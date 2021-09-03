@@ -9,8 +9,8 @@ use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
 use crate::vm::VMBinding;
 use crate::MMTK;
-
-use super::GcStatus;
+use crate::util::metadata::side_metadata;
+use crate::plan::immix::RC;
 
 /// BarrierSelector describes which barrier to use.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -214,6 +214,34 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
             }
         }
     }
+
+    #[inline(always)]
+    fn inc(&mut self, o: ObjectReference) {
+        if o.is_null() { return }
+        let _ = side_metadata::fetch_update(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
+            if x == 0b1111 {
+                None
+            } else {
+                Some(x + 1)
+            }
+        });
+    }
+
+    #[inline(always)]
+    fn dec(&mut self, o: ObjectReference) {
+        if o.is_null() { return }
+        let res = side_metadata::fetch_update(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
+            if x == 0 || x == 0b1111 /* sticky */ {
+                None
+            } else {
+                Some(x - 1)
+            }
+        });
+        if res == Ok(1) {
+            // Release this one
+            println!("Release {:?}", o);
+        }
+    }
 }
 
 impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E, KIND> {
@@ -243,21 +271,30 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
     #[inline(always)]
     fn write_barrier(&mut self, target: WriteTarget) {
         match target {
-            WriteTarget::Field { slot, .. } => {
+            WriteTarget::Field { slot, val, .. } => {
+                self.dec(unsafe { slot.load() });
+                self.inc(val);
                 self.enqueue_node(slot);
             }
             WriteTarget::ArrayCopy {
                 src,
                 src_offset,
+                dst,
+                dst_offset,
                 len,
                 ..
             } => {
                 let src_base = src.to_address() + src_offset;
+                let dst_base = dst.to_address() + dst_offset;
                 for i in 0..len {
+                    self.dec(unsafe { (dst_base + (i << 3)).load() });
+                    self.inc(unsafe { (src_base + (i << 3)).load() });
                     self.enqueue_node(src_base + (i << 3));
                 }
             }
-            WriteTarget::Clone { .. } => {}
+            WriteTarget::Clone { .. } => {
+                // How to deal with this?
+            }
         }
     }
 }

@@ -202,7 +202,7 @@ impl<VM: VMBinding> Immix<VM> {
         let immix_specs = if get_immix_constraints().barrier != BarrierSelector::NoBarrier
             || super::BARRIER_MEASUREMENT
         {
-            metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
+            metadata::extract_side_metadata(&[super::RC, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
         } else {
             vec![]
         };
