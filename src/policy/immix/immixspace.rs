@@ -4,6 +4,7 @@ use super::{
     chunk::{Chunk, ChunkMap, ChunkState},
     defrag::Defrag,
 };
+use crate::plan::immix::RC;
 use crate::plan::ObjectsClosure;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -15,6 +16,7 @@ use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::{Address, ObjectReference};
+use crate::plan::EdgeIterator;
 use crate::vm::*;
 use crate::{
     plan::TransitiveClosure,
@@ -26,6 +28,7 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
+use spin::Mutex;
 use std::{
     iter::Step,
     ops::Range,
@@ -49,6 +52,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     mark_state: u8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
+    live_objects: Mutex<Vec<usize>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -95,6 +99,52 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
 impl<VM: VMBinding> ImmixSpace<VM> {
     const UNMARKED_STATE: u8 = 0;
     const MARKED_STATE: u8 = 1;
+
+    pub fn post_alloc(&self, addr: Address, size: usize) {
+        super::rc::reset(unsafe { addr.to_object_reference() });
+        let block = Block::from(Block::align(addr));
+        let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
+        let mut live_table = self.live_objects.lock();
+        live_table[index] += 1;
+    }
+
+    pub fn is_dead(&self, o: ObjectReference) -> bool {
+        let v = side_metadata::load_atomic(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst);
+        v == 0
+    }
+
+    pub fn free(&self, o: ObjectReference, mut f: impl FnMut(ObjectReference)) {
+        // println!("Free {:?}", o);
+
+        // let block = Block::containing::<VM>(o);
+        // let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
+        // let mut live_table = self.live_objects.lock();
+        // live_table[index] -= 1;
+        // if live_table[index] == 0 {
+        //     self.release_block(block);
+        // }
+        if unsafe { o.to_address().load::<usize>() != 0xdeadbeef } {
+            // println!("Free {:?}", o);
+            EdgeIterator::<VM>::iterate(o, |edge| {
+                let t = unsafe { edge.load::<ObjectReference>() };
+                if !t.is_null() {
+                    if Ok(1) == super::rc::dec(t) {
+                        debug_assert!(super::rc::is_dead(t));
+                        f(t);
+                    }
+                }
+            });
+            let block = Block::containing::<VM>(o);
+            let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
+            let mut live_table = self.live_objects.lock();
+            live_table[index] -= 1;
+            println!("Free {:?} {:?} {}", o, block, live_table[index]);
+            if live_table[index] == 0 {
+                self.release_block(block);
+            }
+            unsafe { o.to_address().store::<usize>(0xdeadbeef); }
+        }
+    }
 
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
@@ -155,6 +205,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
+            live_objects: Default::default(),
         }
     }
 
@@ -256,7 +307,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
-        // println!(" - Release block {:?}", block);
+        println!(" - Release block {:?}", block);
         block.deinit();
         self.pr.release_pages(block.start());
     }
@@ -269,6 +320,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from(block_address);
+        {
+            let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
+            let mut live_table = self.live_objects.lock();
+            if live_table.len() <= index {
+                live_table.resize((index + 1).next_power_of_two() << 1, 0);
+            }
+            live_table[index] = 0;
+        }
         // println!(" - Alloc block {:?}", block);
         block.init(copy);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);

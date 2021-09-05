@@ -1,11 +1,15 @@
 //! The fundamental mechanism for performing a transitive closure over an object graph.
 
+use std::marker::PhantomData;
 use std::mem;
+
+use atomic_traits::fetch::Add;
 
 use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage};
-use crate::util::{Address, ObjectReference};
+use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
 use crate::MMTK;
+use crate::vm::{Scanning, VMBinding};
 
 /// This trait is the fundamental mechanism for performing a
 /// transitive closure over an object graph.
@@ -78,5 +82,27 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
             WorkBucketStage::Closure,
             E::new(new_edges, false, self.mmtk),
         );
+    }
+}
+
+pub struct EdgeIterator<'a, VM: VMBinding> {
+    f: Box<dyn FnMut(Address) + 'a>,
+    _p: PhantomData<VM>,
+}
+
+impl<'a, VM: VMBinding> EdgeIterator<'a, VM> {
+    pub fn iterate(o: ObjectReference, f: impl FnMut(Address) + 'a) {
+        let mut x = Self { f: box f, _p: PhantomData };
+        <VM::VMScanning as Scanning<VM>>::scan_object(&mut x, o, VMWorkerThread(VMThread::UNINITIALIZED));
+    }
+}
+
+impl<'a, VM: VMBinding> TransitiveClosure for EdgeIterator<'a, VM> {
+    #[inline(always)]
+    fn process_edge(&mut self, slot: Address) {
+        (self.f)(slot);
+    }
+    fn process_node(&mut self, _object: ObjectReference) {
+        unreachable!()
     }
 }

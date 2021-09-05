@@ -1,3 +1,6 @@
+use atomic::Ordering;
+
+use super::RC;
 use super::global::Immix;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ScanObjectsAndMarkLines;
@@ -5,6 +8,7 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
+use crate::util::metadata::side_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
@@ -188,6 +192,75 @@ impl<VM: VMBinding, const KIND: TraceKind> Deref for ImmixProcessEdges<VM, KIND>
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> DerefMut for ImmixProcessEdges<VM, KIND> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+
+
+
+
+
+pub struct RCImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
+    // Use a static ref to the specific plan to avoid overhead from dynamic dispatch or
+    // downcast for each traced object.
+    plan: &'static Immix<VM>,
+    base: ProcessEdgesBase<Self>,
+    mmtk: &'static MMTK<VM>,
+}
+
+impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
+    fn immix(&self) -> &'static Immix<VM> {
+        self.plan
+    }
+}
+
+impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEdges<VM, KIND> {
+    type VM = VM;
+    const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG;
+
+    fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(edges, mmtk);
+        let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
+        Self { plan, base, mmtk }
+    }
+
+    /// Trace  and evacuate objects.
+    #[inline(always)]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if object.is_null() {
+            return object;
+        }
+        if self.immix().immix_space.in_space(object) {
+            if !object.is_null() {
+                let _ = side_metadata::fetch_update(RC.extract_side_spec(), object.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
+                    if x == 0b1111 {
+                        None
+                    } else {
+                        Some(x + 1)
+                    }
+                });
+            }
+        }
+        object
+    }
+
+    const CAPACITY: usize = 4096;
+
+    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
+}
+
+impl<VM: VMBinding, const KIND: TraceKind> Deref for RCImmixProcessEdges<VM, KIND> {
+    type Target = ProcessEdgesBase<Self>;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<VM: VMBinding, const KIND: TraceKind> DerefMut for RCImmixProcessEdges<VM, KIND> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base

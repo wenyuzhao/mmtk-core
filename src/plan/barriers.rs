@@ -12,6 +12,8 @@ use crate::MMTK;
 use crate::util::metadata::side_metadata;
 use crate::plan::immix::RC;
 
+use super::transitive_closure::EdgeIterator;
+
 /// BarrierSelector describes which barrier to use.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BarrierSelector {
@@ -157,6 +159,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork, const KIND: FLBKind> {
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
+    dead_objects: Vec<ObjectReference>,
 }
 
 impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
@@ -167,6 +170,7 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
             edges: vec![],
             nodes: vec![],
             meta,
+            dead_objects: vec![],
         }
     }
 
@@ -218,28 +222,20 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
     #[inline(always)]
     fn inc(&mut self, o: ObjectReference) {
         if o.is_null() { return }
-        let _ = side_metadata::fetch_update(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
-            if x == 0b1111 {
-                None
-            } else {
-                Some(x + 1)
-            }
-        });
+        let _ = crate::policy::immix::rc::inc(o);
     }
 
     #[inline(always)]
     fn dec(&mut self, o: ObjectReference) {
         if o.is_null() { return }
-        let res = side_metadata::fetch_update(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
-            if x == 0 || x == 0b1111 /* sticky */ {
-                None
-            } else {
-                Some(x - 1)
-            }
-        });
+        let res = crate::policy::immix::rc::dec(o);
         if res == Ok(1) {
             // Release this one
-            println!("Release {:?}", o);
+            // println!("Release {:?}", o);
+            self.dead_objects.push(o);
+            if self.dead_objects.len() >= E::CAPACITY {
+                self.flush();
+            }
         }
     }
 }
@@ -248,23 +244,27 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
     #[cold]
     fn flush(&mut self) {
         if KIND == FLBKind::SATB {
-            if self.edges.is_empty() && self.nodes.is_empty() {
-                return;
+            if !self.edges.is_empty() || !self.nodes.is_empty() {
+                let mut edges = vec![];
+                std::mem::swap(&mut edges, &mut self.edges);
+                let mut nodes = vec![];
+                std::mem::swap(&mut nodes, &mut self.nodes);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                    .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
             }
-            let mut edges = vec![];
-            std::mem::swap(&mut edges, &mut self.edges);
-            let mut nodes = vec![];
-            std::mem::swap(&mut nodes, &mut self.nodes);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
         } else {
-            if self.edges.is_empty() {
-                return;
+            if !self.edges.is_empty() {
+                let mut edges = vec![];
+                std::mem::swap(&mut edges, &mut self.edges);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                    .add(ProcessModBufIU::<E>::new(edges, self.meta));
             }
-            let mut edges = vec![];
-            std::mem::swap(&mut edges, &mut self.edges);
+        }
+        if !self.dead_objects.is_empty() {
+            let mut dead_objects = vec![];
+            std::mem::swap(&mut dead_objects, &mut self.dead_objects);
             self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                .add(ProcessModBufIU::<E>::new(edges, self.meta));
+                .add(ProcessDeadObjects::<E>::new(dead_objects, self.meta));
         }
     }
 
@@ -292,8 +292,12 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
                     self.enqueue_node(src_base + (i << 3));
                 }
             }
-            WriteTarget::Clone { .. } => {
+            WriteTarget::Clone { src, .. } => {
                 // How to deal with this?
+                // println!("Clone {:?}", src);
+                EdgeIterator::<E::VM>::iterate(src, |edge| {
+                    self.inc(unsafe { edge.load() });
+                })
             }
         }
     }

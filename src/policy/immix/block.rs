@@ -243,19 +243,32 @@ impl Block {
         line_mark_state: Option<u8>,
     ) -> bool {
         if super::BLOCK_ONLY {
-            match self.get_state() {
-                BlockState::Unallocated => false,
-                BlockState::Unmarked => {
-                    // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self);
-                    true
-                }
-                BlockState::Marked => {
-                    // The block is live.
-                    false
-                }
-                _ => unreachable!(),
-            }
+            // let mut live = false;
+            // for i in (0..Block::BYTES).step_by(8) {
+            //     let a = self.start() + i;
+            //     let o = unsafe { a.to_object_reference() };
+            //     if !super::rc::is_dead(o) {
+            //         live = true;
+            //     }
+            // }
+            // if !live {
+            //     space.release_block(*self);
+            // }
+            // !live
+            false
+            // match self.get_state() {
+            //     BlockState::Unallocated => false,
+            //     BlockState::Unmarked => {
+            //         // Release the block if it is allocated but not marked by the current GC.
+            //         space.release_block(*self);
+            //         true
+            //     }
+            //     BlockState::Marked => {
+            //         // The block is live.
+            //         false
+            //     }
+            //     _ => unreachable!(),
+            // }
         } else {
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;

@@ -58,7 +58,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
         let new_cursor = result + size;
 
-        if new_cursor > self.limit {
+        let x = if new_cursor > self.limit {
             trace!("Thread local buffer used up, go to alloc slow path");
             if size > Line::BYTES {
                 // Size larger than a line: do large allocation
@@ -79,7 +79,9 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 self.limit
             );
             result
-        }
+        };
+        self.space.post_alloc(x, size);
+        x
     }
 
     /// Acquire a clean block from ImmixSpace for allocation.

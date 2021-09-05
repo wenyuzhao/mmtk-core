@@ -3,6 +3,7 @@ pub mod chunk;
 pub mod defrag;
 pub mod immixspace;
 pub mod line;
+pub mod rc;
 
 pub use immixspace::*;
 

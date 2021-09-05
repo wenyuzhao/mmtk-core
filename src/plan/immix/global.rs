@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, TraceKind};
+use super::gc_work::{ImmixCopyContext, RCImmixProcessEdges as ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -164,12 +164,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
+        // self.common.prepare(tls, true);
         self.immix_space.prepare();
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
+        // self.common.release(tls, true);
         // release the collected region
         self.immix_space.release();
     }

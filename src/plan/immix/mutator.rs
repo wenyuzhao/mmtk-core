@@ -2,7 +2,7 @@ use super::Immix;
 use crate::plan::barriers::FLBKind;
 use crate::plan::barriers::FieldLoggingBarrier;
 use crate::plan::barriers::ObjectRememberingBarrier;
-use crate::plan::immix::gc_work::ImmixProcessEdges;
+use crate::plan::immix::gc_work::RCImmixProcessEdges as ImmixProcessEdges;
 use crate::plan::immix::gc_work::TraceKind;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
