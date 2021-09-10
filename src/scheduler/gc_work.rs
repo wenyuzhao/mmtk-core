@@ -640,17 +640,10 @@ impl<E: ProcessEdgesWork> ProcessModBuf<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        let unlogged_value = if option_env!("IX_OBJ_BARRIER").is_some() { 0 } else { 1 };
         if !self.modbuf.is_empty() {
             for obj in &self.modbuf {
-                compare_exchange_metadata::<E::VM>(
-                    &self.meta,
-                    *obj,
-                    0b0,
-                    0b1,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                store_metadata::<E::VM>(&self.meta, *obj, unlogged_value, None, Some(Ordering::SeqCst));
             }
         }
         if mmtk.plan.is_current_gc_nursery() {
@@ -658,6 +651,48 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
                 let mut modbuf = vec![];
                 ::std::mem::swap(&mut modbuf, &mut self.modbuf);
                 GCWork::do_work(&mut ScanObjects::<E>::new(modbuf, false), worker, mmtk)
+            }
+        } else {
+            // Do nothing
+        }
+    }
+}
+
+pub struct EdgesProcessModBuf<E: ProcessEdgesWork> {
+    modbuf: Vec<Address>,
+    phantom: PhantomData<E>,
+    meta: MetadataSpec,
+}
+
+impl<E: ProcessEdgesWork> EdgesProcessModBuf<E> {
+    pub fn new(modbuf: Vec<Address>, meta: MetadataSpec) -> Self {
+        Self {
+            modbuf,
+            meta,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<E: ProcessEdgesWork> GCWork<E::VM> for EdgesProcessModBuf<E> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        if !self.modbuf.is_empty() {
+            for e in &self.modbuf {
+                store_metadata::<E::VM>(
+                    &self.meta,
+                    unsafe { e.to_object_reference() },
+                    1,
+                    None,
+                    Some(Ordering::SeqCst),
+                );
+            }
+        }
+        if mmtk.plan.is_current_gc_nursery() {
+            if !self.modbuf.is_empty() {
+                let mut modbuf = vec![];
+                ::std::mem::swap(&mut modbuf, &mut self.modbuf);
+                GCWork::do_work(&mut E::new(modbuf, false, mmtk), worker, mmtk)
             }
         } else {
             // Do nothing
@@ -696,9 +731,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                     Some(Ordering::Relaxed),
                 )
             }
-            let mut modbuf = vec![];
-            ::std::mem::swap(&mut modbuf, &mut self.nodes);
-            GCWork::do_work(&mut ScanObjects::<E>::new(modbuf, false), worker, mmtk);
+            if !crate::plan::barriers::BARRIER_MEASUREMENT {
+                let mut modbuf = vec![];
+                ::std::mem::swap(&mut modbuf, &mut self.nodes);
+                GCWork::do_work(&mut ScanObjects::<E>::new(modbuf, false), worker, mmtk);
+            }
         }
     }
 }

@@ -50,7 +50,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn is_sane(&self) -> bool {
         true
     }
-    fn initialize_object_metadata(&self, object: ObjectReference, alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
             object,
@@ -69,10 +69,19 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             Some(Ordering::SeqCst),
         );
 
-        if self.common.needs_log_bit {
+        if self.common.needs_log_bit && !self.common.needs_field_log_bit {
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         }
+        if self.common.needs_log_bit && self.common.needs_field_log_bit {
+            for i in (0..bytes).step_by(8) {
+                let a = object.to_address() + i;
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
+            }
+        }
 
+        #[cfg(feature = "global_alloc_bit")]
+        crate::util::alloc_bit::set_alloc_bit(object);
         let cell = VM::VMObjectModel::object_start_ref(object);
         self.treadmill.add_to_treadmill(cell, alloc);
     }
@@ -121,6 +130,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 immortal: false,
                 zeroed,
                 needs_log_bit: constraints.needs_log_bit,
+                needs_field_log_bit: constraints.needs_field_log_bit,
                 vmrequest,
                 side_metadata_specs: SideMetadataContext {
                     global: global_side_metadata_specs,
@@ -172,6 +182,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         trace: &mut T,
         object: ObjectReference,
     ) -> ObjectReference {
+        #[cfg(feature = "global_alloc_bit")]
+        debug_assert!(
+            crate::util::alloc_bit::is_alloced(object),
+            "{:x}: alloc bit not set",
+            object
+        );
         let nursery_object = self.is_in_nursery(object);
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
@@ -192,11 +208,15 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if sweep_nursery {
             for cell in self.treadmill.collect_nursery() {
                 // println!("- cn {}", cell);
+                #[cfg(feature = "global_alloc_bit")]
+                crate::util::alloc_bit::unset_addr_alloc_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         } else {
             for cell in self.treadmill.collect() {
                 // println!("- ts {}", cell);
+                #[cfg(feature = "global_alloc_bit")]
+                crate::util::alloc_bit::unset_addr_alloc_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         }
