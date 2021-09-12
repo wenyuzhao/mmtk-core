@@ -242,7 +242,7 @@ impl Block {
             let a = self.start() + i;
             let o = unsafe { a.to_object_reference() };
             if !super::rc::is_dead(o) {
-                return false
+                return false;
             }
         }
         true
@@ -263,7 +263,7 @@ impl Block {
                 if !live {
                     space.release_block(*self);
                 }
-                return !live
+                return !live;
             }
             match self.get_state() {
                 BlockState::Unallocated => false,

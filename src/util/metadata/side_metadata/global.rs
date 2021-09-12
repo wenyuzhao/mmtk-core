@@ -636,7 +636,8 @@ pub fn fetch_sub_atomic(
 pub fn fetch_update(
     metadata_spec: &SideMetadataSpec,
     data_addr: Address,
-    set_order: Ordering, fetch_order: Ordering,
+    set_order: Ordering,
+    fetch_order: Ordering,
     mut f: impl FnMut(usize) -> Option<usize>,
 ) -> std::result::Result<usize, usize> {
     #[cfg(feature = "extreme_assertions")]
@@ -655,20 +656,42 @@ pub fn fetch_update(
         let mut old_val = unsafe { meta_addr.load::<u8>() };
         while let Some(next) = f((((old_val & mask) as usize) >> lshift) as usize) {
             let new_val = (old_val & !mask) | ((next as u8) << lshift);
-            match unsafe { meta_addr.compare_exchange::<AtomicU8>(old_val, new_val, set_order, fetch_order) } {
+            match unsafe {
+                meta_addr.compare_exchange::<AtomicU8>(old_val, new_val, set_order, fetch_order)
+            } {
                 x @ Ok(_) => return x.map(|x| x as usize).map_err(|x| x as usize),
                 Err(next_prev) => old_val = next_prev,
             }
         }
         Err((((old_val & mask) as usize) >> lshift) as usize)
     } else if bits_num_log == 3 {
-        unsafe { (&*meta_addr.to_ptr::<AtomicU8>()).fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _)).map(|x| x as usize).map_err(|x| x as usize) }
+        unsafe {
+            (&*meta_addr.to_ptr::<AtomicU8>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
     } else if bits_num_log == 4 {
-        unsafe { (&*meta_addr.to_ptr::<AtomicU16>()).fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _)).map(|x| x as usize).map_err(|x| x as usize) }
+        unsafe {
+            (&*meta_addr.to_ptr::<AtomicU16>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
     } else if bits_num_log == 5 {
-        unsafe { (&*meta_addr.to_ptr::<AtomicU32>()).fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _)).map(|x| x as usize).map_err(|x| x as usize) }
+        unsafe {
+            (&*meta_addr.to_ptr::<AtomicU32>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
     } else if bits_num_log == 6 {
-        unsafe { (&*meta_addr.to_ptr::<AtomicUsize>()).fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _)).map(|x| x as usize).map_err(|x| x as usize) }
+        unsafe {
+            (&*meta_addr.to_ptr::<AtomicUsize>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
     } else {
         unreachable!(
             "side metadata > {}-bits is not supported!",

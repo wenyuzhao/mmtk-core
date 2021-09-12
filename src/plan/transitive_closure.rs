@@ -8,8 +8,8 @@ use atomic_traits::fetch::Add;
 use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
-use crate::MMTK;
 use crate::vm::{Scanning, VMBinding};
+use crate::MMTK;
 
 /// This trait is the fundamental mechanism for performing a
 /// transitive closure over an object graph.
@@ -92,8 +92,15 @@ pub struct EdgeIterator<'a, VM: VMBinding> {
 
 impl<'a, VM: VMBinding> EdgeIterator<'a, VM> {
     pub fn iterate(o: ObjectReference, f: impl FnMut(Address) + 'a) {
-        let mut x = Self { f: box f, _p: PhantomData };
-        <VM::VMScanning as Scanning<VM>>::scan_object(&mut x, o, VMWorkerThread(VMThread::UNINITIALIZED));
+        let mut x = Self {
+            f: box f,
+            _p: PhantomData,
+        };
+        <VM::VMScanning as Scanning<VM>>::scan_object(
+            &mut x,
+            o,
+            VMWorkerThread(VMThread::UNINITIALIZED),
+        );
     }
 }
 

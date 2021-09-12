@@ -1,8 +1,8 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
+use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
-use crate::plan::immix::Immix;
 use crate::policy::space::Space;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -641,10 +641,20 @@ impl<E: ProcessEdgesWork> ProcessModBuf<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let unlogged_value = if option_env!("IX_OBJ_BARRIER").is_some() { 0 } else { 1 };
+        let unlogged_value = if option_env!("IX_OBJ_BARRIER").is_some() {
+            0
+        } else {
+            1
+        };
         if !self.modbuf.is_empty() {
             for obj in &self.modbuf {
-                store_metadata::<E::VM>(&self.meta, *obj, unlogged_value, None, Some(Ordering::SeqCst));
+                store_metadata::<E::VM>(
+                    &self.meta,
+                    *obj,
+                    unlogged_value,
+                    None,
+                    Some(Ordering::SeqCst),
+                );
             }
         }
         if mmtk.plan.is_current_gc_nursery() {
@@ -783,7 +793,10 @@ pub struct ProcessDecs<VM: VMBinding> {
 }
 impl<VM: VMBinding> ProcessDecs<VM> {
     pub fn new(decs: Vec<ObjectReference>) -> Self {
-        Self { decs, phantom: PhantomData }
+        Self {
+            decs,
+            phantom: PhantomData,
+        }
     }
 }
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
@@ -792,7 +805,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut new_decs = vec![];
         for o in &self.decs {
-            if !immix.immix_space.in_space(*o) { continue }
+            if !immix.immix_space.in_space(*o) {
+                continue;
+            }
             if let Ok(0) = crate::policy::immix::rc::dec(*o) {
                 // Recursively decrease field ref counts
                 EdgeIterator::<VM>::iterate(*o, |edge| {
@@ -804,7 +819,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             }
         }
         if !new_decs.is_empty() {
-            worker.local_work_bucket.add(ProcessDecs::<VM>::new(new_decs));
+            worker
+                .local_work_bucket
+                .add(ProcessDecs::<VM>::new(new_decs));
         }
     }
 }

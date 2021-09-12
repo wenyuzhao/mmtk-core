@@ -38,7 +38,7 @@ mod tracelocal;
 pub use tracelocal::TraceLocal;
 
 mod transitive_closure;
-pub use transitive_closure::{ObjectsClosure, TransitiveClosure, EdgeIterator};
+pub use transitive_closure::{EdgeIterator, ObjectsClosure, TransitiveClosure};
 
 mod generational;
 pub mod immix;

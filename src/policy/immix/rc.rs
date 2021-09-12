@@ -1,6 +1,9 @@
 use atomic::Ordering;
 
-use crate::{util::{ObjectReference, metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec}}};
+use crate::util::{
+    metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
+    ObjectReference,
+};
 
 use super::chunk::ChunkMap;
 
@@ -17,13 +20,19 @@ pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
 #[inline(always)]
 pub fn inc(o: ObjectReference) -> Result<usize, usize> {
     debug_assert!(!o.is_null());
-    let r = side_metadata::fetch_update(&RC_TABLE, o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
-        if x == MAX_REF_COUNT {
-            None
-        } else {
-            Some(x + 1)
-        }
-    });
+    let r = side_metadata::fetch_update(
+        &RC_TABLE,
+        o.to_address(),
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+        |x| {
+            if x == MAX_REF_COUNT {
+                None
+            } else {
+                Some(x + 1)
+            }
+        },
+    );
     // println!("inc {:?} {:?}", o, count(o));
     r
 }
@@ -31,13 +40,21 @@ pub fn inc(o: ObjectReference) -> Result<usize, usize> {
 #[inline(always)]
 pub fn dec(o: ObjectReference) -> Result<usize, usize> {
     debug_assert!(!o.is_null());
-    let r = side_metadata::fetch_update(&RC_TABLE, o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
-        if x == 0 || x == MAX_REF_COUNT /* sticky */ {
-            None
-        } else {
-            Some(x - 1)
-        }
-    });
+    let r = side_metadata::fetch_update(
+        &RC_TABLE,
+        o.to_address(),
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+        |x| {
+            if x == 0 || x == MAX_REF_COUNT
+            /* sticky */
+            {
+                None
+            } else {
+                Some(x - 1)
+            }
+        },
+    );
     // println!("dec {:?} {:?}", o, count(o));
     r
 }

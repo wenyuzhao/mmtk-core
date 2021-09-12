@@ -4,8 +4,9 @@ use super::{
     chunk::{Chunk, ChunkMap, ChunkState},
     defrag::Defrag,
 };
-use crate::plan::ObjectsClosure;
 use crate::plan::immix::REF_COUNT;
+use crate::plan::EdgeIterator;
+use crate::plan::ObjectsClosure;
 use crate::policy::immix::RC_TABLE;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -18,7 +19,6 @@ use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::{Address, ObjectReference};
-use crate::plan::EdgeIterator;
 use crate::vm::*;
 use crate::{
     plan::TransitiveClosure,
@@ -108,12 +108,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn post_alloc(&self, addr: Address, _size: usize) {
         debug_assert!(super::rc::is_dead(unsafe { addr.to_object_reference() }));
-        NEW_OBJECTS.lock().push(unsafe { addr.to_object_reference() });
+        NEW_OBJECTS
+            .lock()
+            .push(unsafe { addr.to_object_reference() });
         let _ = super::rc::inc(unsafe { addr.to_object_reference() });
     }
 
-    pub fn free(&self, o: ObjectReference, mut f: impl FnMut(ObjectReference)) {
-    }
+    pub fn free(&self, o: ObjectReference, mut f: impl FnMut(ObjectReference)) {}
 
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
@@ -257,7 +258,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if REF_COUNT {
             let mut new_objects = vec![];
             std::mem::swap(&mut new_objects, &mut NEW_OBJECTS.lock());
-            self.scheduler().work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<VM>::new(new_objects));
+            self.scheduler().work_buckets[WorkBucketStage::RefClosure]
+                .add(ProcessDecs::<VM>::new(new_objects));
         }
     }
 
@@ -307,11 +309,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // println!(" - Allocate {:?}", block);
         debug_assert!(block.rc_dead());
         if crate::plan::immix::REF_COUNT {
-            side_metadata::bzero_metadata(
-                &RC_TABLE,
-                block.start(),
-                Block::BYTES,
-            );
+            side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
         }
         // println!(" - Alloc block {:?}", block);
         block.init(copy);

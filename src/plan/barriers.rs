@@ -7,16 +7,16 @@ use atomic::Ordering;
 
 use crate::plan::immix::Immix;
 use crate::policy::space::Space;
+use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
-use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
+use crate::util::metadata::side_metadata;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
 use crate::MMTK;
-use crate::util::metadata::side_metadata;
 
 use super::transitive_closure::EdgeIterator;
 
@@ -105,8 +105,16 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
     /// Returns true if the object is not logged previously.
     #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
-        let unlogged_value = if option_env!("IX_OBJ_BARRIER").is_some() { 0 } else { 1 };
-        let logged_value = if option_env!("IX_OBJ_BARRIER").is_some() { 1 } else { 0 };
+        let unlogged_value = if option_env!("IX_OBJ_BARRIER").is_some() {
+            0
+        } else {
+            1
+        };
+        let logged_value = if option_env!("IX_OBJ_BARRIER").is_some() {
+            1
+        } else {
+            0
+        };
         loop {
             let old_value =
                 load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
@@ -241,7 +249,10 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
         if option_env!("IX_OBJ_BARRIER").is_some() {
             unreachable!()
         }
-        if crate::plan::immix::CONCURRENT_MARKING && !BARRIER_MEASUREMENT && !*crate::IN_CONCURRENT_GC.lock() {
+        if crate::plan::immix::CONCURRENT_MARKING
+            && !BARRIER_MEASUREMENT
+            && !*crate::IN_CONCURRENT_GC.lock()
+        {
             return;
         }
         if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
@@ -273,7 +284,10 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
                     self.decs.push(old);
                 }
                 self.incs.push(edge);
-                if self.edges.len() >= E::CAPACITY || self.incs.len() >= E::CAPACITY || self.decs.len() >= E::CAPACITY {
+                if self.edges.len() >= E::CAPACITY
+                    || self.incs.len() >= E::CAPACITY
+                    || self.decs.len() >= E::CAPACITY
+                {
                     self.flush();
                 }
             }
@@ -328,7 +342,8 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
         if !self.decs.is_empty() {
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<E::VM>::new(decs));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                .add(ProcessDecs::<E::VM>::new(decs));
         }
     }
 
@@ -353,7 +368,11 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
                 // How to deal with this?
                 // println!("Clone {:?}", src);
                 EdgeIterator::<E::VM>::iterate(dst, |edge| {
-                    debug_assert!(unsafe { edge.load::<ObjectReference>() }.is_null(), "{:?}", unsafe { edge.load::<ObjectReference>() });
+                    debug_assert!(
+                        unsafe { edge.load::<ObjectReference>() }.is_null(),
+                        "{:?}",
+                        unsafe { edge.load::<ObjectReference>() }
+                    );
                     self.enqueue_node(edge);
                 })
             }
