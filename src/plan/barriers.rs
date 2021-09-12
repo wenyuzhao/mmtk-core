@@ -319,48 +319,16 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
             self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add_lambda(move || {
                 for e in incs {
                     let o: ObjectReference = unsafe { e.load() };
-                    if !o.is_null() &&  immix.immix_space.in_space(o) {
+                    if !o.is_null() && immix.immix_space.in_space(o) {
                         let _ = crate::policy::immix::rc::inc(o);
                     }
                 }
             });
         }
         if !self.decs.is_empty() {
-            struct ProcessDecs<E: ProcessEdgesWork> {
-                decs: Vec<ObjectReference>,
-                phantom: PhantomData<E>,
-            }
-            impl<E: ProcessEdgesWork> ProcessDecs<E> {
-                pub fn new(decs: Vec<ObjectReference>) -> Self {
-                    Self { decs, phantom: PhantomData }
-                }
-            }
-            impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessDecs<E> {
-                #[inline(always)]
-                fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-                    let mut new_decs = vec![];
-                    for o in &self.decs {
-                        let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-                        if !immix.immix_space.in_space(*o) { continue }
-                        let r = crate::policy::immix::rc::dec(*o);
-                        if r == Ok(0) {
-                            // Recursively decrease field ref counts
-                            EdgeIterator::<E::VM>::iterate(*o, |edge| {
-                                let o = unsafe { edge.load::<ObjectReference>() };
-                                if !o.is_null() {
-                                    new_decs.push(o);
-                                }
-                            });
-                        }
-                    }
-                    if !new_decs.is_empty() {
-                        worker.local_work_bucket.add(ProcessDecs::<E>::new(new_decs));
-                    }
-                }
-            }
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<E>::new(decs));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<E::VM>::new(decs));
         }
     }
 

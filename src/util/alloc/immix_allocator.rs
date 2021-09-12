@@ -54,32 +54,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 
     #[inline(always)]
     fn alloc(&mut self, size: usize, align: usize, offset: isize) -> Address {
-        trace!("alloc");
-        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
-        let new_cursor = result + size;
-
-        let x = if new_cursor > self.limit {
-            trace!("Thread local buffer used up, go to alloc slow path");
-            if size > Line::BYTES {
-                // Size larger than a line: do large allocation
-                self.overflow_alloc(size, align, offset)
-            } else {
-                // Size smaller than a line: fit into holes
-                self.alloc_slow_hot(size, align, offset)
-            }
-        } else {
-            // Simple bump allocation.
-            fill_alignment_gap::<VM>(self.cursor, result);
-            self.cursor = new_cursor;
-            trace!(
-                "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
-                size,
-                result,
-                self.cursor,
-                self.limit
-            );
-            result
-        };
+        let x = self.alloc2(size, align, offset);
         self.space.post_alloc(x, size);
         x
     }
@@ -97,7 +72,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                     self.cursor = block.start();
                     self.limit = block.end();
                 }
-                self.alloc(size, align, offset)
+                self.alloc2(size, align, offset)
             }
         }
     }
@@ -134,6 +109,36 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.space
     }
 
+    #[inline(always)]
+    fn alloc2(&mut self, size: usize, align: usize, offset: isize) -> Address {
+        trace!("alloc");
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        if new_cursor > self.limit {
+            trace!("Thread local buffer used up, go to alloc slow path");
+            if size > Line::BYTES {
+                // Size larger than a line: do large allocation
+                self.overflow_alloc(size, align, offset)
+            } else {
+                // Size smaller than a line: fit into holes
+                self.alloc_slow_hot(size, align, offset)
+            }
+        } else {
+            // Simple bump allocation.
+            fill_alignment_gap::<VM>(self.cursor, result);
+            self.cursor = new_cursor;
+            trace!(
+                "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+                size,
+                result,
+                self.cursor,
+                self.limit
+            );
+            result
+        }
+    }
+
     /// Large-object (larger than a line) bump alloaction.
     fn overflow_alloc(&mut self, size: usize, align: usize, offset: isize) -> Address {
         let start = align_allocation_no_fill::<VM>(self.large_cursor, align, offset);
@@ -154,7 +159,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cold]
     fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
         if self.acquire_recyclable_lines(size, align, offset) {
-            self.alloc(size, align, offset)
+            self.alloc2(size, align, offset)
         } else {
             self.alloc_slow_inline(size, align, offset)
         }

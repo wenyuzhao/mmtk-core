@@ -1,5 +1,6 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
+use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::plan::immix::Immix;
 use crate::policy::space::Space;
@@ -772,6 +773,38 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufIU<E> {
             let mut modbuf = vec![];
             ::std::mem::swap(&mut modbuf, &mut self.edges);
             GCWork::do_work(&mut E::new(modbuf, false, mmtk), worker, mmtk)
+        }
+    }
+}
+
+pub struct ProcessDecs<VM: VMBinding> {
+    decs: Vec<ObjectReference>,
+    phantom: PhantomData<VM>,
+}
+impl<VM: VMBinding> ProcessDecs<VM> {
+    pub fn new(decs: Vec<ObjectReference>) -> Self {
+        Self { decs, phantom: PhantomData }
+    }
+}
+impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let mut new_decs = vec![];
+        for o in &self.decs {
+            if !immix.immix_space.in_space(*o) { continue }
+            if let Ok(0) = crate::policy::immix::rc::dec(*o) {
+                // Recursively decrease field ref counts
+                EdgeIterator::<VM>::iterate(*o, |edge| {
+                    let o = unsafe { edge.load::<ObjectReference>() };
+                    if !o.is_null() {
+                        new_decs.push(o);
+                    }
+                });
+            }
+        }
+        if !new_decs.is_empty() {
+            worker.local_work_bucket.add(ProcessDecs::<VM>::new(new_decs));
         }
     }
 }

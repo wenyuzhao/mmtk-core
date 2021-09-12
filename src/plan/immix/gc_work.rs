@@ -16,6 +16,7 @@ use crate::{
     plan::CopyContext,
     util::opaque_pointer::{VMThread, VMWorkerThread},
 };
+use spin::Mutex;
 use std::{
     mem,
     ops::{Deref, DerefMut},
@@ -216,6 +217,9 @@ impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
     }
 }
 
+pub static CURR_ROOTS: Mutex<Vec<ObjectReference>> = Mutex::new(vec![]);
+pub static OLD_ROOTS: Mutex<Vec<ObjectReference>> = Mutex::new(vec![]);
+
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEdges<VM, KIND> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG;
@@ -234,6 +238,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         }
         if self.immix().immix_space.in_space(object) {
             let _ = crate::policy::immix::rc::inc(object);
+            CURR_ROOTS.lock().push(object);
         }
         object
     }

@@ -15,7 +15,7 @@ use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
-use crate::util::metadata;
+use crate::util::{ObjectReference, metadata};
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
 use crate::util::options::UnsafeOptionsWrapper;
 #[cfg(feature = "sanity")]
@@ -158,6 +158,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+
+        if super::REF_COUNT {
+            let mut decs = vec![];
+            let mut old_roots = super::gc_work::OLD_ROOTS.lock();
+            std::mem::swap(&mut decs, &mut old_roots);
+            scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<VM>::new(decs));
+        }
+
         // Analysis routine that is ran. It is generally recommended to take advantage
         // of the scheduling system we have in place for more performance
         #[cfg(feature = "analysis")]
@@ -186,6 +194,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         // release the collected region
         self.immix_space.release();
+        if super::REF_COUNT {
+            let mut curr_roots = super::gc_work::CURR_ROOTS.lock();
+            let mut old_roots = super::gc_work::OLD_ROOTS.lock();
+            std::mem::swap::<Vec<ObjectReference>>(&mut curr_roots, &mut old_roots);
+        }
     }
 
     fn get_collection_reserve(&self) -> usize {
