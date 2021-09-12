@@ -26,6 +26,9 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
     })
 }
 
+pub fn count(o: ObjectReference) -> usize {
+    side_metadata::load_atomic(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst)
+}
 
 pub fn is_dead(o: ObjectReference) -> bool {
     let v = side_metadata::load_atomic(RC.extract_side_spec(), o.to_address(), Ordering::SeqCst);

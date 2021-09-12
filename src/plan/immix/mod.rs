@@ -8,6 +8,8 @@ pub use self::global::Immix;
 
 pub const CONCURRENT_MARKING: bool = false;
 
+pub const RC_ENABLED: bool = true;
+
 pub const RC: MetadataSpec = MetadataSpec::OnSide(SideMetadataSpec {
     is_global: true,
     offset: GLOBAL_SIDE_METADATA_VM_BASE_OFFSET,

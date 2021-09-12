@@ -233,17 +233,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         if object.is_null() {
             return object;
         }
-        if self.immix().immix_space.in_space(object) {
-            if !object.is_null() {
-                let _ = side_metadata::fetch_update(RC.extract_side_spec(), object.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
-                    if x == 0b1111 {
-                        None
-                    } else {
-                        Some(x + 1)
-                    }
-                });
-            }
-        }
+        // if self.immix().immix_space.in_space(object) {
+            let _ = crate::policy::immix::rc::inc(object);
+        // }
         object
     }
 

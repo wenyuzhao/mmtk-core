@@ -2,6 +2,7 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::Line;
 use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
+use crate::plan::immix::RC_ENABLED;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::MetadataSpec;
@@ -235,6 +236,18 @@ impl Block {
         Line::from(self.start())..Line::from(self.end())
     }
 
+    #[inline(always)]
+    pub fn rc_dead(&self) -> bool {
+        for i in (0..Block::BYTES).step_by(8) {
+            let a = self.start() + i;
+            let o = unsafe { a.to_object_reference() };
+            if !super::rc::is_dead(o) {
+                return false
+            }
+        }
+        true
+    }
+
     /// Sweep this block.
     /// Return true if the block is swept.
     #[inline(always)]
@@ -245,32 +258,26 @@ impl Block {
         line_mark_state: Option<u8>,
     ) -> bool {
         if super::BLOCK_ONLY {
-            // let mut live = false;
-            // for i in (0..Block::BYTES).step_by(8) {
-            //     let a = self.start() + i;
-            //     let o = unsafe { a.to_object_reference() };
-            //     if !super::rc::is_dead(o) {
-            //         live = true;
-            //     }
-            // }
-            // if !live {
-            //     space.release_block(*self);
-            // }
-            // !live
-            false
-            // match self.get_state() {
-            //     BlockState::Unallocated => false,
-            //     BlockState::Unmarked => {
-            //         // Release the block if it is allocated but not marked by the current GC.
-            //         space.release_block(*self);
-            //         true
-            //     }
-            //     BlockState::Marked => {
-            //         // The block is live.
-            //         false
-            //     }
-            //     _ => unreachable!(),
-            // }
+            if RC_ENABLED {
+                let live = !self.rc_dead();
+                if !live {
+                    space.release_block(*self);
+                }
+                return !live
+            }
+            match self.get_state() {
+                BlockState::Unallocated => false,
+                BlockState::Unmarked => {
+                    // Release the block if it is allocated but not marked by the current GC.
+                    space.release_block(*self);
+                    true
+                }
+                BlockState::Marked => {
+                    // The block is live.
+                    false
+                }
+                _ => unreachable!(),
+            }
         } else {
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;

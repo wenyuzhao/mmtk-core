@@ -105,6 +105,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             println!("FLB_KIND: {:?}", flb);
             assert!(flb == None || flb == Some("SATB") || flb == Some("IU"));
         }
+        println!("RC: {}", super::RC_ENABLED);
+        println!("CONCURRENT_MARKING: {}", super::CONCURRENT_MARKING);
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
     }
@@ -172,12 +174,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        // self.common.prepare(tls, true);
+        if !super::RC_ENABLED {
+            self.common.prepare(tls, true);
+        }
         self.immix_space.prepare();
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        // self.common.release(tls, true);
+        if !super::RC_ENABLED {
+            self.common.release(tls, true);
+        }
         // release the collected region
         self.immix_space.release();
     }

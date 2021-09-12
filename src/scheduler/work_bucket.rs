@@ -113,6 +113,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn add<W: GCWork<VM>>(&self, work: W) {
         self.add_with_priority(Self::DEFAULT_PRIORITY, box work);
     }
+    pub fn add_lambda(&self, f: impl FnOnce() + 'static + Send) {
+        self.add_with_priority(Self::DEFAULT_PRIORITY, box super::work::Lambda(box f));
+    }
     pub fn bulk_add_with_priority(&self, priority: usize, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         {
             let mut queue = self.queue.write();

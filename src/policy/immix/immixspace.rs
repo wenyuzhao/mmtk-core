@@ -52,7 +52,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     mark_state: u8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
-    live_objects: Mutex<Vec<usize>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -104,11 +103,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     const MARKED_STATE: u8 = 1;
 
     pub fn post_alloc(&self, addr: Address, size: usize) {
-        super::rc::reset(unsafe { addr.to_object_reference() });
-        let block = Block::from(Block::align(addr));
-        let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
-        let mut live_table = self.live_objects.lock();
-        live_table[index] += 1;
+        debug_assert!(super::rc::is_dead(unsafe { addr.to_object_reference() }))
     }
 
     pub fn is_dead(&self, o: ObjectReference) -> bool {
@@ -117,36 +112,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn free(&self, o: ObjectReference, mut f: impl FnMut(ObjectReference)) {
-        // println!("Free {:?}", o);
-
-        // let block = Block::containing::<VM>(o);
-        // let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
-        // let mut live_table = self.live_objects.lock();
-        // live_table[index] -= 1;
-        // if live_table[index] == 0 {
-        //     self.release_block(block);
-        // }
-        if unsafe { o.to_address().load::<usize>() != 0xdeadbeef } {
-            // println!("Free {:?}", o);
-            EdgeIterator::<VM>::iterate(o, |edge| {
-                let t = unsafe { edge.load::<ObjectReference>() };
-                if !t.is_null() {
-                    if Ok(1) == super::rc::dec(t) {
-                        debug_assert!(super::rc::is_dead(t));
-                        f(t);
-                    }
-                }
-            });
-            let block = Block::containing::<VM>(o);
-            let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
-            let mut live_table = self.live_objects.lock();
-            live_table[index] -= 1;
-            println!("Free {:?} {:?} {}", o, block, live_table[index]);
-            if live_table[index] == 0 {
-                self.release_block(block);
-            }
-            unsafe { o.to_address().store::<usize>(0xdeadbeef); }
-        }
     }
 
     /// Get side metadata specs
@@ -209,7 +174,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
-            live_objects: Default::default(),
         }
     }
 
@@ -311,7 +275,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
-        println!(" - Release block {:?}", block);
+        println!(" - Release {:?}", block);
+        debug_assert!(block.rc_dead());
+        for i in (0..Block::BYTES).step_by(8) {
+            unsafe {
+                (block.start() + i).store(0xdeadbeefusize);
+            }
+        }
         block.deinit();
         self.pr.release_pages(block.start());
     }
@@ -324,13 +294,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from(block_address);
-        {
-            let index = (block.start() - self.common.start) >> Block::LOG_BYTES;
-            let mut live_table = self.live_objects.lock();
-            if live_table.len() <= index {
-                live_table.resize((index + 1).next_power_of_two() << 1, 0);
-            }
-            live_table[index] = 0;
+        // println!(" - Allocate {:?}", block);
+        debug_assert!(block.rc_dead());
+        if crate::plan::immix::RC_ENABLED {
+            side_metadata::bzero_metadata(
+                crate::plan::immix::RC.extract_side_spec(),
+                block.start(),
+                Block::BYTES,
+            );
         }
         // println!(" - Alloc block {:?}", block);
         block.init(copy);

@@ -1,12 +1,18 @@
 //! Read/Write barrier implementations.
 
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
+use crate::plan::immix::Immix;
+use crate::policy::space::Space;
+use crate::scheduler::GCWork;
+use crate::scheduler::GCWorker;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
+use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
 use crate::MMTK;
@@ -188,7 +194,8 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork, const KIND: FLBKind> {
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
-    dead_objects: Vec<ObjectReference>,
+    incs: Vec<Address>,
+    decs: Vec<ObjectReference>,
 }
 
 impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
@@ -199,7 +206,8 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
             edges: vec![],
             nodes: vec![],
             meta,
-            dead_objects: vec![],
+            incs: vec![],
+            decs: vec![],
         }
     }
 
@@ -234,7 +242,7 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
         if option_env!("IX_OBJ_BARRIER").is_some() {
             unreachable!()
         }
-        if !BARRIER_MEASUREMENT && !*crate::IN_CONCURRENT_GC.lock() {
+        if crate::plan::immix::CONCURRENT_MARKING && !BARRIER_MEASUREMENT && !*crate::IN_CONCURRENT_GC.lock() {
             return;
         }
         if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
@@ -244,35 +252,30 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
             if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            self.edges.push(edge);
-            if KIND == FLBKind::SATB {
-                let node: ObjectReference = unsafe { edge.load() };
-                if !node.is_null() {
-                    self.nodes.push(node);
+            // Concurrent Marking
+            if crate::plan::immix::CONCURRENT_MARKING {
+                self.edges.push(edge);
+                if KIND == FLBKind::SATB {
+                    let node: ObjectReference = unsafe { edge.load() };
+                    if !node.is_null() {
+                        self.nodes.push(node);
+                    }
+                }
+                if self.edges.len() >= E::CAPACITY {
+                    self.flush();
                 }
             }
-            if self.edges.len() >= E::CAPACITY {
-                self.flush();
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn inc(&mut self, o: ObjectReference) {
-        if o.is_null() { return }
-        let _ = crate::policy::immix::rc::inc(o);
-    }
-
-    #[inline(always)]
-    fn dec(&mut self, o: ObjectReference) {
-        if o.is_null() { return }
-        let res = crate::policy::immix::rc::dec(o);
-        if res == Ok(1) {
-            // Release this one
-            // println!("Release {:?}", o);
-            self.dead_objects.push(o);
-            if self.dead_objects.len() >= E::CAPACITY {
-                self.flush();
+            // Reference counting
+            if crate::plan::immix::RC_ENABLED {
+                debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
+                self.edges.push(edge);
+                let old: ObjectReference = unsafe { edge.load() };
+                if old.is_null() { return }
+                self.decs.push(old);
+                self.incs.push(edge);
+                if self.edges.len() >= E::CAPACITY || self.incs.len() >= E::CAPACITY || self.decs.len() >= E::CAPACITY {
+                    self.flush();
+                }
             }
         }
     }
@@ -291,50 +294,99 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
                     .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
             }
         } else {
-            if !self.edges.is_empty() {
-                let mut edges = vec![];
-                std::mem::swap(&mut edges, &mut self.edges);
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                    .add(ProcessModBufIU::<E>::new(edges, self.meta));
-            }
+            unreachable!()
         }
-        if !self.dead_objects.is_empty() {
-            let mut dead_objects = vec![];
-            std::mem::swap(&mut dead_objects, &mut self.dead_objects);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                .add(ProcessDeadObjects::<E>::new(dead_objects, self.meta));
+        if !crate::plan::immix::CONCURRENT_MARKING && !self.edges.is_empty() {
+            let mut edges = vec![];
+            std::mem::swap(&mut edges, &mut self.edges);
+            let meta = self.meta;
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add_lambda(move || {
+                for e in edges {
+                    store_metadata::<E::VM>(
+                        &meta,
+                        unsafe { e.to_object_reference() },
+                        0,
+                        None,
+                        Some(Ordering::Relaxed),
+                    )
+                }
+            });
+        }
+        if !self.incs.is_empty() {
+            let mut incs = vec![];
+            std::mem::swap(&mut incs, &mut self.incs);
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add_lambda(move || {
+                for e in incs {
+                    let o: ObjectReference = unsafe { e.load() };
+                    if !o.is_null() {
+                        let _ = crate::policy::immix::rc::inc(o);
+                        // println!("inc {:?} {:?} {:?}", e, o, crate::policy::immix::rc::count(o));
+                    }
+                }
+            });
+        }
+        if !self.decs.is_empty() {
+            struct ProcessDecs<E: ProcessEdgesWork> {
+                decs: Vec<ObjectReference>,
+                phantom: PhantomData<E>,
+            }
+            impl<E: ProcessEdgesWork> ProcessDecs<E> {
+                pub fn new(decs: Vec<ObjectReference>) -> Self {
+                    Self { decs, phantom: PhantomData }
+                }
+            }
+            impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessDecs<E> {
+                #[inline(always)]
+                fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+                    let mut new_decs = vec![];
+                    for o in &self.decs {
+                        let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
+                        if !immix.immix_space.in_space(*o) {continue}
+                        let r = crate::policy::immix::rc::dec(*o);
+                        if r == Ok(0) {
+                            // Recursively decrease field ref counts
+                            EdgeIterator::<E::VM>::iterate(*o, |edge| {
+                                let o = unsafe { edge.load::<ObjectReference>() };
+                                if !o.is_null() {
+                                    new_decs.push(o);
+                                }
+                            });
+                        }
+                    }
+                    if !new_decs.is_empty() {
+                        worker.local_work_bucket.add(ProcessDecs::<E>::new(new_decs));
+                    }
+                }
+            }
+            let mut decs = vec![];
+            std::mem::swap(&mut decs, &mut self.decs);
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<E>::new(decs));
         }
     }
 
     #[inline(always)]
     fn write_barrier(&mut self, target: WriteTarget) {
         match target {
-            WriteTarget::Field { slot, val, .. } => {
-                self.dec(unsafe { slot.load() });
-                self.inc(val);
+            WriteTarget::Field { slot, src, .. } => {
                 self.enqueue_node(slot);
             }
             WriteTarget::ArrayCopy {
-                src,
-                src_offset,
                 dst,
                 dst_offset,
                 len,
                 ..
             } => {
-                let src_base = src.to_address() + src_offset;
                 let dst_base = dst.to_address() + dst_offset;
                 for i in 0..len {
-                    self.dec(unsafe { (dst_base + (i << 3)).load() });
-                    self.inc(unsafe { (src_base + (i << 3)).load() });
-                    self.enqueue_node(src_base + (i << 3));
+                    self.enqueue_node(dst_base + (i << 3));
                 }
             }
-            WriteTarget::Clone { src, .. } => {
+            WriteTarget::Clone { dst, .. } => {
                 // How to deal with this?
                 // println!("Clone {:?}", src);
-                EdgeIterator::<E::VM>::iterate(src, |edge| {
-                    self.inc(unsafe { edge.load() });
+                EdgeIterator::<E::VM>::iterate(dst, |edge| {
+                    debug_assert!(unsafe { edge.load::<ObjectReference>() }.is_null(), "{:?}", unsafe { edge.load::<ObjectReference>() });
+                    self.enqueue_node(edge);
                 })
             }
         }
