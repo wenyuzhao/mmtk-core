@@ -14,25 +14,29 @@ pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
 #[inline(always)]
 pub fn inc(o: ObjectReference) -> Result<usize, usize> {
     debug_assert!(!o.is_null());
-    side_metadata::fetch_update(&RC_TABLE, o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
+    let r = side_metadata::fetch_update(&RC_TABLE, o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
         if x == 0b1111 {
             None
         } else {
             Some(x + 1)
         }
-    })
+    });
+    // println!("inc {:?} {:?}", o, count(o));
+    r
 }
 
 #[inline(always)]
 pub fn dec(o: ObjectReference) -> Result<usize, usize> {
     debug_assert!(!o.is_null());
-    side_metadata::fetch_update(&RC_TABLE, o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
+    let r = side_metadata::fetch_update(&RC_TABLE, o.to_address(), Ordering::SeqCst, Ordering::SeqCst, |x| {
         if x == 0 || x == 0b1111 /* sticky */ {
             None
         } else {
             Some(x - 1)
         }
-    })
+    });
+    // println!("dec {:?} {:?}", o, count(o));
+    r
 }
 
 pub fn count(o: ObjectReference) -> usize {

@@ -269,8 +269,9 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
                 debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
                 self.edges.push(edge);
                 let old: ObjectReference = unsafe { edge.load() };
-                if old.is_null() { return }
-                self.decs.push(old);
+                if !old.is_null() {
+                    self.decs.push(old);
+                }
                 self.incs.push(edge);
                 if self.edges.len() >= E::CAPACITY || self.incs.len() >= E::CAPACITY || self.decs.len() >= E::CAPACITY {
                     self.flush();
@@ -320,7 +321,6 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
                     let o: ObjectReference = unsafe { e.load() };
                     if !o.is_null() &&  immix.immix_space.in_space(o) {
                         let _ = crate::policy::immix::rc::inc(o);
-                        // println!("inc {:?} {:?} {:?}", e, o, crate::policy::immix::rc::count(o));
                     }
                 }
             });

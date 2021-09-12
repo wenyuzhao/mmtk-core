@@ -157,7 +157,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mmapper,
             heap,
         );
-        ImmixSpace {
+        let mut x = ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
                 FreeListPageResource::new_discontiguous(0, vm_map)
             } else {
@@ -171,7 +171,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
-        }
+        };
+        x.pr.protect_memory_on_release = true;
+        x
     }
 
     /// Get the number of defrag headroom pages.
