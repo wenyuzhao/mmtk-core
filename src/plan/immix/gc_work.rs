@@ -1,6 +1,5 @@
 use atomic::Ordering;
 
-use super::RC;
 use super::global::Immix;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ScanObjectsAndMarkLines;
@@ -233,9 +232,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         if object.is_null() {
             return object;
         }
-        // if self.immix().immix_space.in_space(object) {
+        if self.immix().immix_space.in_space(object) {
             let _ = crate::policy::immix::rc::inc(object);
-        // }
+        }
         object
     }
 

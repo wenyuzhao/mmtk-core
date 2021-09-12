@@ -12,7 +12,7 @@ use crate::{
     util::metadata::side_metadata::{SideMetadataOffset, SideMetadataSpec},
 };
 
-use self::chunk::ChunkMap;
+use self::rc::RC_TABLE;
 
 use super::mallocspace::metadata::ACTIVE_PAGE_METADATA_SPEC;
 
@@ -43,4 +43,4 @@ const IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
     SideMetadataOffset::layout_after(&ACTIVE_PAGE_METADATA_SPEC);
 
 /// Immix's Last local side metadata. Used to calculate `LOCAL_SIDE_METADATA_VM_BASE_OFFSET`.
-pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = ChunkMap::ALLOC_TABLE;
+pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = RC_TABLE;

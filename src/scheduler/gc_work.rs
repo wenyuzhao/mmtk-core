@@ -775,38 +775,3 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufIU<E> {
         }
     }
 }
-
-pub struct ProcessDeadObjects<E: ProcessEdgesWork> {
-    objs: Vec<ObjectReference>,
-    meta: MetadataSpec,
-    phantom: PhantomData<E>,
-}
-
-impl<E: ProcessEdgesWork> ProcessDeadObjects<E> {
-    pub fn new(objs: Vec<ObjectReference>, meta: MetadataSpec) -> Self {
-        Self {
-            objs,
-            meta,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessDeadObjects<E> {
-    #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut objs = vec![];
-        for o in &self.objs {
-            let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-            if immix.immix_space.in_space(*o) && immix.immix_space.is_dead(*o) {
-                immix.immix_space.free(*o, |x| {
-                    objs.push(x)
-                });
-            }
-        }
-        if !objs.is_empty() {
-            worker.local_work_bucket.add(ProcessDeadObjects::<E>::new(objs, self.meta));
-
-        }
-    }
-}

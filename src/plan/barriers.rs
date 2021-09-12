@@ -17,7 +17,6 @@ use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
 use crate::MMTK;
 use crate::util::metadata::side_metadata;
-use crate::plan::immix::RC;
 
 use super::transitive_closure::EdgeIterator;
 
@@ -266,7 +265,7 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> FieldLoggingBarrier<E, KIND> {
                 }
             }
             // Reference counting
-            if crate::plan::immix::RC_ENABLED {
+            if crate::plan::immix::REF_COUNT {
                 debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
                 self.edges.push(edge);
                 let old: ObjectReference = unsafe { edge.load() };
@@ -315,10 +314,11 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
         if !self.incs.is_empty() {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
+            let immix = self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
             self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add_lambda(move || {
                 for e in incs {
                     let o: ObjectReference = unsafe { e.load() };
-                    if !o.is_null() {
+                    if !o.is_null() &&  immix.immix_space.in_space(o) {
                         let _ = crate::policy::immix::rc::inc(o);
                         // println!("inc {:?} {:?} {:?}", e, o, crate::policy::immix::rc::count(o));
                     }
@@ -341,7 +341,7 @@ impl<E: ProcessEdgesWork, const KIND: FLBKind> Barrier for FieldLoggingBarrier<E
                     let mut new_decs = vec![];
                     for o in &self.decs {
                         let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-                        if !immix.immix_space.in_space(*o) {continue}
+                        if !immix.immix_space.in_space(*o) { continue }
                         let r = crate::policy::immix::rc::dec(*o);
                         if r == Ok(0) {
                             // Recursively decrease field ref counts

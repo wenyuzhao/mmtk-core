@@ -2,7 +2,7 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::Line;
 use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
-use crate::plan::immix::RC_ENABLED;
+use crate::plan::immix::REF_COUNT;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::MetadataSpec;
@@ -258,7 +258,7 @@ impl Block {
         line_mark_state: Option<u8>,
     ) -> bool {
         if super::BLOCK_ONLY {
-            if RC_ENABLED {
+            if REF_COUNT {
                 let live = !self.rc_dead();
                 if !live {
                     space.release_block(*self);

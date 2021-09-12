@@ -105,7 +105,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             println!("FLB_KIND: {:?}", flb);
             assert!(flb == None || flb == Some("SATB") || flb == Some("IU"));
         }
-        println!("RC: {}", super::RC_ENABLED);
+        println!("RC: {}", super::REF_COUNT);
         println!("CONCURRENT_MARKING: {}", super::CONCURRENT_MARKING);
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
@@ -174,14 +174,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        if !super::RC_ENABLED {
+        if !super::REF_COUNT {
             self.common.prepare(tls, true);
         }
         self.immix_space.prepare();
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        if !super::RC_ENABLED {
+        if !super::REF_COUNT {
             self.common.release(tls, true);
         }
         // release the collected region
@@ -216,7 +216,7 @@ impl<VM: VMBinding> Immix<VM> {
         let immix_specs = if get_immix_constraints().barrier != BarrierSelector::NoBarrier
             || crate::plan::barriers::BARRIER_MEASUREMENT
         {
-            metadata::extract_side_metadata(&[super::RC, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
+            metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
         } else {
             vec![]
         };
