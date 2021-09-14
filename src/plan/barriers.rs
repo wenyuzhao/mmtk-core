@@ -185,6 +185,9 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
     }
 }
 
+pub const UNLOGGED_VALUE: usize = 1;
+pub const LOGGED_VALUE: usize = UNLOGGED_VALUE ^ 1;
+
 pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
     edges: Vec<Address>,
@@ -218,14 +221,14 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 None,
                 Some(Ordering::SeqCst),
             );
-            if old_value == 1 {
+            if old_value == LOGGED_VALUE {
                 return false;
             }
             if compare_exchange_metadata::<E::VM>(
                 &self.meta,
                 unsafe { edge.to_object_reference() },
-                0,
-                1,
+                UNLOGGED_VALUE,
+                LOGGED_VALUE,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
@@ -289,6 +292,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     fn flush(&mut self) {
         // Concurrent Marking: Flush satb buffer
         if crate::plan::immix::CONCURRENT_MARKING {
+            unreachable!();
             let mut edges = vec![];
             std::mem::swap(&mut edges, &mut self.edges);
             let mut nodes = vec![];
@@ -306,7 +310,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                     store_metadata::<E::VM>(
                         &meta,
                         unsafe { e.to_object_reference() },
-                        0,
+                        UNLOGGED_VALUE,
                         None,
                         Some(Ordering::Relaxed),
                     )
@@ -317,15 +321,8 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if !self.incs.is_empty() {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
-            let immix = self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add_lambda(move || {
-                for e in incs {
-                    let o: ObjectReference = unsafe { e.load() };
-                    if !o.is_null() && immix.immix_space.in_space(o) {
-                        let _ = crate::policy::immix::rc::inc(o);
-                    }
-                }
-            });
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure]
+                .add(ProcessIncs::<E::VM>::new(incs));
         }
         // Flush dec buffer
         if !self.decs.is_empty() {

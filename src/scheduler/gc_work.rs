@@ -788,6 +788,58 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufIU<E> {
     }
 }
 
+pub struct ProcessIncs<VM: VMBinding> {
+    incs: Vec<Address>,
+    phantom: PhantomData<VM>,
+}
+impl<VM: VMBinding> ProcessIncs<VM> {
+    pub fn new(incs: Vec<Address>) -> Self {
+        Self {
+            incs,
+            phantom: PhantomData,
+        }
+    }
+}
+impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let mut new_incs = vec![];
+        for e in &self.incs {
+            let o: ObjectReference = unsafe { e.load() };
+            if o.is_null() || !immix.immix_space.in_space(o) {
+                continue;
+            }
+            if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                debug_assert_eq!(
+                    crate::plan::barriers::LOGGED_VALUE,
+                    load_metadata::<VM>(
+                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                        o,
+                        None,
+                        Some(Ordering::SeqCst),
+                    )
+                );
+                EdgeIterator::<VM>::iterate(o, |edge| {
+                    store_metadata::<VM>(
+                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                        unsafe { edge.to_object_reference() },
+                        crate::plan::barriers::UNLOGGED_VALUE,
+                        None,
+                        Some(Ordering::SeqCst),
+                    );
+                    new_incs.push(edge);
+                });
+            }
+        }
+        if !new_incs.is_empty() {
+            worker
+                .local_work_bucket
+                .add(ProcessIncs::<VM>::new(new_incs));
+        }
+    }
+}
+
 pub struct ProcessDecs<VM: VMBinding> {
     decs: Vec<ObjectReference>,
     phantom: PhantomData<VM>,

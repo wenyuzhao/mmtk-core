@@ -204,6 +204,7 @@ pub struct RCImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
     mmtk: &'static MMTK<VM>,
+    slots: Vec<Address>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
@@ -217,12 +218,22 @@ pub static OLD_ROOTS: Mutex<Vec<ObjectReference>> = Mutex::new(vec![]);
 
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEdges<VM, KIND> {
     type VM = VM;
-    const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG;
+    const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
+        && if let TraceKind::Defrag = KIND {
+            true
+        } else {
+            false
+        };
 
     fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self { plan, base, mmtk }
+        Self {
+            plan,
+            base,
+            mmtk,
+            slots: vec![],
+        }
     }
 
     /// Trace  and evacuate objects.
@@ -232,10 +243,30 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            let _ = crate::policy::immix::rc::inc(object);
             CURR_ROOTS.lock().push(object);
         }
         object
+    }
+
+    #[inline]
+    fn process_edge(&mut self, slot: Address) {
+        self.slots.push(slot);
+        let object = unsafe { slot.load::<ObjectReference>() };
+        let new_object = self.trace_object(object);
+        if Self::OVERWRITE_REFERENCE {
+            unsafe { slot.store(new_object) };
+        }
+    }
+
+    #[inline]
+    fn process_edges(&mut self) {
+        for i in 0..self.edges.len() {
+            self.process_edge(self.edges[i])
+        }
+        let mut slots = vec![];
+        std::mem::swap(&mut slots, &mut self.slots);
+        self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure]
+            .add(ProcessIncs::<VM>::new(slots));
     }
 
     const CAPACITY: usize = 4096;

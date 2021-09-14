@@ -100,19 +100,9 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
 }
 
-static NEW_OBJECTS: Mutex<Vec<ObjectReference>> = Mutex::new(vec![]);
-
 impl<VM: VMBinding> ImmixSpace<VM> {
     const UNMARKED_STATE: u8 = 0;
     const MARKED_STATE: u8 = 1;
-
-    pub fn post_alloc(&self, addr: Address, _size: usize) {
-        debug_assert!(super::rc::is_dead(unsafe { addr.to_object_reference() }));
-        NEW_OBJECTS
-            .lock()
-            .push(unsafe { addr.to_object_reference() });
-        let _ = super::rc::inc(unsafe { addr.to_object_reference() });
-    }
 
     pub fn free(&self, o: ObjectReference, mut f: impl FnMut(ObjectReference)) {}
 
@@ -254,12 +244,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.line_mark_state
                     .store(Line::RESET_MARK_STATE, Ordering::Release);
             }
-        }
-        if REF_COUNT {
-            let mut new_objects = vec![];
-            std::mem::swap(&mut new_objects, &mut NEW_OBJECTS.lock());
-            self.scheduler().work_buckets[WorkBucketStage::RefClosure]
-                .add(ProcessDecs::<VM>::new(new_objects));
         }
     }
 
