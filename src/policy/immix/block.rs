@@ -280,9 +280,10 @@ impl Block {
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
+        perform_cycle_collection: bool,
     ) -> bool {
         if super::BLOCK_ONLY {
-            if REF_COUNT {
+            if REF_COUNT && !perform_cycle_collection {
                 let live = !self.rc_dead();
                 if !live {
                     space.release_block(*self);

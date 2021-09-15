@@ -1,6 +1,7 @@
 use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
+use crate::plan::immix::Immix;
 use crate::util::metadata::side_metadata::{self, load, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::{
@@ -56,7 +57,7 @@ impl Chunk {
     }
 
     /// Sweep this chunk.
-    pub fn sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>, mark_histogram: &mut Histogram) {
+    pub fn sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>, mark_histogram: &mut Histogram, perform_cycle_collection: bool) {
         let line_mark_state = if super::BLOCK_ONLY {
             None
         } else {
@@ -69,7 +70,7 @@ impl Chunk {
             .blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            if !block.sweep(space, mark_histogram, line_mark_state) {
+            if !block.sweep(space, mark_histogram, line_mark_state, perform_cycle_collection) {
                 // println!("{:?} is live", block);
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
@@ -220,10 +221,11 @@ struct SweepChunk<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut histogram = self.space.defrag.new_histogram();
         if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
-            self.chunk.sweep(self.space, &mut histogram);
+            self.chunk.sweep(self.space, &mut histogram, immix.perform_cycle_collection());
         }
         self.space.defrag.add_completed_mark_histogram(histogram);
     }

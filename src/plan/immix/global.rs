@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixCopyContext, RCImmixProcessEdges as ImmixProcessEdges, TraceKind};
+use super::gc_work::{ImmixCopyContext, RCImmixProcessEdges, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -31,6 +31,7 @@ use crate::{
 use crate::{scheduler::*, BarrierSelector};
 use std::env;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use atomic::Ordering;
 use enum_map::EnumMap;
@@ -40,6 +41,9 @@ pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
     pub common: CommonPlan<VM>,
+    /// Always true for non-rc immix.
+    /// For RC immix, this is used for enable backup tracing.
+    pub perform_cycle_collection: AtomicBool,
 }
 
 #[inline]
@@ -143,59 +147,23 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.base().is_user_triggered_collection(),
             self.base().options.full_heap_system_gc,
         );
-        // Stop & scan mutators (mutator scanning can happen before STW)
-        // The blocks are not identical, clippy is wrong. Probably it does not recognize the constant type parameter.
-        #[allow(clippy::if_same_then_else)]
-        // The two StopMutators have different types parameters, thus we cannot extract the common code before add().
-        #[allow(clippy::branches_sharing_code)]
-        if in_defrag {
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>::new());
-        } else {
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
-        }
-        // Prepare global/collectors/mutators
-        if concurrent {
-            scheduler.work_buckets[WorkBucketStage::PreClosure].add(ConcurrentWorkStart);
-            scheduler.work_buckets[WorkBucketStage::PostClosure].add(ConcurrentWorkEnd::<
-                ImmixProcessEdges<VM, { TraceKind::Fast }>,
-            >::new());
-        }
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        // The blocks are not identical, clippy is wrong. Probably it does not recognize the constant type parameter.
-        #[allow(clippy::if_same_then_else)]
-        // The two StopMutators have different types parameters, thus we cannot extract the common code before add().
-        #[allow(clippy::branches_sharing_code)]
-        if in_defrag {
-            scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<
-                ImmixProcessEdges<VM, { TraceKind::Defrag }>,
-            >::new());
-        } else {
-            scheduler.work_buckets[WorkBucketStage::RefClosure]
-                .add(ProcessWeakRefs::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
-        }
-        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
-        // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        let cc_force_full = self.base().options.full_heap_system_gc;
+        let mut perform_cycle_collection = !super::REF_COUNT || self.perform_cycle_collection.load(Ordering::SeqCst);
+        perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1) || self.is_emergency_collection() || cc_force_full;
+        self.perform_cycle_collection.store(perform_cycle_collection, Ordering::SeqCst);
+        println!("perform_cycle_collection: {}", perform_cycle_collection);
 
-        if super::REF_COUNT {
-            let mut decs = vec![];
-            let mut old_roots = super::gc_work::OLD_ROOTS.lock();
-            std::mem::swap(&mut decs, &mut old_roots);
-            scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<VM>::new(decs));
+        // println!("is_emergency_collection: {}", self.is_emergency_collection());
+        if in_defrag {
+            self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(scheduler, concurrent, in_defrag);
+            unreachable!();
+        } else {
+            if !super::REF_COUNT || perform_cycle_collection {
+                self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler, concurrent, in_defrag);
+            } else {
+                self.schedule_immix_collection::<RCImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler, concurrent, in_defrag);
+            }
         }
-
-        // Analysis routine that is ran. It is generally recommended to take advantage
-        // of the scheduling system we have in place for more performance
-        #[cfg(feature = "analysis")]
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
-        // Resume mutators
-        #[cfg(feature = "sanity")]
-        scheduler.work_buckets[WorkBucketStage::Final]
-            .add(ScheduleSanityGC::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.set_finalizer(Some(EndOfGC));
     }
 
@@ -204,14 +172,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        if !super::REF_COUNT {
+        if !super::REF_COUNT || self.perform_cycle_collection() {
             self.common.prepare(tls, true);
         }
         self.immix_space.prepare();
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        if !super::REF_COUNT {
+        if !super::REF_COUNT || self.perform_cycle_collection() {
             self.common.release(tls, true);
         }
         // release the collected region
@@ -220,6 +188,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut curr_roots = super::gc_work::CURR_ROOTS.lock();
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap::<Vec<ObjectReference>>(&mut curr_roots, &mut old_roots);
+            let me = unsafe { &*(self as *const Self) };
+            self.base().control_collector_context.scheduler().work_buckets[WorkBucketStage::Final].add_lambda(move || {
+                let perform_cycle_collection = me.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+                me.perform_cycle_collection.store(perform_cycle_collection, Ordering::SeqCst);
+            });
         }
     }
 
@@ -264,6 +237,7 @@ impl<VM: VMBinding> Immix<VM> {
                 &mut heap,
                 scheduler,
                 global_metadata_specs.clone(),
+                get_immix_constraints(),
             ),
             common: CommonPlan::new(
                 vm_map,
@@ -273,6 +247,7 @@ impl<VM: VMBinding> Immix<VM> {
                 get_immix_constraints(),
                 global_metadata_specs,
             ),
+            perform_cycle_collection: AtomicBool::new(false),
         };
 
         {
@@ -286,5 +261,42 @@ impl<VM: VMBinding> Immix<VM> {
         }
 
         immix
+    }
+
+    fn schedule_immix_collection<E: ProcessEdgesWork<VM=VM>>(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool, in_defrag: bool) {
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
+        // Prepare global/collectors/mutators
+        if concurrent {
+            scheduler.work_buckets[WorkBucketStage::PreClosure].add(ConcurrentWorkStart);
+            scheduler.work_buckets[WorkBucketStage::PostClosure].add(ConcurrentWorkEnd::<E>::new());
+        }
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E>::new());
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+
+        if super::REF_COUNT {
+            let mut decs = vec![];
+            let mut old_roots = super::gc_work::OLD_ROOTS.lock();
+            std::mem::swap(&mut decs, &mut old_roots);
+            scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<VM>::new(decs));
+        }
+
+        // Analysis routine that is ran. It is generally recommended to take advantage
+        // of the scheduling system we have in place for more performance
+        #[cfg(feature = "analysis")]
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
+        // Resume mutators
+        #[cfg(feature = "sanity")]
+        scheduler.work_buckets[WorkBucketStage::Final]
+            .add(ScheduleSanityGC::<Self, ImmixCopyContext<VM>>::new(self));
+    }
+
+    pub fn perform_cycle_collection(&self) -> bool {
+        self.perform_cycle_collection.load(Ordering::SeqCst)
     }
 }

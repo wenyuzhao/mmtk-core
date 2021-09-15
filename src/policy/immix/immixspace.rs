@@ -5,7 +5,7 @@ use super::{
     defrag::Defrag,
 };
 use crate::plan::immix::REF_COUNT;
-use crate::plan::EdgeIterator;
+use crate::plan::PlanConstraints;
 use crate::plan::ObjectsClosure;
 use crate::policy::immix::RC_TABLE;
 use crate::policy::space::SpaceOptions;
@@ -30,12 +30,14 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
-use spin::Mutex;
+use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
     ops::Range,
     sync::{atomic::AtomicU8, Arc},
 };
+
+static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -104,8 +106,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     const UNMARKED_STATE: u8 = 0;
     const MARKED_STATE: u8 = 1;
 
-    pub fn free(&self, o: ObjectReference, mut f: impl FnMut(ObjectReference)) {}
-
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
         let mut x = metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -137,6 +137,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         heap: &mut HeapMeta,
         scheduler: Arc<GCWorkScheduler<VM>>,
         global_side_metadata_specs: Vec<SideMetadataSpec>,
+        constraints: &'static PlanConstraints,
     ) -> Self {
         let common = CommonSpace::new(
             SpaceOptions {
@@ -149,8 +150,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     global: global_side_metadata_specs,
                     local: Self::side_metadata_specs(),
                 },
-                needs_log_bit: false,
-                needs_field_log_bit: false,
+                needs_log_bit: constraints.needs_log_bit,
+                needs_field_log_bit: constraints.needs_field_log_bit,
             },
             vm_map,
             mmapper,
@@ -269,17 +270,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::DEFRAG {
             self.defrag.release(self)
         }
+        self.scheduler().work_buckets[WorkBucketStage::Final].add_lambda(|| {
+            let released_blocks = RELEASED_BLOCKS.load(Ordering::SeqCst);
+            println!("Released {} blocks", released_blocks);
+            RELEASED_BLOCKS.store(0, Ordering::SeqCst);
+        });
     }
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
-        println!(" - Release {:?}", block);
-        debug_assert!(block.rc_dead());
-        for i in (0..Block::BYTES).step_by(8) {
-            unsafe {
-                (block.start() + i).store(0xdeadbeefusize);
-            }
-        }
+        RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         block.deinit();
         self.pr.release_pages(block.start());
     }
@@ -294,12 +294,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let block = Block::from(block_address);
         // println!(" - Allocate {:?}", block);
         if crate::plan::immix::REF_COUNT {
-            debug_assert!(block.rc_dead());
             side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
         }
         // println!(" - Alloc block {:?}", block);
         block.init(copy);
-        block.clear_log_table::<VM>();
+        if self.common.needs_log_bit {
+            block.clear_log_table::<VM>();
+        }
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
         Some(block)
     }
@@ -323,7 +324,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
-    ) -> ObjectReference {
+    ) -> (ObjectReference, bool) {
         self.trace_object_without_moving(trace, object)
     }
 
@@ -345,7 +346,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if Block::containing::<VM>(object).is_defrag_source() {
             self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
         } else {
-            self.trace_object_without_moving(trace, object)
+            self.trace_object_without_moving(trace, object).0
         }
     }
 
@@ -355,7 +356,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
-    ) -> ObjectReference {
+    ) -> (ObjectReference, bool) {
+        let mut marked = false;
         if self.attempt_mark(object, self.mark_state) {
             // Mark block and lines
             if !super::BLOCK_ONLY {
@@ -368,8 +370,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // println!(" - Mark object {:?}", object);
             // Visit node
             trace.process_node(object);
+            marked = true;
         }
-        object
+        (object, marked)
     }
 
     /// Trace object and do evacuation if required.

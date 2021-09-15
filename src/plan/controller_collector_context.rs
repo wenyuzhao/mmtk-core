@@ -47,6 +47,11 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
         }
     }
 
+    pub fn scheduler(&self) -> Arc<GCWorkScheduler<VM>> {
+        let scheduler_guard = self.scheduler.read().unwrap();
+        scheduler_guard.as_ref().unwrap().clone()
+    }
+
     pub fn init(&self, scheduler: &Arc<GCWorkScheduler<VM>>) {
         let mut scheduler_guard = self.scheduler.write().unwrap();
         debug_assert!(scheduler_guard.is_none());

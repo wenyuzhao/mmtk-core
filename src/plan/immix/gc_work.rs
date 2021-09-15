@@ -1,15 +1,16 @@
 use atomic::Ordering;
 
 use super::global::Immix;
-use crate::plan::PlanConstraints;
+use crate::plan::{EdgeIterator, PlanConstraints};
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
+use crate::util::metadata::store_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
-use crate::vm::VMBinding;
+use crate::vm::{VMBinding, ObjectModel};
 use crate::MMTK;
 use crate::{
     plan::CopyContext,
@@ -95,6 +96,7 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
     mmtk: &'static MMTK<VM>,
+    roots: bool,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
@@ -107,8 +109,30 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         if object.is_null() {
             return object;
         }
+        if super::REF_COUNT {
+            // TODO: Do this in barrier work packets
+            EdgeIterator::<VM>::iterate(object, |edge| {
+                store_metadata::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    unsafe { edge.to_object_reference() },
+                    crate::plan::barriers::UNLOGGED_VALUE,
+                    None,
+                    Some(Ordering::SeqCst),
+                );
+            });
+        }
         if self.immix().immix_space.in_space(object) {
-            self.immix().immix_space.fast_trace_object(self, object)
+            let (_, marked) = self.immix().immix_space.fast_trace_object(self, object);
+            if super::REF_COUNT {
+                if marked {
+                    crate::policy::immix::rc::reset(object);
+                }
+                let _ = crate::policy::immix::rc::inc(object);
+                if self.roots {
+                    CURR_ROOTS.lock().push(object);
+                }
+            }
+            object
         } else {
             self.immix()
                 .common
@@ -128,10 +152,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG;
 
-    fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self { plan, base, mmtk }
+        Self { plan, base, mmtk, roots }
     }
 
     #[cold]

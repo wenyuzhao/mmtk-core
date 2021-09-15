@@ -7,3 +7,5 @@ pub use self::global::{get_active_barrier, Immix};
 pub const CONCURRENT_MARKING: bool = false;
 
 pub const REF_COUNT: bool = true;
+
+const CYCLE_TRIGGER_THRESHOLD: usize = 1024;

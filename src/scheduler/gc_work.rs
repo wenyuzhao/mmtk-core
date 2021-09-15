@@ -288,6 +288,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         }
 
         mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
+        mmtk.plan.reset_collection_trigger();
         // println!(
         //     "End of GC: {} / {}",
         //     mmtk.plan.get_pages_reserved(),
@@ -765,7 +766,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         let mut new_incs = vec![];
         for e in &self.incs {
             let o: ObjectReference = unsafe { e.load() };
-            if o.is_null() || !immix.immix_space.in_space(o) {
+            if o.is_null() || !immix.immix_space.in_space(o) || immix.perform_cycle_collection() {
                 continue;
             }
             // println!("inc: {:?} -> {:?} oldcount={}", e, o, crate::policy::immix::rc::count(o));
@@ -818,7 +819,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut new_decs = vec![];
         for o in &self.decs {
-            if !immix.immix_space.in_space(*o) {
+            if !immix.immix_space.in_space(*o) || immix.perform_cycle_collection() {
                 continue;
             }
             if let Ok(0) = crate::policy::immix::rc::dec(*o) {
