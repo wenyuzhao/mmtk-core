@@ -108,12 +108,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
-        metadata::extract_side_metadata(&if super::BLOCK_ONLY {
+        let mut x = metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
-                MetadataSpec::OnSide(RC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             ]
         } else {
@@ -122,10 +121,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
-                MetadataSpec::OnSide(RC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             ]
-        })
+        });
+        if crate::plan::immix::REF_COUNT {
+            x.push(RC_TABLE);
+        }
+        x
     }
 
     pub fn new(
@@ -291,8 +293,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from(block_address);
         // println!(" - Allocate {:?}", block);
-        debug_assert!(block.rc_dead());
         if crate::plan::immix::REF_COUNT {
+            debug_assert!(block.rc_dead());
             side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
         }
         // println!(" - Alloc block {:?}", block);

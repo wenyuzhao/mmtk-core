@@ -149,8 +149,6 @@ pub fn load_metadata(
 }
 
 /// This function provides a default implementation for the `store_metadata` method from the `ObjectModel` trait.
-///
-/// Note: this function does compare-and-swap in a busy loop. So, unlike `compare_exchange_metadata`, this operation will always success.
 #[inline(always)]
 pub fn store_metadata(
     metadata_spec: &HeaderMetadataSpec,
@@ -353,8 +351,6 @@ pub fn store_metadata(
 }
 
 /// This function provides a default implementation for the `compare_exchange_metadata` method from the `ObjectModel` trait.
-///
-/// Note: this function only does fetch and exclusive store once, without any busy waiting in a loop.
 #[inline(always)]
 pub fn compare_exchange_metadata(
     metadata_spec: &HeaderMetadataSpec,

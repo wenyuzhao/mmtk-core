@@ -135,11 +135,11 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
     #[inline(always)]
     fn enqueue_node(&mut self, obj: ObjectReference) {
         // If the objecct is unlogged, log it and push it to mod buffer
-        if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
+        if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
         if self.log_object(obj) {
-            if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
+            if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             self.modbuf.push(obj);
@@ -249,11 +249,11 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         {
             return;
         }
-        if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
+        if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
         if self.log_edge(edge) {
-            if TAKERATE_MEASUREMENT && crate::INSIDE_HARNESS.load(Ordering::SeqCst) {
+            if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             // Concurrent Marking
@@ -292,7 +292,6 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     fn flush(&mut self) {
         // Concurrent Marking: Flush satb buffer
         if crate::plan::immix::CONCURRENT_MARKING {
-            unreachable!();
             let mut edges = vec![];
             std::mem::swap(&mut edges, &mut self.edges);
             let mut nodes = vec![];

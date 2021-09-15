@@ -12,7 +12,7 @@ use crate::{
     util::metadata::side_metadata::{SideMetadataOffset, SideMetadataSpec},
 };
 
-use self::rc::RC_TABLE;
+use self::{chunk::ChunkMap, rc::RC_TABLE};
 
 use super::mallocspace::metadata::ACTIVE_PAGE_METADATA_SPEC;
 
@@ -24,7 +24,7 @@ pub const DEFRAG: bool = false;
 
 /// Mark lines when scanning objects.
 /// Otherwise, do it at mark time.
-pub const MARK_LINE_AT_SCAN_TIME: bool = false;
+pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
 macro_rules! validate {
     ($x: expr) => { assert!($x, stringify!($x)) };
@@ -43,4 +43,8 @@ const IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
     SideMetadataOffset::layout_after(&ACTIVE_PAGE_METADATA_SPEC);
 
 /// Immix's Last local side metadata. Used to calculate `LOCAL_SIDE_METADATA_VM_BASE_OFFSET`.
-pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = RC_TABLE;
+pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = if crate::plan::immix::REF_COUNT {
+    RC_TABLE
+} else {
+    ChunkMap::ALLOC_TABLE
+};

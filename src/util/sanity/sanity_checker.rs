@@ -1,6 +1,6 @@
+use crate::plan::immix::Immix;
 use crate::plan::CopyContext;
 use crate::plan::Plan;
-use crate::plan::immix::Immix;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::*;

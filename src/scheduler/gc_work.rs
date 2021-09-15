@@ -641,18 +641,12 @@ impl<E: ProcessEdgesWork> ProcessModBuf<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let unlogged_value =
-            if crate::plan::immix::get_active_barrier() == BarrierSelector::ObjectBarrier {
-                0
-            } else {
-                1
-            };
         if !self.modbuf.is_empty() {
             for obj in &self.modbuf {
                 store_metadata::<E::VM>(
                     &self.meta,
                     *obj,
-                    unlogged_value,
+                    crate::plan::barriers::UNLOGGED_VALUE,
                     None,
                     Some(Ordering::SeqCst),
                 );
@@ -748,42 +742,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 ::std::mem::swap(&mut modbuf, &mut self.nodes);
                 GCWork::do_work(&mut ScanObjects::<E>::new(modbuf, false), worker, mmtk);
             }
-        }
-    }
-}
-
-pub struct ProcessModBufIU<E: ProcessEdgesWork> {
-    edges: Vec<Address>,
-    phantom: PhantomData<E>,
-    meta: MetadataSpec,
-}
-
-impl<E: ProcessEdgesWork> ProcessModBufIU<E> {
-    pub fn new(edges: Vec<Address>, meta: MetadataSpec) -> Self {
-        Self {
-            edges,
-            meta,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufIU<E> {
-    #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        if !self.edges.is_empty() {
-            for edge in &self.edges {
-                store_metadata::<E::VM>(
-                    &self.meta,
-                    unsafe { edge.to_object_reference() },
-                    0,
-                    None,
-                    Some(Ordering::Relaxed),
-                )
-            }
-            let mut modbuf = vec![];
-            ::std::mem::swap(&mut modbuf, &mut self.edges);
-            GCWork::do_work(&mut E::new(modbuf, false, mmtk), worker, mmtk)
         }
     }
 }

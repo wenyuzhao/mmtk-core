@@ -15,7 +15,8 @@ use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
-use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
+use crate::util::metadata::side_metadata::SideMetadataContext;
+use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::options::UnsafeOptionsWrapper;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
@@ -74,8 +75,8 @@ pub fn get_immix_constraints() -> &'static PlanConstraints {
         /// Max immix object size is half of a block.
         max_non_los_default_alloc_bytes: Block::BYTES >> 1,
         barrier: BarrierSelector::NoBarrier,
-        needs_log_bit: super::REF_COUNT,
-        needs_field_log_bit: super::REF_COUNT,
+        needs_log_bit: super::CONCURRENT_MARKING || super::REF_COUNT,
+        needs_field_log_bit: super::CONCURRENT_MARKING || super::REF_COUNT,
         ..PlanConstraints::default()
     };
     unsafe {

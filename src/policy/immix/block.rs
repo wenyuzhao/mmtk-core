@@ -5,7 +5,7 @@ use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
 use crate::plan::immix::REF_COUNT;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
-use crate::util::metadata::MetadataSpec;
+use crate::util::metadata::store_metadata;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use spin::{Mutex, MutexGuard};
@@ -238,7 +238,26 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        bzero_metadata(VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec().extract_side_spec(), self.start(), Block::BYTES);
+        if crate::plan::immix::CONCURRENT_MARKING {
+            for i in (0..Block::BYTES).step_by(8) {
+                let o = unsafe { (self.start() + i).to_object_reference() };
+                store_metadata::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    o,
+                    crate::plan::barriers::UNLOGGED_VALUE,
+                    None,
+                    Some(Ordering::SeqCst),
+                );
+            }
+        } else {
+            bzero_metadata(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .as_spec()
+                    .extract_side_spec(),
+                self.start(),
+                Block::BYTES,
+            );
+        }
     }
 
     #[inline(always)]
