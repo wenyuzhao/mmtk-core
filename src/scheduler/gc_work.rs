@@ -810,17 +810,19 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             if o.is_null() || !immix.immix_space.in_space(o) {
                 continue;
             }
+            // println!("inc: {:?} -> {:?} oldcount={}", e, o, crate::policy::immix::rc::count(o));
             if let Ok(0) = crate::policy::immix::rc::inc(o) {
-                debug_assert_eq!(
-                    crate::plan::barriers::LOGGED_VALUE,
-                    load_metadata::<VM>(
-                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
-                        o,
-                        None,
-                        Some(Ordering::SeqCst),
-                    )
-                );
+                // This is a nursery object
                 EdgeIterator::<VM>::iterate(o, |edge| {
+                    debug_assert_eq!(
+                        crate::plan::barriers::LOGGED_VALUE,
+                        load_metadata::<VM>(
+                            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                            unsafe { edge.to_object_reference() },
+                            None,
+                            Some(Ordering::SeqCst),
+                        )
+                    );
                     store_metadata::<VM>(
                         VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
                         unsafe { edge.to_object_reference() },

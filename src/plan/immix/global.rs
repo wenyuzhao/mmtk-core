@@ -74,6 +74,8 @@ pub fn get_immix_constraints() -> &'static PlanConstraints {
         /// Max immix object size is half of a block.
         max_non_los_default_alloc_bytes: Block::BYTES >> 1,
         barrier: BarrierSelector::NoBarrier,
+        needs_log_bit: super::REF_COUNT,
+        needs_field_log_bit: super::REF_COUNT,
         ..PlanConstraints::default()
     };
     unsafe {

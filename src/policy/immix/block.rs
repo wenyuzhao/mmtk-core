@@ -237,6 +237,11 @@ impl Block {
     }
 
     #[inline(always)]
+    pub fn clear_log_table<VM: VMBinding>(&self) {
+        bzero_metadata(VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec().extract_side_spec(), self.start(), Block::BYTES);
+    }
+
+    #[inline(always)]
     pub fn rc_dead(&self) -> bool {
         for i in (0..Block::BYTES).step_by(8) {
             let a = self.start() + i;

@@ -297,6 +297,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // println!(" - Alloc block {:?}", block);
         block.init(copy);
+        block.clear_log_table::<VM>();
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
         Some(block)
     }
