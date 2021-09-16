@@ -5,8 +5,8 @@ use super::{
     defrag::Defrag,
 };
 use crate::plan::immix::REF_COUNT;
-use crate::plan::PlanConstraints;
 use crate::plan::ObjectsClosure;
+use crate::plan::PlanConstraints;
 use crate::policy::immix::RC_TABLE;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};

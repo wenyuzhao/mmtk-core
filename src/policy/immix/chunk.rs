@@ -57,7 +57,12 @@ impl Chunk {
     }
 
     /// Sweep this chunk.
-    pub fn sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>, mark_histogram: &mut Histogram, perform_cycle_collection: bool) {
+    pub fn sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        perform_cycle_collection: bool,
+    ) {
         let line_mark_state = if super::BLOCK_ONLY {
             None
         } else {
@@ -70,7 +75,12 @@ impl Chunk {
             .blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            if !block.sweep(space, mark_histogram, line_mark_state, perform_cycle_collection) {
+            if !block.sweep(
+                space,
+                mark_histogram,
+                line_mark_state,
+                perform_cycle_collection,
+            ) {
                 // println!("{:?} is live", block);
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
@@ -225,7 +235,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut histogram = self.space.defrag.new_histogram();
         if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
-            self.chunk.sweep(self.space, &mut histogram, immix.perform_cycle_collection());
+            self.chunk
+                .sweep(self.space, &mut histogram, immix.perform_cycle_collection());
         }
         self.space.defrag.add_completed_mark_histogram(histogram);
     }

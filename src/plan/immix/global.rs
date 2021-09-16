@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixCopyContext, RCImmixProcessEdges, ImmixProcessEdges, TraceKind};
+use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -30,8 +30,8 @@ use crate::{
 };
 use crate::{scheduler::*, BarrierSelector};
 use std::env;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use atomic::Ordering;
 use enum_map::EnumMap;
@@ -148,20 +148,31 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.base().options.full_heap_system_gc,
         );
         let cc_force_full = self.base().options.full_heap_system_gc;
-        let mut perform_cycle_collection = !super::REF_COUNT || self.perform_cycle_collection.load(Ordering::SeqCst);
-        perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1) || self.is_emergency_collection() || cc_force_full;
-        self.perform_cycle_collection.store(perform_cycle_collection, Ordering::SeqCst);
+        let mut perform_cycle_collection =
+            !super::REF_COUNT || self.perform_cycle_collection.load(Ordering::SeqCst);
+        perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
+            > 1)
+            || self.is_emergency_collection()
+            || cc_force_full;
+        self.perform_cycle_collection
+            .store(perform_cycle_collection, Ordering::SeqCst);
         println!("perform_cycle_collection: {}", perform_cycle_collection);
 
         // println!("is_emergency_collection: {}", self.is_emergency_collection());
         if in_defrag {
-            self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(scheduler, concurrent, in_defrag);
+            self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(
+                scheduler, concurrent, in_defrag,
+            );
             unreachable!();
         } else {
             if !super::REF_COUNT || perform_cycle_collection {
-                self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler, concurrent, in_defrag);
+                self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(
+                    scheduler, concurrent, in_defrag,
+                );
             } else {
-                self.schedule_immix_collection::<RCImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler, concurrent, in_defrag);
+                self.schedule_immix_collection::<RCImmixProcessEdges<VM, { TraceKind::Fast }>>(
+                    scheduler, concurrent, in_defrag,
+                );
             }
         }
         scheduler.set_finalizer(Some(EndOfGC));
@@ -189,10 +200,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap::<Vec<ObjectReference>>(&mut curr_roots, &mut old_roots);
             let me = unsafe { &*(self as *const Self) };
-            self.base().control_collector_context.scheduler().work_buckets[WorkBucketStage::Final].add_lambda(move || {
-                let perform_cycle_collection = me.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
-                me.perform_cycle_collection.store(perform_cycle_collection, Ordering::SeqCst);
-            });
+            self.base()
+                .control_collector_context
+                .scheduler()
+                .work_buckets[WorkBucketStage::Final]
+                .add_lambda(move || {
+                    let perform_cycle_collection =
+                        me.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+                    me.perform_cycle_collection
+                        .store(perform_cycle_collection, Ordering::SeqCst);
+                });
         }
     }
 
@@ -263,7 +280,12 @@ impl<VM: VMBinding> Immix<VM> {
         immix
     }
 
-    fn schedule_immix_collection<E: ProcessEdgesWork<VM=VM>>(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool, in_defrag: bool) {
+    fn schedule_immix_collection<E: ProcessEdgesWork<VM = VM>>(
+        &'static self,
+        scheduler: &GCWorkScheduler<VM>,
+        concurrent: bool,
+        in_defrag: bool,
+    ) {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators

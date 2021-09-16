@@ -10,7 +10,7 @@ use crate::util::alloc::{Allocator, ImmixAllocator};
 use crate::util::metadata::store_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
-use crate::vm::{VMBinding, ObjectModel};
+use crate::vm::{ObjectModel, VMBinding};
 use crate::MMTK;
 use crate::{
     plan::CopyContext,
@@ -155,7 +155,12 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self { plan, base, mmtk, roots }
+        Self {
+            plan,
+            base,
+            mmtk,
+            roots,
+        }
     }
 
     #[cold]
