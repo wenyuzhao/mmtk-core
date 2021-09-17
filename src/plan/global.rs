@@ -257,7 +257,7 @@ pub trait Plan: 'static + Sync + Downcast {
                 return false;
             }*/
             self.log_poll(space, "Triggering collection");
-            if *crate::IN_CONCURRENT_GC.lock() {
+            if crate::IN_CONCURRENT_GC.load(Ordering::SeqCst) {
                 println!(
                     "End CONC GC: {} / {}",
                     self.get_pages_reserved(),

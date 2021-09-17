@@ -7,6 +7,7 @@ use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::util::metadata::*;
 use crate::util::*;
+use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::vm::*;
 use crate::*;
 use std::lazy::SyncLazy;
@@ -21,6 +22,9 @@ pub struct ScheduleCollection(pub bool);
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if crate::REPORT_GC_TIME {
+            *crate::GC_TRIGGER_TIME.lock() = Some(SystemTime::now());
+        }
         mmtk.plan.schedule_collection(worker.scheduler(), self.0);
     }
 }
@@ -319,9 +323,7 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentWorkStart {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if worker.is_coordinator() {
             // FIXME: Put this flag in correct place.
-            {
-                *crate::IN_CONCURRENT_GC.lock() = true;
-            }
+            crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
             // Resume mutators for concurrent marking.
             <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
         } else {
@@ -348,16 +350,14 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ConcurrentWorkEnd<E> {
         if worker.is_coordinator() {
             {
                 // Do nothing if not in concurrent phase
-                if !*crate::IN_CONCURRENT_GC.lock() {
+                if !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst) {
                     return;
                 }
             }
             // Stop mutators
             <E::VM as VMBinding>::VMCollection::stop_all_mutators2(worker.tls);
             // Set the flag to false
-            {
-                *crate::IN_CONCURRENT_GC.lock() = false;
-            }
+            crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             // Scan and mark roots again
             mmtk.plan.base().scanned_stacks.store(0, Ordering::SeqCst);
             for mutator in <E::VM as VMBinding>::VMActivePlan::mutators() {
@@ -782,16 +782,13 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
         let mut new_incs = vec![];
         for e in &self.incs {
             if UNLOG_EDGES {
-                store_metadata::<VM>(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
-                    unsafe { e.to_object_reference() },
-                    crate::plan::barriers::UNLOGGED_VALUE,
-                    None,
-                    Some(Ordering::SeqCst),
-                );
+                let ptr = address_to_meta_address(VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec().extract_side_spec(), *e);
+                unsafe {
+                    ptr.store(0b01010101u8);
+                }
             }
             let o: ObjectReference = unsafe { e.load() };
-            if o.is_null() || !immix.immix_space.in_space(o) {
+            if !immix.immix_space.in_space(o) {
                 continue;
             }
             // println!("inc: {:?} -> {:?} oldcount={}", e, o, crate::policy::immix::rc::count(o));

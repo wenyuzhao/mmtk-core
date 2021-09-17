@@ -261,11 +261,12 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_dead(&self) -> bool {
-        for i in (0..Block::BYTES).step_by(8) {
-            let a = self.start() + i;
-            let o = unsafe { a.to_object_reference() };
-            if !super::rc::is_dead(o) {
+    fn rc_dead(&self) -> bool {
+        let start: *const u128 = address_to_meta_address(&super::rc::RC_TABLE, self.start()).to_ptr();
+        let limit: *const u128 = address_to_meta_address(&super::rc::RC_TABLE, self.end()).to_ptr();
+        let rc_table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
+        for x in rc_table {
+            if *x != 0 {
                 return false;
             }
         }

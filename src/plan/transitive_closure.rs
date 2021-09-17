@@ -85,15 +85,30 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
-pub struct EdgeIterator<'a, VM: VMBinding> {
-    f: Box<dyn FnMut(Address) + 'a>,
+struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(Address)> {
+    f: F,
     _p: PhantomData<VM>,
 }
 
-impl<'a, VM: VMBinding> EdgeIterator<'a, VM> {
-    pub fn iterate(o: ObjectReference, f: impl FnMut(Address) + 'a) {
-        let mut x = Self {
-            f: box f,
+impl<VM: VMBinding, F: FnMut(Address)> TransitiveClosure for EdgeIteratorImpl<VM, F> {
+    #[inline(always)]
+    fn process_edge(&mut self, slot: Address) {
+        (self.f)(slot);
+    }
+    fn process_node(&mut self, _object: ObjectReference) {
+        unreachable!()
+    }
+}
+
+pub struct EdgeIterator<VM: VMBinding> {
+    _p: PhantomData<VM>,
+}
+
+impl<VM: VMBinding> EdgeIterator<VM> {
+    #[inline(always)]
+    pub fn iterate(o: ObjectReference, f: impl FnMut(Address)) {
+        let mut x = EdgeIteratorImpl::<VM, _> {
+            f,
             _p: PhantomData,
         };
         <VM::VMScanning as Scanning<VM>>::scan_object(
@@ -104,12 +119,3 @@ impl<'a, VM: VMBinding> EdgeIterator<'a, VM> {
     }
 }
 
-impl<'a, VM: VMBinding> TransitiveClosure for EdgeIterator<'a, VM> {
-    #[inline(always)]
-    fn process_edge(&mut self, slot: Address) {
-        (self.f)(slot);
-    }
-    fn process_node(&mut self, _object: ObjectReference) {
-        unreachable!()
-    }
-}

@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+const PRETTY_PRINT: bool = true;
+
 /// Merge and print the work-packet level statistics from all worker threads
 #[derive(Default)]
 pub struct SchedulerStat {
@@ -58,7 +60,10 @@ impl SchedulerStat {
         stat.insert("total-work.count".to_owned(), format!("{}", total_count));
         // Work execution times
         let mut duration_overall: WorkCounterBase = Default::default();
-        for (t, vs) in &self.work_counters {
+        let mut total: u128 = 0;
+        let mut work_counters = self.work_counters.iter().collect::<Vec<_>>();
+        work_counters.sort_by_cached_key(|(t, _)| self.work_id_name_map[t]);
+        for (t, vs) in work_counters {
             // Name of the work packet type
             let n = self.work_id_name_map[t];
             // Iterate through different types of work counters
@@ -85,7 +90,14 @@ impl SchedulerStat {
                     format!("work.{}.{}.max", self.work_name(n), name),
                     format!("{:.2}", fold.max),
                 );
+                if PRETTY_PRINT && name == "time" {
+                    println!(" - {:<35} total={:15}    min={:10}    max={:15}    avg={:15.2}    count={:10}", self.work_name(n), fold.total, fold.min, fold.max, fold.total / self.work_counts[t] as f64, self.work_counts[t]);
+                    total += fold.total as u128;
+                }
             }
+        }
+        if PRETTY_PRINT {
+            println!("SUM: {} ns", total);
         }
         // Print out overall execution time
         stat.insert(

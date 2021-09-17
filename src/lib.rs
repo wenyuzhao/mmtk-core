@@ -68,7 +68,7 @@ extern crate num_cpus;
 extern crate downcast_rs;
 
 mod mmtk;
-use std::time::SystemTime;
+use std::{sync::atomic::AtomicBool, time::SystemTime};
 
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
@@ -88,7 +88,7 @@ pub use crate::plan::{
     TransitiveClosure,
 };
 
-static IN_CONCURRENT_GC: Mutex<bool> = Mutex::new(false);
+static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 
 const REPORT_GC_TIME: bool = true;
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);

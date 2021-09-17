@@ -1,20 +1,17 @@
 use atomic::Ordering;
 
-use crate::util::{
-    metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
-    ObjectReference,
-};
+use crate::util::{ObjectReference, constants::LOG_MIN_OBJECT_SIZE, metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec}};
 
 use super::chunk::ChunkMap;
 
-const LOG_REF_COUNT_BITS: usize = 3;
+const LOG_REF_COUNT_BITS: usize = 2;
 const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 1;
 
 pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
     is_global: false,
     offset: SideMetadataOffset::layout_after(&ChunkMap::ALLOC_TABLE),
     log_num_of_bits: LOG_REF_COUNT_BITS,
-    log_min_obj_size: 3,
+    log_min_obj_size: LOG_MIN_OBJECT_SIZE as _,
 };
 
 #[inline(always)]

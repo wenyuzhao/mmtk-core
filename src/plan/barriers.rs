@@ -263,7 +263,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         }
         if crate::plan::immix::CONCURRENT_MARKING
             && !BARRIER_MEASUREMENT
-            && !*crate::IN_CONCURRENT_GC.lock()
+            && !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
         {
             return;
         }
