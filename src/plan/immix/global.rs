@@ -199,17 +199,22 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut curr_roots = super::gc_work::CURR_ROOTS.lock();
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap::<Vec<ObjectReference>>(&mut curr_roots, &mut old_roots);
-            let me = unsafe { &*(self as *const Self) };
+            struct UpdatePerformCycleCollection;
+            impl<VM: VMBinding> GCWork<VM> for UpdatePerformCycleCollection {
+                fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+                    let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+                    let perform_cycle_collection =
+                        immix.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+                    immix
+                        .perform_cycle_collection
+                        .store(perform_cycle_collection, Ordering::SeqCst);
+                }
+            }
             self.base()
                 .control_collector_context
                 .scheduler()
                 .work_buckets[WorkBucketStage::Final]
-                .add_lambda(move || {
-                    let perform_cycle_collection =
-                        me.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
-                    me.perform_cycle_collection
-                        .store(perform_cycle_collection, Ordering::SeqCst);
-                });
+                .add(UpdatePerformCycleCollection);
         }
     }
 
@@ -305,6 +310,15 @@ impl<VM: VMBinding> Immix<VM> {
             let mut decs = vec![];
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap(&mut decs, &mut old_roots);
+            if crate::policy::immix::SANITY {
+                for x in &decs {
+                    debug_assert!(!self
+                        .immix_space
+                        .new_blocks
+                        .lock()
+                        .contains(&Block::containing::<E::VM>(*x)));
+                }
+            }
             scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<VM>::new(decs));
         }
 

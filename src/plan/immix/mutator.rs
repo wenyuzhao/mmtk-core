@@ -1,5 +1,4 @@
 use super::Immix;
-use crate::MutatorContext;
 use crate::plan::barriers::FieldLoggingBarrier;
 use crate::plan::barriers::ObjectRememberingBarrier;
 use crate::plan::immix::gc_work::ImmixProcessEdges;
@@ -14,6 +13,7 @@ use crate::util::alloc::ImmixAllocator;
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
+use crate::MutatorContext;
 use crate::MMTK;
 use crate::{
     plan::barriers::NoBarrier,

@@ -26,7 +26,7 @@ pub const DEFRAG: bool = false;
 /// Otherwise, do it at mark time.
 pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
-pub const SANITY: bool = true;
+pub const SANITY: bool = false;
 
 macro_rules! validate {
     ($x: expr) => { assert!($x, stringify!($x)) };

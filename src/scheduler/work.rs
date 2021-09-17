@@ -22,13 +22,3 @@ pub trait GCWork<VM: VMBinding>: 'static + Send {
         stat.end_of_work(&mut worker.stat);
     }
 }
-
-pub struct Lambda(pub Box<dyn FnOnce() + 'static + Send>);
-
-impl<VM: VMBinding> GCWork<VM> for Lambda {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let mut f: Box<dyn FnOnce() + 'static + Send> = box || {};
-        std::mem::swap(&mut f, &mut self.0);
-        f();
-    }
-}

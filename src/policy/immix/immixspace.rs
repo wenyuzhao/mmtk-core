@@ -38,7 +38,7 @@ use std::{
     sync::{atomic::AtomicU8, Arc},
 };
 
-static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -274,11 +274,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::DEFRAG {
             self.defrag.release(self)
         }
-        self.scheduler().work_buckets[WorkBucketStage::Final].add_lambda(|| {
-            let released_blocks = RELEASED_BLOCKS.load(Ordering::SeqCst);
-            println!("Released {} blocks", released_blocks);
-            RELEASED_BLOCKS.store(0, Ordering::SeqCst);
-        });
         if super::SANITY {
             self.new_blocks.lock().clear();
         }

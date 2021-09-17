@@ -281,6 +281,10 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
+        let released_blocks =
+            crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
+        println!("Released {} blocks", released_blocks);
+        crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
 
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
@@ -748,11 +752,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     }
 }
 
-pub struct ProcessIncs<VM: VMBinding> {
+pub struct ProcessIncs<VM: VMBinding, const UNLOG_EDGES: bool> {
     incs: Vec<Address>,
     phantom: PhantomData<VM>,
 }
-impl<VM: VMBinding> ProcessIncs<VM> {
+impl<VM: VMBinding, const UNLOG_EDGES: bool> ProcessIncs<VM, UNLOG_EDGES> {
     pub fn new(incs: Vec<Address>) -> Self {
         Self {
             incs,
@@ -760,7 +764,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
     }
 }
-impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
+impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLOG_EDGES> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
@@ -769,6 +773,15 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         }
         let mut new_incs = vec![];
         for e in &self.incs {
+            if UNLOG_EDGES {
+                store_metadata::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    unsafe { e.to_object_reference() },
+                    crate::plan::barriers::UNLOGGED_VALUE,
+                    None,
+                    Some(Ordering::SeqCst),
+                );
+            }
             let o: ObjectReference = unsafe { e.load() };
             if o.is_null() || !immix.immix_space.in_space(o) {
                 continue;
@@ -776,7 +789,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             // println!("inc: {:?} -> {:?} oldcount={}", e, o, crate::policy::immix::rc::count(o));
             if let Ok(0) = crate::policy::immix::rc::inc(o) {
                 if crate::policy::immix::SANITY {
-                    debug_assert!(immix.immix_space.new_blocks.lock().contains(&Block::containing::<VM>(o)));
+                    debug_assert!(immix
+                        .immix_space
+                        .new_blocks
+                        .lock()
+                        .contains(&Block::containing::<VM>(o)));
                 }
                 // This is a nursery object
                 EdgeIterator::<VM>::iterate(o, |edge| {
@@ -789,13 +806,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                             Some(Ordering::SeqCst),
                         )
                     );
-                    store_metadata::<VM>(
-                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
-                        unsafe { edge.to_object_reference() },
-                        crate::plan::barriers::UNLOGGED_VALUE,
-                        None,
-                        Some(Ordering::SeqCst),
-                    );
                     new_incs.push(edge);
                 });
             }
@@ -803,7 +813,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         if !new_incs.is_empty() {
             worker
                 .local_work_bucket
-                .add(ProcessIncs::<VM>::new(new_incs));
+                .add(ProcessIncs::<VM, true>::new(new_incs));
         }
     }
 }
@@ -831,9 +841,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         for o in &self.decs {
             if !immix.immix_space.in_space(*o) {
                 continue;
-            }
-            if crate::policy::immix::SANITY {
-                debug_assert!(!immix.immix_space.new_blocks.lock().contains(&Block::containing::<VM>(*o)));
             }
             if let Ok(1) = crate::policy::immix::rc::dec(*o) {
                 debug_assert_eq!(crate::policy::immix::rc::count(*o), 0);

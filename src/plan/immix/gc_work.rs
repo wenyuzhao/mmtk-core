@@ -296,7 +296,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         let mut slots = vec![];
         std::mem::swap(&mut slots, &mut self.slots);
         self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure]
-            .add(ProcessIncs::<VM>::new(slots));
+            .add(ProcessIncs::<VM, false>::new(slots));
     }
 
     const CAPACITY: usize = 4096;

@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicUsize;
 use atomic::Ordering;
 
 use crate::plan::immix::Immix;
+use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::GCWork;
@@ -185,8 +186,9 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
     }
 }
 
-pub const UNLOGGED_VALUE: usize = 1;
-pub const LOGGED_VALUE: usize = UNLOGGED_VALUE ^ 1;
+pub const UNLOGGED_VALUE: usize = 0b01;
+pub const LOGGED_VALUE: usize = 0b00;
+pub const LOGGING_IN_PROGRESS: usize = 0b11;
 
 pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
@@ -213,8 +215,9 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn log_edge(&self, edge: Address) -> bool {
+    fn attempt_to_log_edge(&self, edge: Address) -> bool {
         loop {
+            std::hint::spin_loop();
             let old_value = load_metadata::<E::VM>(
                 &self.meta,
                 unsafe { edge.to_object_reference() },
@@ -224,11 +227,15 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             if old_value == LOGGED_VALUE {
                 return false;
             }
+            if old_value == LOGGING_IN_PROGRESS {
+                continue;
+            }
+            debug_assert!(old_value == UNLOGGED_VALUE);
             if compare_exchange_metadata::<E::VM>(
                 &self.meta,
                 unsafe { edge.to_object_reference() },
                 UNLOGGED_VALUE,
-                LOGGED_VALUE,
+                LOGGING_IN_PROGRESS,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
@@ -236,6 +243,17 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 return true;
             }
         }
+    }
+
+    #[inline(always)]
+    fn mark_edge_as_logged(&self, edge: Address) {
+        store_metadata::<E::VM>(
+            &self.meta,
+            unsafe { edge.to_object_reference() },
+            LOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
     }
 
     #[inline(always)]
@@ -252,7 +270,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if self.log_edge(edge) {
+        if self.attempt_to_log_edge(edge) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
@@ -273,6 +291,14 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 self.edges.push(edge);
                 let old: ObjectReference = unsafe { edge.load() };
                 if !old.is_null() {
+                    if crate::policy::immix::SANITY {
+                        let immix = self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
+                        debug_assert!(!immix
+                            .immix_space
+                            .new_blocks
+                            .lock()
+                            .contains(&Block::containing::<E::VM>(old)));
+                    }
                     self.decs.push(old);
                 }
                 self.incs.push(edge);
@@ -283,6 +309,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                     self.flush();
                 }
             }
+            self.mark_edge_as_logged(edge);
         }
     }
 }
@@ -299,29 +326,12 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
                 .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
         }
-        // No Concurrent Marking: Unlog edges
-        if !crate::plan::immix::CONCURRENT_MARKING && !self.edges.is_empty() {
-            let mut edges = vec![];
-            std::mem::swap(&mut edges, &mut self.edges);
-            let meta = self.meta;
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add_lambda(move || {
-                for e in edges {
-                    store_metadata::<E::VM>(
-                        &meta,
-                        unsafe { e.to_object_reference() },
-                        UNLOGGED_VALUE,
-                        None,
-                        Some(Ordering::Relaxed),
-                    )
-                }
-            });
-        }
         // Flush inc buffer
         if !self.incs.is_empty() {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
             self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure]
-                .add(ProcessIncs::<E::VM>::new(incs));
+                .add(ProcessIncs::<E::VM, true>::new(incs));
         }
         // Flush dec buffer
         if !self.decs.is_empty() {
