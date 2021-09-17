@@ -804,11 +804,13 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
                     ptr.store(0b01010101u8);
                 }
             }
+            if crate::plan::barriers::BARRIER_MEASUREMENT {
+                return
+            }
             let o: ObjectReference = unsafe { e.load() };
             if !immix.immix_space.in_space(o) {
                 continue;
             }
-            // println!("inc: {:?} -> {:?} oldcount={}", e, o, crate::policy::immix::rc::count(o));
             if let Ok(0) = crate::policy::immix::rc::inc(o) {
                 if crate::policy::immix::SANITY {
                     debug_assert!(immix
@@ -856,7 +858,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        if immix.perform_cycle_collection() {
+        if crate::plan::barriers::BARRIER_MEASUREMENT || immix.perform_cycle_collection() {
             return;
         }
         let mut new_decs = vec![];

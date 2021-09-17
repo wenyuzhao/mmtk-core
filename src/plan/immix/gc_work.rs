@@ -7,6 +7,7 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
+use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::store_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
@@ -123,7 +124,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         }
         if self.immix().immix_space.in_space(object) {
             self.immix().immix_space.fast_trace_object(self, object);
-            if super::REF_COUNT {
+            if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
                 let _ = crate::policy::immix::rc::inc(object);
                 if self.roots {
                     CURR_ROOTS.lock().push(object);

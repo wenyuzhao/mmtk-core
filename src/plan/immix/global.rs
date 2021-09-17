@@ -150,7 +150,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         );
         let cc_force_full = self.base().options.full_heap_system_gc;
         let mut perform_cycle_collection =
-            !super::REF_COUNT || self.perform_cycle_collection.load(Ordering::SeqCst);
+            !super::REF_COUNT || crate::plan::barriers::BARRIER_MEASUREMENT || self.perform_cycle_collection.load(Ordering::SeqCst);
         perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
             > 1)
             || self.is_emergency_collection()

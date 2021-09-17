@@ -283,7 +283,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             // Reference counting
             if crate::plan::immix::REF_COUNT {
                 debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
-                self.edges.push(edge);
                 let old: ObjectReference = unsafe { edge.load() };
                 if !old.is_null() {
                     if crate::policy::immix::SANITY {

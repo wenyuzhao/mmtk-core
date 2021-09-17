@@ -293,7 +293,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::SANITY {
             self.new_blocks.lock().push(block);
         }
-        if crate::plan::immix::REF_COUNT {
+        if crate::plan::immix::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
             side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
         }
         block.init(copy);
