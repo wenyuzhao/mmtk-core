@@ -122,7 +122,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
             });
         }
         if self.immix().immix_space.in_space(object) {
-            let (_, marked) = self.immix().immix_space.fast_trace_object(self, object);
+            self.immix().immix_space.fast_trace_object(self, object);
             if super::REF_COUNT {
                 let _ = crate::policy::immix::rc::inc(object);
                 if self.roots {

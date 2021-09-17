@@ -215,7 +215,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init(&self, copy: bool) {
+    pub fn init(&self, _copy: bool) {
         self.set_state(BlockState::Marked);
         side_metadata::store_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), 0, Ordering::SeqCst);
     }
@@ -262,7 +262,8 @@ impl Block {
 
     #[inline(always)]
     fn rc_dead(&self) -> bool {
-        let start: *const u128 = address_to_meta_address(&super::rc::RC_TABLE, self.start()).to_ptr();
+        let start: *const u128 =
+            address_to_meta_address(&super::rc::RC_TABLE, self.start()).to_ptr();
         let limit: *const u128 = address_to_meta_address(&super::rc::RC_TABLE, self.end()).to_ptr();
         let rc_table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
         for x in rc_table {

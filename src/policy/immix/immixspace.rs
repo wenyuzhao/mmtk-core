@@ -4,13 +4,11 @@ use super::{
     chunk::{Chunk, ChunkMap, ChunkState},
     defrag::Defrag,
 };
-use crate::plan::immix::REF_COUNT;
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::RC_TABLE;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
-use crate::scheduler::gc_work::ProcessDecs;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
@@ -159,7 +157,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mmapper,
             heap,
         );
-        let mut x = ImmixSpace {
+        ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
                 FreeListPageResource::new_discontiguous(0, vm_map)
             } else {
@@ -174,9 +172,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::UNMARKED_STATE,
             scheduler,
             new_blocks: Default::default(),
-        };
-        x.pr.protect_memory_on_release = true;
-        x
+        }
     }
 
     /// Get the number of defrag headroom pages.
@@ -297,11 +293,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::SANITY {
             self.new_blocks.lock().push(block);
         }
-        // println!(" - Allocate {:?}", block);
         if crate::plan::immix::REF_COUNT {
             side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
         }
-        // println!(" - Alloc block {:?}", block);
         block.init(copy);
         if self.common.needs_log_bit {
             block.clear_log_table::<VM>();
@@ -329,7 +323,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
-    ) -> (ObjectReference, bool) {
+    ) -> ObjectReference {
         self.trace_object_without_moving(trace, object)
     }
 
@@ -351,7 +345,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if Block::containing::<VM>(object).is_defrag_source() {
             self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
         } else {
-            self.trace_object_without_moving(trace, object).0
+            self.trace_object_without_moving(trace, object)
         }
     }
 
@@ -361,8 +355,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
-    ) -> (ObjectReference, bool) {
-        let mut marked = false;
+    ) -> ObjectReference {
         if self.attempt_mark(object, self.mark_state) {
             // Mark block and lines
             if !super::BLOCK_ONLY {
@@ -372,12 +365,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
             }
-            // println!(" - Mark object {:?}", object);
             // Visit node
             trace.process_node(object);
-            marked = true;
         }
-        (object, marked)
+        object
     }
 
     /// Trace object and do evacuation if required.

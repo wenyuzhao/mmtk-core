@@ -7,18 +7,14 @@ use crate::plan::immix::global::get_active_barrier;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::AllocationSemantics as AllocationType;
-use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
+use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
 use crate::MutatorContext;
 use crate::MMTK;
-use crate::{
-    plan::barriers::NoBarrier,
-    util::opaque_pointer::{VMMutatorThread, VMWorkerThread},
-};
 use enum_map::enum_map;
 use enum_map::EnumMap;
 

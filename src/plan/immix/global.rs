@@ -32,7 +32,6 @@ use crate::{scheduler::*, BarrierSelector};
 use std::env;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use atomic::Ordering;
 use enum_map::EnumMap;
@@ -279,7 +278,7 @@ impl<VM: VMBinding> Immix<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
         concurrent: bool,
-        in_defrag: bool,
+        _in_defrag: bool,
     ) {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -332,8 +331,7 @@ struct UpdatePerformCycleCollection;
 impl<VM: VMBinding> GCWork<VM> for UpdatePerformCycleCollection {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let perform_cycle_collection =
-            immix.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+        let perform_cycle_collection = immix.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
         immix
             .perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);

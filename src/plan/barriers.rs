@@ -1,19 +1,14 @@
 //! Read/Write barrier implementations.
 
-use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
 use crate::plan::immix::Immix;
 use crate::policy::immix::block::Block;
-use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
-use crate::scheduler::GCWork;
-use crate::scheduler::GCWorker;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
-use crate::util::metadata::side_metadata;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
@@ -330,8 +325,12 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if !self.incs.is_empty() {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure]
-                .add(ProcessIncs::<E::VM, true>::new(incs));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add(ProcessIncs::<
+                E::VM,
+                true,
+            >::new(
+                incs
+            ));
         }
         // Flush dec buffer
         if !self.decs.is_empty() {
@@ -345,7 +344,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     #[inline(always)]
     fn write_barrier(&mut self, target: WriteTarget) {
         match target {
-            WriteTarget::Field { slot, src, .. } => {
+            WriteTarget::Field { slot, .. } => {
                 self.enqueue_node(slot);
             }
             WriteTarget::ArrayCopy {

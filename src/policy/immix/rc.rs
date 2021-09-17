@@ -1,6 +1,10 @@
 use atomic::Ordering;
 
-use crate::util::{ObjectReference, constants::LOG_MIN_OBJECT_SIZE, metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec}};
+use crate::util::{
+    constants::LOG_MIN_OBJECT_SIZE,
+    metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
+    ObjectReference,
+};
 
 use super::chunk::ChunkMap;
 
@@ -60,13 +64,9 @@ pub fn count(o: ObjectReference) -> usize {
     side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst)
 }
 
+#[allow(unused)]
+#[inline(always)]
 pub fn is_dead(o: ObjectReference) -> bool {
     let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst);
     v == 0
-}
-
-#[inline(always)]
-pub fn reset(o: ObjectReference) {
-    debug_assert!(!o.is_null());
-    side_metadata::store_atomic(&RC_TABLE, o.to_address(), 0, Ordering::SeqCst)
 }

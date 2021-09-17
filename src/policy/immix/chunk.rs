@@ -2,8 +2,7 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use crate::plan::immix::Immix;
-use crate::util::metadata::side_metadata::{self, load, SideMetadataOffset, SideMetadataSpec};
-use crate::util::metadata::MetadataSpec;
+use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},
@@ -81,7 +80,6 @@ impl Chunk {
                 line_mark_state,
                 perform_cycle_collection,
             ) {
-                // println!("{:?} is live", block);
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
             }

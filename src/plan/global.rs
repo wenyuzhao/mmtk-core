@@ -258,20 +258,10 @@ pub trait Plan: 'static + Sync + Downcast {
             }*/
             self.log_poll(space, "Triggering collection");
             if crate::IN_CONCURRENT_GC.load(Ordering::SeqCst) {
-                println!(
-                    "End CONC GC: {} / {}",
-                    self.get_pages_reserved(),
-                    self.get_total_pages()
-                );
                 self.base()
                     .control_collector_context
                     .terminate_concurrent_gc();
             } else {
-                // println!(
-                //     "Trigger STW GC: {} / {}",
-                //     self.get_pages_reserved(),
-                //     self.get_total_pages()
-                // );
                 self.base().control_collector_context.request(false);
             }
             return true;
@@ -279,18 +269,12 @@ pub trait Plan: 'static + Sync + Downcast {
 
         // FIXME
         if self.concurrent_collection_required() {
-            // println!(
-            //     "Trigger CONC GC: {} / {}",
-            //     self.get_pages_reserved(),
-            //     self.get_total_pages()
-            // );
             // FIXME
             /*if space == self.common().meta_data_space {
                 self.log_poll(space, "Triggering async concurrent collection");
                 Self::trigger_internal_collection_request();
                 return false;
             } else {*/
-            // println!("concurrent_collection_required -> true");
             self.log_poll(space, "Triggering concurrent collection");
             self.base().trigger_internal_collection_request();
             return true;
@@ -617,7 +601,6 @@ impl<VM: VMBinding> BasePlan<VM> {
             return self.vm_space.trace_object(_trace, _object);
         }
         _object
-        // panic!("No special case for space in trace_object({:?})", _object);
     }
 
     pub fn prepare(&mut self, _tls: VMWorkerThread, _full_heap: bool) {

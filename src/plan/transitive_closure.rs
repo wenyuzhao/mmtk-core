@@ -3,8 +3,6 @@
 use std::marker::PhantomData;
 use std::mem;
 
-use atomic_traits::fetch::Add;
-
 use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
@@ -107,10 +105,7 @@ pub struct EdgeIterator<VM: VMBinding> {
 impl<VM: VMBinding> EdgeIterator<VM> {
     #[inline(always)]
     pub fn iterate(o: ObjectReference, f: impl FnMut(Address)) {
-        let mut x = EdgeIteratorImpl::<VM, _> {
-            f,
-            _p: PhantomData,
-        };
+        let mut x = EdgeIteratorImpl::<VM, _> { f, _p: PhantomData };
         <VM::VMScanning as Scanning<VM>>::scan_object(
             &mut x,
             o,
@@ -118,4 +113,3 @@ impl<VM: VMBinding> EdgeIterator<VM> {
         );
     }
 }
-

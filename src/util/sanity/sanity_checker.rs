@@ -1,13 +1,10 @@
-use crate::plan::immix::Immix;
 use crate::plan::CopyContext;
 use crate::plan::Plan;
-use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -16,7 +13,6 @@ use std::sync::atomic::Ordering;
 #[allow(dead_code)]
 pub struct SanityChecker {
     refs: HashSet<ObjectReference>,
-    counts: HashMap<ObjectReference, usize>,
 }
 
 impl Default for SanityChecker {
@@ -29,7 +25,6 @@ impl SanityChecker {
     pub fn new() -> Self {
         Self {
             refs: HashSet::new(),
-            counts: Default::default(),
         }
     }
 }
@@ -94,7 +89,6 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for SanityPrepare<P,
         {
             let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
             sanity_checker.refs.clear();
-            sanity_checker.counts.clear();
         }
         for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
@@ -122,16 +116,6 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> SanityRelease<P, W> {
 
 impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for SanityRelease<P, W> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
-        {
-            let immix = mmtk.plan.downcast_ref::<Immix<P::VM>>().unwrap();
-            let sanity_checker = mmtk.sanity_checker.lock().unwrap();
-            for (o, c) in &sanity_checker.counts {
-                if immix.immix_space.in_space(*o) {
-                    let real_count = crate::policy::immix::rc::count(*o);
-                    assert!(real_count >= *c, "{:?} real={} sanity={}", o, real_count, c);
-                }
-            }
-        }
         mmtk.plan.leave_sanity();
         for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::Release]
@@ -173,20 +157,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
-        // if !object.is_null() {
-        //     let sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
-        //     let c = sanity_checker.counts.get(&object).unwrap_or(&0);
-        //     println!("edge: {:?} -> {:?} oldcount={}", slot, object, c);
-        // }
-        let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE {
-            unsafe { slot.store(new_object) };
-        }
-    }
-
-    #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
@@ -201,8 +171,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             sanity_checker.refs.insert(object); // "Mark" it
             ProcessEdgesWork::process_node(self, object);
         }
-        let counter = sanity_checker.counts.entry(object).or_insert(0);
-        *counter += 1;
         object
     }
 }

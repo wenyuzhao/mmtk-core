@@ -5,9 +5,9 @@ use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
+use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
-use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::vm::*;
 use crate::*;
 use std::lazy::SyncLazy;
@@ -103,7 +103,7 @@ impl<VM: VMBinding> FlushMutator<VM> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for FlushMutator<VM> {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         trace!("Prepare Mutator");
         self.mutator.flush();
     }
@@ -294,9 +294,24 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         println!("Released {} blocks", released_blocks);
         crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
         if crate::REPORT_GC_TIME {
-            println!("> {}ms {}ms", crate::GC_TRIGGER_TIME.lock().as_ref().unwrap().elapsed().unwrap().as_millis(), crate::GC_START_TIME.lock().as_ref().unwrap().elapsed().unwrap().as_millis());
+            println!(
+                "> {}ms {}ms",
+                crate::GC_TRIGGER_TIME
+                    .lock()
+                    .as_ref()
+                    .unwrap()
+                    .elapsed()
+                    .unwrap()
+                    .as_millis(),
+                crate::GC_START_TIME
+                    .lock()
+                    .as_ref()
+                    .unwrap()
+                    .elapsed()
+                    .unwrap()
+                    .as_millis()
+            );
         }
-
 
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
@@ -782,7 +797,12 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
         let mut new_incs = vec![];
         for e in &self.incs {
             if UNLOG_EDGES {
-                let ptr = address_to_meta_address(VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec().extract_side_spec(), *e);
+                let ptr = address_to_meta_address(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .as_spec()
+                        .extract_side_spec(),
+                    *e,
+                );
                 unsafe {
                     ptr.store(0b01010101u8);
                 }
