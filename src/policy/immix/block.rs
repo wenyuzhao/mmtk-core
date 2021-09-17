@@ -5,7 +5,6 @@ use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
 use crate::plan::immix::REF_COUNT;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
-use crate::util::metadata::store_metadata;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use spin::{Mutex, MutexGuard};
@@ -239,15 +238,15 @@ impl Block {
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
         if crate::plan::immix::CONCURRENT_MARKING {
-            for i in (0..Block::BYTES).step_by(8) {
-                let o = unsafe { (self.start() + i).to_object_reference() };
-                store_metadata::<VM>(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
-                    o,
-                    crate::plan::barriers::UNLOGGED_VALUE,
-                    None,
-                    Some(Ordering::SeqCst),
-                );
+            let meta = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec();
+            let start: *mut u128 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
+            let limit: *mut u128 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
+            let log_table =
+                unsafe { std::slice::from_raw_parts_mut(start, limit.offset_from(start) as _) };
+            for x in log_table {
+                *x = 113427455640312821154458202477256070485u128;
             }
         } else {
             bzero_metadata(

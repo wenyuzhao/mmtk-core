@@ -217,7 +217,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 &self.meta,
                 unsafe { edge.to_object_reference() },
                 None,
-                Some(Ordering::SeqCst),
+                None,
             );
             if old_value == LOGGED_VALUE {
                 return false;
@@ -233,7 +233,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 LOGGING_IN_PROGRESS,
                 None,
                 Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::Relaxed,
             ) {
                 return true;
             }

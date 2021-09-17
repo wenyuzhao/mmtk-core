@@ -758,13 +758,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         if !self.edges.is_empty() {
             for edge in &self.edges {
-                store_metadata::<E::VM>(
-                    &self.meta,
-                    unsafe { edge.to_object_reference() },
-                    0,
-                    None,
-                    Some(Ordering::Relaxed),
-                )
+                let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
+                unsafe {
+                    ptr.store(0b01010101u8);
+                }
             }
             if !crate::plan::barriers::BARRIER_MEASUREMENT {
                 let mut modbuf = vec![];

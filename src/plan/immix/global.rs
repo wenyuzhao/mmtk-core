@@ -98,6 +98,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn concurrent_collection_required(&self) -> bool {
         super::CONCURRENT_MARKING
+            && !crate::plan::barriers::BARRIER_MEASUREMENT
             && self.base().gc_status() == GcStatus::NotInGC
             && self.get_pages_reserved() * 100 / 45 > self.get_total_pages()
     }
