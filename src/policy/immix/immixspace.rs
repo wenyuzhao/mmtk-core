@@ -30,6 +30,7 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
+use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
@@ -56,6 +57,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     mark_state: u8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
+    pub new_blocks: Mutex<Vec<Block>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -171,6 +173,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
+            new_blocks: Default::default(),
         };
         x.pr.protect_memory_on_release = true;
         x
@@ -212,7 +215,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare(&mut self) {
+    pub fn prepare(&mut self, perform_cycle_collection: bool) {
         // Update mark_state
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             self.mark_state = Self::MARKED_STATE;
@@ -238,6 +241,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     None
                 },
+                perform_cycle_collection,
             });
         self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         // Update line mark state
@@ -275,6 +279,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             println!("Released {} blocks", released_blocks);
             RELEASED_BLOCKS.store(0, Ordering::SeqCst);
         });
+        if super::SANITY {
+            self.new_blocks.lock().clear();
+        }
     }
 
     /// Release a block.
@@ -292,6 +299,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from(block_address);
+        if super::SANITY {
+            self.new_blocks.lock().push(block);
+        }
         // println!(" - Allocate {:?}", block);
         if crate::plan::immix::REF_COUNT {
             side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
@@ -519,6 +529,7 @@ pub struct PrepareBlockState<VM: VMBinding> {
     pub space: &'static ImmixSpace<VM>,
     pub chunk: Chunk,
     pub defrag_threshold: Option<usize>,
+    pub perform_cycle_collection: bool,
 }
 
 impl<VM: VMBinding> PrepareBlockState<VM> {
@@ -543,6 +554,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;
+            }
+            if crate::plan::immix::REF_COUNT && self.perform_cycle_collection {
+                side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG

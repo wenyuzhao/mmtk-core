@@ -124,9 +124,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         if self.immix().immix_space.in_space(object) {
             let (_, marked) = self.immix().immix_space.fast_trace_object(self, object);
             if super::REF_COUNT {
-                if marked {
-                    crate::policy::immix::rc::reset(object);
-                }
                 let _ = crate::policy::immix::rc::inc(object);
                 if self.roots {
                     CURR_ROOTS.lock().push(object);
@@ -150,7 +147,12 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
 
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdges<VM, KIND> {
     type VM = VM;
-    const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG;
+    const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
+        && if let TraceKind::Defrag = KIND {
+            true
+        } else {
+            false
+        };
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, mmtk);

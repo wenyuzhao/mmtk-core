@@ -1,4 +1,5 @@
 use super::Immix;
+use crate::MutatorContext;
 use crate::plan::barriers::FieldLoggingBarrier;
 use crate::plan::barriers::ObjectRememberingBarrier;
 use crate::plan::immix::gc_work::ImmixProcessEdges;
@@ -30,6 +31,7 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
     immix_allocator.reset();
+    mutator.flush();
 }
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {

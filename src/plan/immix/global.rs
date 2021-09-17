@@ -186,7 +186,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if !super::REF_COUNT || self.perform_cycle_collection() {
             self.common.prepare(tls, true);
         }
-        self.immix_space.prepare();
+        self.immix_space.prepare(self.perform_cycle_collection());
     }
 
     fn release(&mut self, tls: VMWorkerThread) {

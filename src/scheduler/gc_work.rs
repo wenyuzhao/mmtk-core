@@ -3,6 +3,7 @@ use super::*;
 use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
+use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -763,14 +764,20 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        if immix.perform_cycle_collection() {
+            return;
+        }
         let mut new_incs = vec![];
         for e in &self.incs {
             let o: ObjectReference = unsafe { e.load() };
-            if o.is_null() || !immix.immix_space.in_space(o) || immix.perform_cycle_collection() {
+            if o.is_null() || !immix.immix_space.in_space(o) {
                 continue;
             }
             // println!("inc: {:?} -> {:?} oldcount={}", e, o, crate::policy::immix::rc::count(o));
             if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                if crate::policy::immix::SANITY {
+                    debug_assert!(immix.immix_space.new_blocks.lock().contains(&Block::containing::<VM>(o)));
+                }
                 // This is a nursery object
                 EdgeIterator::<VM>::iterate(o, |edge| {
                     debug_assert_eq!(
@@ -817,12 +824,19 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        if immix.perform_cycle_collection() {
+            return;
+        }
         let mut new_decs = vec![];
         for o in &self.decs {
-            if !immix.immix_space.in_space(*o) || immix.perform_cycle_collection() {
+            if !immix.immix_space.in_space(*o) {
                 continue;
             }
-            if let Ok(0) = crate::policy::immix::rc::dec(*o) {
+            if crate::policy::immix::SANITY {
+                debug_assert!(!immix.immix_space.new_blocks.lock().contains(&Block::containing::<VM>(*o)));
+            }
+            if let Ok(1) = crate::policy::immix::rc::dec(*o) {
+                debug_assert_eq!(crate::policy::immix::rc::count(*o), 0);
                 // Recursively decrease field ref counts
                 EdgeIterator::<VM>::iterate(*o, |edge| {
                     let o = unsafe { edge.load::<ObjectReference>() };
