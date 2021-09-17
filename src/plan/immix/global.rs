@@ -32,6 +32,7 @@ use crate::{scheduler::*, BarrierSelector};
 use std::env;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use atomic::Ordering;
 use enum_map::EnumMap;
@@ -138,6 +139,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool) {
+        if crate::REPORT_GC_TIME {
+            *crate::GC_TRIGGER_TIME.lock() = Some(SystemTime::now());
+        }
         self.base().set_collection_kind();
         self.base().set_gc_status(GcStatus::GcPrepare);
         let in_defrag = self.immix_space.decide_whether_to_defrag(

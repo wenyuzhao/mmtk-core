@@ -68,6 +68,8 @@ extern crate num_cpus;
 extern crate downcast_rs;
 
 mod mmtk;
+use std::time::SystemTime;
+
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
@@ -87,3 +89,7 @@ pub use crate::plan::{
 };
 
 static IN_CONCURRENT_GC: Mutex<bool> = Mutex::new(false);
+
+const REPORT_GC_TIME: bool = true;
+static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
+static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);

@@ -15,6 +15,7 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::Condvar;
+use std::time::SystemTime;
 
 pub struct ScheduleCollection(pub bool);
 
@@ -239,6 +240,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
             trace!("stop_all_mutators start");
             debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
             <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
+            if crate::REPORT_GC_TIME {
+                *crate::GC_START_TIME.lock() = Some(SystemTime::now());
+            }
             trace!("stop_all_mutators end");
             mmtk.scheduler.notify_mutators_paused(mmtk);
             if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
@@ -285,6 +289,10 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
         println!("Released {} blocks", released_blocks);
         crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
+        if crate::REPORT_GC_TIME {
+            println!("> {}ms {}ms", crate::GC_TRIGGER_TIME.lock().as_ref().unwrap().elapsed().unwrap().as_millis(), crate::GC_START_TIME.lock().as_ref().unwrap().elapsed().unwrap().as_millis());
+        }
+
 
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
