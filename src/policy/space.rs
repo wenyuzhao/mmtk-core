@@ -303,9 +303,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     }
 
                     // TODO: Concurrent zeroing
-                    if self.common().zeroed {
-                        memory::zero(res.start, bytes);
-                    }
+                    // if self.common().zeroed {
+                    //     memory::zero(res.start, bytes);
+                    // }
 
                     debug!("Space.acquire(), returned = {}", res.start);
                     res.start

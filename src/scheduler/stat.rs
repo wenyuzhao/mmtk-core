@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub const PRETTY_PRINT: bool = true;
+pub const PRETTY_PRINT: bool = false;
 
 /// Merge and print the work-packet level statistics from all worker threads
 #[derive(Default)]

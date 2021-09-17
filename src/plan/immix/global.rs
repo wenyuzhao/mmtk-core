@@ -149,16 +149,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.base().options.full_heap_system_gc,
         );
         let cc_force_full = self.base().options.full_heap_system_gc;
-        let mut perform_cycle_collection =
-            !super::REF_COUNT || crate::plan::barriers::BARRIER_MEASUREMENT || self.perform_cycle_collection.load(Ordering::SeqCst);
+        let mut perform_cycle_collection = !super::REF_COUNT
+            || crate::plan::barriers::BARRIER_MEASUREMENT
+            || self.perform_cycle_collection.load(Ordering::SeqCst);
         perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
             > 1)
             || self.is_emergency_collection()
             || cc_force_full;
         self.perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
-        println!("perform_cycle_collection: {}", perform_cycle_collection);
-
+        // println!("perform_cycle_collection: {}", perform_cycle_collection);
         // println!("is_emergency_collection: {}", self.is_emergency_collection());
         if in_defrag {
             self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(

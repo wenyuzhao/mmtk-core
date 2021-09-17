@@ -289,10 +289,12 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
-        let released_blocks =
-            crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
-        println!("Released {} blocks", released_blocks);
-        crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
+        if crate::policy::immix::LOG_RELEASED_BLOCKS {
+            let released_blocks =
+                crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
+            println!("Released {} blocks", released_blocks);
+            crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
+        }
         if crate::REPORT_GC_TIME {
             println!(
                 "> {}ms {}ms",
@@ -805,7 +807,7 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
                 }
             }
             if crate::plan::barriers::BARRIER_MEASUREMENT {
-                return
+                return;
             }
             let o: ObjectReference = unsafe { e.load() };
             if !immix.immix_space.in_space(o) {

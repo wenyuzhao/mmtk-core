@@ -90,6 +90,6 @@ pub use crate::plan::{
 
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 
-const REPORT_GC_TIME: bool = true;
+const REPORT_GC_TIME: bool = false;
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);

@@ -379,7 +379,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 format!("{}", slow as f64 / fast as f64),
             );
             if PRETTY_PRINT {
-                println!("barrier: fast={} slow={} takerate={}", fast, slow, slow as f64 / fast as f64);
+                println!(
+                    "barrier: fast={} slow={} takerate={}",
+                    fast,
+                    slow,
+                    slow as f64 / fast as f64
+                );
             }
         }
         stat

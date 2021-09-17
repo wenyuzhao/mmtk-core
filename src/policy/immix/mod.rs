@@ -50,3 +50,5 @@ pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = if crate::plan::immix::RE
 } else {
     ChunkMap::ALLOC_TABLE
 };
+
+pub const LOG_RELEASED_BLOCKS: bool = false;

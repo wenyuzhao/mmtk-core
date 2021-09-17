@@ -277,7 +277,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
-        RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
+        if super::LOG_RELEASED_BLOCKS {
+            RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
+        }
         block.deinit();
         self.pr.release_pages(block.start());
     }
