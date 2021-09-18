@@ -1,9 +1,6 @@
-use atomic::Ordering;
-
 use super::block::Block;
 use super::IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET;
 use crate::util::metadata::side_metadata::{self, *};
-use crate::util::metadata::store_metadata;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,

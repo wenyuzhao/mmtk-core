@@ -91,7 +91,6 @@ pub use crate::plan::{
 
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 
-const REPORT_GC_TIME: bool = true;
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 
@@ -116,6 +115,7 @@ pub mod flags {
     pub const SANITY: bool = false;
     pub const LOG_RELEASED_BLOCKS: bool = false;
     pub const HARNESS_PRETTY_PRINT: bool = false;
+    pub const REPORT_GC_TIME: bool = true;
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);
