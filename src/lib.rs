@@ -75,6 +75,7 @@ pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
 use spin::Mutex;
 
+#[macro_use]
 mod policy;
 
 pub mod memory_manager;
@@ -115,4 +116,15 @@ pub mod flags {
     pub const SANITY: bool = false;
     pub const LOG_RELEASED_BLOCKS: bool = false;
     pub const HARNESS_PRETTY_PRINT: bool = false;
+
+    pub fn validate_features() {
+        validate!(DEFRAG => !BLOCK_ONLY);
+        validate!(DEFRAG => !CONCURRENT_MARKING);
+        validate!(DEFRAG => !REF_COUNT);
+        validate!(CONCURRENT_MARKING => !DEFRAG);
+        validate!(CONCURRENT_MARKING => !REF_COUNT);
+        validate!(REF_COUNT => !CONCURRENT_MARKING);
+        validate!(REF_COUNT => BLOCK_ONLY);
+        validate!(REF_COUNT => !DEFRAG);
+    }
 }

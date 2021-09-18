@@ -14,6 +14,7 @@
 pub mod space;
 
 pub mod copyspace;
+#[macro_use]
 pub mod immix;
 pub mod immortalspace;
 pub mod largeobjectspace;
