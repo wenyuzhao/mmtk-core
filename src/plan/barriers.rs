@@ -324,7 +324,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if !self.incs.is_empty() {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure].add(ProcessIncs::<
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ProcessIncs::<
                 E::VM,
                 true,
             >::new(

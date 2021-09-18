@@ -1,5 +1,7 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
+use crate::plan::barriers::LOGGING_IN_PROGRESS;
+use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
@@ -790,6 +792,28 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> ProcessIncs<VM, UNLOG_EDGES> {
             phantom: PhantomData,
         }
     }
+
+    #[inline(always)]
+    fn mark_edge_as_in_progress(&self, edge: Address) {
+        store_metadata::<VM>(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+            unsafe { edge.to_object_reference() },
+            LOGGING_IN_PROGRESS,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
+
+    #[inline(always)]
+    fn mark_edge_as_unlogged(&self, edge: Address) {
+        store_metadata::<VM>(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+            unsafe { edge.to_object_reference() },
+            UNLOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
 }
 impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLOG_EDGES> {
     #[inline(always)]
@@ -801,20 +825,22 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
         let mut new_incs = vec![];
         for e in &self.incs {
             if UNLOG_EDGES {
-                let ptr = address_to_meta_address(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .as_spec()
-                        .extract_side_spec(),
-                    *e,
+                self.mark_edge_as_in_progress(*e);
+                store_metadata::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    unsafe { e.to_object_reference() },
+                    crate::plan::barriers::UNLOGGED_VALUE,
+                    None,
+                    Some(Ordering::Relaxed),
                 );
-                unsafe {
-                    ptr.store(0b01010101u8);
-                }
             }
             if crate::plan::barriers::BARRIER_MEASUREMENT {
                 return;
             }
             let o: ObjectReference = unsafe { e.load() };
+            if UNLOG_EDGES {
+                self.mark_edge_as_unlogged(*e);
+            }
             if !immix.immix_space.in_space(o) {
                 continue;
             }
