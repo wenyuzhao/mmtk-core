@@ -801,7 +801,7 @@ pub struct MetadataByteArrayRef<const ENTRIES: usize> {
     heap_range_start: Address,
     #[cfg(feature = "extreme_assertions")]
     spec: SideMetadataSpec,
-    data: &'static [u8; ENTRIES],
+    data: &'static mut [u8; ENTRIES],
 }
 
 impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
@@ -830,7 +830,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
             spec: *metadata_spec,
             // # Safety
             // The metadata memory is assumed to be mapped when accessing.
-            data: unsafe { &*address_to_meta_address(metadata_spec, start).to_ptr() },
+            data: unsafe { &mut *address_to_meta_address(metadata_spec, start).to_mut_ptr() },
         }
     }
 
@@ -853,6 +853,12 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
             sanity::verify_load(&self.spec, data_addr, value as _);
         }
         value
+    }
+
+    /// Get a byte from the metadata byte array at the given index.
+    #[inline(always)]
+    pub fn set(&mut self, index: usize, value: u8) {
+        self.data[index] = value;
     }
 }
 

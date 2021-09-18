@@ -17,7 +17,7 @@ use self::{chunk::ChunkMap, rc::RC_TABLE};
 use super::mallocspace::metadata::ACTIVE_PAGE_METADATA_SPEC;
 
 /// Mark/sweep memory for block-level only
-pub const BLOCK_ONLY: bool = true;
+pub const BLOCK_ONLY: bool = false;
 
 /// Opportunistic copying
 pub const DEFRAG: bool = false;

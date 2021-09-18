@@ -1,5 +1,7 @@
 use crate::plan::CopyContext;
 use crate::plan::Plan;
+use crate::policy::immix::block::Block;
+use crate::policy::immix::line::Line;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::*;
 use crate::util::{Address, ObjectReference};
@@ -167,6 +169,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             if !object.is_sane() {
                 panic!("Invalid reference {:?}", object);
             }
+            assert!(object.is_live(), "{:?} is dead, {:?}", object, Block::containing::<VM>(object));
             // Object is not "marked"
             sanity_checker.refs.insert(object); // "Mark" it
             ProcessEdgesWork::process_node(self, object);

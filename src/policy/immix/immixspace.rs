@@ -65,7 +65,13 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        self.is_marked(object, self.mark_state) || ForwardingWord::is_forwarded::<VM>(object)
+        let mut x = self.is_marked(object, self.mark_state) || ForwardingWord::is_forwarded::<VM>(object);
+        if super::BLOCK_ONLY {
+            x |= Block::containing::<VM>(object).get_state() == BlockState::Marked;
+        } else {
+            x |= Line::containing::<VM>(object).is_marked(self.line_mark_state.load(Ordering::Relaxed));
+        }
+        x
     }
     fn is_movable(&self) -> bool {
         super::DEFRAG
@@ -298,6 +304,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if crate::plan::immix::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
             side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
         }
+        if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY {
+            let current_state = self.line_mark_state.load(Ordering::Acquire);
+            for line in block.lines() {
+                line.mark(current_state);
+            }
+        }
         block.init(copy);
         if self.common.needs_log_bit {
             block.clear_log_table::<VM>();
@@ -486,7 +498,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();
-        let mark_data = block.line_mark_table();
+        let mut mark_data = block.line_mark_table();
         let start_cursor = search_start.get_index_within_block();
         let mut cursor = start_cursor;
         // Find start
@@ -507,11 +519,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if mark == unavail_state || mark == current_state {
                 break;
             }
+            if crate::plan::immix::CONCURRENT_MARKING {
+                mark_data.set(cursor, current_state);
+            }
+            if self.common.needs_log_bit {
+                let line = Line::forward(search_start, cursor - start_cursor);
+                line.initialize_log_table::<VM>();
+            }
             cursor += 1;
         }
         let end = Line::forward(search_start, cursor - start_cursor);
-        debug_assert!((start..end)
-            .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
         Some(start..end)
     }
 }

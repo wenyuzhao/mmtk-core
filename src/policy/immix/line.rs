@@ -1,6 +1,9 @@
+use atomic::Ordering;
+
 use super::block::Block;
 use super::IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET;
 use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::store_metadata;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,
@@ -51,6 +54,11 @@ impl Line {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
+    }
+
+    #[inline(always)]
+    pub fn containing<VM: VMBinding>(object: ObjectReference) -> Self {
+        Self(VM::VMObjectModel::ref_to_address(object).align_down(Self::BYTES))
     }
 
     /// Get the block containing the line.
@@ -109,6 +117,26 @@ impl Line {
             line.mark(state)
         }
         marked_lines
+    }
+
+    #[inline(always)]
+    pub fn initialize_log_table<VM: VMBinding>(&self) {
+        if crate::plan::immix::CONCURRENT_MARKING {
+            for i in (0..Self::BYTES).step_by(8) {
+                let o = unsafe { (self.start() + i).to_object_reference() };
+                store_metadata::<VM>(VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .as_spec(), o, crate::plan::barriers::UNLOGGED_VALUE, None, Some(Ordering::SeqCst));
+            }
+        } else {
+            unreachable!();
+            bzero_metadata(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .as_spec()
+                    .extract_side_spec(),
+                self.start(),
+                Block::BYTES,
+            );
+        }
     }
 }
 

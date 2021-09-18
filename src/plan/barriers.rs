@@ -276,7 +276,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 if !node.is_null() {
                     self.nodes.push(node);
                 }
-                if self.edges.len() >= E::CAPACITY {
+                if self.edges.len() >= E::CAPACITY || self.nodes.len() >= E::CAPACITY {
                     self.flush();
                 }
             }
