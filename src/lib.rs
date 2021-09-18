@@ -106,6 +106,7 @@ pub mod flags {
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
+    pub const EAGER_INCREMENTS: bool = true;
 
     // ---------- Barrier flags ---------- //
     pub const BARRIER_MEASUREMENT: bool = false;
