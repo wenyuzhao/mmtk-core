@@ -3,7 +3,6 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
-use crate::scheduler::stat::PRETTY_PRINT;
 use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
 use enum_map::{enum_map, EnumMap};
@@ -378,7 +377,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 "barrier.takerate".to_owned(),
                 format!("{}", slow as f64 / fast as f64),
             );
-            if PRETTY_PRINT {
+            if crate::flags::HARNESS_PRETTY_PRINT {
                 println!(
                     "barrier: fast={} slow={} takerate={}",
                     fast,

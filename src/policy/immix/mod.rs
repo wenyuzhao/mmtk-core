@@ -18,16 +18,16 @@ use self::{chunk::ChunkMap, rc::RC_TABLE};
 use super::mallocspace::metadata::ACTIVE_PAGE_METADATA_SPEC;
 
 /// Mark/sweep memory for block-level only
-pub const BLOCK_ONLY: bool = false;
+pub const BLOCK_ONLY: bool = crate::flags::BLOCK_ONLY;
 
 /// Opportunistic copying
-pub const DEFRAG: bool = false;
+pub const DEFRAG: bool = crate::flags::DEFRAG;
 
 /// Mark lines when scanning objects.
 /// Otherwise, do it at mark time.
-pub const MARK_LINE_AT_SCAN_TIME: bool = true;
+pub const MARK_LINE_AT_SCAN_TIME: bool = crate::flags::MARK_LINE_AT_SCAN_TIME;
 
-pub const SANITY: bool = false;
+pub const SANITY: bool = crate::flags::SANITY;
 
 macro_rules! validate {
     ($x: expr) => { assert!($x, stringify!($x)) };
@@ -58,5 +58,3 @@ pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = if crate::plan::immix::RE
 } else {
     ChunkMap::ALLOC_TABLE
 };
-
-pub const LOG_RELEASED_BLOCKS: bool = false;

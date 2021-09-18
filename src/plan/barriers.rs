@@ -16,8 +16,8 @@ use crate::MMTK;
 
 use super::transitive_closure::EdgeIterator;
 
-pub const BARRIER_MEASUREMENT: bool = false;
-pub const TAKERATE_MEASUREMENT: bool = false;
+pub const BARRIER_MEASUREMENT: bool = crate::flags::BARRIER_MEASUREMENT;
+pub const TAKERATE_MEASUREMENT: bool = crate::flags::TAKERATE_MEASUREMENT;
 pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 

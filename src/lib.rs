@@ -93,3 +93,26 @@ static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 const REPORT_GC_TIME: bool = false;
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
+
+/// Immix or barrier related flags
+pub mod flags {
+    // ---------- Immix flags ---------- //
+    pub const CONCURRENT_MARKING: bool = true;
+    pub const REF_COUNT: bool = false;
+    pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
+    /// Mark/sweep memory for block-level only
+    pub const BLOCK_ONLY: bool = false;
+    /// Opportunistic copying
+    pub const DEFRAG: bool = false;
+    /// Mark lines when scanning objects. Otherwise, do it at mark time.
+    pub const MARK_LINE_AT_SCAN_TIME: bool = true;
+
+    // ---------- Barrier flags ---------- //
+    pub const BARRIER_MEASUREMENT: bool = false;
+    pub const TAKERATE_MEASUREMENT: bool = false;
+
+    // ---------- Debugging flags ---------- //
+    pub const SANITY: bool = false;
+    pub const LOG_RELEASED_BLOCKS: bool = false;
+    pub const HARNESS_PRETTY_PRINT: bool = false;
+}

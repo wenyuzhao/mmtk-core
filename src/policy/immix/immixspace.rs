@@ -285,7 +285,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
-        if super::LOG_RELEASED_BLOCKS {
+        if crate::flags::LOG_RELEASED_BLOCKS {
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
         block.deinit();
