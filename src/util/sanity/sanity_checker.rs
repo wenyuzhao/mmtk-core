@@ -169,7 +169,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             if !object.is_sane() {
                 panic!("Invalid reference {:?}", object);
             }
-            assert!(object.is_live(), "{:?} is dead, {:?}", object, Block::containing::<VM>(object));
+            assert!(
+                object.is_live(),
+                "{:?} is dead, {:?}",
+                object,
+                Block::containing::<VM>(object)
+            );
             // Object is not "marked"
             sanity_checker.refs.insert(object); // "Mark" it
             ProcessEdgesWork::process_node(self, object);

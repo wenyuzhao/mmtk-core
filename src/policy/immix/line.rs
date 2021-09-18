@@ -124,8 +124,13 @@ impl Line {
         if crate::plan::immix::CONCURRENT_MARKING {
             for i in (0..Self::BYTES).step_by(8) {
                 let o = unsafe { (self.start() + i).to_object_reference() };
-                store_metadata::<VM>(VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .as_spec(), o, crate::plan::barriers::UNLOGGED_VALUE, None, Some(Ordering::SeqCst));
+                store_metadata::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    o,
+                    crate::plan::barriers::UNLOGGED_VALUE,
+                    None,
+                    Some(Ordering::SeqCst),
+                );
             }
         } else {
             unreachable!();

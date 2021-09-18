@@ -65,11 +65,13 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        let mut x = self.is_marked(object, self.mark_state) || ForwardingWord::is_forwarded::<VM>(object);
+        let mut x =
+            self.is_marked(object, self.mark_state) || ForwardingWord::is_forwarded::<VM>(object);
         if super::BLOCK_ONLY {
             x |= Block::containing::<VM>(object).get_state() == BlockState::Marked;
         } else {
-            x |= Line::containing::<VM>(object).is_marked(self.line_mark_state.load(Ordering::Relaxed));
+            x |= Line::containing::<VM>(object)
+                .is_marked(self.line_mark_state.load(Ordering::Relaxed));
         }
         x
     }

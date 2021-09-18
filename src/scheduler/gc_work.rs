@@ -3,8 +3,8 @@ use super::*;
 use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
-use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
@@ -769,7 +769,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
                 let mut modbuf = vec![];
                 ::std::mem::swap(&mut modbuf, &mut self.nodes);
-                GCWork::do_work(&mut ScanObjectsAndMarkLines::<E>::new(modbuf, false, &immix.immix_space), worker, mmtk);
+                GCWork::do_work(
+                    &mut ScanObjectsAndMarkLines::<E>::new(modbuf, false, &immix.immix_space),
+                    worker,
+                    mmtk,
+                );
             }
         }
     }
