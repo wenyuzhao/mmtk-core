@@ -234,25 +234,25 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        if crate::plan::immix::CONCURRENT_MARKING {
-            let meta = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        bzero_metadata(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                 .as_spec()
-                .extract_side_spec();
-            let start: *mut u128 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
-            let limit: *mut u128 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
-            let log_table =
-                unsafe { std::slice::from_raw_parts_mut(start, limit.offset_from(start) as _) };
-            for x in log_table {
-                *x = 113427455640312821154458202477256070485u128;
-            }
-        } else {
-            bzero_metadata(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .as_spec()
-                    .extract_side_spec(),
-                self.start(),
-                Block::BYTES,
-            );
+                .extract_side_spec(),
+            self.start(),
+            Block::BYTES,
+        );
+    }
+
+    #[inline(always)]
+    pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
+        let meta = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec();
+        let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
+        let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
+        unsafe {
+            let count = limit.offset_from(start) as usize;
+            std::ptr::write_bytes(start, 0b01010101u8, count);
         }
     }
 

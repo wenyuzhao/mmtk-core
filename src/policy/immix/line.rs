@@ -9,6 +9,7 @@ use crate::{
     vm::*,
 };
 use std::iter::Step;
+use std::ops::Range;
 
 /// Data structure to reference a line within an immix block.
 #[repr(C)]
@@ -120,28 +121,16 @@ impl Line {
     }
 
     #[inline(always)]
-    pub fn initialize_log_table<VM: VMBinding>(&self) {
-        if crate::plan::immix::CONCURRENT_MARKING {
-            for i in (0..Self::BYTES).step_by(8) {
-                let o = unsafe { (self.start() + i).to_object_reference() };
-                store_metadata::<VM>(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
-                    o,
-                    crate::plan::barriers::UNLOGGED_VALUE,
-                    None,
-                    Some(Ordering::SeqCst),
-                );
-            }
-        } else {
-            unreachable!();
-            bzero_metadata(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .as_spec()
-                    .extract_side_spec(),
-                self.start(),
-                Block::BYTES,
-            );
-        }
+    pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
+        let start = lines.start.start();
+        let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
+        bzero_metadata(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec(),
+            start,
+            size,
+        );
     }
 }
 

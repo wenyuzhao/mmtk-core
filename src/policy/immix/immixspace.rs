@@ -246,6 +246,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     None
                 },
                 perform_cycle_collection,
+                needs_log_bit: space.common().needs_log_bit,
             });
         self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         // Update line mark state
@@ -524,13 +525,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if crate::plan::immix::CONCURRENT_MARKING {
                 mark_data.set(cursor, current_state);
             }
-            if self.common.needs_log_bit {
-                let line = Line::forward(search_start, cursor - start_cursor);
-                line.initialize_log_table::<VM>();
-            }
             cursor += 1;
         }
         let end = Line::forward(search_start, cursor - start_cursor);
+        if self.common.needs_log_bit {
+            Line::clear_log_table::<VM>(start..end);
+        }
         Some(start..end)
     }
 }
@@ -542,6 +542,7 @@ pub struct PrepareBlockState<VM: VMBinding> {
     pub chunk: Chunk,
     pub defrag_threshold: Option<usize>,
     pub perform_cycle_collection: bool,
+    needs_log_bit: bool,
 }
 
 impl<VM: VMBinding> PrepareBlockState<VM> {
@@ -566,6 +567,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;
+            }
+            // FIXME: Don;t need this when doing RC
+            if crate::flags::CONCURRENT_MARKING && self.needs_log_bit {
+                block.initialize_log_table_as_unlogged::<VM>();
             }
             if crate::plan::immix::REF_COUNT && self.perform_cycle_collection {
                 side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
