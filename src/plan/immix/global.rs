@@ -160,11 +160,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .store(perform_cycle_collection, Ordering::SeqCst);
         // println!("perform_cycle_collection: {}", perform_cycle_collection);
         // println!("is_emergency_collection: {}", self.is_emergency_collection());
+        // println!("in_defrag: {}", in_defrag);
         if in_defrag {
             self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(
                 scheduler, concurrent, in_defrag,
             );
-            unreachable!();
         } else {
             if !super::REF_COUNT || perform_cycle_collection {
                 self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(
