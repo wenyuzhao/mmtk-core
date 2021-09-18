@@ -7,7 +7,6 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
-use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::store_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
