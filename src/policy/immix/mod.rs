@@ -7,6 +7,7 @@ pub mod rc;
 
 pub use immixspace::*;
 
+pub use crate::plan::immix::{CONCURRENT_MARKING, REF_COUNT};
 use crate::{
     policy::immix::block::Block,
     util::metadata::side_metadata::{SideMetadataOffset, SideMetadataSpec},
@@ -36,6 +37,13 @@ macro_rules! validate {
 fn validate_features() {
     // Block-only immix cannot do defragmentation
     validate!(DEFRAG => !BLOCK_ONLY);
+    validate!(DEFRAG => !CONCURRENT_MARKING);
+    validate!(DEFRAG => !REF_COUNT);
+    validate!(CONCURRENT_MARKING => !DEFRAG);
+    validate!(CONCURRENT_MARKING => !REF_COUNT);
+    validate!(REF_COUNT => !CONCURRENT_MARKING);
+    validate!(REF_COUNT => BLOCK_ONLY);
+    validate!(REF_COUNT => !DEFRAG);
     // Number of lines in a block should not exceed BlockState::MARK_MARKED
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
