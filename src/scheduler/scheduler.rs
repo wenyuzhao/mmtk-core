@@ -19,8 +19,6 @@ pub enum CoordinatorMessage<VM: VMBinding> {
 
 pub struct GCWorkScheduler<VM: VMBinding> {
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
-    /// Work for the coordinator thread
-    pub coordinator_work: WorkBucket<VM>,
     /// workers
     worker_group: Option<Arc<WorkerGroup<VM>>>,
     /// Condition Variable for worker synchronization
@@ -69,7 +67,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 WorkBucketStage::PreClosure => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::PostClosure => WorkBucket::new(false, worker_monitor.clone()),
             },
-            coordinator_work: WorkBucket::new(true, worker_monitor.clone()),
             worker_group: None,
             worker_monitor,
             mmtk: None,
@@ -114,12 +111,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             Arc::downgrade(self),
             self.channel.0.clone(),
         ));
+        let group = self_mut.worker_group.as_ref().unwrap().clone();
+        self_mut.work_buckets.values_mut().for_each(|bucket| {
+            bucket.set_group(group.clone());
+        });
         self.worker_group.as_ref().unwrap().spawn_workers(tls, mmtk);
 
         {
             // Unconstrained is always open. Prepare will be opened at the beginning of a GC.
             // This vec will grow for each stage we call with open_next()
-            let mut open_stages: Vec<WorkBucketStage> = vec![Unconstrained, Prepare];
+            let mut open_stages: Vec<WorkBucketStage> = vec![Prepare];
             // The rest will open after the previous stage is done.
             let mut open_next = |s: WorkBucketStage| {
                 let cur_stages = open_stages.clone();
@@ -140,14 +141,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 open_stages.push(s);
             };
 
-            open_next(ForwardRoots);
-            open_next(PreClosure);
-            open_next(Closure);
-            open_next(PostClosure);
-            open_next(RefClosure);
-            open_next(RefForwarding);
-            open_next(Release);
-            open_next(Final);
+            for (id, _) in self.work_buckets.iter() {
+                if id != WorkBucketStage::Unconstrained && id != WorkBucketStage::Prepare {
+                    open_next(id);
+                }
+            }
         }
     }
 
@@ -238,51 +236,33 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
             self.process_coordinator_work(finalizer);
         }
-        debug_assert!(!self.work_buckets[WorkBucketStage::Prepare].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::ForwardRoots].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::PreClosure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::Closure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::PostClosure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::RefClosure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::RefForwarding].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::Release].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::Final].is_activated());
+        self.assert_all_deactivated();
     }
 
     pub fn assert_all_deactivated(&self) {
-        debug_assert!(!self.work_buckets[WorkBucketStage::Prepare].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::ForwardRoots].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::PreClosure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::Closure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::PostClosure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::RefClosure].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::RefForwarding].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::Release].is_activated());
-        debug_assert!(!self.work_buckets[WorkBucketStage::Final].is_activated());
+        if cfg!(debug_assertions) {
+            self.work_buckets.iter().for_each(|(id, bkt)| {
+                if id != WorkBucketStage::Unconstrained {
+                    assert!(!bkt.is_activated());
+                }
+            });
+        }
     }
 
     pub fn deactivate_all(&self) {
-        self.work_buckets[WorkBucketStage::Prepare].deactivate();
-        self.work_buckets[WorkBucketStage::ForwardRoots].deactivate();
-        self.work_buckets[WorkBucketStage::PreClosure].deactivate();
-        self.work_buckets[WorkBucketStage::Closure].deactivate();
-        self.work_buckets[WorkBucketStage::PostClosure].deactivate();
-        self.work_buckets[WorkBucketStage::RefClosure].deactivate();
-        self.work_buckets[WorkBucketStage::RefForwarding].deactivate();
-        self.work_buckets[WorkBucketStage::Release].deactivate();
-        self.work_buckets[WorkBucketStage::Final].deactivate();
+        self.work_buckets.iter().for_each(|(id, bkt)| {
+            if id != WorkBucketStage::Unconstrained {
+                bkt.deactivate();
+            }
+        });
     }
 
     pub fn reset_state(&self) {
-        // self.work_buckets[WorkBucketStage::Prepare].deactivate();
-        self.work_buckets[WorkBucketStage::ForwardRoots].deactivate();
-        self.work_buckets[WorkBucketStage::PreClosure].deactivate();
-        self.work_buckets[WorkBucketStage::PostClosure].deactivate();
-        self.work_buckets[WorkBucketStage::Closure].deactivate();
-        self.work_buckets[WorkBucketStage::RefClosure].deactivate();
-        self.work_buckets[WorkBucketStage::RefForwarding].deactivate();
-        self.work_buckets[WorkBucketStage::Release].deactivate();
-        self.work_buckets[WorkBucketStage::Final].deactivate();
+        self.work_buckets.iter().for_each(|(id, bkt)| {
+            if id != WorkBucketStage::Unconstrained && id != WorkBucketStage::Prepare {
+                bkt.deactivate();
+            }
+        });
     }
 
     pub fn add_coordinator_work(&self, work: impl CoordinatorWork<VM>, worker: &GCWorker<VM>) {
