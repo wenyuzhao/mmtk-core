@@ -36,6 +36,7 @@ use std::{
     sync::{atomic::AtomicU8, Arc},
 };
 
+pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct ImmixSpace<VM: VMBinding> {
@@ -312,8 +313,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release a block.
-    pub fn release_block(&self, block: Block) {
-        if crate::flags::LOG_RELEASED_BLOCKS {
+    pub fn release_block(&self, block: Block, nursery: bool) {
+        if crate::flags::LOG_PER_GC_STATE {
+            if nursery {
+                RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
+            }
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
         block.deinit();

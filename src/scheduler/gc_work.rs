@@ -25,7 +25,7 @@ pub struct ScheduleCollection(pub bool);
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if crate::flags::REPORT_GC_TIME {
+        if crate::flags::LOG_PER_GC_STATE {
             *crate::GC_TRIGGER_TIME.lock() = Some(SystemTime::now());
         }
         mmtk.plan.schedule_collection(worker.scheduler(), self.0);
@@ -247,7 +247,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
             trace!("stop_all_mutators start");
             debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
             <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
-            if crate::flags::REPORT_GC_TIME {
+            if crate::flags::LOG_PER_GC_STATE {
                 *crate::GC_START_TIME.lock() = Some(SystemTime::now());
             }
             trace!("stop_all_mutators end");
@@ -292,12 +292,15 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
-        if crate::flags::LOG_RELEASED_BLOCKS {
+        if crate::flags::LOG_PER_GC_STATE {
+            let released =
+                crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
+            println!("Eager released {} nursery blocks", released);
             let released = crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
             println!("Released {} blocks", released);
+            crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
-        }
-        if crate::flags::REPORT_GC_TIME {
+
             println!(
                 "> {}ms {}ms",
                 crate::GC_TRIGGER_TIME

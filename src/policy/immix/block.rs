@@ -284,7 +284,7 @@ impl Block {
             if REF_COUNT && !perform_cycle_collection {
                 let live = !self.rc_dead();
                 if !live {
-                    space.release_block(*self);
+                    space.release_block(*self, false);
                 }
                 return !live;
             }
@@ -292,7 +292,7 @@ impl Block {
                 BlockState::Unallocated => false,
                 BlockState::Unmarked => {
                     // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self);
+                    space.release_block(*self, false);
                     true
                 }
                 BlockState::Marked => {
@@ -322,7 +322,7 @@ impl Block {
 
             if marked_lines == 0 {
                 // Release the block if non of its lines are marked.
-                space.release_block(*self);
+                space.release_block(*self, false);
                 true
             } else {
                 // There are some marked lines. Keep the block live.
@@ -355,7 +355,7 @@ impl Block {
         if super::BLOCK_ONLY {
             let live = !self.rc_dead();
             if !live {
-                space.release_block(*self);
+                space.release_block(*self, true);
             }
             return !live;
         } else {

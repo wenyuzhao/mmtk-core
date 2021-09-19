@@ -114,9 +114,8 @@ pub mod flags {
 
     // ---------- Debugging flags ---------- //
     pub const SANITY: bool = false;
-    pub const LOG_RELEASED_BLOCKS: bool = false;
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const REPORT_GC_TIME: bool = true;
+    pub const LOG_PER_GC_STATE: bool = true;
     pub const LOG_STAGES: bool = false;
 
     pub fn validate_features() {
