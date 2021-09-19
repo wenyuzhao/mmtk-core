@@ -254,6 +254,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         } else {
             false
         };
+    const RC_ROOTS: bool = true;
 
     fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, mmtk);
@@ -295,7 +296,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         }
         let mut slots = vec![];
         std::mem::swap(&mut slots, &mut self.slots);
-        self.mmtk.scheduler.work_buckets[WorkBucketStage::PostClosure]
+        self.mmtk.scheduler.work_buckets[WorkBucketStage::ProcessRoots]
             .add(ProcessIncs::<VM, false>::new(slots));
     }
 

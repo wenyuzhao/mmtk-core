@@ -122,7 +122,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 pub enum WorkBucketStage {
     Unconstrained,
     Prepare,
-    ForwardRoots,
+    ProcessRoots,
     PreClosure,
     Closure,
     // TODO: We only support final reference at the moment. If we have references of multiple strengths,

@@ -158,7 +158,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             || cc_force_full;
         self.perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
-        println!("perform_cycle_collection: {}", perform_cycle_collection);
+        // println!("perform_cycle_collection: {}", perform_cycle_collection);
         // println!("is_emergency_collection: {}", self.is_emergency_collection());
         // println!("in_defrag: {}", in_defrag);
         if in_defrag {
