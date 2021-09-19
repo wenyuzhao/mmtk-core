@@ -324,7 +324,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if !self.incs.is_empty() {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
-            let bucket = if crate::flags::EAGER_INCREMENTS {
+            let bucket = if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 WorkBucketStage::Unconstrained
             } else {
                 WorkBucketStage::PostClosure
