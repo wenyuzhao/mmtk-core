@@ -121,6 +121,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
 pub enum WorkBucketStage {
     Unconstrained,
+    ScanGlobalRoots,
     Prepare,
     ProcessRoots,
     PreClosure,

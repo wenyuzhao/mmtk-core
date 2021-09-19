@@ -2,7 +2,10 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use crate::plan::immix::Immix;
+use crate::policy::immix::rc::RC_TABLE;
+use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
+use crate::util::metadata::MetadataSpec;
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},
@@ -80,6 +83,31 @@ impl Chunk {
                 line_mark_state,
                 perform_cycle_collection,
             ) {
+                // Block is live. Increment the allocated block count.
+                allocated_blocks += 1;
+            }
+        }
+        // Set this chunk as free if there is not live blocks.
+        if allocated_blocks == 0 {
+            space.chunk_map.set(*self, ChunkState::Free)
+        }
+    }
+
+    pub fn sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        debug_assert!(crate::flags::REF_COUNT);
+        let line_mark_state = if super::BLOCK_ONLY {
+            None
+        } else {
+            Some(space.line_mark_state.load(Ordering::Acquire))
+        };
+        // number of allocated blocks.
+        let mut allocated_blocks = 0;
+        // Iterate over all allocated blocks in this chunk.
+        for block in self
+            .blocks()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+        {
+            if !block.sweep_nursery(space, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
             }
@@ -197,7 +225,7 @@ impl ChunkMap {
     }
 
     /// Helper function to create per-chunk processing work packets.
-    pub fn generate_tasks<VM: VMBinding>(
+    fn generate_tasks<VM: VMBinding>(
         &self,
         func: impl Fn(Chunk) -> Box<dyn GCWork<VM>>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
@@ -212,12 +240,96 @@ impl ChunkMap {
     }
 
     /// Generate chunk sweep work packets.
+    pub fn generate_prepare_tasks<VM: VMBinding>(
+        &self,
+        space: &'static ImmixSpace<VM>,
+        rc: bool,
+        defrag_threshold: Option<usize>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        if rc {
+            self.generate_tasks(|chunk| box PrepareChunk::<_, true> {
+                space,
+                chunk,
+                defrag_threshold: None,
+                needs_log_bit: space.common().needs_log_bit,
+            })
+        } else {
+            self.generate_tasks(|chunk| box PrepareChunk::<_, false> {
+                space,
+                chunk,
+                defrag_threshold,
+                needs_log_bit: space.common().needs_log_bit,
+            })
+        }
+    }
+
+    /// Generate chunk sweep work packets.
     pub fn generate_sweep_tasks<VM: VMBinding>(
         &self,
         space: &'static ImmixSpace<VM>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
         space.defrag.mark_histograms.lock().clear();
         self.generate_tasks(|chunk| box SweepChunk { space, chunk })
+    }
+}
+
+/// A work packet to prepare each block for GC.
+/// Performs the action on a range of chunks.
+struct PrepareChunk<VM: VMBinding, const RC: bool> {
+    space: &'static ImmixSpace<VM>,
+    chunk: Chunk,
+    defrag_threshold: Option<usize>,
+    needs_log_bit: bool,
+}
+
+impl<VM: VMBinding> PrepareChunk<VM, false> {
+    /// Clear object mark table
+    #[inline(always)]
+    fn reset_object_mark(chunk: Chunk) {
+        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+            side_metadata::bzero_metadata(&side, chunk.start(), Chunk::BYTES);
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for PrepareChunk<VM, false> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
+        // Clear object mark table for this chunk
+        Self::reset_object_mark(self.chunk);
+        // Iterate over all blocks in this chunk
+        for block in self.chunk.blocks() {
+            let state = block.get_state();
+            // Skip unallocated blocks.
+            if state == BlockState::Unallocated {
+                continue;
+            }
+            // FIXME: Don;t need this when doing RC
+            if crate::flags::CONCURRENT_MARKING && self.needs_log_bit {
+                block.initialize_log_table_as_unlogged::<VM>();
+            }
+            if crate::plan::immix::REF_COUNT {
+                side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
+            }
+            // Check if this block needs to be defragmented.
+            if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
+                block.set_as_defrag_source(true);
+            } else {
+                block.set_as_defrag_source(false);
+            }
+            // Clear block mark data.
+            block.set_state(BlockState::Unmarked);
+            debug_assert!(!block.get_state().is_reusable());
+            debug_assert_ne!(block.get_state(), BlockState::Marked);
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for PrepareChunk<VM, true> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.chunk.sweep_nursery(self.space)
     }
 }
 

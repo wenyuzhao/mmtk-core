@@ -111,6 +111,9 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     fn flush(&mut self) {
         self.flush_remembered_sets();
     }
+    fn assert_is_flushed(&mut self) {
+        self.barrier().assert_is_flushed();
+    }
     fn get_tls(&self) -> VMMutatorThread;
     fn barrier(&mut self) -> &mut dyn Barrier;
 

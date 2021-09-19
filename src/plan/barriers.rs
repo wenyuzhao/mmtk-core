@@ -68,6 +68,7 @@ pub enum WriteTarget {
 pub trait Barrier: 'static + Send {
     fn flush(&mut self);
     fn write_barrier(&mut self, target: WriteTarget);
+    fn assert_is_flushed(&self) {}
 }
 
 pub struct NoBarrier;
@@ -309,6 +310,13 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 }
 
 impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
+    fn assert_is_flushed(&self) {
+        debug_assert!(self.edges.is_empty());
+        debug_assert!(self.nodes.is_empty());
+        debug_assert!(self.incs.is_empty());
+        debug_assert!(self.decs.is_empty());
+    }
+
     #[cold]
     fn flush(&mut self) {
         // Concurrent Marking: Flush satb buffer

@@ -296,7 +296,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         }
         let mut slots = vec![];
         std::mem::swap(&mut slots, &mut self.slots);
-        self.mmtk.scheduler.work_buckets[WorkBucketStage::ProcessRoots]
+        self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(ProcessIncs::<VM, false>::new(slots));
     }
 

@@ -158,7 +158,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             || cc_force_full;
         self.perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
-        // println!("perform_cycle_collection: {}", perform_cycle_collection);
+        println!("perform_cycle_collection: {}", perform_cycle_collection);
         // println!("is_emergency_collection: {}", self.is_emergency_collection());
         // println!("in_defrag: {}", in_defrag);
         if in_defrag {
@@ -186,16 +186,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn prepare(&mut self, tls: VMWorkerThread) {
         if !super::REF_COUNT || self.perform_cycle_collection() {
             self.common.prepare(tls, true);
+            self.immix_space.prepare();
+        } else {
+            self.immix_space.prepare_rc();
         }
-        self.immix_space.prepare(self.perform_cycle_collection());
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
         if !super::REF_COUNT || self.perform_cycle_collection() {
             self.common.release(tls, true);
+            self.immix_space.release();
+        } else {
+            self.immix_space.release_rc();
         }
-        // release the collected region
-        self.immix_space.release();
         if super::REF_COUNT {
             let mut curr_roots = super::gc_work::CURR_ROOTS.lock();
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();

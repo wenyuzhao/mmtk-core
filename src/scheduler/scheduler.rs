@@ -57,6 +57,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         Arc::new(Self {
             work_buckets: enum_map! {
                 WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone()),
+                WorkBucketStage::ScanGlobalRoots => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::ProcessRoots => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::PreClosure => WorkBucket::new(false, worker_monitor.clone()),
@@ -89,7 +90,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         mmtk: &'static MMTK<VM>,
         tls: VMThread,
     ) {
-        use crate::scheduler::work_bucket::WorkBucketStage::*;
         let num_workers = if cfg!(feature = "single_worker") {
             1
         } else {
@@ -120,7 +120,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         {
             // Unconstrained is always open. Prepare will be opened at the beginning of a GC.
             // This vec will grow for each stage we call with open_next()
-            let mut open_stages: Vec<WorkBucketStage> = vec![Prepare];
+            let first_stw_stage = self
+                .work_buckets
+                .iter()
+                .skip(1)
+                .next()
+                .map(|(id, _)| id)
+                .unwrap();
+            let mut open_stages: Vec<WorkBucketStage> = vec![first_stw_stage];
             // The rest will open after the previous stage is done.
             let mut open_next = |s: WorkBucketStage| {
                 let cur_stages = open_stages.clone();
@@ -142,7 +149,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             };
 
             for (id, _) in self.work_buckets.iter() {
-                if id != WorkBucketStage::Unconstrained && id != WorkBucketStage::Prepare {
+                if id != WorkBucketStage::Unconstrained && id != first_stw_stage {
                     open_next(id);
                 }
             }
@@ -185,7 +192,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if id == WorkBucketStage::Unconstrained {
                 continue;
             }
-            buckets_updated |= bucket.update();
+            let x = bucket.update();
+            if crate::flags::LOG_STAGES && x {
+                println!("Activate {:?}", id);
+            }
+            buckets_updated |= x;
         }
         if buckets_updated {
             // Notify the workers for new work
@@ -258,8 +269,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn reset_state(&self) {
+        let first_stw_stage = self
+            .work_buckets
+            .iter()
+            .skip(1)
+            .next()
+            .map(|(id, _)| id)
+            .unwrap();
         self.work_buckets.iter().for_each(|(id, bkt)| {
-            if id != WorkBucketStage::Unconstrained && id != WorkBucketStage::Prepare {
+            if id != WorkBucketStage::Unconstrained && id != first_stw_stage {
                 bkt.deactivate();
             }
         });
@@ -371,8 +389,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
         mmtk.plan.base().control_collector_context.clear_request();
-        debug_assert!(!self.work_buckets[WorkBucketStage::Prepare].is_activated());
-        self.work_buckets[WorkBucketStage::Prepare].activate();
+        let first_stw_bucket = self.work_buckets.values().skip(1).next().unwrap();
+        debug_assert!(!first_stw_bucket.is_activated());
+        first_stw_bucket.activate();
         let _guard = self.worker_monitor.0.lock().unwrap();
         self.worker_monitor.1.notify_all();
     }

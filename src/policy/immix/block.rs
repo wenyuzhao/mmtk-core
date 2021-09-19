@@ -344,6 +344,24 @@ impl Block {
             }
         }
     }
+
+    #[inline(always)]
+    pub fn sweep_nursery<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        _line_mark_state: Option<u8>,
+    ) -> bool {
+        debug_assert!(crate::flags::REF_COUNT);
+        if super::BLOCK_ONLY {
+            let live = !self.rc_dead();
+            if !live {
+                space.release_block(*self);
+            }
+            return !live;
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 impl Step for Block {

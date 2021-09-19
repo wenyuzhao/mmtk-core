@@ -1,7 +1,7 @@
 use super::line::*;
 use super::{
     block::*,
-    chunk::{Chunk, ChunkMap, ChunkState},
+    chunk::{ChunkMap, ChunkState},
     defrag::Defrag,
 };
 use crate::plan::ObjectsClosure;
@@ -219,7 +219,38 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare(&mut self, perform_cycle_collection: bool) {
+    pub fn prepare_rc(&mut self) {
+        let space = unsafe { &*(self as *const Self) };
+        let work_packets = self
+            .chunk_map
+            .generate_prepare_tasks::<VM>(space, true, None);
+        self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+        // Update line mark state
+        if !super::BLOCK_ONLY {
+            unimplemented!()
+        }
+    }
+
+    pub fn release_rc(&mut self) {
+        // Update line_unavail_state for hole searching afte this GC.
+        if !super::BLOCK_ONLY {
+            unimplemented!()
+        }
+        // Clear reusable blocks list
+        if !super::BLOCK_ONLY {
+            unimplemented!()
+        }
+        // Sweep chunks and blocks
+        // # Safety: ImmixSpace reference is always valid within this collection cycle.
+        let space = unsafe { &*(self as *const Self) };
+        let work_packets = self.chunk_map.generate_sweep_tasks(space);
+        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        if super::DEFRAG {
+            unimplemented!()
+        }
+    }
+
+    pub fn prepare(&mut self) {
         // Update mark_state
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             self.mark_state = Self::MARKED_STATE;
@@ -235,19 +266,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
-        let work_packets = self
-            .chunk_map
-            .generate_tasks(|chunk| box PrepareBlockState {
-                space,
-                chunk,
-                defrag_threshold: if space.in_defrag() {
-                    Some(threshold)
-                } else {
-                    None
-                },
-                perform_cycle_collection,
-                needs_log_bit: space.common().needs_log_bit,
-            });
+        let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(
+            space,
+            false,
+            if space.in_defrag() {
+                Some(threshold)
+            } else {
+                None
+            },
+        );
         self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         // Update line mark state
         if !super::BLOCK_ONLY {
@@ -532,60 +559,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::clear_log_table::<VM>(start..end);
         }
         Some(start..end)
-    }
-}
-
-/// A work packet to prepare each block for GC.
-/// Performs the action on a range of chunks.
-pub struct PrepareBlockState<VM: VMBinding> {
-    pub space: &'static ImmixSpace<VM>,
-    pub chunk: Chunk,
-    pub defrag_threshold: Option<usize>,
-    pub perform_cycle_collection: bool,
-    needs_log_bit: bool,
-}
-
-impl<VM: VMBinding> PrepareBlockState<VM> {
-    /// Clear object mark table
-    #[inline(always)]
-    fn reset_object_mark(chunk: Chunk) {
-        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-            side_metadata::bzero_metadata(&side, chunk.start(), Chunk::BYTES);
-        }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
-    #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
-        // Clear object mark table for this chunk
-        Self::reset_object_mark(self.chunk);
-        // Iterate over all blocks in this chunk
-        for block in self.chunk.blocks() {
-            let state = block.get_state();
-            // Skip unallocated blocks.
-            if state == BlockState::Unallocated {
-                continue;
-            }
-            // FIXME: Don;t need this when doing RC
-            if crate::flags::CONCURRENT_MARKING && self.needs_log_bit {
-                block.initialize_log_table_as_unlogged::<VM>();
-            }
-            if crate::plan::immix::REF_COUNT && self.perform_cycle_collection {
-                side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
-            }
-            // Check if this block needs to be defragmented.
-            if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
-                block.set_as_defrag_source(true);
-            } else {
-                block.set_as_defrag_source(false);
-            }
-            // Clear block mark data.
-            block.set_state(BlockState::Unmarked);
-            debug_assert!(!block.get_state().is_reusable());
-            debug_assert_ne!(block.get_state(), BlockState::Marked);
-        }
     }
 }
 
