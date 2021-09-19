@@ -267,9 +267,14 @@ impl ChunkMap {
     pub fn generate_sweep_tasks<VM: VMBinding>(
         &self,
         space: &'static ImmixSpace<VM>,
+        rc: bool,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        space.defrag.mark_histograms.lock().clear();
-        self.generate_tasks(|chunk| box SweepChunk { space, chunk })
+        if rc {
+            vec![]
+        } else {
+            space.defrag.mark_histograms.lock().clear();
+            self.generate_tasks(|chunk| box SweepChunk { space, chunk })
+        }
     }
 }
 
@@ -348,6 +353,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             self.chunk
                 .sweep(self.space, &mut histogram, immix.perform_cycle_collection());
         }
-        self.space.defrag.add_completed_mark_histogram(histogram);
+        if super::DEFRAG {
+            self.space.defrag.add_completed_mark_histogram(histogram);
+        }
     }
 }

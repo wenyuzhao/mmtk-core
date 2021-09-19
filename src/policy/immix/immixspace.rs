@@ -244,7 +244,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Sweep chunks and blocks
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_sweep_tasks(space);
+        let work_packets = self.chunk_map.generate_sweep_tasks(space, true);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
             unimplemented!()
@@ -302,7 +302,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Sweep chunks and blocks
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_sweep_tasks(space);
+        let work_packets = self.chunk_map.generate_sweep_tasks(space, false);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
             self.defrag.release(self)

@@ -93,6 +93,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     #[inline(always)]
     pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+        if work_vec.is_empty() {
+            return;
+        }
         self.bulk_add_with_priority(1000, work_vec)
     }
     /// Get a work packet (with the greatest priority) from this bucket
