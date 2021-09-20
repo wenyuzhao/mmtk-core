@@ -53,7 +53,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     mark_state: u8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
-    block_allocation: BlockAllocation<VM>,
+    pub block_allocation: BlockAllocation<VM>,
     pub new_blocks: Mutex<Vec<Block>>,
 }
 

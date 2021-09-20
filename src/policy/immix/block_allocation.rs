@@ -29,6 +29,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
     }
 
+    pub fn nursery_blocks(&self) -> usize {
+        self.clean_block_cursor.load(Ordering::Relaxed)
+    }
+
     pub fn init(&mut self, space: &'static ImmixSpace<VM>) {
         self.space = Some(space);
     }

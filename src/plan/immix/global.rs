@@ -94,6 +94,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         self.base().collection_required(self, space_full, space)
+            || (crate::flags::REF_COUNT
+                && crate::flags::LOCK_FREE_BLOCK_ALLOCATION
+                && self.immix_space.block_allocation.nursery_blocks()
+                    >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC)
     }
 
     fn concurrent_collection_required(&self) -> bool {
