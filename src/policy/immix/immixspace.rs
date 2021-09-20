@@ -1,3 +1,4 @@
+use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{
     block::*,
@@ -56,6 +57,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     mark_state: u8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
+    block_allocation: BlockAllocation<VM>,
     pub new_blocks: Mutex<Vec<Block>>,
 }
 
@@ -105,6 +107,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn init(&mut self, _vm_map: &'static VMMap) {
         super::validate_features();
         self.common().init(self.as_space());
+        self.block_allocation.init(unsafe { &*(self as *const Self) })
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -181,6 +184,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::UNMARKED_STATE,
             scheduler,
             new_blocks: Default::default(),
+            block_allocation: BlockAllocation::new(),
         }
     }
 
@@ -325,49 +329,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Allocate a clean block.
+    #[inline(always)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block_address = self.acquire(tls, Block::PAGES);
-        if block_address.is_zero() {
-            return None;
-        }
-        self.defrag.notify_new_clean_block(copy);
-        let block = Block::from(block_address);
-        if super::SANITY {
-            self.new_blocks.lock().push(block);
-        }
-        if crate::plan::immix::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
-            side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
-        }
-        if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY {
-            let current_state = self.line_mark_state.load(Ordering::Acquire);
-            for line in block.lines() {
-                line.mark(current_state);
-            }
-        }
-        block.init(copy);
-        if self.common.needs_log_bit {
-            block.clear_log_table::<VM>();
-        }
-        self.chunk_map.set(block.chunk(), ChunkState::Allocated);
-        Some(block)
+        self.block_allocation.get_clean_block(tls, copy)
     }
 
     /// Pop a reusable block from the reusable block list.
+    #[inline(always)]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
-        if super::BLOCK_ONLY {
-            return None;
-        }
-        loop {
-            if let Some(block) = self.reusable_blocks.pop() {
-                if copy && block.is_defrag_source() {
-                    continue;
-                }
-                block.init(copy);
-                return Some(block);
-            } else {
-                return None;
-            }
-        }
+        self.block_allocation.get_reusable_block(copy)
     }
 
     /// Trace and mark objects without evacuation.

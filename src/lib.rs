@@ -17,6 +17,8 @@
 #![feature(once_cell)]
 #![feature(const_generics_defaults)]
 #![feature(const_trait_impl)]
+#![feature(const_option)]
+#![feature(const_fn_trait_bound)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 
@@ -98,7 +100,7 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 pub mod flags {
     // ---------- Immix flags ---------- //
     pub const CONCURRENT_MARKING: bool = false;
-    pub const REF_COUNT: bool = true;
+    pub const REF_COUNT: bool = false;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
     pub const BLOCK_ONLY: bool = true;
@@ -107,6 +109,7 @@ pub mod flags {
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = true;
+    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
 
     // ---------- Barrier flags ---------- //
     pub const BARRIER_MEASUREMENT: bool = false;
@@ -115,7 +118,7 @@ pub mod flags {
     // ---------- Debugging flags ---------- //
     pub const SANITY: bool = false;
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = true;
+    pub const LOG_PER_GC_STATE: bool = false;
     pub const LOG_STAGES: bool = false;
 
     pub fn validate_features() {
