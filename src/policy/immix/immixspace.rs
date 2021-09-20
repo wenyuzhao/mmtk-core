@@ -1,10 +1,6 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
-use super::{
-    block::*,
-    chunk::{ChunkMap, ChunkState},
-    defrag::Defrag,
-};
+use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::RC_TABLE;
@@ -14,7 +10,7 @@ use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
-use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::{Address, ObjectReference};
@@ -107,7 +103,8 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn init(&mut self, _vm_map: &'static VMMap) {
         super::validate_features();
         self.common().init(self.as_space());
-        self.block_allocation.init(unsafe { &*(self as *const Self) })
+        self.block_allocation
+            .init(unsafe { &*(self as *const Self) })
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -225,6 +222,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self) {
+        self.block_allocation.reset();
         let space = unsafe { &*(self as *const Self) };
         let work_packets = self
             .chunk_map
@@ -256,6 +254,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare(&mut self) {
+        self.block_allocation.reset();
         // Update mark_state
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             self.mark_state = Self::MARKED_STATE;
