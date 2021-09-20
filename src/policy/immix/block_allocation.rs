@@ -113,7 +113,15 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Allocate a clean block.
     #[inline(always)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block = self.alloc_clean_block(tls)?;
+        let block = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+            self.alloc_clean_block(tls)?
+        } else {
+            let block_address = self.space().acquire(tls, Block::PAGES);
+            if block_address.is_zero() {
+                return None;
+            }
+            Block::from(block_address)
+        };
         self.initialize_new_clean_block(block, copy);
         Some(block)
     }
