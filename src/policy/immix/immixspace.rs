@@ -222,11 +222,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self) {
-        self.block_allocation.reset();
-        let space = unsafe { &*(self as *const Self) };
-        let work_packets = self
-            .chunk_map
-            .generate_prepare_tasks::<VM>(space, true, None);
+        let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+            self.block_allocation
+                .reset_and_generate_nursery_sweep_tasks()
+        } else {
+            self.block_allocation.reset();
+            let space = unsafe { &*(self as *const Self) };
+            self.chunk_map
+                .generate_prepare_tasks::<VM>(space, true, None)
+        };
         self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         // Update line mark state
         if !super::BLOCK_ONLY {
@@ -291,6 +295,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn release(&mut self) {
+        self.block_allocation.reset();
         // Update line_unavail_state for hole searching afte this GC.
         if !super::BLOCK_ONLY {
             self.line_unavail_state.store(

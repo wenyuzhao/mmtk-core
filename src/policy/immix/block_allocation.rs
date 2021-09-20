@@ -1,8 +1,10 @@
 use super::{block::Block, chunk::ChunkState, rc::RC_TABLE, ImmixSpace};
 use crate::{
     policy::space::Space,
+    scheduler::{GCWork, GCWorker},
     util::{metadata::side_metadata, VMMutatorThread, VMThread},
     vm::*,
+    MMTK,
 };
 use atomic::Ordering;
 use spin::Mutex;
@@ -36,6 +38,27 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.clean_block_cursor.store(0, Ordering::SeqCst);
     }
 
+    pub fn reset_and_generate_nursery_sweep_tasks(&mut self) -> Vec<Box<dyn GCWork<VM>>> {
+        let blocks = self.clean_block_buffer.len();
+        let num_bins = 24usize;
+        let bin_cap = blocks / num_bins + if blocks % num_bins == 0 { 0 } else { 1 };
+        let mut bins = (0..num_bins)
+            .map(|_| Vec::with_capacity(bin_cap))
+            .collect::<Vec<Vec<Block>>>();
+        for i in 0..num_bins {
+            for j in 0..bin_cap {
+                if let Some(block) = self.clean_block_buffer.get(i * bin_cap + j) {
+                    bins[i].push(*block);
+                }
+            }
+        }
+        self.reset();
+        let space = self.space();
+        bins.into_iter()
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
+            .collect()
+    }
+
     const fn space(&self) -> &'static ImmixSpace<VM> {
         self.space.unwrap()
     }
@@ -65,17 +88,18 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     #[inline(always)]
     fn alloc_clean_block_fast(&self) -> Option<Block> {
+        let buffer: &[Block] = &self.clean_block_buffer;
         let i = self
             .clean_block_cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |i| {
-                if i >= self.clean_block_buffer.len() {
+                if i >= buffer.len() {
                     None
                 } else {
                     Some(i + 1)
                 }
             })
             .ok()?;
-        Some(self.clean_block_buffer[i])
+        Some(buffer[i])
     }
 
     #[cold]
@@ -111,7 +135,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Allocate a clean block.
-    #[inline(always)]
+    #[inline(never)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
         let block = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.alloc_clean_block(tls)?
@@ -142,6 +166,25 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             } else {
                 return None;
             }
+        }
+    }
+}
+
+struct RCSweepNurseryBlocks<VM: VMBinding> {
+    space: &'static ImmixSpace<VM>,
+    blocks: Vec<Block>,
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let line_mark_state = if super::BLOCK_ONLY {
+            None
+        } else {
+            Some(self.space.line_mark_state.load(Ordering::Acquire))
+        };
+        for b in &self.blocks {
+            b.sweep_nursery(self.space, line_mark_state);
         }
     }
 }
