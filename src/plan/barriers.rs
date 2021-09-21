@@ -337,7 +337,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let bucket = if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 WorkBucketStage::Unconstrained
             } else {
-                WorkBucketStage::PostClosure
+                WorkBucketStage::RCProcessIncs
             };
             self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<E::VM, true>::new(incs));
         }
@@ -349,7 +349,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             if crate::flags::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone(w);
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure].add(w);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
             }
         }
     }

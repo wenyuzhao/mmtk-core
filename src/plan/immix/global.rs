@@ -324,7 +324,12 @@ impl<VM: VMBinding> Immix<VM> {
                         .contains(&Block::containing::<E::VM>(*x)));
                 }
             }
-            scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessDecs::<VM>::new(decs));
+            let w = ProcessDecs::<VM>::new(decs);
+            if crate::flags::LAZY_DECREMENTS {
+                scheduler.postpone(w);
+            } else {
+                scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
+            }
         }
 
         // Analysis routine that is ran. It is generally recommended to take advantage

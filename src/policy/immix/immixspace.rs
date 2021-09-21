@@ -222,6 +222,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self) {
+        // Update line mark state
+        if !super::BLOCK_ONLY {
+            unimplemented!()
+        }
+        let space = unsafe { &mut *(self as *mut Self) };
+        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery]
+            .add(ReleaseRCNursery { space });
+    }
+
+    pub fn release_rc_nursery(&mut self) {
         let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
                 .reset_and_generate_nursery_sweep_tasks()
@@ -232,10 +242,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 .generate_prepare_tasks::<VM>(space, true, None)
         };
         self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
-        // Update line mark state
-        if !super::BLOCK_ONLY {
-            unimplemented!()
-        }
     }
 
     pub fn release_rc(&mut self) {
@@ -579,5 +585,15 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
                 self.immix_space.mark_lines(*object);
             }
         }
+    }
+}
+
+pub struct ReleaseRCNursery<VM: VMBinding> {
+    space: &'static mut ImmixSpace<VM>,
+}
+
+impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.space.release_rc_nursery();
     }
 }
