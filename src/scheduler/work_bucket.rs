@@ -26,6 +26,10 @@ impl<VM: VMBinding> WorkBucket<VM> {
             group: None,
         }
     }
+    pub fn swap_queue(&mut self, mut queue: SegQueue<Box<dyn GCWork<VM>>>) -> SegQueue<Box<dyn GCWork<VM>>> {
+        std::mem::swap(&mut self.queue, &mut queue);
+        queue
+    }
     pub fn set_group(&mut self, group: Arc<WorkerGroup<VM>>) {
         self.group = Some(group)
     }
@@ -43,7 +47,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
     #[inline(always)]
-    fn notify_all_workers(&self) {
+    pub fn notify_all_workers(&self) {
         if let Some(parked) = self.parked_workers() {
             if parked > 0 {
                 let _guard = self.monitor.0.lock().unwrap();

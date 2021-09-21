@@ -5,9 +5,10 @@ use super::*;
 use crate::mmtk::MMTK;
 use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
+use crossbeam_queue::SegQueue;
 use enum_map::{enum_map, EnumMap};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -42,6 +43,8 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
+    postponed_concurrent_work: SegQueue<Box<dyn GCWork<VM>>>,
+    pub drop_postponed_work: AtomicBool,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -69,14 +72,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone()),
             },
             worker_group: None,
-            worker_monitor,
+            worker_monitor: worker_monitor.clone(),
             mmtk: None,
             coordinator_worker: None,
             channel: channel(),
             startup: Mutex::new(None),
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
+            postponed_concurrent_work: SegQueue::new(),
+            drop_postponed_work: AtomicBool::new(false),
         })
+    }
+
+    #[inline]
+    pub fn postpone(&self, w: impl GCWork<VM>) {
+        self.postponed_concurrent_work.push(box w)
     }
 
     #[inline]
@@ -244,8 +254,22 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
+        let mut unconstrained_bucket_refilled = false;
+        if !self.drop_postponed_work.load(Ordering::SeqCst) && !self.postponed_concurrent_work.is_empty() {
+            let me = unsafe { &mut *(self as *const Self as *mut Self) };
+            let mut queue = Default::default();
+            std::mem::swap(&mut me.postponed_concurrent_work, &mut queue);
+            println!("Postponed {} packets", queue.len());
+            let old_queue = me.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
+            debug_assert!(old_queue.is_empty());
+            unconstrained_bucket_refilled = true;
+        }
+        self.drop_postponed_work.store(false, Ordering::SeqCst);
         if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
             self.process_coordinator_work(finalizer);
+        }
+        if unconstrained_bucket_refilled {
+            self.work_buckets[WorkBucketStage::Unconstrained].notify_all_workers();
         }
         self.assert_all_deactivated();
     }

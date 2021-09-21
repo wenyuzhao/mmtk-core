@@ -162,6 +162,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             || cc_force_full;
         self.perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
+        scheduler.drop_postponed_work.store(perform_cycle_collection, Ordering::SeqCst);
         if crate::flags::LOG_PER_GC_STATE {
             println!(
                 "[STW] RC={} emergency={} defrag={}",
