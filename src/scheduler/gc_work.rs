@@ -326,6 +326,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::util::edge_logger::reset();
         }
 
+        mmtk.plan.end_of_gc();
         mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
         mmtk.plan.reset_collection_trigger();
         // println!(
@@ -785,6 +786,66 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     }
 }
 
+pub struct ProcessRootIncs<VM: VMBinding> {
+    incs: Vec<ObjectReference>,
+    phantom: PhantomData<VM>,
+}
+impl<VM: VMBinding> ProcessRootIncs<VM> {
+    pub fn new(incs: Vec<ObjectReference>) -> Self {
+        Self {
+            incs,
+            phantom: PhantomData,
+        }
+    }
+}
+impl<VM: VMBinding> GCWork<VM> for ProcessRootIncs<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if crate::plan::barriers::BARRIER_MEASUREMENT {
+            return;
+        }
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        if immix.perform_cycle_collection() {
+            return;
+        }
+        let mut new_incs = vec![];
+        for o in &self.incs {
+            let o = *o;
+            debug_assert!(immix.immix_space.in_space(o));
+            if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                if crate::policy::immix::SANITY {
+                    debug_assert!(immix
+                        .immix_space
+                        .new_blocks
+                        .lock()
+                        .contains(&Block::containing::<VM>(o)));
+                }
+                // This is a nursery object
+                EdgeIterator::<VM>::iterate(o, |edge| {
+                    debug_assert_eq!(
+                        crate::plan::barriers::LOGGED_VALUE,
+                        load_metadata::<VM>(
+                            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                            unsafe { edge.to_object_reference() },
+                            None,
+                            Some(Ordering::SeqCst),
+                        ),
+                        "{:?} {}",
+                        o,
+                        unsafe { o.to_address().load::<usize>() }
+                    );
+                    new_incs.push(edge);
+                });
+            }
+        }
+        if !new_incs.is_empty() {
+            worker
+                .local_work_bucket
+                .add(ProcessIncs::<VM, true>::new(new_incs));
+        }
+    }
+}
+
 pub struct ProcessIncs<VM: VMBinding, const UNLOG_EDGES: bool> {
     incs: Vec<Address>,
     phantom: PhantomData<VM>,
@@ -822,6 +883,9 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> ProcessIncs<VM, UNLOG_EDGES> {
 impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLOG_EDGES> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if crate::plan::barriers::BARRIER_MEASUREMENT {
+            return;
+        }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         if immix.perform_cycle_collection() {
             return;
@@ -829,6 +893,15 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
         let mut new_incs = vec![];
         for e in &self.incs {
             if UNLOG_EDGES {
+                debug_assert_eq!(
+                    crate::plan::barriers::LOGGED_VALUE,
+                    load_metadata::<VM>(
+                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                        unsafe { e.to_object_reference() },
+                        None,
+                        Some(Ordering::SeqCst),
+                    )
+                );
                 self.mark_edge_as_in_progress(*e);
                 store_metadata::<VM>(
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
@@ -837,9 +910,6 @@ impl<VM: VMBinding, const UNLOG_EDGES: bool> GCWork<VM> for ProcessIncs<VM, UNLO
                     None,
                     Some(Ordering::Relaxed),
                 );
-            }
-            if crate::plan::barriers::BARRIER_MEASUREMENT {
-                return;
             }
             let o: ObjectReference = unsafe { e.load() };
             if UNLOG_EDGES {
@@ -912,6 +982,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                         new_decs.push(o);
                     }
                 });
+                #[cfg(feature = "sanity")]
+                unsafe {
+                    o.to_address().store(0xdeadusize);
+                }
             }
         }
         if !new_decs.is_empty() {

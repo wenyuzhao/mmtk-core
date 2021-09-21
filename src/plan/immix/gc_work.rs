@@ -234,7 +234,7 @@ pub struct RCImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
     mmtk: &'static MMTK<VM>,
-    slots: Vec<Address>,
+    roots: Vec<ObjectReference>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
@@ -263,7 +263,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             plan,
             base,
             mmtk,
-            slots: vec![],
+            roots: vec![],
         }
     }
 
@@ -275,18 +275,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         }
         if self.immix().immix_space.in_space(object) {
             CURR_ROOTS.lock().push(object);
+            self.roots.push(object);
         }
         object
-    }
-
-    #[inline]
-    fn process_edge(&mut self, slot: Address) {
-        self.slots.push(slot);
-        let object = unsafe { slot.load::<ObjectReference>() };
-        let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE {
-            unsafe { slot.store(new_object) };
-        }
     }
 
     #[inline]
@@ -294,10 +285,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])
         }
-        let mut slots = vec![];
-        std::mem::swap(&mut slots, &mut self.slots);
+        let mut roots = vec![];
+        std::mem::swap(&mut roots, &mut self.roots);
         self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(ProcessIncs::<VM, false>::new(slots));
+            .add(ProcessRootIncs::<VM>::new(roots));
     }
 
     const CAPACITY: usize = 4096;

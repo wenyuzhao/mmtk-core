@@ -215,11 +215,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut curr_roots = super::gc_work::CURR_ROOTS.lock();
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap::<Vec<ObjectReference>>(&mut curr_roots, &mut old_roots);
-            self.base()
-                .control_collector_context
-                .scheduler()
-                .work_buckets[WorkBucketStage::Final]
-                .add(UpdatePerformCycleCollection);
         }
     }
 
@@ -237,6 +232,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    fn end_of_gc(&self) {
+        let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+        self.perform_cycle_collection
+            .store(perform_cycle_collection, Ordering::SeqCst);
     }
 }
 
@@ -344,17 +345,5 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub fn perform_cycle_collection(&self) -> bool {
         self.perform_cycle_collection.load(Ordering::SeqCst)
-    }
-}
-
-struct UpdatePerformCycleCollection;
-
-impl<VM: VMBinding> GCWork<VM> for UpdatePerformCycleCollection {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let perform_cycle_collection = immix.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
-        immix
-            .perform_cycle_collection
-            .store(perform_cycle_collection, Ordering::SeqCst);
     }
 }

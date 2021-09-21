@@ -1,7 +1,6 @@
 use crate::plan::CopyContext;
 use crate::plan::Plan;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::line::Line;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::*;
 use crate::util::{Address, ObjectReference};
@@ -171,6 +170,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             }
             assert!(
                 object.is_live(),
+                "{:?} is dead, {:?}",
+                object,
+                Block::containing::<VM>(object)
+            );
+            assert!(
+                unsafe { object.to_address().load::<usize>() } != 0xdead,
                 "{:?} is dead, {:?}",
                 object,
                 Block::containing::<VM>(object)
