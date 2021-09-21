@@ -277,7 +277,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 if !node.is_null() {
                     self.nodes.push(node);
                 }
-                if self.edges.len() >= E::CAPACITY || self.nodes.len() >= E::CAPACITY {
+                if self.edges.len() >= Self::CAPACITY || self.nodes.len() >= Self::CAPACITY {
                     self.flush();
                 }
             }
@@ -297,9 +297,9 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                     self.decs.push(old);
                 }
                 self.incs.push(edge);
-                if self.edges.len() >= E::CAPACITY
-                    || self.incs.len() >= E::CAPACITY
-                    || self.decs.len() >= E::CAPACITY
+                if self.edges.len() >= Self::CAPACITY
+                    || self.incs.len() >= Self::CAPACITY
+                    || self.decs.len() >= Self::CAPACITY
                 {
                     self.flush();
                 }
@@ -307,6 +307,8 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             self.mark_edge_as_logged(edge);
         }
     }
+
+    const CAPACITY: usize = 512;
 }
 
 impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
