@@ -26,7 +26,10 @@ impl<VM: VMBinding> WorkBucket<VM> {
             group: None,
         }
     }
-    pub fn swap_queue(&mut self, mut queue: SegQueue<Box<dyn GCWork<VM>>>) -> SegQueue<Box<dyn GCWork<VM>>> {
+    pub fn swap_queue(
+        &mut self,
+        mut queue: SegQueue<Box<dyn GCWork<VM>>>,
+    ) -> SegQueue<Box<dyn GCWork<VM>>> {
         std::mem::swap(&mut self.queue, &mut queue);
         queue
     }

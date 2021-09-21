@@ -255,7 +255,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
         let mut unconstrained_bucket_refilled = false;
-        if !self.drop_postponed_work.load(Ordering::SeqCst) && !self.postponed_concurrent_work.is_empty() {
+        if !self.drop_postponed_work.load(Ordering::SeqCst)
+            && !self.postponed_concurrent_work.is_empty()
+        {
             let me = unsafe { &mut *(self as *const Self as *mut Self) };
             let mut queue = Default::default();
             std::mem::swap(&mut me.postponed_concurrent_work, &mut queue);
