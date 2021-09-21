@@ -339,7 +339,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             } else {
                 WorkBucketStage::RCProcessIncs
             };
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<E::VM, true>::new(incs));
+            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<E::VM>::new(incs));
         }
         // Flush dec buffer
         if !self.decs.is_empty() {
