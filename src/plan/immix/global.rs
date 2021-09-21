@@ -44,6 +44,7 @@ pub struct Immix<VM: VMBinding> {
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.
     pub perform_cycle_collection: AtomicBool,
+    next_gc_may_perform_cycle_collection: AtomicBool,
 }
 
 #[inline]
@@ -155,7 +156,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let cc_force_full = self.base().options.full_heap_system_gc;
         let mut perform_cycle_collection = !super::REF_COUNT
             || crate::plan::barriers::BARRIER_MEASUREMENT
-            || self.perform_cycle_collection.load(Ordering::SeqCst);
+            || self.next_gc_may_perform_cycle_collection.load(Ordering::SeqCst);
         perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
             > 1)
             || self.is_emergency_collection()
@@ -236,8 +237,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn end_of_gc(&self) {
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
-        self.perform_cycle_collection
+        self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
+        self.perform_cycle_collection
+            .store(false, Ordering::SeqCst);
     }
 }
 
@@ -276,6 +279,7 @@ impl<VM: VMBinding> Immix<VM> {
                 global_metadata_specs,
             ),
             perform_cycle_collection: AtomicBool::new(false),
+            next_gc_may_perform_cycle_collection: AtomicBool::new(false),
         };
 
         {
