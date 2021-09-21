@@ -346,7 +346,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
             let w = ProcessDecs::<E::VM>::new(decs);
-            if crate::flags::LAZY_DECREMENTS {
+            if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);
             } else {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);

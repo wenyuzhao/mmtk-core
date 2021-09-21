@@ -325,7 +325,7 @@ impl<VM: VMBinding> Immix<VM> {
                 }
             }
             let w = ProcessDecs::<VM>::new(decs);
-            if crate::flags::LAZY_DECREMENTS {
+            if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 scheduler.postpone(w);
             } else {
                 scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
