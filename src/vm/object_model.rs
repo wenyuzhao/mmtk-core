@@ -322,7 +322,7 @@ pub mod specs {
     }
 
     // Log bit: 1 bit per object, global
-    define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 1, LOG_MIN_OBJECT_SIZE);
+    define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE);
     // Forwarding pointer: word size per object, local
     define_vm_metadata_spec!(
         VMLocalForwardingPointerSpec,

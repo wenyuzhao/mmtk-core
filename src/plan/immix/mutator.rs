@@ -9,6 +9,7 @@ use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::AllocationSemantics as AllocationType;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
+use crate::util::metadata::RC_UNLOG_BIT_SPEC;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
@@ -78,7 +79,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         } else {
             box FieldLoggingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
                 mmtk,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+                RC_UNLOG_BIT_SPEC,
             )
         },
         mutator_tls,

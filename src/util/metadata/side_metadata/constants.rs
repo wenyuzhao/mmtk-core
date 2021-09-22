@@ -1,9 +1,11 @@
+use crate::policy::mallocspace::metadata::ACTIVE_CHUNK_METADATA_SPEC;
 use crate::util::heap::layout::vm_layout_constants::LOG_ADDRESS_SPACE;
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::{BYTES_IN_CHUNK, LOG_BYTES_IN_CHUNK};
 use crate::util::metadata::side_metadata::SideMetadataOffset;
-use crate::util::Address;
+use crate::util::{constants, Address};
 
+use super::SideMetadataSpec;
 // This is currently not used in 32-bits targets, but ultimately it is required in 32-bits global side metadata. So, instead of guarding with target_pointer_width, I allow unused_imports for now.
 #[allow(unused_imports)]
 use super::metadata_address_range_size;
@@ -26,6 +28,13 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 
 // Base address of alloc bit, public to VM bindings which may need to use this.
 pub const ALLOC_SIDE_METADATA_ADDR: Address = crate::util::alloc_bit::ALLOC_SIDE_METADATA_ADDR;
+
+pub const RC_UNLOG_BIT_SIDE_METADATA_SPEC: SideMetadataSpec = SideMetadataSpec {
+    is_global: true,
+    offset: SideMetadataOffset::layout_after(&ACTIVE_CHUNK_METADATA_SPEC),
+    log_num_of_bits: 1,
+    log_min_obj_size: constants::LOG_MIN_OBJECT_SIZE as usize,
+};
 
 /// This constant represents the worst-case ratio of source data size to global side metadata.
 /// A value of 2 means the space required for global side metadata must be less than 1/4th of the source data.
@@ -95,6 +104,9 @@ pub const GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS: Address = GLOBAL_SIDE_METADATA_B
     ))
     .add(metadata_address_range_size(
         &crate::policy::mallocspace::metadata::ACTIVE_CHUNK_METADATA_SPEC,
+    ))
+    .add(metadata_address_range_size(
+        &RC_UNLOG_BIT_SIDE_METADATA_SPEC,
     ));
 
 pub const GLOBAL_SIDE_METADATA_VM_BASE_OFFSET: SideMetadataOffset =

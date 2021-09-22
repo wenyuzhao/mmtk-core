@@ -225,3 +225,7 @@ pub mod side_metadata;
 pub(crate) mod log_bit;
 
 pub use global::*;
+
+use self::side_metadata::RC_UNLOG_BIT_SIDE_METADATA_SPEC;
+
+pub const RC_UNLOG_BIT_SPEC: MetadataSpec = MetadataSpec::OnSide(RC_UNLOG_BIT_SIDE_METADATA_SPEC);

@@ -7,10 +7,10 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
-use crate::util::metadata::store_metadata;
+use crate::util::metadata::{store_metadata, RC_UNLOG_BIT_SPEC};
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
-use crate::vm::{ObjectModel, VMBinding};
+use crate::vm::VMBinding;
 use crate::MMTK;
 use crate::{
     plan::CopyContext,
@@ -113,7 +113,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
             // TODO: Do this in barrier work packets
             EdgeIterator::<VM>::iterate(object, |edge| {
                 store_metadata::<VM>(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    &RC_UNLOG_BIT_SPEC,
                     unsafe { edge.to_object_reference() },
                     crate::plan::barriers::UNLOGGED_VALUE,
                     None,

@@ -10,3 +10,10 @@ impl VMGlobalLogBitSpec {
         store_metadata::<VM>(self, object, 1, None, Some(order))
     }
 }
+
+impl MetadataSpec {
+    /// Mark the log bit as unlogged (1 means unlogged)
+    pub fn mark_as_unlogged<VM: VMBinding>(&self, object: ObjectReference, order: Ordering) {
+        store_metadata::<VM>(self, object, 1, None, Some(order))
+    }
+}

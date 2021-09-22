@@ -828,7 +828,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn mark_edge_as_in_progress(&self, edge: Address) {
         store_metadata::<VM>(
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+            &RC_UNLOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
             LOGGING_IN_PROGRESS,
             None,
@@ -839,7 +839,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn mark_edge_as_unlogged(&self, edge: Address) {
         store_metadata::<VM>(
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+            &RC_UNLOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
             UNLOGGED_VALUE,
             None,
@@ -885,7 +885,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 debug_assert_eq!(
                     crate::plan::barriers::LOGGED_VALUE,
                     load_metadata::<VM>(
-                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                        &RC_UNLOG_BIT_SPEC,
                         unsafe { edge.to_object_reference() },
                         None,
                         Some(Ordering::SeqCst),
@@ -917,7 +917,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             debug_assert_eq!(
                 crate::plan::barriers::LOGGED_VALUE,
                 load_metadata::<VM>(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                    &RC_UNLOG_BIT_SPEC,
                     unsafe { e.to_object_reference() },
                     None,
                     Some(Ordering::SeqCst),
@@ -925,7 +925,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             );
             self.mark_edge_as_in_progress(*e);
             store_metadata::<VM>(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec(),
+                &RC_UNLOG_BIT_SPEC,
                 unsafe { e.to_object_reference() },
                 crate::plan::barriers::UNLOGGED_VALUE,
                 None,

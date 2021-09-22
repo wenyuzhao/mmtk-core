@@ -17,11 +17,11 @@ use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
+use crate::util::metadata::RC_UNLOG_BIT_SPEC;
 use crate::util::options::UnsafeOptionsWrapper;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};
-use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::{
     mmtk::MMTK,
@@ -156,7 +156,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let cc_force_full = self.base().options.full_heap_system_gc;
         let mut perform_cycle_collection = !super::REF_COUNT
             || crate::plan::barriers::BARRIER_MEASUREMENT
-            || self.next_gc_may_perform_cycle_collection.load(Ordering::SeqCst);
+            || self
+                .next_gc_may_perform_cycle_collection
+                .load(Ordering::SeqCst);
         perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
             > 1)
             || self.is_emergency_collection()
@@ -239,8 +241,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
-        self.perform_cycle_collection
-            .store(false, Ordering::SeqCst);
+        self.perform_cycle_collection.store(false, Ordering::SeqCst);
     }
 }
 
@@ -255,7 +256,7 @@ impl<VM: VMBinding> Immix<VM> {
         let immix_specs = if get_immix_constraints().barrier != BarrierSelector::NoBarrier
             || crate::plan::barriers::BARRIER_MEASUREMENT
         {
-            metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
+            metadata::extract_side_metadata(&[RC_UNLOG_BIT_SPEC])
         } else {
             vec![]
         };
