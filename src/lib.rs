@@ -100,7 +100,7 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 pub mod flags {
     // ---------- Immix flags ---------- //
     pub const CONCURRENT_MARKING: bool = false;
-    pub const REF_COUNT: bool = false;
+    pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
     pub const BLOCK_ONLY: bool = true;
@@ -109,12 +109,12 @@ pub mod flags {
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
-    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
+    pub const LAZY_DECREMENTS: bool = true;
+    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = false;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 10000;
 
     // ---------- Barrier flags ---------- //
-    pub const BARRIER_MEASUREMENT: bool = true;
+    pub const BARRIER_MEASUREMENT: bool = false;
     pub const TAKERATE_MEASUREMENT: bool = false;
 
     // ---------- Debugging flags ---------- //
