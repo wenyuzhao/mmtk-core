@@ -2,7 +2,10 @@ use super::{block::Block, chunk::ChunkState, rc::RC_TABLE, ImmixSpace};
 use crate::{
     policy::space::Space,
     scheduler::{GCWork, GCWorker},
-    util::{metadata::side_metadata, VMMutatorThread, VMThread},
+    util::{
+        metadata::side_metadata::{self, bzero_metadata},
+        VMMutatorThread, VMThread,
+    },
     vm::*,
     MMTK,
 };
@@ -83,7 +86,17 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         block.init(copy);
         if self.space().common().needs_log_bit {
-            block.clear_log_table::<VM>();
+            if self.space().common().needs_field_log_bit {
+                block.clear_log_table::<VM>();
+            } else {
+                bzero_metadata(
+                    &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .as_spec()
+                        .extract_side_spec(),
+                    block.start(),
+                    Block::BYTES,
+                );
+            }
         }
         self.space()
             .chunk_map

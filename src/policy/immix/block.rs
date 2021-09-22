@@ -2,11 +2,14 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::Line;
 use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
+use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::immix::REF_COUNT;
+use crate::policy::space::Space;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::{store_metadata, RC_UNLOG_BIT_SPEC};
 use crate::util::{Address, ObjectReference};
-use crate::vm::*;
+use crate::{vm::*, BarrierSelector};
 use spin::{Mutex, MutexGuard};
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
@@ -272,6 +275,18 @@ impl Block {
         line_mark_state: Option<u8>,
         perform_cycle_collection: bool,
     ) -> bool {
+        if crate::plan::barriers::BARRIER_MEASUREMENT && space.common().needs_log_bit {
+            let meta = if crate::plan::immix::get_active_barrier() == BarrierSelector::ObjectBarrier
+            {
+                &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            } else {
+                &RC_UNLOG_BIT_SPEC
+            };
+            for i in (0..Block::BYTES).step_by(8) {
+                let o = unsafe { (self.start() + i).to_object_reference() };
+                store_metadata::<VM>(meta, o, LOGGED_VALUE, None, None);
+            }
+        }
         if super::BLOCK_ONLY {
             if REF_COUNT && !perform_cycle_collection {
                 let live = !self.rc_dead();

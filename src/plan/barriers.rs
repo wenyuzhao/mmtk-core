@@ -102,24 +102,17 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
     /// Returns true if the object is not logged previously.
     #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
-        let unlogged_value =
-            if crate::plan::immix::get_active_barrier() == BarrierSelector::ObjectBarrier {
-                0
-            } else {
-                1
-            };
-        let logged_value = unlogged_value ^ 1;
         loop {
             let old_value =
                 load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
-            if old_value == logged_value {
+            if old_value == LOGGED_VALUE {
                 return false;
             }
             if compare_exchange_metadata::<E::VM>(
                 &self.meta,
                 object,
-                unlogged_value,
-                logged_value,
+                UNLOGGED_VALUE,
+                LOGGED_VALUE,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
@@ -254,9 +247,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn enqueue_node(&mut self, edge: Address) {
-        if crate::plan::immix::get_active_barrier() == BarrierSelector::ObjectBarrier {
-            unreachable!()
-        }
         if crate::plan::immix::CONCURRENT_MARKING
             && !BARRIER_MEASUREMENT
             && !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
@@ -278,6 +268,12 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                     self.nodes.push(node);
                 }
                 if self.edges.len() >= Self::CAPACITY || self.nodes.len() >= Self::CAPACITY {
+                    self.flush();
+                }
+            }
+            if crate::flags::BARRIER_MEASUREMENT {
+                self.edges.push(edge);
+                if self.edges.len() >= Self::CAPACITY {
                     self.flush();
                 }
             }
@@ -322,7 +318,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     #[cold]
     fn flush(&mut self) {
         // Concurrent Marking: Flush satb buffer
-        if crate::plan::immix::CONCURRENT_MARKING {
+        if crate::plan::immix::CONCURRENT_MARKING || crate::flags::BARRIER_MEASUREMENT {
             let mut edges = vec![];
             std::mem::swap(&mut edges, &mut self.edges);
             let mut nodes = vec![];

@@ -22,7 +22,7 @@ use crate::util::options::UnsafeOptionsWrapper;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};
-use crate::vm::VMBinding;
+use crate::vm::{ObjectModel, VMBinding};
 use crate::{
     mmtk::MMTK,
     policy::immix::{block::Block, ImmixSpace},
@@ -47,30 +47,28 @@ pub struct Immix<VM: VMBinding> {
     next_gc_may_perform_cycle_collection: AtomicBool,
 }
 
-#[inline]
+#[inline(always)]
 pub fn get_active_barrier() -> BarrierSelector {
-    static mut B: Option<BarrierSelector> = None;
+    static mut V: Option<BarrierSelector> = None;
     unsafe {
-        if B.is_none() {
-            B = Some({
-                if crate::plan::barriers::BARRIER_MEASUREMENT {
-                    match env::var("IX_BARRIER") {
-                        Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
-                        Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
-                        Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
-                        _ => unreachable!("Please explicitly specify barrier"),
-                    }
-                } else if super::CONCURRENT_MARKING || super::REF_COUNT {
-                    BarrierSelector::FieldLoggingBarrier
-                } else {
-                    BarrierSelector::NoBarrier
+        *V.get_or_insert_with(|| {
+            if crate::plan::barriers::BARRIER_MEASUREMENT {
+                match env::var("IX_BARRIER") {
+                    Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
+                    Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
+                    Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
+                    _ => unreachable!("Please explicitly specify barrier"),
                 }
-            });
-        }
-        B.unwrap()
+            } else if super::CONCURRENT_MARKING || super::REF_COUNT {
+                BarrierSelector::FieldLoggingBarrier
+            } else {
+                BarrierSelector::NoBarrier
+            }
+        })
     }
 }
 
+#[inline(always)]
 pub fn get_immix_constraints() -> &'static PlanConstraints {
     static mut C: PlanConstraints = PlanConstraints {
         moves_objects: true,
@@ -80,12 +78,15 @@ pub fn get_immix_constraints() -> &'static PlanConstraints {
         /// Max immix object size is half of a block.
         max_non_los_default_alloc_bytes: Block::BYTES >> 1,
         barrier: BarrierSelector::NoBarrier,
-        needs_log_bit: super::CONCURRENT_MARKING || super::REF_COUNT,
-        needs_field_log_bit: super::CONCURRENT_MARKING || super::REF_COUNT,
+        needs_log_bit: false,
+        needs_field_log_bit: false,
         ..PlanConstraints::default()
     };
     unsafe {
-        C.barrier = get_active_barrier();
+        let barrier = get_active_barrier();
+        C.barrier = barrier;
+        C.needs_log_bit = barrier != BarrierSelector::NoBarrier;
+        C.needs_field_log_bit = barrier == BarrierSelector::FieldLoggingBarrier;
         &C
     }
 }
@@ -253,10 +254,11 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
-        let immix_specs = if get_immix_constraints().barrier != BarrierSelector::NoBarrier
-            || crate::plan::barriers::BARRIER_MEASUREMENT
-        {
+        let immix_specs = if get_active_barrier() == BarrierSelector::FieldLoggingBarrier {
             metadata::extract_side_metadata(&[RC_UNLOG_BIT_SPEC])
+        } else if get_active_barrier() == BarrierSelector::ObjectBarrier {
+            assert!(crate::flags::BARRIER_MEASUREMENT);
+            metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
         } else {
             vec![]
         };

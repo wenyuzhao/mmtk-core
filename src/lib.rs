@@ -100,7 +100,7 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 pub mod flags {
     // ---------- Immix flags ---------- //
     pub const CONCURRENT_MARKING: bool = false;
-    pub const REF_COUNT: bool = true;
+    pub const REF_COUNT: bool = false;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
     pub const BLOCK_ONLY: bool = true;
@@ -114,13 +114,13 @@ pub mod flags {
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 10000;
 
     // ---------- Barrier flags ---------- //
-    pub const BARRIER_MEASUREMENT: bool = false;
+    pub const BARRIER_MEASUREMENT: bool = true;
     pub const TAKERATE_MEASUREMENT: bool = false;
 
     // ---------- Debugging flags ---------- //
     pub const SANITY: bool = false;
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = true;
+    pub const LOG_PER_GC_STATE: bool = false;
     pub const LOG_STAGES: bool = false;
 
     pub fn validate_features() {
@@ -132,5 +132,11 @@ pub mod flags {
         validate!(REF_COUNT => !CONCURRENT_MARKING);
         validate!(REF_COUNT => BLOCK_ONLY);
         validate!(REF_COUNT => !DEFRAG);
+        if BARRIER_MEASUREMENT {
+            assert!(!EAGER_INCREMENTS);
+            assert!(!LAZY_DECREMENTS);
+            assert!(!REF_COUNT);
+            assert!(!CONCURRENT_MARKING);
+        }
     }
 }
