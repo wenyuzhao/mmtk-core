@@ -345,13 +345,13 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if !self.decs.is_empty() {
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
+            let w = ProcessDecs::new(decs, unsafe {
+                CURRENT_CONC_DECS_COUNTER.clone().unwrap()
+            });
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
-                self.mmtk.scheduler.postpone(ProcessDecs::new(decs, unsafe {
-                    CURRENT_CONC_DECS_COUNTER.clone()
-                }));
+                self.mmtk.scheduler.postpone(w);
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs]
-                    .add(ProcessDecs::new(decs, None));
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
             }
         }
     }

@@ -940,16 +940,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
 
 pub struct ProcessDecs {
     decs: Vec<ObjectReference>,
-    count_down: Option<Arc<AtomicUsize>>,
+    count_down: Arc<AtomicUsize>,
 }
 
 impl ProcessDecs {
-    pub fn new(decs: Vec<ObjectReference>, count_down: Option<Arc<AtomicUsize>>) -> Self {
-        if crate::flags::LAZY_DECREMENTS {
-            if let Some(count_down) = count_down.as_ref() {
-                count_down.fetch_add(1, Ordering::SeqCst);
-            }
-        }
+    pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
+        count_down.fetch_add(1, Ordering::SeqCst);
         Self { decs, count_down }
     }
 }
@@ -995,26 +991,20 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                 .add(ProcessDecs::new(new_decs, self.count_down.clone()));
         }
 
-        if crate::flags::LAZY_DECREMENTS {
-            if let Some(count_down) = self.count_down.as_ref() {
-                let old = count_down.fetch_sub(1, Ordering::SeqCst);
-                if old == 1 {
-                    // Finished processing all the decrements. Start releasing blocks.
-                    let mut blocks = immix.immix_space.possibly_dead_mature_blocks.lock();
-                    ConcFreeBlocksAfterDecs::schedule(&mmtk.scheduler, &mut blocks);
-                }
-            } else {
-                unreachable!();
-            }
+        // If all decs are finished, start sweeping blocks
+        if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // Finished processing all the decrements. Start releasing blocks.
+            let mut blocks = immix.immix_space.possibly_dead_mature_blocks.lock();
+            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &mut blocks);
         }
     }
 }
 
-pub struct ConcFreeBlocksAfterDecs {
+pub struct SweepBlocksAfterDecs {
     blocks: Vec<Block>,
 }
 
-impl ConcFreeBlocksAfterDecs {
+impl SweepBlocksAfterDecs {
     fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, blocks_set: &mut HashSet<Block>) {
         let size = blocks_set.len();
         let num_bins = scheduler.num_workers() << 1;
@@ -1034,13 +1024,13 @@ impl ConcFreeBlocksAfterDecs {
         debug_assert!(blocks.is_empty());
         let packets = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box ConcFreeBlocksAfterDecs { blocks })
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs { blocks })
             .collect();
         scheduler.work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ConcFreeBlocksAfterDecs {
+impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         debug_assert!(crate::flags::BLOCK_ONLY);
