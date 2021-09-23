@@ -659,7 +659,11 @@ pub fn fetch_update(
             match unsafe {
                 meta_addr.compare_exchange::<AtomicU8>(old_val, new_val, set_order, fetch_order)
             } {
-                x @ Ok(_) => return x.map(|x| ((x & mask) as usize) >> lshift).map_err(|x| ((x & mask) as usize) >> lshift),
+                x @ Ok(_) => {
+                    return x
+                        .map(|x| ((x & mask) as usize) >> lshift)
+                        .map_err(|x| ((x & mask) as usize) >> lshift)
+                }
                 Err(next_prev) => old_val = next_prev,
             }
         }

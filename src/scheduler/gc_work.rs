@@ -956,7 +956,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        if crate::plan::barriers::BARRIER_MEASUREMENT || (!crate::flags::LAZY_DECREMENTS && immix.perform_cycle_collection()) {
+        if crate::plan::barriers::BARRIER_MEASUREMENT
+            || (!crate::flags::LAZY_DECREMENTS && immix.perform_cycle_collection())
+        {
             return;
         }
         let mut new_decs = vec![];
