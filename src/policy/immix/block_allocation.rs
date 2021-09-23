@@ -45,7 +45,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.clean_block_cursor.store(0, Ordering::SeqCst);
     }
 
-    pub fn reset_and_generate_nursery_sweep_tasks(&mut self, num_workers: usize) -> Vec<Box<dyn GCWork<VM>>> {
+    pub fn reset_and_generate_nursery_sweep_tasks(
+        &mut self,
+        num_workers: usize,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
         let blocks = self.clean_block_buffer.len();
         let num_bins = num_workers << 1;
         let bin_cap = blocks / num_bins + if blocks % num_bins == 0 { 0 } else { 1 };
