@@ -1,5 +1,6 @@
 use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
+use super::CURRENT_CONC_DECS_COUNTER;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
@@ -30,7 +31,7 @@ use crate::{
 };
 use crate::{scheduler::*, BarrierSelector};
 use std::env;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
 use atomic::Ordering;
@@ -142,6 +143,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         println!("BARRIER: {:?}", get_active_barrier());
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
+        unsafe {
+            CURRENT_CONC_DECS_COUNTER = Some(Default::default());
+        }
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool) {
@@ -239,6 +243,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn end_of_gc(&self) {
+        unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
@@ -323,11 +328,13 @@ impl<VM: VMBinding> Immix<VM> {
             let mut decs = vec![];
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap(&mut decs, &mut old_roots);
-            let w = ProcessDecs::new(decs);
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
-                scheduler.postpone(w);
+                scheduler.postpone(ProcessDecs::new(decs, unsafe {
+                    CURRENT_CONC_DECS_COUNTER.clone()
+                }));
             } else {
-                scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
+                scheduler.work_buckets[WorkBucketStage::RCProcessDecs]
+                    .add(ProcessDecs::new(decs, None));
             }
         }
 

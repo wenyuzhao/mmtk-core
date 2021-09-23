@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
+use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
@@ -344,11 +345,13 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if !self.decs.is_empty() {
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
-            let w = ProcessDecs::new(decs);
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
-                self.mmtk.scheduler.postpone(w);
+                self.mmtk.scheduler.postpone(ProcessDecs::new(decs, unsafe {
+                    CURRENT_CONC_DECS_COUNTER.clone()
+                }));
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs]
+                    .add(ProcessDecs::new(decs, None));
             }
         }
     }

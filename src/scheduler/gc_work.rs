@@ -5,6 +5,8 @@ use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
+use crate::policy::immix::block::Block;
+use crate::policy::immix::defrag::Defrag;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::address_to_meta_address;
@@ -12,11 +14,14 @@ use crate::util::metadata::*;
 use crate::util::*;
 use crate::vm::*;
 use crate::*;
+use std::collections::HashSet;
 use std::lazy::SyncLazy;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::Condvar;
 use std::time::SystemTime;
 
@@ -840,9 +845,7 @@ impl ProcessIncs {
 
     #[inline(always)]
     fn should_skip_inc_processing<VM: VMBinding>(mmtk: &'static MMTK<VM>) -> bool {
-        if crate::plan::barriers::BARRIER_MEASUREMENT {
-            return true;
-        }
+        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         if immix.perform_cycle_collection() {
             return true;
@@ -923,11 +926,17 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
 
 pub struct ProcessDecs {
     decs: Vec<ObjectReference>,
+    count_down: Option<Arc<AtomicUsize>>,
 }
 
 impl ProcessDecs {
-    pub fn new(decs: Vec<ObjectReference>) -> Self {
-        Self { decs }
+    pub fn new(decs: Vec<ObjectReference>, count_down: Option<Arc<AtomicUsize>>) -> Self {
+        if crate::flags::LAZY_DECREMENTS {
+            if let Some(count_down) = count_down.as_ref() {
+                count_down.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        Self { decs, count_down }
     }
 }
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
@@ -957,10 +966,74 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                 unsafe {
                     o.to_address().store(0xdeadusize);
                 }
+                if crate::flags::LAZY_DECREMENTS {
+                    immix
+                        .immix_space
+                        .possibly_dead_mature_blocks
+                        .lock()
+                        .insert(Block::containing::<VM>(*o));
+                }
             }
         }
         if !new_decs.is_empty() {
-            worker.local_work_bucket.add(ProcessDecs::new(new_decs));
+            worker
+                .local_work_bucket
+                .add(ProcessDecs::new(new_decs, self.count_down.clone()));
+        }
+
+        if crate::flags::LAZY_DECREMENTS {
+            if let Some(count_down) = self.count_down.as_ref() {
+                let old = count_down.fetch_sub(1, Ordering::SeqCst);
+                if old == 1 {
+                    // Finished processing all the decrements. Start releasing blocks.
+                    let mut blocks = immix.immix_space.possibly_dead_mature_blocks.lock();
+                    ConcFreeBlocksAfterDecs::schedule(&mmtk.scheduler, &mut blocks);
+                }
+            } else {
+                unreachable!();
+            }
+        }
+    }
+}
+
+pub struct ConcFreeBlocksAfterDecs {
+    blocks: Vec<Block>,
+}
+
+impl ConcFreeBlocksAfterDecs {
+    fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, blocks_set: &mut HashSet<Block>) {
+        let size = blocks_set.len();
+        let num_bins = scheduler.num_workers() << 1;
+        let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
+        let mut bins = (0..num_bins)
+            .map(|_| Vec::with_capacity(bin_cap))
+            .collect::<Vec<Vec<Block>>>();
+        let mut blocks = blocks_set.iter().cloned().collect::<Vec<Block>>();
+        blocks_set.clear();
+        for i in 0..num_bins {
+            for _ in 0..bin_cap {
+                if let Some(block) = blocks.pop() {
+                    bins[i].push(block);
+                }
+            }
+        }
+        debug_assert!(blocks.is_empty());
+        let packets = bins
+            .into_iter()
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box ConcFreeBlocksAfterDecs { blocks })
+            .collect();
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for ConcFreeBlocksAfterDecs {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        debug_assert!(crate::flags::BLOCK_ONLY);
+        for b in &self.blocks {
+            if b.sweep::<VM>(&immix.immix_space, &mut [0; Defrag::NUM_BINS], None, false) {
+                println!("Conc free {:?}", b);
+            }
         }
     }
 }
