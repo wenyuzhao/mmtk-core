@@ -332,7 +332,7 @@ impl<VM: VMBinding> Immix<VM> {
                         .contains(&Block::containing::<E::VM>(*x)));
                 }
             }
-            let w = ProcessDecs::<VM>::new(decs);
+            let w = ProcessDecs::new(decs);
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 scheduler.postpone(w);
             } else {

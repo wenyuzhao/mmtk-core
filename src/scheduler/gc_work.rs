@@ -786,47 +786,39 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     }
 }
 
-pub struct ProcessRootIncs<VM: VMBinding> {
+pub struct ProcessRootIncs {
     incs: Vec<ObjectReference>,
-    phantom: PhantomData<VM>,
 }
-impl<VM: VMBinding> ProcessRootIncs<VM> {
+impl ProcessRootIncs {
     pub fn new(incs: Vec<ObjectReference>) -> Self {
-        Self {
-            incs,
-            phantom: PhantomData,
-        }
+        Self { incs }
     }
 }
-impl<VM: VMBinding> GCWork<VM> for ProcessRootIncs<VM> {
+impl<VM: VMBinding> GCWork<VM> for ProcessRootIncs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if ProcessIncs::<VM>::should_skip_inc_processing(mmtk) {
+        if ProcessIncs::should_skip_inc_processing::<VM>(mmtk) {
             return;
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut new_incs = vec![];
         for o in &self.incs {
-            ProcessIncs::<VM>::process_inc::<false>(*o, immix, &mut new_incs);
+            ProcessIncs::process_inc::<VM, false>(*o, immix, &mut new_incs);
         }
-        ProcessIncs::<VM>::flush_incs(worker, new_incs);
+        ProcessIncs::flush_incs::<VM>(worker, new_incs);
     }
 }
 
-pub struct ProcessIncs<VM: VMBinding> {
+pub struct ProcessIncs {
     incs: Vec<Address>,
-    phantom: PhantomData<VM>,
 }
-impl<VM: VMBinding> ProcessIncs<VM> {
+impl ProcessIncs {
     pub fn new(incs: Vec<Address>) -> Self {
-        Self {
-            incs,
-            phantom: PhantomData,
-        }
+        Self { incs }
     }
 
     #[inline(always)]
-    fn mark_edge_as_in_progress(&self, edge: Address) {
+    fn mark_edge_as_in_progress<VM: VMBinding>(&self, edge: Address) {
         store_metadata::<VM>(
             &RC_UNLOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
@@ -837,7 +829,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn mark_edge_as_unlogged(&self, edge: Address) {
+    fn mark_edge_as_unlogged<VM: VMBinding>(&self, edge: Address) {
         store_metadata::<VM>(
             &RC_UNLOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
@@ -848,7 +840,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn should_skip_inc_processing(mmtk: &'static MMTK<VM>) -> bool {
+    fn should_skip_inc_processing<VM: VMBinding>(mmtk: &'static MMTK<VM>) -> bool {
         if crate::plan::barriers::BARRIER_MEASUREMENT {
             return true;
         }
@@ -860,7 +852,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn process_inc<const SPACE_CHECK: bool>(
+    fn process_inc<VM: VMBinding, const SPACE_CHECK: bool>(
         o: ObjectReference,
         immix: &Immix<VM>,
         new_incs: &mut Vec<Address>,
@@ -897,15 +889,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn flush_incs(worker: &mut GCWorker<VM>, new_incs: Vec<Address>) {
+    fn flush_incs<VM: VMBinding>(worker: &mut GCWorker<VM>, new_incs: Vec<Address>) {
         if !new_incs.is_empty() {
-            worker
-                .local_work_bucket
-                .add(ProcessIncs::<VM>::new(new_incs));
+            worker.local_work_bucket.add(ProcessIncs::new(new_incs));
         }
     }
 }
-impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
+impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if Self::should_skip_inc_processing(mmtk) {
@@ -923,7 +913,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     Some(Ordering::SeqCst),
                 )
             );
-            self.mark_edge_as_in_progress(*e);
+            self.mark_edge_as_in_progress::<VM>(*e);
             store_metadata::<VM>(
                 &RC_UNLOG_BIT_SPEC,
                 unsafe { e.to_object_reference() },
@@ -932,27 +922,23 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 Some(Ordering::Relaxed),
             );
             let o: ObjectReference = unsafe { e.load() };
-            self.mark_edge_as_unlogged(*e);
-            Self::process_inc::<true>(o, immix, &mut new_incs);
+            self.mark_edge_as_unlogged::<VM>(*e);
+            Self::process_inc::<VM, true>(o, immix, &mut new_incs);
         }
         Self::flush_incs(worker, new_incs);
     }
 }
 
-pub struct ProcessDecs<VM: VMBinding> {
+pub struct ProcessDecs {
     decs: Vec<ObjectReference>,
-    phantom: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> ProcessDecs<VM> {
+impl ProcessDecs {
     pub fn new(decs: Vec<ObjectReference>) -> Self {
-        Self {
-            decs,
-            phantom: PhantomData,
-        }
+        Self { decs }
     }
 }
-impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
+impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
@@ -982,9 +968,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             }
         }
         if !new_decs.is_empty() {
-            worker
-                .local_work_bucket
-                .add(ProcessDecs::<VM>::new(new_decs));
+            worker.local_work_bucket.add(ProcessDecs::new(new_decs));
         }
     }
 }
