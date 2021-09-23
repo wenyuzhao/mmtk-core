@@ -223,42 +223,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self) {
-        // Update line mark state
-        if !super::BLOCK_ONLY {
-            unimplemented!()
-        }
         let space = unsafe { &mut *(self as *mut Self) };
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery]
             .add(ReleaseRCNursery { space });
     }
 
-    pub fn release_rc_nursery(&mut self, num_worker: usize) {
-        let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
-            self.block_allocation
-                .reset_and_generate_nursery_sweep_tasks(num_worker)
-        } else {
-            self.block_allocation.reset();
-            let space = unsafe { &*(self as *const Self) };
-            self.chunk_map
-                .generate_prepare_tasks::<VM>(space, true, None)
-        };
-        self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
-    }
-
     pub fn release_rc(&mut self) {
-        // Update line_unavail_state for hole searching afte this GC.
-        if !super::BLOCK_ONLY {
-            unimplemented!()
-        }
-        // Clear reusable blocks list
-        if !super::BLOCK_ONLY {
-            unimplemented!()
-        }
-        // Sweep chunks and blocks
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_sweep_tasks(space, true);
-        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
             unimplemented!()
         }
@@ -593,6 +563,15 @@ pub struct ReleaseRCNursery<VM: VMBinding> {
 impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let num_workers = worker.scheduler().worker_group().worker_count();
-        self.space.release_rc_nursery(num_workers);
+        let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+            self.space.block_allocation
+                .reset_and_generate_nursery_sweep_tasks(num_workers)
+        } else {
+            self.space.block_allocation.reset();
+            let space: &'static ImmixSpace<VM> = unsafe { &*(self.space as *const ImmixSpace<VM>) };
+            self.space.chunk_map
+                .generate_prepare_tasks::<VM>(space, true, None)
+        };
+        worker.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
     }
 }

@@ -95,11 +95,6 @@ impl Chunk {
 
     pub fn sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         debug_assert!(crate::flags::REF_COUNT);
-        let line_mark_state = if super::BLOCK_ONLY {
-            None
-        } else {
-            Some(space.line_mark_state.load(Ordering::Acquire))
-        };
         // number of allocated blocks.
         let mut allocated_blocks = 0;
         // Iterate over all allocated blocks in this chunk.
@@ -107,7 +102,7 @@ impl Chunk {
             .blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            if !block.sweep_nursery(space, line_mark_state) {
+            if !block.rc_sweep_nursery(space) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
             }

@@ -353,21 +353,29 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn sweep_nursery<VM: VMBinding>(
+    pub fn rc_sweep_nursery<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
-        _line_mark_state: Option<u8>,
     ) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
-        if super::BLOCK_ONLY {
-            let live = !self.rc_dead();
-            if !live {
-                space.release_block(*self, true);
-            }
-            return !live;
-        } else {
-            unreachable!()
+        let live = !self.rc_dead();
+        if !live {
+            space.release_block(*self, true);
         }
+        return !live;
+    }
+
+    #[inline(always)]
+    pub fn rc_sweep_mature<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+    ) -> bool {
+        debug_assert!(crate::flags::REF_COUNT);
+        let live = !self.rc_dead();
+        if !live {
+            space.release_block(*self, true);
+        }
+        return !live;
     }
 }
 

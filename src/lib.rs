@@ -103,13 +103,13 @@ pub mod flags {
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = true;
+    pub const BLOCK_ONLY: bool = false;
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = true;
+    pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 10000;
 
@@ -129,7 +129,6 @@ pub mod flags {
         validate!(CONCURRENT_MARKING => !DEFRAG);
         validate!(CONCURRENT_MARKING => !REF_COUNT);
         validate!(REF_COUNT => !CONCURRENT_MARKING);
-        validate!(REF_COUNT => BLOCK_ONLY);
         validate!(REF_COUNT => !DEFRAG);
         if BARRIER_MEASUREMENT {
             assert!(!EAGER_INCREMENTS);

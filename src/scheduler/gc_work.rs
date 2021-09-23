@@ -6,7 +6,6 @@ use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::defrag::Defrag;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::address_to_meta_address;
@@ -1033,11 +1032,8 @@ impl SweepBlocksAfterDecs {
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        debug_assert!(crate::flags::BLOCK_ONLY);
         for b in &self.blocks {
-            if b.sweep::<VM>(&immix.immix_space, &mut [0; Defrag::NUM_BINS], None, false) {
-                println!("Conc free {:?}", b);
-            }
+            b.rc_sweep_mature::<VM>(&immix.immix_space);
         }
     }
 }

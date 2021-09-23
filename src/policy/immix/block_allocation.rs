@@ -198,13 +198,8 @@ struct RCSweepNurseryBlocks<VM: VMBinding> {
 impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let line_mark_state = if super::BLOCK_ONLY {
-            None
-        } else {
-            Some(self.space.line_mark_state.load(Ordering::Acquire))
-        };
         for b in &self.blocks {
-            b.sweep_nursery(self.space, line_mark_state);
+            b.rc_sweep_nursery(self.space);
         }
     }
 }
