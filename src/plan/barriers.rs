@@ -244,6 +244,22 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
+    fn log_edge_and_get_old_target(&self, edge: Address) -> Result<ObjectReference, ()> {
+        if self.attempt_to_log_edge(edge) {
+            if crate::flags::BARRIER_MEASUREMENT {
+                self.mark_edge_as_logged(edge);
+                Ok(unsafe { Address::ZERO.to_object_reference() })
+            } else {
+                let old: ObjectReference = unsafe { edge.load() };
+                self.mark_edge_as_logged(edge);
+                Ok(old)
+            }
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline(always)]
     fn enqueue_node(&mut self, edge: Address) {
         if crate::plan::immix::CONCURRENT_MARKING
             && !BARRIER_MEASUREMENT
@@ -254,20 +270,9 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if self.attempt_to_log_edge(edge) {
+        if let Ok(old) = self.log_edge_and_get_old_target(edge) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
-            }
-            // Concurrent Marking
-            if crate::plan::immix::CONCURRENT_MARKING {
-                self.edges.push(edge);
-                let node: ObjectReference = unsafe { edge.load() };
-                if !node.is_null() {
-                    self.nodes.push(node);
-                }
-                if self.edges.len() >= Self::CAPACITY || self.nodes.len() >= Self::CAPACITY {
-                    self.flush();
-                }
             }
             if crate::flags::BARRIER_MEASUREMENT {
                 self.edges.push(edge);
@@ -275,10 +280,19 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                     self.flush();
                 }
             }
+            // Concurrent Marking
+            if crate::plan::immix::CONCURRENT_MARKING {
+                self.edges.push(edge);
+                if !old.is_null() {
+                    self.nodes.push(old);
+                }
+                if self.edges.len() >= Self::CAPACITY || self.nodes.len() >= Self::CAPACITY {
+                    self.flush();
+                }
+            }
             // Reference counting
             if crate::plan::immix::REF_COUNT {
                 debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
-                let old: ObjectReference = unsafe { edge.load() };
                 if !old.is_null() {
                     self.decs.push(old);
                 }
@@ -290,7 +304,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                     self.flush();
                 }
             }
-            self.mark_edge_as_logged(edge);
         }
     }
 

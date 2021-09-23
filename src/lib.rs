@@ -110,7 +110,7 @@ pub mod flags {
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = false;
     pub const LAZY_DECREMENTS: bool = true;
-    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = false;
+    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 10000;
 
     // ---------- Barrier flags ---------- //
