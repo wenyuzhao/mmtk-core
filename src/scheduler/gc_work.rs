@@ -5,7 +5,6 @@ use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
-use crate::policy::immix::block::Block;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::address_to_meta_address;
@@ -865,13 +864,6 @@ impl ProcessIncs {
             debug_assert!(immix.immix_space.in_space(o));
         }
         if let Ok(0) = crate::policy::immix::rc::inc(o) {
-            if crate::policy::immix::SANITY {
-                debug_assert!(immix
-                    .immix_space
-                    .new_blocks
-                    .lock()
-                    .contains(&Block::containing::<VM>(o)));
-            }
             // This is a nursery object
             EdgeIterator::<VM>::iterate(o, |edge| {
                 debug_assert_eq!(

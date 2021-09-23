@@ -25,7 +25,6 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
-use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
@@ -54,7 +53,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
     pub block_allocation: BlockAllocation<VM>,
-    pub new_blocks: Mutex<Vec<Block>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -180,7 +178,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
-            new_blocks: Default::default(),
             block_allocation: BlockAllocation::new(),
         }
     }
@@ -320,9 +317,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
             self.defrag.release(self)
-        }
-        if super::SANITY {
-            self.new_blocks.lock().clear();
         }
     }
 

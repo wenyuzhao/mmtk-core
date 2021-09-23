@@ -28,8 +28,6 @@ pub const DEFRAG: bool = crate::flags::DEFRAG;
 /// Otherwise, do it at mark time.
 pub const MARK_LINE_AT_SCAN_TIME: bool = crate::flags::MARK_LINE_AT_SCAN_TIME;
 
-pub const SANITY: bool = crate::flags::SANITY;
-
 macro_rules! validate {
     ($x: expr) => { assert!($x, stringify!($x)) };
     ($x: expr => $y: expr) => { if $x { assert!($y, stringify!($x implies $y)) } };

@@ -4,8 +4,6 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
-use crate::plan::immix::Immix;
-use crate::policy::immix::block::Block;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
@@ -282,14 +280,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
                 let old: ObjectReference = unsafe { edge.load() };
                 if !old.is_null() {
-                    if crate::policy::immix::SANITY {
-                        let immix = self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-                        debug_assert!(!immix
-                            .immix_space
-                            .new_blocks
-                            .lock()
-                            .contains(&Block::containing::<E::VM>(old)));
-                    }
                     self.decs.push(old);
                 }
                 self.incs.push(edge);

@@ -323,15 +323,6 @@ impl<VM: VMBinding> Immix<VM> {
             let mut decs = vec![];
             let mut old_roots = super::gc_work::OLD_ROOTS.lock();
             std::mem::swap(&mut decs, &mut old_roots);
-            if crate::policy::immix::SANITY {
-                for x in &decs {
-                    debug_assert!(!self
-                        .immix_space
-                        .new_blocks
-                        .lock()
-                        .contains(&Block::containing::<E::VM>(*x)));
-                }
-            }
             let w = ProcessDecs::new(decs);
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 scheduler.postpone(w);
