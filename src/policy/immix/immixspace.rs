@@ -228,10 +228,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .add(ReleaseRCNursery { space });
     }
 
-    pub fn release_rc_nursery(&mut self) {
+    pub fn release_rc_nursery(&mut self, num_worker: usize) {
         let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
-                .reset_and_generate_nursery_sweep_tasks()
+                .reset_and_generate_nursery_sweep_tasks(num_worker)
         } else {
             self.block_allocation.reset();
             let space = unsafe { &*(self as *const Self) };
@@ -587,7 +587,8 @@ pub struct ReleaseRCNursery<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.space.release_rc_nursery();
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let num_workers = worker.scheduler().worker_group().worker_count();
+        self.space.release_rc_nursery(num_workers);
     }
 }
