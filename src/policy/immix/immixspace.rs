@@ -564,12 +564,14 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let num_workers = worker.scheduler().worker_group().worker_count();
         let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
-            self.space.block_allocation
+            self.space
+                .block_allocation
                 .reset_and_generate_nursery_sweep_tasks(num_workers)
         } else {
             self.space.block_allocation.reset();
             let space: &'static ImmixSpace<VM> = unsafe { &*(self.space as *const ImmixSpace<VM>) };
-            self.space.chunk_map
+            self.space
+                .chunk_map
                 .generate_prepare_tasks::<VM>(space, true, None)
         };
         worker.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);

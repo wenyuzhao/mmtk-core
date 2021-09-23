@@ -353,10 +353,7 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_nursery<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-    ) -> bool {
+    pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
         let live = !self.rc_dead();
         if !live {
@@ -366,10 +363,7 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_mature<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-    ) -> bool {
+    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
         let live = !self.rc_dead();
         if !live {
