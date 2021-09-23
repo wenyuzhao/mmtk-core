@@ -34,7 +34,7 @@ pub fn inc(o: ObjectReference) -> Result<usize, usize> {
             }
         },
     );
-    // println!("inc {:?} {:?}", o, count(o));
+    // println!("inc {:?} {:?} -> {:?}", o, r, count(o));
     r
 }
 
@@ -56,7 +56,7 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
             }
         },
     );
-    // println!("dec {:?} {:?}", o, count(o));
+    // println!("dec {:?} {:?} -> {:?}", o, r, count(o));
     r
 }
 
