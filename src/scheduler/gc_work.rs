@@ -349,6 +349,7 @@ pub struct ConcurrentWorkStart;
 impl<VM: VMBinding> GCWork<VM> for ConcurrentWorkStart {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if worker.is_coordinator() {
+            *MONITOR.0.lock().unwrap() = MutatorRunningState::Running;
             // FIXME: Put this flag in correct place.
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
             // Resume mutators for concurrent marking.
@@ -370,7 +371,18 @@ impl<E: ProcessEdgesWork> ConcurrentWorkEnd<E> {
     }
 }
 
-static MONITOR: SyncLazy<(std::sync::Mutex<bool>, Condvar)> = SyncLazy::new(Default::default);
+#[derive(PartialEq, Eq)]
+enum MutatorRunningState {
+    Running,
+    Stopping,
+    Stopped,
+}
+static MONITOR: SyncLazy<(std::sync::Mutex<MutatorRunningState>, Condvar)> = SyncLazy::new(|| {
+    (
+        std::sync::Mutex::new(MutatorRunningState::Running),
+        Default::default(),
+    )
+});
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ConcurrentWorkEnd<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
@@ -394,18 +406,20 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ConcurrentWorkEnd<E> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(ScanVMSpecificRoots::<E>::new());
             let (lock, cvar) = &*MONITOR;
-            let mut started = lock.lock().unwrap();
-            *started = true;
+            let mut state = lock.lock().unwrap();
+            *state = MutatorRunningState::Stopped;
             // We notify the condvar that the value has changed.
-            cvar.notify_one();
+            cvar.notify_all();
         } else {
             let (lock, cvar) = &*MONITOR;
-            let mut started = lock.lock().unwrap();
-            *started = false;
-            mmtk.scheduler
-                .add_coordinator_work(ConcurrentWorkEnd::<E>::new(), worker);
-            while !*started {
-                started = cvar.wait(started).unwrap();
+            let mut state = lock.lock().unwrap();
+            if *state == MutatorRunningState::Running {
+                *state = MutatorRunningState::Stopping;
+                mmtk.scheduler
+                    .add_coordinator_work(ConcurrentWorkEnd::<E>::new(), worker);
+            }
+            while *state != MutatorRunningState::Stopped {
+                state = cvar.wait(state).unwrap();
             }
         }
     }
