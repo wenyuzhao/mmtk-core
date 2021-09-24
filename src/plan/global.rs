@@ -353,7 +353,8 @@ pub trait Plan: 'static + Sync + Downcast {
         }
     }
 
-    fn end_of_gc(&self) {}
+    fn gc_pause_start(&self) {}
+    fn gc_pause_end(&self) {}
 }
 
 impl_downcast!(Plan assoc VM);

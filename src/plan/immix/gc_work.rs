@@ -1,13 +1,10 @@
-use atomic::Ordering;
-
 use super::global::Immix;
-use crate::plan::{EdgeIterator, PlanConstraints};
+use crate::plan::PlanConstraints;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
-use crate::util::metadata::{store_metadata, RC_UNLOG_BIT_SPEC};
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
@@ -97,6 +94,7 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     base: ProcessEdgesBase<Self>,
     mmtk: &'static MMTK<VM>,
     roots: bool,
+    root_slots: Vec<Address>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
@@ -105,28 +103,16 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
     }
 
     #[inline(always)]
-    fn fast_trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn fast_trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
-        }
-        if super::REF_COUNT {
-            // TODO: Do this in barrier work packets
-            EdgeIterator::<VM>::iterate(object, |edge| {
-                store_metadata::<VM>(
-                    &RC_UNLOG_BIT_SPEC,
-                    unsafe { edge.to_object_reference() },
-                    crate::plan::barriers::UNLOGGED_VALUE,
-                    None,
-                    Some(Ordering::SeqCst),
-                );
-            });
         }
         if self.immix().immix_space.in_space(object) {
             self.immix().immix_space.fast_trace_object(self, object);
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
-                let _ = crate::policy::immix::rc::inc(object);
                 if self.roots {
                     CURR_ROOTS.lock().push(object);
+                    self.root_slots.push(slot);
                 }
             }
             object
@@ -141,7 +127,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
     #[inline(always)]
     fn fast_process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
-        self.fast_trace_object(object);
+        self.fast_trace_object(slot, object);
     }
 }
 
@@ -162,6 +148,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             base,
             mmtk,
             roots,
+            root_slots: vec![],
         }
     }
 
@@ -209,6 +196,12 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             for i in 0..self.edges.len() {
                 self.process_edge(self.edges[i])
             }
+        }
+        if self.roots && !self.root_slots.is_empty() {
+            let mut roots = vec![];
+            std::mem::swap(&mut roots, &mut self.root_slots);
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(ProcessIncs::new_roots(roots));
         }
     }
 }
@@ -298,10 +291,12 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])
         }
-        let mut roots = vec![];
-        std::mem::swap(&mut roots, &mut self.roots);
-        self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(ProcessIncs::new_roots(roots));
+        if !self.roots.is_empty() {
+            let mut roots = vec![];
+            std::mem::swap(&mut roots, &mut self.roots);
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(ProcessIncs::new_roots(roots));
+        }
     }
 
     const CAPACITY: usize = 4096;

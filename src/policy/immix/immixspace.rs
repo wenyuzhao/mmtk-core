@@ -253,7 +253,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let space = unsafe { &*(self as *const Self) };
         let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(
             space,
-            false,
             if space.in_defrag() {
                 Some(threshold)
             } else {
@@ -570,10 +569,8 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
         } else {
             self.space.block_allocation.reset();
             let space: &'static ImmixSpace<VM> = unsafe { &*(self.space as *const ImmixSpace<VM>) };
-            self.space
-                .chunk_map
-                .generate_prepare_tasks::<VM>(space, true, None)
+            self.space.chunk_map.generate_sweep_tasks::<VM>(space, true)
         };
-        worker.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+        worker.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
     }
 }

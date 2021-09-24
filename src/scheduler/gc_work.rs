@@ -253,6 +253,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
             if crate::flags::LOG_PER_GC_STATE {
                 *crate::GC_START_TIME.lock() = Some(SystemTime::now());
             }
+            mmtk.plan.gc_pause_start();
             trace!("stop_all_mutators end");
             mmtk.scheduler.notify_mutators_paused(mmtk);
             if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
@@ -329,7 +330,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::util::edge_logger::reset();
         }
 
-        mmtk.plan.end_of_gc();
+        mmtk.plan.gc_pause_end();
         mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
         mmtk.plan.reset_collection_trigger();
         // println!(
@@ -846,12 +847,8 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn should_skip_inc_processing<VM: VMBinding>(mmtk: &'static MMTK<VM>) -> bool {
+    fn should_skip_inc_processing<VM: VMBinding>(_mmtk: &'static MMTK<VM>) -> bool {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        if immix.perform_cycle_collection() {
-            return true;
-        }
         false
     }
 
@@ -867,6 +864,10 @@ impl ProcessIncs {
             }
         } else {
             debug_assert!(immix.immix_space.in_space(o), "{:?}", o);
+            // FIXME: Some root edge may suddenly be set to null during the pause.
+            if o.is_null() {
+                return;
+            }
         }
         if let Ok(0) = crate::policy::immix::rc::inc(o) {
             // This is a nursery object
@@ -941,11 +942,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        if crate::plan::barriers::BARRIER_MEASUREMENT
-            || (!crate::flags::LAZY_DECREMENTS && immix.perform_cycle_collection())
-        {
-            return;
-        }
+        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut new_decs = vec![];
         for o in &self.decs {
             if !immix.immix_space.in_space(*o) {
@@ -964,13 +961,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                 unsafe {
                     o.to_address().store(0xdeadusize);
                 }
-                if crate::flags::LAZY_DECREMENTS {
-                    immix
-                        .immix_space
-                        .possibly_dead_mature_blocks
-                        .lock()
-                        .insert(Block::containing::<VM>(*o));
-                }
+                immix
+                    .immix_space
+                    .possibly_dead_mature_blocks
+                    .lock()
+                    .insert(Block::containing::<VM>(*o));
             }
         }
         if !new_decs.is_empty() {
@@ -983,7 +978,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
             // Finished processing all the decrements. Start releasing blocks.
             let mut blocks = immix.immix_space.possibly_dead_mature_blocks.lock();
-            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &mut blocks);
+            if immix.last_gc_was_cycle_collection() {
+                // Blocks are swept in `Release` stage.
+                blocks.clear();
+            } else {
+                SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &mut blocks);
+            }
         }
     }
 }
@@ -994,6 +994,7 @@ pub struct SweepBlocksAfterDecs {
 
 impl SweepBlocksAfterDecs {
     fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, blocks_set: &mut HashSet<Block>) {
+        // This may happen either within a pause, or in concurrent.
         let size = blocks_set.len();
         let num_bins = scheduler.num_workers() << 1;
         let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
