@@ -803,35 +803,24 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     }
 }
 
-pub struct ProcessRootIncs {
-    incs: Vec<ObjectReference>,
-}
-impl ProcessRootIncs {
-    pub fn new(incs: Vec<ObjectReference>) -> Self {
-        Self { incs }
-    }
-}
-impl<VM: VMBinding> GCWork<VM> for ProcessRootIncs {
-    #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if ProcessIncs::should_skip_inc_processing::<VM>(mmtk) {
-            return;
-        }
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let mut new_incs = vec![];
-        for o in &self.incs {
-            ProcessIncs::process_inc::<VM, false>(*o, immix, &mut new_incs);
-        }
-        ProcessIncs::flush_incs::<VM>(worker, new_incs);
-    }
-}
-
 pub struct ProcessIncs {
     incs: Vec<Address>,
+    unlog_edges: bool,
 }
+
 impl ProcessIncs {
     pub fn new(incs: Vec<Address>) -> Self {
-        Self { incs }
+        Self {
+            incs,
+            unlog_edges: true,
+        }
+    }
+
+    pub fn new_roots(incs: Vec<Address>) -> Self {
+        Self {
+            incs,
+            unlog_edges: false,
+        }
     }
 
     #[inline(always)]
@@ -877,7 +866,7 @@ impl ProcessIncs {
                 return;
             }
         } else {
-            debug_assert!(immix.immix_space.in_space(o));
+            debug_assert!(immix.immix_space.in_space(o), "{:?}", o);
         }
         if let Ok(0) = crate::policy::immix::rc::inc(o) {
             // This is a nursery object
@@ -903,6 +892,7 @@ impl ProcessIncs {
         }
     }
 }
+
 impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
@@ -912,26 +902,25 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut new_incs = vec![];
         for e in &self.incs {
-            debug_assert_eq!(
-                crate::plan::barriers::LOGGED_VALUE,
-                load_metadata::<VM>(
-                    &RC_UNLOG_BIT_SPEC,
-                    unsafe { e.to_object_reference() },
-                    None,
-                    Some(Ordering::SeqCst),
-                )
-            );
-            self.mark_edge_as_in_progress::<VM>(*e);
-            store_metadata::<VM>(
-                &RC_UNLOG_BIT_SPEC,
-                unsafe { e.to_object_reference() },
-                crate::plan::barriers::UNLOGGED_VALUE,
-                None,
-                Some(Ordering::Relaxed),
-            );
+            if self.unlog_edges {
+                debug_assert_eq!(
+                    crate::plan::barriers::LOGGED_VALUE,
+                    load_metadata::<VM>(
+                        &RC_UNLOG_BIT_SPEC,
+                        unsafe { e.to_object_reference() },
+                        None,
+                        Some(Ordering::SeqCst),
+                    )
+                );
+                self.mark_edge_as_in_progress::<VM>(*e);
+            }
             let o: ObjectReference = unsafe { e.load() };
-            self.mark_edge_as_unlogged::<VM>(*e);
-            Self::process_inc::<VM, true>(o, immix, &mut new_incs);
+            if self.unlog_edges {
+                self.mark_edge_as_unlogged::<VM>(*e);
+                Self::process_inc::<VM, true>(o, immix, &mut new_incs);
+            } else {
+                Self::process_inc::<VM, false>(o, immix, &mut new_incs);
+            }
         }
         Self::flush_incs(worker, new_incs);
     }

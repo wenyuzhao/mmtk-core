@@ -234,12 +234,24 @@ pub struct RCImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
     mmtk: &'static MMTK<VM>,
-    roots: Vec<ObjectReference>,
+    roots: Vec<Address>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
     fn immix(&self) -> &'static Immix<VM> {
         self.plan
+    }
+
+    #[inline(always)]
+    fn trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
+        if object.is_null() {
+            return object;
+        }
+        if self.immix().immix_space.in_space(object) {
+            CURR_ROOTS.lock().push(object);
+            self.roots.push(slot);
+        }
+        object
     }
 }
 
@@ -268,16 +280,17 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
     }
 
     /// Trace  and evacuate objects.
+    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
+        unreachable!()
+    }
+
     #[inline(always)]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
+    fn process_edge(&mut self, slot: Address) {
+        let object = unsafe { slot.load::<ObjectReference>() };
+        let new_object = self.trace_object(slot, object);
+        if Self::OVERWRITE_REFERENCE {
+            unsafe { slot.store(new_object) };
         }
-        if self.immix().immix_space.in_space(object) {
-            CURR_ROOTS.lock().push(object);
-            self.roots.push(object);
-        }
-        object
     }
 
     #[inline]
@@ -288,7 +301,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
         let mut roots = vec![];
         std::mem::swap(&mut roots, &mut self.roots);
         self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(ProcessRootIncs::new(roots));
+            .add(ProcessIncs::new_roots(roots));
     }
 
     const CAPACITY: usize = 4096;
