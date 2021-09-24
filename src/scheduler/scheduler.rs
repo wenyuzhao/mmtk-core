@@ -90,6 +90,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     #[inline]
+    pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+        ws.into_iter()
+            .for_each(|w| self.postponed_concurrent_work.push(w));
+    }
+
+    #[inline]
     pub fn num_workers(&self) -> usize {
         self.worker_group.as_ref().unwrap().worker_count()
     }

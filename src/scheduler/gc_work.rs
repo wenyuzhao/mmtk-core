@@ -806,22 +806,16 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
 
 pub struct ProcessIncs {
     incs: Vec<Address>,
-    unlog_edges: bool,
+    roots: bool,
 }
 
 impl ProcessIncs {
     pub fn new(incs: Vec<Address>) -> Self {
-        Self {
-            incs,
-            unlog_edges: true,
-        }
+        Self { incs, roots: false }
     }
 
     pub fn new_roots(incs: Vec<Address>) -> Self {
-        Self {
-            incs,
-            unlog_edges: false,
-        }
+        Self { incs, roots: true }
     }
 
     #[inline(always)]
@@ -863,8 +857,7 @@ impl ProcessIncs {
                 return;
             }
         } else {
-            debug_assert!(immix.immix_space.in_space(o), "{:?}", o);
-            // FIXME: Some root edge may suddenly be set to null during the pause.
+            debug_assert!(o.is_null() || immix.immix_space.in_space(o), "{:?}", o);
             if o.is_null() {
                 return;
             }
@@ -902,8 +895,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut new_incs = vec![];
+        let mut roots = vec![];
         for e in &self.incs {
-            if self.unlog_edges {
+            if !self.roots {
                 debug_assert_eq!(
                     crate::plan::barriers::LOGGED_VALUE,
                     load_metadata::<VM>(
@@ -916,12 +910,22 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
                 self.mark_edge_as_in_progress::<VM>(*e);
             }
             let o: ObjectReference = unsafe { e.load() };
-            if self.unlog_edges {
+            if !self.roots {
                 self.mark_edge_as_unlogged::<VM>(*e);
                 Self::process_inc::<VM, true>(o, immix, &mut new_incs);
             } else {
                 Self::process_inc::<VM, false>(o, immix, &mut new_incs);
+                if !o.is_null() {
+                    roots.push(o);
+                }
             }
+        }
+        if self.roots {
+            if !roots.is_empty() {
+                crate::plan::immix::CURR_ROOTS.lock().push(roots);
+            }
+        } else {
+            debug_assert!(roots.is_empty());
         }
         Self::flush_incs(worker, new_incs);
     }

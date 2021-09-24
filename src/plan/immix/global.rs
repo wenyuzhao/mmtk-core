@@ -218,9 +218,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.immix_space.release_rc();
         }
         if super::REF_COUNT {
-            let mut curr_roots = super::gc_work::CURR_ROOTS.lock();
-            let mut old_roots = super::gc_work::OLD_ROOTS.lock();
-            std::mem::swap::<Vec<ObjectReference>>(&mut curr_roots, &mut old_roots);
+            let mut curr_roots = super::CURR_ROOTS.lock();
+            let mut old_roots = super::PREV_ROOTS.lock();
+            std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
         }
     }
 
@@ -314,6 +314,22 @@ impl<VM: VMBinding> Immix<VM> {
         concurrent: bool,
         _in_defrag: bool,
     ) {
+        // Before start yielding, wrap all the roots from the previous GC with work-packets.
+        if super::REF_COUNT {
+            let mut roots = super::PREV_ROOTS.lock();
+            let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(roots.len());
+            for decs in roots.drain(..) {
+                let w =
+                    ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
+                work_packets.push(box w);
+            }
+            if crate::flags::LAZY_DECREMENTS {
+                debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
+                scheduler.postpone_all(work_packets);
+            } else {
+                scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);
+            }
+        }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
@@ -328,18 +344,6 @@ impl<VM: VMBinding> Immix<VM> {
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
-
-        if super::REF_COUNT {
-            let mut decs = vec![];
-            let mut old_roots = super::gc_work::OLD_ROOTS.lock();
-            std::mem::swap(&mut decs, &mut old_roots);
-            let w = ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
-            if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
-                scheduler.postpone(w);
-            } else {
-                scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
-            }
-        }
 
         // Analysis routine that is ran. It is generally recommended to take advantage
         // of the scheduling system we have in place for more performance
