@@ -3,6 +3,7 @@ use crate::plan::Plan;
 use crate::policy::immix::block::Block;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::*;
+use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
@@ -147,18 +148,9 @@ impl<VM: VMBinding> DerefMut for SanityGCProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
-    type VM = VM;
-    const OVERWRITE_REFERENCE: bool = false;
-    fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        Self {
-            base: ProcessEdgesBase::new(edges, mmtk),
-            // ..Default::default()
-        }
-    }
-
+impl<VM: VMBinding> SanityGCProcessEdges<VM> {
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -176,7 +168,14 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             );
             assert!(
                 unsafe { object.to_address().load::<usize>() } != 0xdead,
-                "{:?} is dead, {:?}",
+                "{:?} -> {:?} is dead, {:?}",
+                slot,
+                object,
+                Block::containing::<VM>(object)
+            );
+            assert!(
+                !object_forwarding::is_forwarded::<VM>(object),
+                "{:?} is forwarded, {:?}",
                 object,
                 Block::containing::<VM>(object)
             );
@@ -185,5 +184,25 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             ProcessEdgesWork::process_node(self, object);
         }
         object
+    }
+}
+
+impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
+    type VM = VM;
+    const OVERWRITE_REFERENCE: bool = false;
+    fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        Self {
+            base: ProcessEdgesBase::new(edges, mmtk),
+            // ..Default::default()
+        }
+    }
+
+    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
+        unreachable!()
+    }
+
+    fn process_edge(&mut self, slot: Address) {
+        let object = unsafe { slot.load::<ObjectReference>() };
+        self.trace_object(slot, object);
     }
 }

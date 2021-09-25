@@ -3,6 +3,7 @@ use super::*;
 use crate::plan::barriers::LOGGING_IN_PROGRESS;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::immix::Immix;
+use crate::plan::immix::ImmixCopyContext;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
@@ -847,35 +848,82 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn process_inc<VM: VMBinding, const SPACE_CHECK: bool>(
+    fn scan_nursery_object<VM: VMBinding>(o: ObjectReference, incs: &mut Vec<Address>) {
+        EdgeIterator::<VM>::iterate(o, |edge| {
+            debug_assert_eq!(
+                crate::plan::barriers::LOGGED_VALUE,
+                load_metadata::<VM>(
+                    &RC_UNLOG_BIT_SPEC,
+                    unsafe { edge.to_object_reference() },
+                    None,
+                    Some(Ordering::SeqCst),
+                ),
+                "Edge {:?}.{:?} is unlogged",
+                o,
+                edge
+            );
+            incs.push(edge);
+        });
+    }
+
+    #[inline(always)]
+    fn process_inc<VM: VMBinding, CC: CopyContext<VM = VM>, const SPACE_CHECK: bool>(
+        e: Address,
         o: ObjectReference,
         immix: &Immix<VM>,
         new_incs: &mut Vec<Address>,
-    ) {
+        copy_context: &mut CC,
+    ) -> ObjectReference {
+        // Filter objects outside of RC space.
         if SPACE_CHECK {
             if !immix.immix_space.in_space(o) {
-                return;
+                return o;
             }
         } else {
             debug_assert!(o.is_null() || immix.immix_space.in_space(o), "{:?}", o);
             if o.is_null() {
-                return;
+                return o;
             }
         }
-        if let Ok(0) = crate::policy::immix::rc::inc(o) {
-            // This is a nursery object
-            EdgeIterator::<VM>::iterate(o, |edge| {
-                debug_assert_eq!(
-                    crate::plan::barriers::LOGGED_VALUE,
-                    load_metadata::<VM>(
-                        &RC_UNLOG_BIT_SPEC,
-                        unsafe { edge.to_object_reference() },
-                        None,
-                        Some(Ordering::SeqCst),
-                    )
-                );
-                new_incs.push(edge);
-            });
+        if crate::flags::RC_EVACUATE_NURSERY && !immix.perform_cycle_collection() {
+            let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
+            if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
+                // Object is moved to a new location.
+                let new =
+                    object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
+                if new != o {
+                    unsafe {
+                        e.store(new);
+                    }
+                }
+                let r = crate::policy::immix::rc::inc(new);
+                debug_assert_ne!(r, Ok(0));
+                new
+            } else {
+                if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                    // Evacuate the object
+                    let new = object_forwarding::forward_object::<VM, _>(
+                        o,
+                        AllocationSemantics::Default,
+                        copy_context,
+                    );
+                    unsafe {
+                        e.store(new);
+                    }
+                    crate::policy::immix::rc::set(o, 0);
+                    Self::scan_nursery_object::<VM>(new, new_incs);
+                    new
+                } else {
+                    // Object is not moved.
+                    object_forwarding::clear_forwarding_bits::<VM>(o);
+                    o
+                }
+            }
+        } else {
+            if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                Self::scan_nursery_object::<VM>(o, new_incs);
+            }
+            o
         }
     }
 
@@ -910,11 +958,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
                 self.mark_edge_as_in_progress::<VM>(*e);
             }
             let o: ObjectReference = unsafe { e.load() };
+            let copy_context = unsafe { worker.local::<ImmixCopyContext<VM>>() };
             if !self.roots {
                 self.mark_edge_as_unlogged::<VM>(*e);
-                Self::process_inc::<VM, true>(o, immix, &mut new_incs);
+                Self::process_inc::<_, _, true>(*e, o, immix, &mut new_incs, copy_context);
             } else {
-                Self::process_inc::<VM, false>(o, immix, &mut new_incs);
+                let o = Self::process_inc::<_, _, false>(*e, o, immix, &mut new_incs, copy_context);
                 if !o.is_null() {
                     roots.push(o);
                 }

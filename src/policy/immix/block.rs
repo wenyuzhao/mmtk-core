@@ -1,6 +1,7 @@
 use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::Line;
+use super::rc::RC_TABLE;
 use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::immix::REF_COUNT;
@@ -233,6 +234,11 @@ impl Block {
     pub fn lines(&self) -> Range<Line> {
         debug_assert!(!super::BLOCK_ONLY);
         Line::from(self.start())..Line::from(self.end())
+    }
+
+    #[inline(always)]
+    pub fn clear_rc_table<VM: VMBinding>(&self) {
+        bzero_metadata(&RC_TABLE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]

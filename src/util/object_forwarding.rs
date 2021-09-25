@@ -76,6 +76,8 @@ pub fn spin_and_get_forwarded_object<VM: VMBinding>(
     }
     if forwarding_bits == FORWARDED {
         read_forwarding_pointer::<VM>(object)
+    } else if forwarding_bits == FORWARDING_NOT_TRIGGERED_YET {
+        object
     } else {
         panic!(
             "Invalid forwarding state 0x{:x} 0x{:x} for object{}",

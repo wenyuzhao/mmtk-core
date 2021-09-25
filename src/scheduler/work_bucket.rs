@@ -148,7 +148,7 @@ pub enum WorkBucketStage {
 // Alias
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
-    pub const RCProcessIncs: Self = Self::Prepare;
-    pub const RCReleaseNursery: Self = Self::PreClosure;
+    pub const RCProcessIncs: Self = Self::PreClosure;
+    pub const RCReleaseNursery: Self = Self::Closure;
     pub const RCProcessDecs: Self = Self::PostClosure;
 }

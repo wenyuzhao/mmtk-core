@@ -58,6 +58,9 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         _semantics: crate::AllocationSemantics,
     ) {
         object_forwarding::clear_forwarding_bits::<VM>(obj);
+        if crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY {
+            crate::policy::immix::rc::set(obj, 1);
+        }
     }
 }
 
@@ -196,10 +199,14 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             }
         }
         if self.roots && !self.root_slots.is_empty() {
+            let bucket = if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
+                WorkBucketStage::Unconstrained
+            } else {
+                WorkBucketStage::RCProcessIncs
+            };
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.root_slots);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ProcessIncs::new_roots(roots));
+            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new_roots(roots));
         }
     }
 }
@@ -286,10 +293,14 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             self.process_edge(self.edges[i])
         }
         if !self.roots.is_empty() {
+            let bucket = if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
+                WorkBucketStage::Unconstrained
+            } else {
+                WorkBucketStage::RCProcessIncs
+            };
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.roots);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ProcessIncs::new_roots(roots));
+            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new_roots(roots));
         }
     }
 

@@ -1,9 +1,9 @@
-use super::{block::Block, chunk::ChunkState, rc::RC_TABLE, ImmixSpace};
+use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
     policy::space::Space,
     scheduler::{GCWork, GCWorker},
     util::{
-        metadata::side_metadata::{self, bzero_metadata},
+        metadata::side_metadata::bzero_metadata,
         VMMutatorThread, VMThread,
     },
     vm::*,
@@ -79,7 +79,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             self.space().defrag.notify_new_clean_block(copy);
         }
         if crate::plan::immix::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
-            side_metadata::bzero_metadata(&RC_TABLE, block.start(), Block::BYTES);
+            block.clear_rc_table::<VM>();
         }
         if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY {
             let current_state = self.space().line_mark_state.load(Ordering::Acquire);

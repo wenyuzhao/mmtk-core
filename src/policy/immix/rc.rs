@@ -60,6 +60,12 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
     r
 }
 
+#[inline(always)]
+pub fn set(o: ObjectReference, count: usize) {
+    debug_assert!(!o.is_null());
+    side_metadata::store_atomic(&RC_TABLE, o.to_address(), count, Ordering::SeqCst)
+}
+
 pub fn count(o: ObjectReference) -> usize {
     side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst)
 }
