@@ -87,8 +87,10 @@ pub fn get_immix_constraints() -> &'static PlanConstraints {
     unsafe {
         let barrier = get_active_barrier();
         C.barrier = barrier;
-        C.needs_log_bit = barrier != BarrierSelector::NoBarrier;
-        C.needs_field_log_bit = barrier == BarrierSelector::FieldLoggingBarrier;
+        C.needs_log_bit =
+            crate::flags::BARRIER_MEASUREMENT || barrier != BarrierSelector::NoBarrier;
+        C.needs_field_log_bit = barrier == BarrierSelector::FieldLoggingBarrier
+            || (crate::flags::BARRIER_MEASUREMENT && barrier == BarrierSelector::NoBarrier);
         &C
     }
 }
@@ -263,7 +265,12 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
-        let immix_specs = if get_active_barrier() == BarrierSelector::FieldLoggingBarrier {
+        let immix_specs = if crate::flags::BARRIER_MEASUREMENT {
+            metadata::extract_side_metadata(&[
+                RC_UNLOG_BIT_SPEC,
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            ])
+        } else if get_active_barrier() == BarrierSelector::FieldLoggingBarrier {
             metadata::extract_side_metadata(&[RC_UNLOG_BIT_SPEC])
         } else if get_active_barrier() == BarrierSelector::ObjectBarrier {
             assert!(crate::flags::BARRIER_MEASUREMENT);

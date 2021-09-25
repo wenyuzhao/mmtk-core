@@ -2,10 +2,7 @@ use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
     policy::space::Space,
     scheduler::{GCWork, GCWorker},
-    util::{
-        metadata::side_metadata::bzero_metadata,
-        VMMutatorThread, VMThread,
-    },
+    util::{metadata::side_metadata::RC_UNLOG_BIT_SIDE_METADATA_SPEC, VMMutatorThread, VMThread},
     vm::*,
     MMTK,
 };
@@ -88,16 +85,21 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         }
         block.init(copy);
-        if self.space().common().needs_log_bit {
-            if self.space().common().needs_field_log_bit {
-                block.clear_log_table::<VM>();
-            } else {
-                bzero_metadata(
-                    &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        if cfg!(debug_assertions) {
+            if crate::flags::BARRIER_MEASUREMENT {
+                block.assert_log_table_cleared::<VM>(&RC_UNLOG_BIT_SIDE_METADATA_SPEC);
+                block.assert_log_table_cleared::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         .as_spec()
                         .extract_side_spec(),
-                    block.start(),
-                    Block::BYTES,
+                );
+            } else if self.space().common().needs_field_log_bit {
+                block.assert_log_table_cleared::<VM>(&RC_UNLOG_BIT_SIDE_METADATA_SPEC);
+            } else {
+                block.assert_log_table_cleared::<VM>(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .as_spec()
+                        .extract_side_spec(),
                 );
             }
         }

@@ -247,6 +247,17 @@ impl Block {
     }
 
     #[inline(always)]
+    pub fn assert_log_table_cleared<VM: VMBinding>(&self, meta: &SideMetadataSpec) {
+        assert!(cfg!(debug_assertions));
+        let start = address_to_meta_address(meta, self.start()).to_ptr::<u128>();
+        let limit = address_to_meta_address(meta, self.end()).to_ptr::<u128>();
+        let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
+        for x in table {
+            assert_eq!(*x, 0);
+        }
+    }
+
+    #[inline(always)]
     pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
         let meta = RC_UNLOG_BIT_SIDE_METADATA_SPEC;
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
