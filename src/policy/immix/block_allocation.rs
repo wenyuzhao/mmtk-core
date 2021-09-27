@@ -95,7 +95,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 );
             } else if self.space().common().needs_field_log_bit {
                 block.assert_log_table_cleared::<VM>(&RC_UNLOG_BIT_SIDE_METADATA_SPEC);
-            } else {
+            } else if self.space().common().needs_log_bit {
                 block.assert_log_table_cleared::<VM>(
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         .as_spec()
