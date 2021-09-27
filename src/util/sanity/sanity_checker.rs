@@ -174,6 +174,13 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                 Block::containing::<VM>(object)
             );
             assert!(
+                unsafe { (object.to_address() + 8usize).load::<usize>() } != 0xdead,
+                "{:?} -> {:?} is dead, {:?}",
+                slot,
+                object,
+                Block::containing::<VM>(object)
+            );
+            assert!(
                 !object_forwarding::is_forwarded::<VM>(object),
                 "{:?} is forwarded, {:?}",
                 object,
