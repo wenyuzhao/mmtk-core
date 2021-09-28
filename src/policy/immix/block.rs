@@ -8,9 +8,9 @@ use crate::plan::immix::REF_COUNT;
 use crate::policy::space::Space;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
-use crate::util::metadata::{store_metadata, RC_UNLOG_BIT_SPEC};
+use crate::util::metadata::store_metadata;
 use crate::util::{Address, ObjectReference};
-use crate::{vm::*, BarrierSelector};
+use crate::vm::*;
 use spin::{Mutex, MutexGuard};
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
@@ -243,7 +243,11 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        bzero_metadata(&RC_UNLOG_BIT_SIDE_METADATA_SPEC, self.start(), Block::BYTES);
+        bzero_metadata(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+            self.start(),
+            Block::BYTES,
+        );
     }
 
     #[inline(always)]
@@ -259,12 +263,12 @@ impl Block {
 
     #[inline(always)]
     pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
-        let meta = RC_UNLOG_BIT_SIDE_METADATA_SPEC;
+        let meta = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {
             let count = limit.offset_from(start) as usize;
-            std::ptr::write_bytes(start, 0b01010101u8, count);
+            std::ptr::write_bytes(start, 0xffu8, count);
         }
     }
 
@@ -293,12 +297,7 @@ impl Block {
         perform_cycle_collection: bool,
     ) -> bool {
         if crate::plan::barriers::BARRIER_MEASUREMENT && space.common().needs_log_bit {
-            let meta = if crate::plan::immix::get_active_barrier() == BarrierSelector::ObjectBarrier
-            {
-                &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            } else {
-                &RC_UNLOG_BIT_SPEC
-            };
+            let meta = &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC;
             for i in (0..Block::BYTES).step_by(8) {
                 let o = unsafe { (self.start() + i).to_object_reference() };
                 store_metadata::<VM>(meta, o, LOGGED_VALUE, None, None);

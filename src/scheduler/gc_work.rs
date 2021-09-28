@@ -1,6 +1,7 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::barriers::LOGGING_IN_PROGRESS;
+use crate::plan::barriers::LOCKED_VALUE;
+use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::immix::Immix;
 use crate::plan::immix::ImmixCopyContext;
@@ -788,7 +789,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
             for edge in &self.edges {
                 let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
                 unsafe {
-                    ptr.store(0b01010101u8);
+                    ptr.store(0b11111111u8);
                 }
             }
             if !crate::plan::barriers::BARRIER_MEASUREMENT {
@@ -820,22 +821,44 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn mark_edge_as_in_progress<VM: VMBinding>(&self, edge: Address) {
-        store_metadata::<VM>(
-            &RC_UNLOG_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            LOGGING_IN_PROGRESS,
-            None,
-            Some(Ordering::SeqCst),
-        );
+    fn lock_edge<VM: VMBinding>(&self, edge: Address) {
+        loop {
+            let v = load_metadata::<VM>(
+                &RC_LOCK_BIT_SPEC,
+                unsafe { edge.to_object_reference() },
+                None,
+                Some(Ordering::SeqCst),
+            );
+            if v == LOCKED_VALUE {
+                continue;
+            }
+            if compare_exchange_metadata::<VM>(
+                &RC_LOCK_BIT_SPEC,
+                unsafe { edge.to_object_reference() },
+                UNLOCKED_VALUE,
+                LOCKED_VALUE,
+                None,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                return;
+            }
+        }
     }
 
     #[inline(always)]
-    fn mark_edge_as_unlogged<VM: VMBinding>(&self, edge: Address) {
+    fn unlogged_and_unlock_edge<VM: VMBinding>(&self, edge: Address) {
         store_metadata::<VM>(
-            &RC_UNLOG_BIT_SPEC,
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
             UNLOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+        store_metadata::<VM>(
+            &RC_LOCK_BIT_SPEC,
+            unsafe { edge.to_object_reference() },
+            UNLOCKED_VALUE,
             None,
             Some(Ordering::SeqCst),
         );
@@ -853,7 +876,7 @@ impl ProcessIncs {
             debug_assert_eq!(
                 crate::plan::barriers::LOGGED_VALUE,
                 load_metadata::<VM>(
-                    &RC_UNLOG_BIT_SPEC,
+                    &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
                     unsafe { edge.to_object_reference() },
                     None,
                     Some(Ordering::SeqCst),
@@ -949,18 +972,18 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
                 debug_assert_eq!(
                     crate::plan::barriers::LOGGED_VALUE,
                     load_metadata::<VM>(
-                        &RC_UNLOG_BIT_SPEC,
+                        &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
                         unsafe { e.to_object_reference() },
                         None,
                         Some(Ordering::SeqCst),
                     )
                 );
-                self.mark_edge_as_in_progress::<VM>(*e);
+                self.lock_edge::<VM>(*e);
             }
             let o: ObjectReference = unsafe { e.load() };
             let copy_context = unsafe { worker.local::<ImmixCopyContext<VM>>() };
             if !self.roots {
-                self.mark_edge_as_unlogged::<VM>(*e);
+                self.unlogged_and_unlock_edge::<VM>(*e);
                 Self::process_inc::<_, _, true>(*e, o, immix, &mut new_incs, copy_context);
             } else {
                 let o = Self::process_inc::<_, _, false>(*e, o, immix, &mut new_incs, copy_context);

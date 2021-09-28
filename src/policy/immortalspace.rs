@@ -5,9 +5,7 @@ use crate::util::address::Address;
 use crate::util::heap::{MonotonePageResource, PageResource, VMRequest};
 
 use crate::util::constants::CARD_META_PAGES_PER_REGION;
-use crate::util::metadata::{
-    compare_exchange_metadata, load_metadata, store_metadata, RC_UNLOG_BIT_SPEC,
-};
+use crate::util::metadata::{compare_exchange_metadata, load_metadata, store_metadata};
 use crate::util::{metadata, ObjectReference};
 
 use crate::plan::TransitiveClosure;
@@ -82,7 +80,7 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         {
             for i in (0..bytes).step_by(8) {
                 let a = object.to_address() + i;
-                RC_UNLOG_BIT_SPEC
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                     .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
             }
         }

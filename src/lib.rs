@@ -100,7 +100,7 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 pub mod flags {
     // ---------- Immix flags ---------- //
     pub const CONCURRENT_MARKING: bool = false;
-    pub const REF_COUNT: bool = false;
+    pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
     pub const BLOCK_ONLY: bool = true;
@@ -110,17 +110,17 @@ pub mod flags {
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = false;
     pub const LAZY_DECREMENTS: bool = false;
-    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
+    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = false;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const RC_EVACUATE_NURSERY: bool = false;
 
     // ---------- Barrier flags ---------- //
-    pub const BARRIER_MEASUREMENT: bool = true;
+    pub const BARRIER_MEASUREMENT: bool = false;
     pub const TAKERATE_MEASUREMENT: bool = false;
 
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = false;
+    pub const LOG_PER_GC_STATE: bool = true;
     pub const LOG_STAGES: bool = false;
 
     pub fn validate_features() {

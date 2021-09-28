@@ -14,7 +14,6 @@ use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
-use crate::util::metadata::RC_UNLOG_BIT_SPEC;
 use crate::util::opaque_pointer::*;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
@@ -80,7 +79,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         {
             for i in (0..bytes).step_by(8) {
                 let a = object.to_address() + i;
-                RC_UNLOG_BIT_SPEC
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                     .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
             }
         }

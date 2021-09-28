@@ -121,7 +121,11 @@ impl Line {
     pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
-        bzero_metadata(&RC_UNLOG_BIT_SIDE_METADATA_SPEC, start, size);
+        bzero_metadata(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+            start,
+            size,
+        );
     }
 }
 

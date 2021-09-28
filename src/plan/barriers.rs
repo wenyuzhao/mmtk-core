@@ -9,6 +9,7 @@ use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::store_metadata;
+use crate::util::metadata::RC_LOCK_BIT_SPEC;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
 use crate::MMTK;
@@ -174,9 +175,11 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
     }
 }
 
-pub const UNLOGGED_VALUE: usize = 0b01;
-pub const LOGGED_VALUE: usize = 0b00;
-pub const LOGGING_IN_PROGRESS: usize = 0b11;
+pub const UNLOGGED_VALUE: usize = 0b1;
+pub const LOGGED_VALUE: usize = 0b0;
+
+pub const UNLOCKED_VALUE: usize = 0b0;
+pub const LOCKED_VALUE: usize = 0b1;
 
 pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
@@ -203,38 +206,79 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn attempt_to_log_edge(&self, edge: Address) -> bool {
+    fn get_edge_lock_state(&self, edge: Address) -> usize {
+        load_metadata::<E::VM>(
+            &RC_LOCK_BIT_SPEC,
+            unsafe { edge.to_object_reference() },
+            None,
+            None,
+        )
+    }
+
+    #[inline(always)]
+    fn get_edge_logging_state(&self, edge: Address) -> usize {
+        load_metadata::<E::VM>(
+            &self.meta,
+            unsafe { edge.to_object_reference() },
+            None,
+            None,
+        )
+    }
+
+    #[inline(always)]
+    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
+        // println!("try lock {:?}", edge);
         loop {
             std::hint::spin_loop();
-            let old_value = load_metadata::<E::VM>(
-                &self.meta,
-                unsafe { edge.to_object_reference() },
-                None,
-                None,
-            );
-            if old_value == LOGGED_VALUE {
+            let logging_value = self.get_edge_logging_state(edge);
+            // Bailout if logged
+            if logging_value == LOGGED_VALUE {
+                // println!("quit lock {:?}", edge);
                 return false;
             }
-            if old_value == LOGGING_IN_PROGRESS {
+            debug_assert_eq!(logging_value, UNLOGGED_VALUE);
+            let lock_value = self.get_edge_lock_state(edge);
+            // println!(" - {:?} lock_value={}", edge, lock_value);
+            // Spin if locked
+            if lock_value == LOCKED_VALUE {
+                // println!("quit lock {:?}", edge);
                 continue;
             }
-            debug_assert!(old_value == UNLOGGED_VALUE);
+            debug_assert_eq!(lock_value, UNLOCKED_VALUE);
+            // Attempt to lock the edges
             if compare_exchange_metadata::<E::VM>(
-                &self.meta,
+                &RC_LOCK_BIT_SPEC,
                 unsafe { edge.to_object_reference() },
-                UNLOGGED_VALUE,
-                LOGGING_IN_PROGRESS,
+                UNLOCKED_VALUE,
+                LOCKED_VALUE,
                 None,
                 Ordering::SeqCst,
                 Ordering::Relaxed,
             ) {
+                let logging_value = self.get_edge_logging_state(edge);
+                if logging_value == LOGGED_VALUE {
+                    self.unlock_edge(edge);
+                    return false;
+                }
                 return true;
             }
+            // Failed to lock the edge. Spin.
         }
     }
 
     #[inline(always)]
-    fn mark_edge_as_logged(&self, edge: Address) {
+    fn unlock_edge(&self, edge: Address) {
+        store_metadata::<E::VM>(
+            &RC_LOCK_BIT_SPEC,
+            unsafe { edge.to_object_reference() },
+            UNLOCKED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
+
+    #[inline(always)]
+    fn log_and_unlock_edge(&self, edge: Address) {
         store_metadata::<E::VM>(
             &self.meta,
             unsafe { edge.to_object_reference() },
@@ -242,17 +286,24 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             None,
             Some(Ordering::SeqCst),
         );
+        store_metadata::<E::VM>(
+            &RC_LOCK_BIT_SPEC,
+            unsafe { edge.to_object_reference() },
+            UNLOCKED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
     }
 
     #[inline(always)]
     fn log_edge_and_get_old_target(&self, edge: Address) -> Result<ObjectReference, ()> {
-        if self.attempt_to_log_edge(edge) {
+        if self.attempt_to_lock_edge_bailout_if_logged(edge) {
             if crate::flags::BARRIER_MEASUREMENT {
-                self.mark_edge_as_logged(edge);
+                self.log_and_unlock_edge(edge);
                 Ok(unsafe { Address::ZERO.to_object_reference() })
             } else {
                 let old: ObjectReference = unsafe { edge.load() };
-                self.mark_edge_as_logged(edge);
+                self.log_and_unlock_edge(edge);
                 Ok(old)
             }
         } else {

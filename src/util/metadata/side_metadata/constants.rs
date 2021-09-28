@@ -29,10 +29,10 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 // Base address of alloc bit, public to VM bindings which may need to use this.
 pub const ALLOC_SIDE_METADATA_ADDR: Address = crate::util::alloc_bit::ALLOC_SIDE_METADATA_ADDR;
 
-pub const RC_UNLOG_BIT_SIDE_METADATA_SPEC: SideMetadataSpec = SideMetadataSpec {
+pub const RC_LOCK_BIT_SIDE_METADATA_SPEC: SideMetadataSpec = SideMetadataSpec {
     is_global: true,
     offset: SideMetadataOffset::layout_after(&ACTIVE_CHUNK_METADATA_SPEC),
-    log_num_of_bits: 1,
+    log_num_of_bits: 0,
     log_min_obj_size: constants::LOG_MIN_OBJECT_SIZE as usize,
 };
 
@@ -105,9 +105,7 @@ pub const GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS: Address = GLOBAL_SIDE_METADATA_B
     .add(metadata_address_range_size(
         &crate::policy::mallocspace::metadata::ACTIVE_CHUNK_METADATA_SPEC,
     ))
-    .add(metadata_address_range_size(
-        &RC_UNLOG_BIT_SIDE_METADATA_SPEC,
-    ));
+    .add(metadata_address_range_size(&RC_LOCK_BIT_SIDE_METADATA_SPEC));
 
 pub const GLOBAL_SIDE_METADATA_VM_BASE_OFFSET: SideMetadataOffset =
     SideMetadataOffset::addr(GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS);

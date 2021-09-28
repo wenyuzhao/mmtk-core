@@ -18,7 +18,7 @@ use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
-use crate::util::metadata::RC_UNLOG_BIT_SPEC;
+use crate::util::metadata::RC_LOCK_BIT_SPEC;
 use crate::util::options::UnsafeOptionsWrapper;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
@@ -265,16 +265,13 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
-        let immix_specs = if crate::flags::BARRIER_MEASUREMENT {
+        let immix_specs = if crate::flags::BARRIER_MEASUREMENT
+            || get_active_barrier() != BarrierSelector::NoBarrier
+        {
             metadata::extract_side_metadata(&[
-                RC_UNLOG_BIT_SPEC,
+                RC_LOCK_BIT_SPEC,
                 *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             ])
-        } else if get_active_barrier() == BarrierSelector::FieldLoggingBarrier {
-            metadata::extract_side_metadata(&[RC_UNLOG_BIT_SPEC])
-        } else if get_active_barrier() == BarrierSelector::ObjectBarrier {
-            assert!(crate::flags::BARRIER_MEASUREMENT);
-            metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
         } else {
             vec![]
         };
