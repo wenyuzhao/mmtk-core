@@ -15,17 +15,17 @@ pub struct BlockAllocation<VM: VMBinding> {
     clean_block_cursor: AtomicUsize,
     clean_block_buffer: Vec<Block>,
     clean_block_buffer_refill_lock: Mutex<()>,
+    refill_count: usize,
 }
 
 impl<VM: VMBinding> BlockAllocation<VM> {
-    const REFILL_INCREMENT: usize = 32;
-
     pub fn new() -> Self {
         Self {
             space: None,
             clean_block_cursor: AtomicUsize::new(0),
             clean_block_buffer: vec![],
             clean_block_buffer_refill_lock: Mutex::new(()),
+            refill_count: num_cpus::get(),
         }
     }
 
@@ -124,7 +124,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             return Some(block);
         }
         // Fill buffer with N blocks
-        for _ in 0..Self::REFILL_INCREMENT {
+        for _ in 0..self.refill_count {
             let a = self.space().acquire_uninterruptable(tls, Block::PAGES)?;
             self.clean_block_buffer.push(Block::from(a));
         }
