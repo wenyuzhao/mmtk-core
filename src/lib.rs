@@ -108,9 +108,9 @@ pub mod flags {
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
-    pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
-    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = false;
+    pub const EAGER_INCREMENTS: bool = true;
+    pub const LAZY_DECREMENTS: bool = true;
+    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const RC_EVACUATE_NURSERY: bool = false;
 
@@ -134,8 +134,6 @@ pub mod flags {
         validate!(RC_EVACUATE_NURSERY => REF_COUNT);
         validate!(EAGER_INCREMENTS => !RC_EVACUATE_NURSERY);
         validate!(RC_EVACUATE_NURSERY => !EAGER_INCREMENTS);
-        validate!(LAZY_DECREMENTS => !RC_EVACUATE_NURSERY);
-        validate!(RC_EVACUATE_NURSERY => !LAZY_DECREMENTS);
         if BARRIER_MEASUREMENT {
             assert!(!EAGER_INCREMENTS);
             assert!(!LAZY_DECREMENTS);
