@@ -53,6 +53,7 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for ScheduleSanityGC
         scheduler.reset_state();
 
         plan.base().inside_sanity.store(true, Ordering::SeqCst);
+        <<P as Plan>::VM as VMBinding>::VMScanning::prepare_for_sanity_roots_scanning();
         // Stop & scan mutators (mutator scanning can happen before STW)
         for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
             scheduler.work_buckets[WorkBucketStage::Prepare]
@@ -182,7 +183,8 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             );
             assert!(
                 !object_forwarding::is_forwarded::<VM>(object),
-                "{:?} is forwarded, {:?}",
+                "{:?} -> {:?} is forwarded, {:?}",
+                slot,
                 object,
                 Block::containing::<VM>(object)
             );
