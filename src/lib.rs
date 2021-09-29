@@ -120,7 +120,7 @@ pub mod flags {
 
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = true;
+    pub const LOG_PER_GC_STATE: bool = false;
     pub const LOG_STAGES: bool = false;
 
     pub fn validate_features() {

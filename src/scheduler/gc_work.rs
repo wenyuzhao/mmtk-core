@@ -746,7 +746,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for EdgesProcessModBuf<E> {
                 store_metadata::<E::VM>(
                     &self.meta,
                     unsafe { e.to_object_reference() },
-                    1,
+                    crate::plan::barriers::UNLOGGED_VALUE,
                     None,
                     Some(Ordering::SeqCst),
                 );
