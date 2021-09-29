@@ -76,6 +76,7 @@ pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
 use spin::Mutex;
+use crate::util::constants;
 
 #[macro_use]
 mod policy;
@@ -113,6 +114,7 @@ pub mod flags {
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const RC_EVACUATE_NURSERY: bool = false;
+    pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
 
     // ---------- Barrier flags ---------- //
     pub const BARRIER_MEASUREMENT: bool = false;
