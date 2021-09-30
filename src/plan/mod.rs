@@ -50,7 +50,6 @@ mod semispace;
 // Expose plan constraints as public. Though a binding can get them from plan.constraints(),
 // it is possible for performance reasons that they want the constraints as constants.
 
-pub use generational::copying::GENCOPY_CONSTRAINTS;
 pub use marksweep::MS_CONSTRAINTS;
 pub use nogc::NOGC_CONSTRAINTS;
 pub use pageprotect::PP_CONSTRAINTS;

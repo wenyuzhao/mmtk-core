@@ -72,11 +72,11 @@ extern crate downcast_rs;
 mod mmtk;
 use std::{sync::atomic::AtomicBool, time::SystemTime};
 
+use crate::util::constants;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
 use spin::Mutex;
-use crate::util::constants;
 
 #[macro_use]
 mod policy;

@@ -38,13 +38,16 @@ pub struct GenCopy<VM: VMBinding> {
     pub copyspace1: CopySpace<VM>,
 }
 
-pub const GENCOPY_CONSTRAINTS: PlanConstraints = crate::plan::generational::GEN_CONSTRAINTS;
+#[inline(always)]
+pub fn gencopy_constaints() -> &'static PlanConstraints {
+    crate::plan::generational::gen_constraints()
+}
 
 impl<VM: VMBinding> Plan for GenCopy<VM> {
     type VM = VM;
 
     fn constraints(&self) -> &'static PlanConstraints {
-        &GENCOPY_CONSTRAINTS
+        gencopy_constaints()
     }
 
     fn create_worker_local(
@@ -86,7 +89,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
             debug!("Nursery GC");
             self.common()
                 .schedule_common::<GenNurseryProcessEdges<VM, GenCopyCopyContext<VM>>>(
-                    &GENCOPY_CONSTRAINTS,
+                    gencopy_constaints(),
                     scheduler,
                 );
             // Stop & scan mutators (mutator scanning can happen before STW)
@@ -96,7 +99,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         } else {
             debug!("Full heap GC");
             self.common()
-                .schedule_common::<GenCopyMatureProcessEdges<VM>>(&GENCOPY_CONSTRAINTS, scheduler);
+                .schedule_common::<GenCopyMatureProcessEdges<VM>>(gencopy_constaints(), scheduler);
             // Stop & scan mutators (mutator scanning can happen before STW)
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<GenCopyMatureProcessEdges<VM>>::new());
@@ -217,7 +220,7 @@ impl<VM: VMBinding> GenCopy<VM> {
             gen: Gen::new(
                 heap,
                 global_metadata_specs,
-                &GENCOPY_CONSTRAINTS,
+                gencopy_constaints(),
                 vm_map,
                 mmapper,
                 options,

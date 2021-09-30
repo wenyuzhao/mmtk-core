@@ -20,7 +20,7 @@ impl<VM: VMBinding> CopyContext for GenCopyCopyContext<VM> {
     type VM = VM;
 
     fn constraints(&self) -> &'static PlanConstraints {
-        &super::global::GENCOPY_CONSTRAINTS
+        super::global::gencopy_constaints()
     }
     fn init(&mut self, tls: VMWorkerThread) {
         self.ss.tls = tls.0;
