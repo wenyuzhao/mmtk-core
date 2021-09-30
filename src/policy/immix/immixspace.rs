@@ -302,25 +302,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
         if self.common().needs_log_bit {
-            if crate::flags::BARRIER_MEASUREMENT {
+            if crate::flags::BARRIER_MEASUREMENT || self.common().needs_log_bit {
                 block.clear_log_table::<VM>();
-                bzero_metadata(
-                    &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .as_spec()
-                        .extract_side_spec(),
-                    block.start(),
-                    Block::BYTES,
-                );
-            } else if self.common().needs_field_log_bit {
-                block.clear_log_table::<VM>();
-            } else {
-                bzero_metadata(
-                    &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .as_spec()
-                        .extract_side_spec(),
-                    block.start(),
-                    Block::BYTES,
-                );
             }
         }
         block.deinit();
