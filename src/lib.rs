@@ -110,7 +110,7 @@ pub mod flags {
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
+    pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const RC_EVACUATE_NURSERY: bool = true;
@@ -122,7 +122,7 @@ pub mod flags {
 
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = true;
+    pub const LOG_PER_GC_STATE: bool = false;
     pub const LOG_STAGES: bool = false;
 
     pub fn validate_features() {

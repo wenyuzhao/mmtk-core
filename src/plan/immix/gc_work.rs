@@ -300,7 +300,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             };
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.roots);
-            if crate::flags::RC_EVACUATE_NURSERY {
+            if crate::flags::RC_EVACUATE_NURSERY && ProcessIncs::LATE_EVACUATION {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateNursery]
                     .add(RCEvacuateNursery::new(roots.clone(), true));
             }

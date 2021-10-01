@@ -390,7 +390,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             } else {
                 WorkBucketStage::RCProcessIncs
             };
-            if crate::flags::RC_EVACUATE_NURSERY {
+            if crate::flags::RC_EVACUATE_NURSERY && ProcessIncs::LATE_EVACUATION {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateNursery]
                     .add(RCEvacuateNursery::new(incs.clone(), false));
             }

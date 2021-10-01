@@ -920,6 +920,80 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
+    fn process_inc_and_evacuate<
+        VM: VMBinding,
+        CC: CopyContext<VM = VM>,
+        const SPACE_CHECK: bool,
+    >(
+        e: Address,
+        o: ObjectReference,
+        immix: &Immix<VM>,
+        new_incs: &mut Vec<Address>,
+        copy_context: &mut CC,
+    ) -> ObjectReference {
+        // Filter objects outside of RC space.
+        if SPACE_CHECK {
+            if !immix.immix_space.in_space(o) {
+                return o;
+            }
+        } else {
+            debug_assert!(o.is_null() || immix.immix_space.in_space(o), "{:?}", o);
+            if o.is_null() {
+                return o;
+            }
+        }
+        if crate::flags::RC_EVACUATE_NURSERY && !immix.perform_cycle_collection() {
+            let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
+            if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
+                // Object is moved to a new location.
+                let new =
+                    object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
+                if new != o {
+                    unsafe {
+                        e.store(new);
+                    }
+                }
+                let r = crate::policy::immix::rc::inc(new);
+                debug_assert_ne!(r, Ok(0));
+                new
+            } else {
+                if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                    // Evacuate the object
+                    let new = object_forwarding::forward_object::<VM, _>(
+                        o,
+                        AllocationSemantics::Default,
+                        copy_context,
+                    );
+                    unsafe {
+                        e.store(new);
+                    }
+                    crate::policy::immix::rc::set(o, 0);
+                    if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+                        crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
+                        crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
+                    }
+                    Self::scan_nursery_object::<VM>(new, new_incs);
+                    new
+                } else {
+                    // Object is not moved.
+                    object_forwarding::clear_forwarding_bits::<VM>(o);
+                    o
+                }
+            }
+        } else {
+            if let Ok(0) = crate::policy::immix::rc::inc(o) {
+                Self::scan_nursery_object::<VM>(o, new_incs);
+                if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+                    crate::policy::immix::rc::mark_field_rc_data::<VM>(o);
+                }
+            }
+            o
+        }
+    }
+
+    pub const LATE_EVACUATION: bool = false;
+
+    #[inline(always)]
     fn flush_incs<VM: VMBinding>(worker: &mut GCWorker<VM>, new_incs: Vec<Address>) {
         if !new_incs.is_empty() {
             worker.local_work_bucket.add(ProcessIncs::new(new_incs));
@@ -936,6 +1010,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut new_incs = vec![];
         let mut roots = vec![];
+        let copy_context = unsafe { worker.local::<ImmixCopyContext<VM>>() };
         for e in &self.incs {
             if !self.roots {
                 debug_assert_eq!(
@@ -952,11 +1027,21 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
             let o: ObjectReference = unsafe { e.load() };
             if !self.roots {
                 Self::unlogged_and_unlock_edge::<VM>(*e);
-                Self::process_inc::<_, true>(*e, o, immix, &mut new_incs);
+            }
+            let o = if Self::LATE_EVACUATION {
+                Self::process_inc::<_, true>(*e, o, immix, &mut new_incs)
             } else {
-                let o = Self::process_inc::<_, false>(*e, o, immix, &mut new_incs);
+                Self::process_inc_and_evacuate::<_, _, true>(
+                    *e,
+                    o,
+                    immix,
+                    &mut new_incs,
+                    copy_context,
+                )
+            };
+            if self.roots && !o.is_null() {
                 if (!crate::flags::RC_EVACUATE_NURSERY || immix.perform_cycle_collection())
-                    && !o.is_null()
+                    || !Self::LATE_EVACUATION
                 {
                     roots.push(o);
                 }
@@ -1084,6 +1169,7 @@ pub struct RCEvacuateNursery {
 
 impl RCEvacuateNursery {
     pub fn new(slots: Vec<Address>, roots: bool) -> Self {
+        debug_assert!(ProcessIncs::LATE_EVACUATION);
         Self { slots, roots }
     }
 
