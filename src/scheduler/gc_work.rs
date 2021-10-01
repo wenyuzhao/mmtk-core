@@ -1088,12 +1088,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                         new_decs.push(o);
                     }
                 });
+                if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(*o);
+                }
                 #[cfg(feature = "sanity")]
                 unsafe {
                     o.to_address().store(0xdeadusize);
-                }
-                if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(*o);
                 }
                 immix
                     .immix_space
