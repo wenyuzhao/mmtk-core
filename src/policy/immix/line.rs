@@ -106,6 +106,20 @@ impl Line {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe { side_metadata::load(&Self::MARK_TABLE, self.start()) as u8 == state }
     }
+    #[inline(always)]
+    fn rc_dead_slow(&self) -> bool {
+        debug_assert!(!super::BLOCK_ONLY);
+        debug_assert!(super::REF_COUNT);
+        debug_assert!(Line::LOG_BYTES + RC_TABLE.log_num_of_bits >= 9);
+        for i in (0..Self::BYTES).step_by(8) {
+            let a = self.start() + i;
+            let c = super::rc::count(unsafe { a.to_object_reference() });
+            if c != 0 {
+                return false;
+            }
+        }
+        true
+    }
 
     #[inline(always)]
     pub fn rc_dead(&self) -> bool {
@@ -117,8 +131,14 @@ impl Line {
         let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
         for x in table {
             if *x != 0 {
+                if cfg!(debug_assertions) {
+                    debug_assert!(!self.rc_dead_slow());
+                }
                 return false;
             }
+        }
+        if cfg!(debug_assertions) {
+            debug_assert!(self.rc_dead_slow());
         }
         true
     }

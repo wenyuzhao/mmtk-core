@@ -310,7 +310,13 @@ pub trait Plan: 'static + Sync + Downcast {
     }
 
     fn get_pages_avail(&self) -> usize {
-        self.get_total_pages() - self.get_pages_reserved()
+        let a = self.get_total_pages();
+        let b = self.get_pages_reserved();
+        if a > b {
+            a - b
+        } else {
+            0
+        }
     }
 
     fn get_collection_reserve(&self) -> usize {

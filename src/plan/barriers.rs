@@ -390,6 +390,10 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             } else {
                 WorkBucketStage::RCProcessIncs
             };
+            if crate::flags::RC_EVACUATE_NURSERY {
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateNursery]
+                    .add(RCEvacuateNursery::new(incs.clone(), false));
+            }
             self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new(incs));
         }
         // Flush dec buffer

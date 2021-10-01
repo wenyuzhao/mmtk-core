@@ -159,7 +159,7 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
         if !sanity_checker.refs.contains(&object) {
             // FIXME steveb consider VM-specific integrity check on reference.
             if !object.is_sane() {
-                panic!("Invalid reference {:?}", object);
+                panic!("Invalid reference {:?} -> {:?}", slot, object);
             }
             assert!(
                 object.is_live(),

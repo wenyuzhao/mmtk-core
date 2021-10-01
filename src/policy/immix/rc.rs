@@ -1,9 +1,12 @@
 use atomic::Ordering;
 
-use crate::util::{
-    constants::LOG_MIN_OBJECT_SIZE,
-    metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
-    ObjectReference,
+use crate::{
+    util::{
+        constants::LOG_MIN_OBJECT_SIZE,
+        metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
+        ObjectReference,
+    },
+    vm::*,
 };
 
 use super::chunk::ChunkMap;
@@ -75,4 +78,26 @@ pub fn count(o: ObjectReference) -> usize {
 pub fn is_dead(o: ObjectReference) -> bool {
     let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst);
     v == 0
+}
+
+#[inline(always)]
+pub fn mark_field_rc_data<VM: VMBinding>(o: ObjectReference) {
+    debug_assert!(!crate::flags::BLOCK_ONLY);
+    debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
+    let size = VM::VMObjectModel::get_current_size(o);
+    for i in (0..size).step_by(8).skip(1) {
+        let a = o.to_address() + i;
+        crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 1);
+    }
+}
+
+#[inline(always)]
+pub fn unmark_field_rc_data<VM: VMBinding>(o: ObjectReference) {
+    debug_assert!(!crate::flags::BLOCK_ONLY);
+    debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
+    let size = VM::VMObjectModel::get_current_size(o);
+    for i in (0..size).step_by(8).skip(1) {
+        let a = o.to_address() + i;
+        crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 0);
+    }
 }

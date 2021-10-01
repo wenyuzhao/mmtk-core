@@ -176,7 +176,6 @@ impl Block {
         let byte =
             side_metadata::load_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), Ordering::SeqCst)
                 as u8;
-        debug_assert!(byte == 0 || byte == Self::DEFRAG_SOURCE_STATE);
         byte == Self::DEFRAG_SOURCE_STATE
     }
 
@@ -383,8 +382,9 @@ impl Block {
         debug_assert!(crate::flags::REF_COUNT);
         let live = !self.rc_dead();
         if !live {
+            println!("Release mature {:?}", self);
             space.release_block(*self, true);
-        } else {
+        } else if !crate::flags::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.
             if !self.get_state().is_reusable() {
