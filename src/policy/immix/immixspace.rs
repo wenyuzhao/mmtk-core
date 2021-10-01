@@ -69,6 +69,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             self.is_marked(object, self.mark_state) || ForwardingWord::is_forwarded::<VM>(object);
         if super::BLOCK_ONLY {
             x |= Block::containing::<VM>(object).get_state() == BlockState::Marked;
+        } else if super::REF_COUNT {
+            x |= super::rc::count(object) > 0;
         } else {
             x |= Line::containing::<VM>(object)
                 .is_marked(self.line_mark_state.load(Ordering::Relaxed));

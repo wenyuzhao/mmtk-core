@@ -382,7 +382,6 @@ impl Block {
         debug_assert!(crate::flags::REF_COUNT);
         let live = !self.rc_dead();
         if !live {
-            println!("Release mature {:?}", self);
             space.release_block(*self, true);
         } else if !crate::flags::BLOCK_ONLY {
             // See the caller of this function.
