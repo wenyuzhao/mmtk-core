@@ -1,6 +1,11 @@
+use atomic::Ordering;
+
 use super::block::Block;
 use super::IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET;
+use crate::plan::barriers::LOGGED_VALUE;
+use crate::policy::immix::rc::RC_TABLE;
 use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::store_metadata;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,
@@ -73,6 +78,12 @@ impl Line {
         self.0
     }
 
+    #[inline(always)]
+    pub fn end(&self) -> Address {
+        debug_assert!(!super::BLOCK_ONLY);
+        self.0 + Self::BYTES
+    }
+
     /// Get line index within its containing block.
     #[inline(always)]
     pub fn get_index_within_block(&self) -> usize {
@@ -94,6 +105,22 @@ impl Line {
     pub fn is_marked(&self, state: u8) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe { side_metadata::load(&Self::MARK_TABLE, self.start()) as u8 == state }
+    }
+
+    #[inline(always)]
+    pub fn rc_dead(&self) -> bool {
+        debug_assert!(!super::BLOCK_ONLY);
+        debug_assert!(super::REF_COUNT);
+        debug_assert!(Line::LOG_BYTES + RC_TABLE.log_num_of_bits >= 9);
+        let start = address_to_meta_address(&RC_TABLE, self.start()).to_ptr::<u8>();
+        let limit = address_to_meta_address(&RC_TABLE, self.end()).to_ptr::<u8>();
+        let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
+        for x in table {
+            if *x != 0 {
+                return false;
+            }
+        }
+        true
     }
 
     /// Mark all lines the object is spanned to.
@@ -121,11 +148,16 @@ impl Line {
     pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
-        bzero_metadata(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-            start,
-            size,
-        );
+        for i in (0..size).step_by(8) {
+            let a = start + i;
+            store_metadata::<VM>(
+                &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+                unsafe { a.to_object_reference() },
+                LOGGED_VALUE,
+                None,
+                Some(Ordering::SeqCst),
+            );
+        }
     }
 }
 

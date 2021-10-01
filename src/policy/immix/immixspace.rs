@@ -481,6 +481,55 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
+        if super::REF_COUNT {
+            self.rc_get_next_available_lines(search_start)
+        } else {
+            self.normal_get_next_available_lines(search_start)
+        }
+    }
+
+    /// Search holes by ref-counts instead of line marks
+    #[allow(clippy::assertions_on_constants)]
+    #[inline]
+    pub fn rc_get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
+        debug_assert!(!super::BLOCK_ONLY);
+        debug_assert!(super::REF_COUNT);
+        let block = search_start.block();
+        let mut cursor = search_start;
+        let limit = block.lines().end;
+        // Find start
+        while cursor < limit {
+            if cursor.rc_dead() {
+                break;
+            }
+            cursor = Line::forward(cursor, 1);
+        }
+        if cursor == limit {
+            return None;
+        }
+        let start = cursor;
+        // Find limit
+        while cursor < limit {
+            if !cursor.rc_dead() {
+                break;
+            }
+            // if crate::plan::immix::CONCURRENT_MARKING {
+            //     mark_data.set(cursor, current_state);
+            // }
+            cursor = Line::forward(cursor, 1);
+        }
+        let end = cursor;
+        if self.common.needs_log_bit {
+            Line::clear_log_table::<VM>(start..end);
+        }
+        Some(start..end)
+    }
+
+    #[allow(clippy::assertions_on_constants)]
+    #[inline]
+    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
+        debug_assert!(!super::BLOCK_ONLY);
+        debug_assert!(!super::REF_COUNT);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();

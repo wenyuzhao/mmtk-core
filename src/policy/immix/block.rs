@@ -384,6 +384,15 @@ impl Block {
         let live = !self.rc_dead();
         if !live {
             space.release_block(*self, true);
+        } else {
+            // See the caller of this function.
+            // At least one object is dead in the block.
+            if !self.get_state().is_reusable() {
+                self.set_state(BlockState::Reusable {
+                    unavailable_lines: 0 as _,
+                });
+                space.reusable_blocks.push(*self)
+            }
         }
         return !live;
     }
