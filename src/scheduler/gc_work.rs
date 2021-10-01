@@ -355,6 +355,9 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentWorkStart {
             // FIXME: Put this flag in correct place.
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
             // Resume mutators for concurrent marking.
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("concurrent marking start");
+            }
             <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
         } else {
             mmtk.scheduler
@@ -397,6 +400,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ConcurrentWorkEnd<E> {
             }
             // Stop mutators
             <E::VM as VMBinding>::VMCollection::stop_all_mutators2(worker.tls);
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("concurrent marking end");
+            }
             // Set the flag to false
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             // Scan and mark roots again
