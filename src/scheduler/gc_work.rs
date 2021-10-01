@@ -912,6 +912,9 @@ impl ProcessIncs {
             if crate::flags::RC_EVACUATE_NURSERY && !immix.perform_cycle_collection() {
                 Block::containing::<VM>(o).set_as_defrag_source(true);
             }
+            if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+                crate::policy::immix::rc::mark_field_rc_data::<VM>(o);
+            }
         }
         o
     }
@@ -1130,6 +1133,7 @@ impl RCEvacuateNursery {
             crate::policy::immix::rc::set(o, 0);
             crate::policy::immix::rc::set(new, c);
             if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+                crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
                 crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
             }
             Self::scan_nursery_object::<VM>(new, new_slots);
