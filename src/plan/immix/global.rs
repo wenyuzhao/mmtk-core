@@ -247,7 +247,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_end(&self) {
-        println!("GC pause ended {:?}", self.current_pause());
         if self.current_pause().unwrap() == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
