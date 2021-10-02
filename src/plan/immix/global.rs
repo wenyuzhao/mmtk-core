@@ -191,11 +191,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     scheduler, concurrent, in_defrag,
                 );
             } else {
-                self.schedule_immix_collection::<RCImmixProcessEdges<VM, { TraceKind::Fast }>>(
-                    scheduler, concurrent, in_defrag,
-                );
+                self.schedule_rc_collection(scheduler);
             }
         }
+
+        // Analysis routine that is ran. It is generally recommended to take advantage
+        // of the scheduling system we have in place for more performance
+        #[cfg(feature = "analysis")]
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
+        // Resume mutators
+        #[cfg(feature = "sanity")]
+        scheduler.work_buckets[WorkBucketStage::Final]
+            .add(ScheduleSanityGC::<Self, ImmixCopyContext<VM>>::new(self));
+
         scheduler.set_finalizer(Some(EndOfGC));
     }
 
@@ -320,19 +328,7 @@ impl<VM: VMBinding> Immix<VM> {
     ) {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
-            let mut roots = super::PREV_ROOTS.lock();
-            let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(roots.len());
-            for decs in roots.drain(..) {
-                let w =
-                    ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
-                work_packets.push(box w);
-            }
-            if crate::flags::LAZY_DECREMENTS {
-                debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
-                scheduler.postpone_all(work_packets);
-            } else {
-                scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);
-            }
+            Self::process_prev_roots(scheduler);
         }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -348,15 +344,39 @@ impl<VM: VMBinding> Immix<VM> {
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+    }
 
-        // Analysis routine that is ran. It is generally recommended to take advantage
-        // of the scheduling system we have in place for more performance
-        #[cfg(feature = "analysis")]
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
-        // Resume mutators
-        #[cfg(feature = "sanity")]
-        scheduler.work_buckets[WorkBucketStage::Final]
-            .add(ScheduleSanityGC::<Self, ImmixCopyContext<VM>>::new(self));
+    fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        debug_assert!(super::REF_COUNT);
+        type E<VM> = RCImmixProcessEdges<VM, { TraceKind::Fast }>;
+        // Before start yielding, wrap all the roots from the previous GC with work-packets.
+        Self::process_prev_roots(scheduler);
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E<VM>>::new());
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+    }
+
+    fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
+        debug_assert!(super::REF_COUNT);
+        let mut roots = super::PREV_ROOTS.lock();
+        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(roots.len());
+        for decs in roots.drain(..) {
+            let w = ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
+            work_packets.push(box w);
+        }
+        if crate::flags::LAZY_DECREMENTS {
+            debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
+            scheduler.postpone_all(work_packets);
+        } else {
+            scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);
+        }
     }
 
     pub fn perform_cycle_collection(&self) -> bool {

@@ -819,10 +819,12 @@ pub struct ProcessIncs {
 
 impl ProcessIncs {
     pub fn new(incs: Vec<Address>) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
         Self { incs, roots: false }
     }
 
     pub fn new_roots(incs: Vec<Address>) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
         Self { incs, roots: true }
     }
 
@@ -1071,6 +1073,7 @@ pub struct ProcessDecs {
 
 impl ProcessDecs {
     pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
         Self { decs, count_down }
     }
@@ -1128,7 +1131,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
     }
 }
 
-pub struct SweepBlocksAfterDecs {
+struct SweepBlocksAfterDecs {
     blocks: Vec<Block>,
 }
 
@@ -1175,6 +1178,7 @@ pub struct RCEvacuateNursery {
 
 impl RCEvacuateNursery {
     pub fn new(slots: Vec<Address>, roots: bool) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
         debug_assert!(ProcessIncs::LATE_EVACUATION);
         Self { slots, roots }
     }
