@@ -16,14 +16,12 @@ use crate::util::*;
 use crate::vm::*;
 use crate::*;
 use std::collections::HashSet;
-use std::lazy::SyncLazy;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Condvar;
 use std::time::SystemTime;
 
 pub struct ScheduleCollection(pub bool);
@@ -345,95 +343,6 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
 }
 
 impl<VM: VMBinding> CoordinatorWork<VM> for EndOfGC {}
-
-pub struct ConcurrentWorkStart;
-
-impl<VM: VMBinding> GCWork<VM> for ConcurrentWorkStart {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if worker.is_coordinator() {
-            *MONITOR.0.lock().unwrap() = MutatorRunningState::Running;
-            // FIXME: Put this flag in correct place.
-            crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
-            // Resume mutators for concurrent marking.
-            if crate::flags::LOG_PER_GC_STATE {
-                println!("concurrent marking start");
-            }
-            <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
-        } else {
-            mmtk.scheduler
-                .add_coordinator_work(ConcurrentWorkStart, worker);
-        }
-    }
-}
-
-impl<VM: VMBinding> CoordinatorWork<VM> for ConcurrentWorkStart {}
-
-pub struct ConcurrentWorkEnd<E: ProcessEdgesWork>(PhantomData<E>);
-
-impl<E: ProcessEdgesWork> ConcurrentWorkEnd<E> {
-    pub fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-#[derive(PartialEq, Eq)]
-enum MutatorRunningState {
-    Running,
-    Stopping,
-    Stopped,
-}
-static MONITOR: SyncLazy<(std::sync::Mutex<MutatorRunningState>, Condvar)> = SyncLazy::new(|| {
-    (
-        std::sync::Mutex::new(MutatorRunningState::Running),
-        Default::default(),
-    )
-});
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ConcurrentWorkEnd<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        if worker.is_coordinator() {
-            {
-                // Do nothing if not in concurrent phase
-                if !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst) {
-                    return;
-                }
-            }
-            // Stop mutators
-            <E::VM as VMBinding>::VMCollection::stop_all_mutators2(worker.tls);
-            if crate::flags::LOG_PER_GC_STATE {
-                println!("concurrent marking end");
-            }
-            // Set the flag to false
-            crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
-            // Scan and mark roots again
-            mmtk.plan.base().scanned_stacks.store(0, Ordering::SeqCst);
-            for mutator in <E::VM as VMBinding>::VMActivePlan::mutators() {
-                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                    .add(ScanStackRoot::<E>(mutator));
-            }
-            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(ScanVMSpecificRoots::<E>::new());
-            let (lock, cvar) = &*MONITOR;
-            let mut state = lock.lock().unwrap();
-            *state = MutatorRunningState::Stopped;
-            // We notify the condvar that the value has changed.
-            cvar.notify_all();
-        } else {
-            let (lock, cvar) = &*MONITOR;
-            let mut state = lock.lock().unwrap();
-            if *state == MutatorRunningState::Running {
-                *state = MutatorRunningState::Stopping;
-                mmtk.scheduler
-                    .add_coordinator_work(ConcurrentWorkEnd::<E>::new(), worker);
-            }
-            while *state != MutatorRunningState::Stopped {
-                state = cvar.wait(state).unwrap();
-            }
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> CoordinatorWork<E::VM> for ConcurrentWorkEnd<E> {}
 
 /// Delegate to the VM binding for reference processing.
 ///

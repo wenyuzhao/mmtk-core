@@ -134,11 +134,7 @@ pub enum WorkBucketStage {
     ScanGlobalRoots,
     Prepare,
     ProcessRoots,
-    PreClosure,
     Closure,
-    // TODO: We only support final reference at the moment. If we have references of multiple strengths,
-    // we may need more than one buckets for each reference strength.
-    PostClosure,
     RefClosure,
     RefForwarding,
     Release,
@@ -149,7 +145,7 @@ pub enum WorkBucketStage {
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
     pub const RCProcessIncs: Self = Self::ProcessRoots;
-    pub const RCEvacuateNursery: Self = Self::PreClosure;
-    pub const RCReleaseNursery: Self = Self::Closure;
-    pub const RCProcessDecs: Self = Self::PostClosure;
+    pub const RCEvacuateNursery: Self = Self::Closure;
+    pub const RCReleaseNursery: Self = Self::RefClosure;
+    pub const RCProcessDecs: Self = Self::RefForwarding;
 }

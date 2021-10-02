@@ -383,14 +383,9 @@ impl<VM: VMBinding> Immix<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
-        // if concurrent {
-        //     scheduler.work_buckets[WorkBucketStage::PreClosure].add(ConcurrentWorkStart);
-        //     scheduler.work_buckets[WorkBucketStage::PostClosure].add(ConcurrentWorkEnd::<E>::new());
-        // }
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E>::new());
-        // scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
@@ -407,7 +402,6 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E<VM>>::new());
-        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
