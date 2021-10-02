@@ -21,3 +21,13 @@ pub static mut CURRENT_CONC_DECS_COUNTER: Option<Arc<AtomicUsize>> = None;
 
 pub static PREV_ROOTS: Mutex<Vec<Vec<ObjectReference>>> = Mutex::new(Vec::new());
 pub static CURR_ROOTS: Mutex<Vec<Vec<ObjectReference>>> = Mutex::new(Vec::new());
+
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum Pause {
+    FullTraceFast,
+    FullTraceDefrag,
+    RefCount,
+    InitialMark,
+    FinalMark,
+}

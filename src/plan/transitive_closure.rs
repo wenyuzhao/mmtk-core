@@ -34,6 +34,7 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
     buffer: Vec<Address>,
     worker: &'a mut GCWorker<E::VM>,
+    edge_bucket: WorkBucketStage,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -41,11 +42,13 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         mmtk: &'static MMTK<E::VM>,
         buffer: Vec<Address>,
         worker: &'a mut GCWorker<E::VM>,
+        edge_bucket: WorkBucketStage,
     ) -> Self {
         Self {
             mmtk,
             buffer,
             worker,
+            edge_bucket,
         }
     }
 }
@@ -60,10 +63,8 @@ impl<'a, E: ProcessEdgesWork> TransitiveClosure for ObjectsClosure<'a, E> {
         if self.buffer.len() >= E::CAPACITY {
             let mut new_edges = Vec::new();
             mem::swap(&mut new_edges, &mut self.buffer);
-            self.worker.add_work(
-                WorkBucketStage::Closure,
-                E::new(new_edges, false, self.mmtk),
-            );
+            self.worker
+                .add_work(self.edge_bucket, E::new(new_edges, false, self.mmtk));
         }
     }
     fn process_node(&mut self, _object: ObjectReference) {
@@ -74,12 +75,13 @@ impl<'a, E: ProcessEdgesWork> TransitiveClosure for ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     #[inline(always)]
     fn drop(&mut self) {
+        if self.buffer.is_empty() {
+            return;
+        }
         let mut new_edges = Vec::new();
         mem::swap(&mut new_edges, &mut self.buffer);
-        self.worker.add_work(
-            WorkBucketStage::Closure,
-            E::new(new_edges, false, self.mmtk),
-        );
+        self.worker
+            .add_work(self.edge_bucket, E::new(new_edges, false, self.mmtk));
     }
 }
 

@@ -17,6 +17,9 @@ pub trait GCWork<VM: VMBinding>: 'static + Send {
         let stat = worker
             .stat
             .measure_work(TypeId::of::<Self>(), type_name::<Self>(), mmtk);
+        if crate::flags::LOG_WORK_PACKETS {
+            println!("> {}", type_name::<Self>());
+        }
         self.do_work(worker, mmtk);
         stat.end_of_work(&mut worker.stat);
     }

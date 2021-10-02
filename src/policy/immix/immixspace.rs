@@ -572,7 +572,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 /// A work packet to scan the fields of each objects and mark lines.
 pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     buffer: Vec<ObjectReference>,
-    #[allow(unused)]
     concurrent: bool,
     immix_space: &'static ImmixSpace<Edges::VM>,
 }
@@ -583,6 +582,9 @@ impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
         concurrent: bool,
         immix_space: &'static ImmixSpace<Edges::VM>,
     ) -> Self {
+        if concurrent {
+            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        }
         Self {
             buffer,
             concurrent,
@@ -594,7 +596,16 @@ impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjectsAndMarkLines");
-        let mut closure = ObjectsClosure::<E>::new(mmtk, vec![], worker);
+        let mut closure = ObjectsClosure::<E>::new(
+            mmtk,
+            vec![],
+            worker,
+            if self.concurrent {
+                WorkBucketStage::Unconstrained
+            } else {
+                WorkBucketStage::Closure
+            },
+        );
         for object in &self.buffer {
             <E::VM as VMBinding>::VMScanning::scan_object(
                 &mut closure,
@@ -607,6 +618,14 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
             {
                 self.immix_space.mark_lines(*object);
             }
+        }
+    }
+}
+
+impl<E: ProcessEdgesWork> Drop for ScanObjectsAndMarkLines<E> {
+    fn drop(&mut self) {
+        if self.concurrent {
+            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }

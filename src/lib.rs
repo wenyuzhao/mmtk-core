@@ -70,7 +70,10 @@ extern crate num_cpus;
 extern crate downcast_rs;
 
 mod mmtk;
-use std::{sync::atomic::AtomicBool, time::SystemTime};
+use std::{
+    sync::atomic::{AtomicBool, AtomicUsize},
+    time::SystemTime,
+};
 
 use crate::util::constants;
 pub(crate) use mmtk::MMAPPER;
@@ -93,6 +96,7 @@ pub use crate::plan::{
 };
 
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
+static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
@@ -112,8 +116,8 @@ pub mod flags {
     pub const EAGER_INCREMENTS: bool = false;
     pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
-    pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
-    pub const RC_EVACUATE_NURSERY: bool = false;
+    pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 10000;
+    pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
 
     // ---------- Barrier flags ---------- //
@@ -123,7 +127,8 @@ pub mod flags {
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
     pub const LOG_PER_GC_STATE: bool = true;
-    pub const LOG_STAGES: bool = false;
+    pub const LOG_STAGES: bool = true;
+    pub const LOG_WORK_PACKETS: bool = false;
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);
@@ -133,7 +138,6 @@ pub mod flags {
         validate!(CONCURRENT_MARKING => !REF_COUNT);
         validate!(REF_COUNT => !CONCURRENT_MARKING);
         validate!(REF_COUNT => !DEFRAG);
-        validate!(RC_EVACUATE_NURSERY => REF_COUNT);
         validate!(EAGER_INCREMENTS => !RC_EVACUATE_NURSERY);
         validate!(RC_EVACUATE_NURSERY => !EAGER_INCREMENTS);
         if BARRIER_MEASUREMENT {

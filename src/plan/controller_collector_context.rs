@@ -1,6 +1,6 @@
 //! The GC controller thread.
 
-use crate::scheduler::gc_work::{ConcurrentWorkEnd, ScheduleCollection};
+use crate::scheduler::gc_work::ScheduleCollection;
 use crate::scheduler::*;
 use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
@@ -8,8 +8,6 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 use std::sync::{Arc, Condvar, Mutex};
-
-use super::immix::gc_work::{ImmixProcessEdges, TraceKind};
 
 struct RequestSync {
     request_count: isize,
@@ -78,15 +76,6 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
             scheduler.wait_for_completion();
             debug!("[STWController: Worker threads complete!]");
         }
-    }
-
-    pub fn terminate_concurrent_gc(&self) {
-        println!("terminate_concurrent_gc");
-        let scheduler = self.scheduler.read().unwrap();
-        let scheduler = scheduler.as_ref().unwrap();
-        scheduler.work_buckets[WorkBucketStage::PreClosure].add(ConcurrentWorkEnd::<
-            ImmixProcessEdges<VM, { TraceKind::Fast }>,
-        >::new());
     }
 
     pub fn request(&self, concurrent: bool) {

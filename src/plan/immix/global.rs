@@ -1,6 +1,6 @@
 use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
-use super::CURRENT_CONC_DECS_COUNTER;
+use super::{Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
@@ -34,7 +34,7 @@ use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 use enum_map::EnumMap;
 
 pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
@@ -45,6 +45,7 @@ pub struct Immix<VM: VMBinding> {
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.
     pub perform_cycle_collection: AtomicBool,
+    current_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
     last_gc_was_cycle_collection: AtomicBool,
 }
@@ -99,11 +100,26 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     type VM = VM;
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
-            || (crate::flags::REF_COUNT
-                && crate::flags::LOCK_FREE_BLOCK_ALLOCATION
-                && self.immix_space.block_allocation.nursery_blocks()
-                    >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC)
+        // Spaces or heap full
+        if self.base().collection_required(self, space_full, space) {
+            return true;
+        }
+        // Concurrent tracking finished
+        if crate::flags::CONCURRENT_MARKING
+            && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+            && crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
+        {
+            return true;
+        }
+        // RC nursery full
+        if crate::flags::REF_COUNT
+            && crate::flags::LOCK_FREE_BLOCK_ALLOCATION
+            && self.immix_space.block_allocation.nursery_blocks()
+                >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
+        {
+            return true;
+        }
+        false
     }
 
     fn concurrent_collection_required(&self) -> bool {
@@ -111,6 +127,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !crate::plan::barriers::BARRIER_MEASUREMENT
             && self.base().gc_status() == GcStatus::NotInGC
             && self.get_pages_reserved() * 100 / 45 > self.get_total_pages()
+            && !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
@@ -152,47 +169,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool) {
-        self.base().set_collection_kind();
-        self.base().set_gc_status(GcStatus::GcPrepare);
-        let in_defrag = self.immix_space.decide_whether_to_defrag(
-            self.is_emergency_collection(),
-            true,
-            self.base().cur_collection_attempts.load(Ordering::SeqCst),
-            self.base().is_user_triggered_collection(),
-            self.base().options.full_heap_system_gc,
-        );
-        let cc_force_full = self.base().options.full_heap_system_gc;
-        let mut perform_cycle_collection = !super::REF_COUNT
-            || crate::plan::barriers::BARRIER_MEASUREMENT
-            || self
-                .next_gc_may_perform_cycle_collection
-                .load(Ordering::SeqCst);
-        perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
-            > 1)
-            || self.is_emergency_collection()
-            || cc_force_full;
-        self.perform_cycle_collection
-            .store(perform_cycle_collection, Ordering::SeqCst);
-        if crate::flags::LOG_PER_GC_STATE {
-            println!(
-                "[STW] RC={} emergency={} defrag={}",
-                !perform_cycle_collection,
-                self.is_emergency_collection(),
-                in_defrag
-            );
-        }
-        if in_defrag {
-            self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(
-                scheduler, concurrent, in_defrag,
-            );
-        } else {
-            if !super::REF_COUNT || perform_cycle_collection {
-                self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(
-                    scheduler, concurrent, in_defrag,
-                );
-            } else {
-                self.schedule_rc_collection(scheduler);
-            }
+        let pause = self.select_collection_kind(concurrent);
+        match pause {
+            Pause::FullTraceFast => self
+                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }, false>>(
+                    scheduler,
+                ),
+            Pause::FullTraceDefrag => self
+                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }, false>>(
+                    scheduler,
+                ),
+            Pause::RefCount => self.schedule_rc_collection(scheduler),
+            Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
+            Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
         }
 
         // Analysis routine that is ran. It is generally recommended to take advantage
@@ -254,9 +243,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let perform_cycle_collection = self.perform_cycle_collection.load(Ordering::SeqCst);
         self.last_gc_was_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
+        crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
     }
 
     fn gc_pause_end(&self) {
+        println!("GC pause ended {:?}", self.current_pause());
+        if self.current_pause().unwrap() == Pause::InitialMark {
+            crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
+        }
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
         self.next_gc_may_perform_cycle_collection
@@ -305,6 +299,7 @@ impl<VM: VMBinding> Immix<VM> {
             perform_cycle_collection: AtomicBool::new(false),
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
             last_gc_was_cycle_collection: AtomicBool::new(false),
+            current_pause: Atomic::new(None),
         };
 
         {
@@ -320,11 +315,66 @@ impl<VM: VMBinding> Immix<VM> {
         immix
     }
 
+    fn select_collection_kind(&self, concurrent: bool) -> Pause {
+        self.base().set_collection_kind();
+        self.base().set_gc_status(GcStatus::GcPrepare);
+        let in_defrag = self.immix_space.decide_whether_to_defrag(
+            self.is_emergency_collection(),
+            true,
+            self.base().cur_collection_attempts.load(Ordering::SeqCst),
+            self.base().is_user_triggered_collection(),
+            self.base().options.full_heap_system_gc,
+        );
+        let cc_force_full = self.base().options.full_heap_system_gc;
+        let mut perform_cycle_collection = !super::REF_COUNT
+            || crate::plan::barriers::BARRIER_MEASUREMENT
+            || self
+                .next_gc_may_perform_cycle_collection
+                .load(Ordering::SeqCst);
+        perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
+            > 1)
+            || self.is_emergency_collection()
+            || cc_force_full;
+        let concurrent_marking_in_progress = crate::IN_CONCURRENT_GC.load(Ordering::SeqCst);
+        perform_cycle_collection |= concurrent_marking_in_progress;
+        self.perform_cycle_collection
+            .store(perform_cycle_collection, Ordering::SeqCst);
+        let pause = if concurrent_marking_in_progress {
+            debug_assert!(crate::flags::CONCURRENT_MARKING);
+            debug_assert!(perform_cycle_collection);
+            debug_assert!(!concurrent);
+            Pause::FinalMark
+        } else if in_defrag {
+            debug_assert!(perform_cycle_collection);
+            debug_assert!(!concurrent);
+            Pause::FullTraceDefrag
+        } else if perform_cycle_collection && !concurrent {
+            Pause::FullTraceFast
+        } else if perform_cycle_collection && concurrent {
+            debug_assert!(crate::flags::CONCURRENT_MARKING);
+            Pause::InitialMark
+        } else if !perform_cycle_collection {
+            debug_assert!(!in_defrag);
+            debug_assert!(!concurrent);
+            debug_assert!(crate::flags::REF_COUNT);
+            Pause::RefCount
+        } else {
+            unreachable!()
+        };
+        self.current_pause.store(Some(pause), Ordering::SeqCst);
+        if crate::flags::LOG_PER_GC_STATE {
+            println!(
+                "[STW] {:?} emergency={}",
+                pause,
+                self.is_emergency_collection()
+            );
+        }
+        pause
+    }
+
     fn schedule_immix_collection<E: ProcessEdgesWork<VM = VM>>(
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
-        concurrent: bool,
-        _in_defrag: bool,
     ) {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
@@ -333,14 +383,14 @@ impl<VM: VMBinding> Immix<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
-        if concurrent {
-            scheduler.work_buckets[WorkBucketStage::PreClosure].add(ConcurrentWorkStart);
-            scheduler.work_buckets[WorkBucketStage::PostClosure].add(ConcurrentWorkEnd::<E>::new());
-        }
+        // if concurrent {
+        //     scheduler.work_buckets[WorkBucketStage::PreClosure].add(ConcurrentWorkStart);
+        //     scheduler.work_buckets[WorkBucketStage::PostClosure].add(ConcurrentWorkEnd::<E>::new());
+        // }
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E>::new());
-        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
+        // scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
@@ -359,6 +409,32 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
         // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+    }
+
+    fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false>;
+        if super::REF_COUNT {
+            unreachable!();
+            Self::process_prev_roots(scheduler);
+        }
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+    }
+
+    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false>;
+        if super::REF_COUNT {
+            unreachable!();
+            Self::process_prev_roots(scheduler);
+        }
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
+        // scheduler.work_buckets[WorkBucketStage::Prepare]
+        //     .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(ProcessWeakRefs::<E<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
@@ -385,5 +461,9 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub fn last_gc_was_cycle_collection(&self) -> bool {
         self.last_gc_was_cycle_collection.load(Ordering::SeqCst)
+    }
+
+    pub fn current_pause(&self) -> Option<Pause> {
+        self.current_pause.load(Ordering::SeqCst)
     }
 }

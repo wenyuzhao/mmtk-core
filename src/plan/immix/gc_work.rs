@@ -1,4 +1,7 @@
+use atomic::Ordering;
+
 use super::global::Immix;
+use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
@@ -89,7 +92,7 @@ pub enum TraceKind {
     Defrag,
 }
 
-pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
+pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> {
     // Use a static ref to the specific plan to avoid overhead from dynamic dispatch or
     // downcast for each traced object.
     plan: &'static Immix<VM>,
@@ -99,7 +102,9 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     root_slots: Vec<Address>,
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
+    ImmixProcessEdges<VM, KIND, CONCURRENT>
+{
     fn immix(&self) -> &'static Immix<VM> {
         self.plan
     }
@@ -132,7 +137,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesWork
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+{
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
         && if let TraceKind::Defrag = KIND {
@@ -144,6 +151,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
+        if CONCURRENT {
+            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        }
         Self {
             plan,
             base,
@@ -155,14 +165,44 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     #[cold]
     fn flush(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
         let mut new_nodes = vec![];
         mem::swap(&mut new_nodes, &mut self.nodes);
-        let scan_objects_work =
-            ScanObjectsAndMarkLines::<Self>::new(new_nodes, false, &self.immix().immix_space);
-        if Self::SCAN_OBJECTS_IMMEDIATELY {
-            self.worker().do_work(scan_objects_work);
+        if CONCURRENT {
+            // This packet is executed in concurrent.
+            debug_assert!(crate::flags::CONCURRENT_MARKING);
+            let w =
+                ScanObjectsAndMarkLines::<Self>::new(new_nodes, true, &self.immix().immix_space);
+            if Self::SCAN_OBJECTS_IMMEDIATELY {
+                self.worker().do_work(w);
+            } else {
+                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            }
         } else {
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure].add(scan_objects_work);
+            // This packet is executed within a GC pause.
+            // Further generated packets can either be postponed or run in the same pause.
+            if self.immix().current_pause() == Some(Pause::InitialMark) {
+                debug_assert!(crate::flags::CONCURRENT_MARKING);
+                let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, KIND, true>>::new(
+                    new_nodes,
+                    true,
+                    &self.immix().immix_space,
+                );
+                self.mmtk().scheduler.postpone(w);
+            } else {
+                let w = ScanObjectsAndMarkLines::<Self>::new(
+                    new_nodes,
+                    false,
+                    &self.immix().immix_space,
+                );
+                if Self::SCAN_OBJECTS_IMMEDIATELY {
+                    self.worker().do_work(w);
+                } else {
+                    self.worker().add_work(WorkBucketStage::Closure, w);
+                }
+            }
         }
     }
 
@@ -211,7 +251,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> Deref for ImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Deref
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+{
     type Target = ProcessEdgesBase<Self>;
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -219,10 +261,22 @@ impl<VM: VMBinding, const KIND: TraceKind> Deref for ImmixProcessEdges<VM, KIND>
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> DerefMut for ImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> DerefMut
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+{
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
+    }
+}
+
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Drop
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+{
+    fn drop(&mut self) {
+        if CONCURRENT {
+            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 

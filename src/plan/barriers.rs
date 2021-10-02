@@ -374,6 +374,9 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     fn flush(&mut self) {
         // Concurrent Marking: Flush satb buffer
         if crate::plan::immix::CONCURRENT_MARKING || crate::flags::BARRIER_MEASUREMENT {
+            if self.edges.is_empty() && self.nodes.is_empty() {
+                return;
+            }
             let mut edges = vec![];
             std::mem::swap(&mut edges, &mut self.edges);
             let mut nodes = vec![];
