@@ -723,18 +723,31 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
 
 pub struct ProcessIncs {
     incs: Vec<Address>,
+    new_incs: Vec<Address>,
     roots: bool,
 }
 
 impl ProcessIncs {
+    const CAPACITY: usize = 1024;
+
+    pub const LATE_EVACUATION: bool = false;
+
     pub fn new(incs: Vec<Address>) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
-        Self { incs, roots: false }
+        Self {
+            incs,
+            roots: false,
+            new_incs: vec![],
+        }
     }
 
     pub fn new_roots(incs: Vec<Address>) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
-        Self { incs, roots: true }
+        Self {
+            incs,
+            roots: true,
+            new_incs: vec![],
+        }
     }
 
     #[inline(always)]
@@ -788,45 +801,27 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn scan_nursery_object<VM: VMBinding>(o: ObjectReference, incs: &mut Vec<Address>) {
+    fn scan_nursery_object<VM: VMBinding>(
+        &mut self,
+        worker: &mut GCWorker<VM>,
+        o: ObjectReference,
+    ) {
         EdgeIterator::<VM>::iterate(o, |edge| {
-            debug_assert_eq!(
-                crate::plan::barriers::LOGGED_VALUE,
-                load_metadata::<VM>(
-                    &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-                    unsafe { edge.to_object_reference() },
-                    None,
-                    Some(Ordering::SeqCst),
-                ),
-                "Edge {:?}.{:?} is unlogged",
-                o,
-                edge
-            );
-            incs.push(edge);
+            debug_assert!(unsafe { edge.to_object_reference().is_logged::<VM>() });
+            self.recursive_inc(worker, edge);
         });
     }
 
     #[inline(always)]
-    fn process_inc<VM: VMBinding, const SPACE_CHECK: bool>(
-        _e: Address,
+    fn process_inc<VM: VMBinding>(
+        &mut self,
         o: ObjectReference,
-        immix: &Immix<VM>,
-        new_incs: &mut Vec<Address>,
+        worker: &mut GCWorker<VM>,
+        cycle_collection: bool,
     ) -> ObjectReference {
-        // Filter objects outside of RC space.
-        if SPACE_CHECK {
-            if !immix.immix_space.in_space(o) {
-                return o;
-            }
-        } else {
-            debug_assert!(o.is_null() || immix.immix_space.in_space(o), "{:?}", o);
-            if o.is_null() {
-                return o;
-            }
-        }
         if let Ok(0) = crate::policy::immix::rc::inc(o) {
-            Self::scan_nursery_object::<VM>(o, new_incs);
-            if crate::flags::RC_EVACUATE_NURSERY && !immix.perform_cycle_collection() {
+            self.scan_nursery_object::<VM>(worker, o);
+            if crate::flags::RC_EVACUATE_NURSERY && !cycle_collection {
                 Block::containing::<VM>(o).set_as_defrag_source(true);
             }
             if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
@@ -837,86 +832,71 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn process_inc_and_evacuate<
-        VM: VMBinding,
-        CC: CopyContext<VM = VM>,
-        const SPACE_CHECK: bool,
-    >(
+    fn process_inc_and_evacuate<VM: VMBinding, CC: CopyContext<VM = VM>>(
+        &mut self,
         e: Address,
         o: ObjectReference,
-        immix: &Immix<VM>,
-        new_incs: &mut Vec<Address>,
         copy_context: &mut CC,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        // Filter objects outside of RC space.
-        if SPACE_CHECK {
-            if !immix.immix_space.in_space(o) {
-                return o;
-            }
-        } else {
-            debug_assert!(o.is_null() || immix.immix_space.in_space(o), "{:?}", o);
-            if o.is_null() {
-                return o;
-            }
-        }
-        if crate::flags::RC_EVACUATE_NURSERY && !immix.perform_cycle_collection() {
-            let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
-            if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
-                // Object is moved to a new location.
-                let new =
-                    object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-                if new != o {
-                    unsafe {
-                        e.store(new);
-                    }
-                }
-                let r = crate::policy::immix::rc::inc(new);
-                debug_assert_ne!(r, Ok(0));
-                new
-            } else {
-                if let Ok(0) = crate::policy::immix::rc::inc(o) {
-                    // Evacuate the object
-                    let new = object_forwarding::forward_object::<VM, _>(
-                        o,
-                        AllocationSemantics::Default,
-                        copy_context,
-                    );
-                    unsafe {
-                        e.store(new);
-                    }
-                    crate::policy::immix::rc::set(o, 0);
-                    if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                        crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
-                        crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
-                    }
-                    Self::scan_nursery_object::<VM>(new, new_incs);
-                    new
-                } else {
-                    // Object is not moved.
-                    object_forwarding::clear_forwarding_bits::<VM>(o);
-                    o
+        let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
+        if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
+            // Object is moved to a new location.
+            let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
+            if new != o {
+                unsafe {
+                    e.store(new);
                 }
             }
+            let r = crate::policy::immix::rc::inc(new);
+            debug_assert_ne!(r, Ok(0));
+            new
         } else {
             if let Ok(0) = crate::policy::immix::rc::inc(o) {
-                Self::scan_nursery_object::<VM>(o, new_incs);
-                if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                    crate::policy::immix::rc::mark_field_rc_data::<VM>(o);
+                // Evacuate the object
+                let new = object_forwarding::forward_object::<VM, _>(
+                    o,
+                    AllocationSemantics::Default,
+                    copy_context,
+                );
+                unsafe {
+                    e.store(new);
                 }
+                crate::policy::immix::rc::set(o, 0);
+                if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
+                    crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
+                }
+                self.scan_nursery_object::<VM>(worker, new);
+                new
+            } else {
+                // Object is not moved.
+                object_forwarding::clear_forwarding_bits::<VM>(o);
+                o
             }
-            o
         }
     }
 
-    pub const LATE_EVACUATION: bool = false;
-
-    #[inline(always)]
-    fn flush_incs<VM: VMBinding>(worker: &mut GCWorker<VM>, new_incs: Vec<Address>) {
-        if !new_incs.is_empty() {
+    #[inline]
+    fn flush<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+        if !self.new_incs.is_empty() {
+            let mut new_incs = vec![];
+            std::mem::swap(&mut new_incs, &mut self.new_incs);
             worker.add_work(
                 WorkBucketStage::rc_process_incs_stage(),
                 ProcessIncs::new(new_incs),
             );
+        }
+    }
+
+    #[inline(always)]
+    fn recursive_inc<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, e: Address) {
+        if self.new_incs.is_empty() {
+            self.new_incs.reserve(Self::CAPACITY);
+        }
+        self.new_incs.push(e);
+        if self.new_incs.len() > Self::CAPACITY {
+            self.flush(worker)
         }
     }
 }
@@ -928,41 +908,34 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
             return;
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let mut new_incs = vec![];
+        let tracing = immix.perform_cycle_collection();
+        let rc_evacuation = crate::flags::RC_EVACUATE_NURSERY && !tracing;
         let mut roots = vec![];
-        let copy_context = unsafe { worker.local::<ImmixCopyContext<VM>>() };
-        for e in &self.incs {
+        let copy_context =
+            unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
+        let mut incs = vec![];
+        std::mem::swap(&mut incs, &mut self.incs);
+        for e in incs {
             if !self.roots {
-                debug_assert_eq!(
-                    crate::plan::barriers::LOGGED_VALUE,
-                    load_metadata::<VM>(
-                        &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-                        unsafe { e.to_object_reference() },
-                        None,
-                        Some(Ordering::SeqCst),
-                    )
-                );
-                self.lock_edge::<VM>(*e);
+                debug_assert!(unsafe { e.to_object_reference().is_logged::<VM>() });
+                self.lock_edge::<VM>(e);
             }
             let o: ObjectReference = unsafe { e.load() };
             if !self.roots {
-                Self::unlogged_and_unlock_edge::<VM>(*e);
+                Self::unlogged_and_unlock_edge::<VM>(e);
+                if !immix.immix_space.in_space(o) {
+                    continue;
+                }
             }
-            let o = if Self::LATE_EVACUATION {
-                Self::process_inc::<_, true>(*e, o, immix, &mut new_incs)
+            debug_assert!(!o.is_null());
+            let o = if Self::LATE_EVACUATION || !rc_evacuation {
+                self.process_inc(o, worker, tracing)
             } else {
-                Self::process_inc_and_evacuate::<_, _, true>(
-                    *e,
-                    o,
-                    immix,
-                    &mut new_incs,
-                    copy_context,
-                )
+                debug_assert!(crate::flags::RC_EVACUATE_NURSERY && !tracing);
+                self.process_inc_and_evacuate(e, o, copy_context, worker)
             };
-            if self.roots && !o.is_null() {
-                if (!crate::flags::RC_EVACUATE_NURSERY || immix.perform_cycle_collection())
-                    || !Self::LATE_EVACUATION
-                {
+            if self.roots {
+                if !crate::flags::RC_EVACUATE_NURSERY || !Self::LATE_EVACUATION || tracing {
                     roots.push(o);
                 }
             }
@@ -974,43 +947,75 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
         } else {
             debug_assert!(roots.is_empty());
         }
-        Self::flush_incs(worker, new_incs);
+        self.flush(worker);
     }
 }
 
 pub struct ProcessDecs {
     decs: Vec<ObjectReference>,
     count_down: Arc<AtomicUsize>,
+    new_decs: Vec<ObjectReference>,
 }
 
 impl ProcessDecs {
+    const CAPACITY: usize = 1024;
+
     pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
-        Self { decs, count_down }
+        Self {
+            decs,
+            count_down,
+            new_decs: vec![],
+        }
+    }
+
+    #[inline]
+    pub fn flush<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+        if !self.new_decs.is_empty() {
+            let mut new_decs = vec![];
+            std::mem::swap(&mut new_decs, &mut self.new_decs);
+            worker.add_work(
+                WorkBucketStage::Unconstrained,
+                ProcessDecs::new(new_decs, self.count_down.clone()),
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub fn recursive_dec<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, o: ObjectReference) {
+        if self.new_decs.is_empty() {
+            self.new_decs.reserve(Self::CAPACITY);
+        }
+        self.new_decs.push(o);
+        if self.new_decs.len() > Self::CAPACITY {
+            self.flush(worker)
+        }
     }
 }
+
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        let mut new_decs = vec![];
-        for o in &self.decs {
-            if !immix.immix_space.in_space(*o) {
+        let mut decs = vec![];
+        std::mem::swap(&mut decs, &mut self.decs);
+        for o in decs {
+            if !immix.immix_space.in_space(o) {
                 continue;
             }
-            if let Ok(1) = crate::policy::immix::rc::dec(*o) {
-                debug_assert_eq!(crate::policy::immix::rc::count(*o), 0);
+            if let Ok(1) = crate::policy::immix::rc::dec(o) {
+                debug_assert_eq!(crate::policy::immix::rc::count(o), 0);
                 // Recursively decrease field ref counts
-                EdgeIterator::<VM>::iterate(*o, |edge| {
+                EdgeIterator::<VM>::iterate(o, |edge| {
                     let o = unsafe { edge.load::<ObjectReference>() };
                     if !o.is_null() {
-                        new_decs.push(o);
+                        self.recursive_dec(worker, o);
                     }
                 });
                 if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(*o);
+                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
                 }
                 #[cfg(feature = "sanity")]
                 unsafe {
@@ -1020,14 +1025,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                     .immix_space
                     .possibly_dead_mature_blocks
                     .lock()
-                    .insert(Block::containing::<VM>(*o));
+                    .insert(Block::containing::<VM>(o));
             }
         }
-        if !new_decs.is_empty() {
-            worker
-                .local_work_bucket
-                .add(ProcessDecs::new(new_decs, self.count_down.clone()));
-        }
+        self.flush(worker);
 
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -1152,9 +1153,10 @@ impl RCEvacuateNursery {
     #[inline(always)]
     fn flush<VM: VMBinding>(worker: &mut GCWorker<VM>, new_slots: Vec<Address>) {
         if !new_slots.is_empty() {
-            worker
-                .local_work_bucket
-                .add(RCEvacuateNursery::new(new_slots, false));
+            worker.add_work(
+                WorkBucketStage::RCEvacuateNursery,
+                RCEvacuateNursery::new(new_slots, false),
+            );
         }
     }
 }

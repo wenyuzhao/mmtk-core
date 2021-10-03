@@ -5,7 +5,11 @@ use std::ops::*;
 use std::sync::atomic::Ordering;
 
 use crate::mmtk::{MMAPPER, SFT_MAP};
+use crate::plan::barriers::LOGGED_VALUE;
 use crate::util::heap::layout::mmapper::Mmapper;
+use crate::vm::*;
+
+use super::metadata::load_metadata;
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -506,6 +510,17 @@ impl ObjectReference {
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
         SFT_MAP.get(Address(self.0)).is_sane()
+    }
+
+    #[inline(always)]
+    pub fn is_logged<VM: VMBinding>(self) -> bool {
+        debug_assert!(!self.is_null());
+        load_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            self,
+            None,
+            Some(Ordering::SeqCst),
+        ) == LOGGED_VALUE
     }
 }
 
