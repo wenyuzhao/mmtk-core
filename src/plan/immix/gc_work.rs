@@ -8,9 +8,10 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
+use crate::util::metadata::load_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
-use crate::vm::VMBinding;
+use crate::vm::*;
 use crate::MMTK;
 use crate::{
     plan::CopyContext,
@@ -57,10 +58,30 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         &mut self,
         obj: ObjectReference,
         _tib: Address,
-        _bytes: usize,
+        bytes: usize,
         _semantics: crate::AllocationSemantics,
     ) {
         object_forwarding::clear_forwarding_bits::<VM>(obj);
+        if cfg!(debug_assertions) {
+            if crate::flags::REF_COUNT {
+                for i in (0..bytes).step_by(8) {
+                    let a = obj.to_address() + i;
+                    assert_eq!(
+                        0,
+                        crate::policy::immix::rc::count(unsafe { a.to_object_reference() })
+                    );
+                    assert_eq!(
+                        0,
+                        load_metadata::<VM>(
+                            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+                            unsafe { a.to_object_reference() },
+                            None,
+                            Some(Ordering::SeqCst),
+                        )
+                    );
+                }
+            }
+        }
         if crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY {
             crate::policy::immix::rc::set(obj, 1);
         }
@@ -239,11 +260,7 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
             }
         }
         if self.roots && !self.root_slots.is_empty() {
-            let bucket = if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
-                WorkBucketStage::Unconstrained
-            } else {
-                WorkBucketStage::RCProcessIncs
-            };
+            let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.root_slots);
             self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new_roots(roots));
@@ -347,11 +364,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             self.process_edge(self.edges[i])
         }
         if !self.roots.is_empty() {
-            let bucket = if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
-                WorkBucketStage::Unconstrained
-            } else {
-                WorkBucketStage::RCProcessIncs
-            };
+            let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.roots);
             if crate::flags::RC_EVACUATE_NURSERY && ProcessIncs::LATE_EVACUATION {

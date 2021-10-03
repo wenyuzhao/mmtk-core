@@ -380,6 +380,7 @@ impl Block {
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
+        debug_assert_ne!(self.get_state(), BlockState::Unallocated);
         let live = !self.rc_dead();
         if !live {
             space.release_block(*self, true);
@@ -388,8 +389,9 @@ impl Block {
             // At least one object is dead in the block.
             if !self.get_state().is_reusable() {
                 self.set_state(BlockState::Reusable {
-                    unavailable_lines: 0 as _,
+                    unavailable_lines: 1 as _,
                 });
+                debug_assert!(self.get_state().is_reusable());
                 space.reusable_blocks.push(*self)
             }
         }

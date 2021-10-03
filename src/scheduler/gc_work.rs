@@ -913,7 +913,10 @@ impl ProcessIncs {
     #[inline(always)]
     fn flush_incs<VM: VMBinding>(worker: &mut GCWorker<VM>, new_incs: Vec<Address>) {
         if !new_incs.is_empty() {
-            worker.local_work_bucket.add(ProcessIncs::new(new_incs));
+            worker.add_work(
+                WorkBucketStage::rc_process_incs_stage(),
+                ProcessIncs::new(new_incs),
+            );
         }
     }
 }

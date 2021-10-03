@@ -175,6 +175,14 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 if copy && block.is_defrag_source() {
                     continue;
                 }
+                if crate::flags::REF_COUNT {
+                    // Blocks in the `reusable_blocks` queue can be released after some RC collections.
+                    // These blocks can either have `Unallocated` state, or be reallocated again.
+                    // Skip these cases and only return the truly reusable blocks.
+                    if !block.get_state().is_reusable() {
+                        continue;
+                    }
+                }
                 block.init(copy);
                 return Some(block);
             } else {
