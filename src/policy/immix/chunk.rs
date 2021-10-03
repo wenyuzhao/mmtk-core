@@ -295,7 +295,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
                 continue;
             }
             // FIXME: Don't need this when doing RC
-            if crate::flags::CONCURRENT_MARKING && self.needs_log_bit {
+            if crate::flags::BARRIER_MEASUREMENT
+                || (crate::flags::CONCURRENT_MARKING && self.needs_log_bit)
+            {
                 block.initialize_log_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.
