@@ -56,7 +56,7 @@ pub fn get_active_barrier() -> BarrierSelector {
     unsafe {
         *V.get_or_insert_with(|| {
             if crate::plan::barriers::BARRIER_MEASUREMENT {
-                match env::var("IX_BARRIER") {
+                match env::var("BARRIER") {
                     Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
                     Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
                     Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
