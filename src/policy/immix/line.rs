@@ -111,7 +111,7 @@ impl Line {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
         debug_assert!(Line::LOG_BYTES + RC_TABLE.log_num_of_bits >= 9);
-        for i in (0..Self::BYTES).step_by(8) {
+        for i in (0..Self::BYTES).step_by(super::rc::MIN_OBJECT_SIZE) {
             let a = self.start() + i;
             let c = super::rc::count(unsafe { a.to_object_reference() });
             if c != 0 {
@@ -166,6 +166,7 @@ impl Line {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
+        // FIXME: Performance
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
         for i in (0..size).step_by(8) {

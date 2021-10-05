@@ -9,6 +9,7 @@ use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ScanObjectsAndMarkLines;
+use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
@@ -825,7 +826,9 @@ impl ProcessIncs {
                 Block::containing::<VM>(o).set_as_defrag_source(true);
             }
             if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                crate::policy::immix::rc::mark_field_rc_data::<VM>(o);
+                if o.get_size::<VM>() > Line::BYTES {
+                    crate::policy::immix::rc::mark_striddle_object::<VM>(o);
+                }
             }
         }
         o
@@ -864,8 +867,7 @@ impl ProcessIncs {
                 }
                 crate::policy::immix::rc::set(o, 0);
                 if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
-                    crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
+                    crate::policy::immix::rc::unmark_striddle_object::<VM>(o);
                 }
                 self.scan_nursery_object::<VM>(worker, new);
                 new
@@ -1015,7 +1017,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                     }
                 });
                 if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                    crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
+                    crate::policy::immix::rc::unmark_striddle_object::<VM>(o);
                 }
                 #[cfg(feature = "sanity")]
                 unsafe {
@@ -1141,10 +1143,11 @@ impl RCEvacuateNursery {
             let c = crate::policy::immix::rc::count(o);
             crate::policy::immix::rc::set(o, 0);
             crate::policy::immix::rc::set(new, c);
-            if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
-                crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
-                crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
-            }
+            unimplemented!();
+            // if crate::flags::RC_EVACUATE_NURSERY && !crate::flags::BLOCK_ONLY {
+            //     crate::policy::immix::rc::unmark_field_rc_data::<VM>(o);
+            //     crate::policy::immix::rc::mark_field_rc_data::<VM>(new);
+            // }
             Self::scan_nursery_object::<VM>(new, new_slots);
             new
         }

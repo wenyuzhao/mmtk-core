@@ -506,7 +506,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             cursor = Line::forward(cursor, 1);
         }
-        if cursor == limit {
+        // Conservatively skip the next line
+        cursor = Line::forward(cursor, 1);
+        if cursor >= limit {
             return None;
         }
         let start = cursor;

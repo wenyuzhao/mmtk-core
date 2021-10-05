@@ -1,18 +1,17 @@
 use atomic::Ordering;
 
-use crate::{
-    util::{
-        constants::LOG_MIN_OBJECT_SIZE,
+use crate::{policy::immix::line::Line, util::{
         metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
         ObjectReference,
-    },
-    vm::*,
-};
+    }, vm::*};
 
 use super::chunk::ChunkMap;
 
 const LOG_REF_COUNT_BITS: usize = 2;
 const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 1;
+
+pub const LOG_MIN_OBJECT_SIZE: usize = 3;
+pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
 pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
     is_global: false,
@@ -81,23 +80,41 @@ pub fn is_dead(o: ObjectReference) -> bool {
 }
 
 #[inline(always)]
-pub fn mark_field_rc_data<VM: VMBinding>(o: ObjectReference) {
+pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
     debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
-    for i in (0..size).step_by(8).skip(1) {
+    debug_assert!(size > Line::BYTES);
+    // FIXME: Only store one marker per line is enough.
+    for i in (0..size).step_by(MIN_OBJECT_SIZE).skip(1) {
         let a = o.to_address() + i;
         crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 1);
     }
 }
 
 #[inline(always)]
-pub fn unmark_field_rc_data<VM: VMBinding>(o: ObjectReference) {
+pub fn unmark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
     debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
-    for i in (0..size).step_by(8).skip(1) {
-        let a = o.to_address() + i;
-        crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 0);
+    if size > Line::BYTES {
+        for i in (0..size).step_by(MIN_OBJECT_SIZE).skip(1) {
+            let a = o.to_address() + i;
+            crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 0);
+        }
     }
 }
+
+#[inline(always)]
+pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
+    debug_assert!(crate::flags::REF_COUNT);
+    let size = VM::VMObjectModel::get_current_size(o);
+    for i in (0..size).step_by(MIN_OBJECT_SIZE) {
+        let a = o.to_address() + i;
+        assert_eq!(
+            0,
+            crate::policy::immix::rc::count(unsafe { a.to_object_reference() })
+        );
+    }
+}
+

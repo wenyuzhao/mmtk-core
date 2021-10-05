@@ -522,6 +522,12 @@ impl ObjectReference {
             Some(Ordering::SeqCst),
         ) == LOGGED_VALUE
     }
+
+    #[inline(always)]
+    pub fn get_size<VM: VMBinding>(self) -> usize {
+        debug_assert!(!self.is_null());
+        VM::VMObjectModel::get_current_size(self)
+    }
 }
 
 /// allows print Address as upper-case hex value
