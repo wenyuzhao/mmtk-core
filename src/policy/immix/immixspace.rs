@@ -522,6 +522,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // }
             cursor = Line::forward(cursor, 1);
         }
+        if cursor == start {
+            return None;
+        }
         let end = cursor;
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);

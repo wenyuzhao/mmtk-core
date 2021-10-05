@@ -1,16 +1,22 @@
+use std::iter::Step;
+
 use atomic::Ordering;
 
-use crate::{policy::immix::line::Line, util::{
+use crate::{
+    policy::immix::line::Line,
+    util::{
         metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
         ObjectReference,
-    }, vm::*};
+    },
+    vm::*,
+};
 
 use super::chunk::ChunkMap;
 
-const LOG_REF_COUNT_BITS: usize = 2;
+pub const LOG_REF_COUNT_BITS: usize = 2;
 const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 1;
 
-pub const LOG_MIN_OBJECT_SIZE: usize = 3;
+pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
 pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
@@ -85,10 +91,10 @@ pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
     debug_assert!(size > Line::BYTES);
-    // FIXME: Only store one marker per line is enough.
-    for i in (0..size).step_by(MIN_OBJECT_SIZE).skip(1) {
-        let a = o.to_address() + i;
-        crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 1);
+    let start_line = Line::forward(Line::containing::<VM>(o), 1);
+    let end_line = Line::from(Line::align(o.to_address() + size));
+    for line in start_line..end_line {
+        crate::policy::immix::rc::set(unsafe { line.start().to_object_reference() }, 1);
     }
 }
 
@@ -98,9 +104,10 @@ pub fn unmark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
     if size > Line::BYTES {
-        for i in (0..size).step_by(MIN_OBJECT_SIZE).skip(1) {
-            let a = o.to_address() + i;
-            crate::policy::immix::rc::set(unsafe { a.to_object_reference() }, 0);
+        let start_line = Line::forward(Line::containing::<VM>(o), 1);
+        let end_line = Line::from(Line::align(o.to_address() + size));
+        for line in start_line..end_line {
+            crate::policy::immix::rc::set(unsafe { line.start().to_object_reference() }, 0);
         }
     }
 }
@@ -117,4 +124,3 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
         );
     }
 }
-

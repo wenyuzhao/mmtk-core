@@ -125,9 +125,15 @@ impl Line {
     pub fn rc_dead(&self) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
-        debug_assert!(Line::LOG_BYTES + RC_TABLE.log_num_of_bits >= 9);
-        let start = address_to_meta_address(&RC_TABLE, self.start()).to_ptr::<u8>();
-        let limit = address_to_meta_address(&RC_TABLE, self.end()).to_ptr::<u8>();
+        type UInt = u64;
+        const LOG_BITS_IN_UINT: usize =
+            (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
+        debug_assert!(
+            Self::LOG_BYTES - super::rc::LOG_MIN_OBJECT_SIZE + super::rc::LOG_REF_COUNT_BITS
+                >= LOG_BITS_IN_UINT
+        );
+        let start = address_to_meta_address(&RC_TABLE, self.start()).to_ptr::<UInt>();
+        let limit = address_to_meta_address(&RC_TABLE, self.end()).to_ptr::<UInt>();
         let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
         for x in table {
             if *x != 0 {
