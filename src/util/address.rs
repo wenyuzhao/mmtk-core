@@ -5,8 +5,10 @@ use std::ops::*;
 use std::sync::atomic::Ordering;
 
 use crate::mmtk::{MMAPPER, SFT_MAP};
+use crate::plan::barriers::LOCKED_VALUE;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::util::heap::layout::mmapper::Mmapper;
+use crate::util::metadata::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
 use super::metadata::load_metadata;
@@ -337,6 +339,17 @@ impl Address {
         } else {
             MMAPPER.is_mapped_address(self)
         }
+    }
+
+    #[inline(always)]
+    pub fn is_locked<VM: VMBinding>(self) -> bool {
+        debug_assert!(!self.is_zero());
+        load_metadata::<VM>(
+            &RC_LOCK_BIT_SPEC,
+            unsafe { self.to_object_reference() },
+            None,
+            Some(Ordering::SeqCst),
+        ) == LOCKED_VALUE
     }
 }
 

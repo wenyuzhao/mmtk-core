@@ -198,7 +198,29 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn unlogged_and_unlock_edge<VM: VMBinding>(edge: Address) {
+    fn unlock_edge<VM: VMBinding>(edge: Address) {
+        store_metadata::<VM>(
+            &RC_LOCK_BIT_SPEC,
+            unsafe { edge.to_object_reference() },
+            UNLOCKED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
+
+    #[inline(always)]
+    fn unlog_edge<VM: VMBinding>(edge: Address) {
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { edge.to_object_reference() },
+            UNLOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
+
+    #[inline(always)]
+    fn unlog_and_unlock_edge<VM: VMBinding>(edge: Address) {
         store_metadata::<VM>(
             &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
@@ -246,6 +268,9 @@ impl ProcessIncs {
 
     #[inline(always)]
     fn add_remset<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, e: Address) {
+        if !self.roots {
+            debug_assert!(!e.is_locked::<VM>());
+        }
         if self.remset.is_empty() {
             self.remset.reserve(Self::CAPACITY);
         }
@@ -264,6 +289,7 @@ impl ProcessIncs {
         cycle_collection: bool,
     ) -> (ObjectReference, bool) {
         if crate::flags::RC_EVACUATE_NURSERY && !cycle_collection && self::count(o) == 0 {
+            debug_assert!(self.roots);
             self.add_remset(worker, e);
             return (o, true);
         }
@@ -368,8 +394,21 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
             }
             let o: ObjectReference = unsafe { e.load() };
             if !self.roots {
-                Self::unlogged_and_unlock_edge::<VM>(e);
-                if !immix.immix_space.in_space(o) {
+                let in_refcount_space = immix.immix_space.in_space(o);
+                if Self::DELAYED_EVACUATION
+                    && crate::flags::RC_EVACUATE_NURSERY
+                    && !tracing
+                    && in_refcount_space
+                    && self::count(o) == 0
+                {
+                    // Don't unlog this edge. Delay the increment to the STW time.
+                    Self::unlock_edge::<VM>(e);
+                    self.add_remset(worker, e);
+                    continue;
+                } else {
+                    Self::unlog_and_unlock_edge::<VM>(e);
+                }
+                if !in_refcount_space {
                     continue;
                 }
             }
@@ -385,9 +424,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
             };
             if self.roots {
                 if !crate::flags::RC_EVACUATE_NURSERY || tracing || !movable {
-                    // if !movable {
-                    roots.push(o);
-                    // }
+                    if !movable {
+                        roots.push(o);
+                    }
                 }
             }
         }
@@ -568,6 +607,7 @@ impl RCEvacuateNursery {
 
     #[inline(always)]
     pub fn add_new_slot<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, e: Address) {
+        debug_assert!(!e.is_locked::<VM>());
         if self.new_slots.is_empty() {
             self.new_slots.reserve(Self::CAPACITY);
         }
@@ -656,7 +696,8 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery {
             let o: ObjectReference = unsafe { e.load() };
             let o = self.forward::<_, _>(e, o, immix, copy_context, worker);
             if !self.roots {
-                ProcessIncs::unlogged_and_unlock_edge::<VM>(e);
+                debug_assert!(!e.is_locked::<VM>());
+                ProcessIncs::unlog_edge::<VM>(e);
             } else {
                 if !o.is_null() {
                     roots.push(o);
