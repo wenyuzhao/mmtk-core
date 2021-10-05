@@ -9,7 +9,6 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
-use crate::util::metadata::load_metadata;
 use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
@@ -80,8 +79,8 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
                 crate::policy::immix::rc::mark_striddle_object::<VM>(obj);
             }
         }
-        if crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY {
-            crate::policy::immix::rc::set(obj, 1);
+        if crate::flags::REF_COUNT {
+            debug_assert_eq!(crate::policy::immix::rc::count(obj), 0);
         }
     }
 }
@@ -365,10 +364,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.roots);
-            if crate::flags::RC_EVACUATE_NURSERY && ProcessIncs::LATE_EVACUATION {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateNursery]
-                    .add(RCEvacuateNursery::new(roots.clone(), true));
-            }
             self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new_roots(roots));
         }
     }
