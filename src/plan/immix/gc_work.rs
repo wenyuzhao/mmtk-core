@@ -3,8 +3,8 @@ use atomic::Ordering;
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::immix::line::Line;
+use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -67,7 +67,11 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
             if crate::flags::REF_COUNT {
                 crate::policy::immix::rc::assert_zero_ref_count::<VM>(obj);
                 for i in (0..bytes).step_by(8) {
-                    debug_assert!(unsafe { (obj.to_address() + i).to_object_reference().is_logged::<VM>() });
+                    debug_assert!(unsafe {
+                        (obj.to_address() + i)
+                            .to_object_reference()
+                            .is_logged::<VM>()
+                    });
                 }
             }
         }
