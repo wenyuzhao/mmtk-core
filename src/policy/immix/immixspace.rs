@@ -3,7 +3,6 @@ use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::RC_TABLE;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
@@ -70,7 +69,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if super::BLOCK_ONLY {
             x |= Block::containing::<VM>(object).get_state() == BlockState::Marked;
         } else if super::REF_COUNT {
-            x |= super::rc::count(object) > 0;
+            x |= crate::util::rc::count(object) > 0;
         } else {
             x |= Line::containing::<VM>(object)
                 .is_marked(self.line_mark_state.load(Ordering::Relaxed));
@@ -137,7 +136,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             ]
         });
         if crate::plan::immix::REF_COUNT {
-            x.push(RC_TABLE);
+            x.push(crate::util::rc::RC_TABLE);
         }
         x
     }

@@ -19,6 +19,7 @@ pub mod conversions;
 pub mod memory;
 /// Opaque pointers used in MMTk, e.g. VMThread.
 pub mod opaque_pointer;
+pub mod rc;
 /// Reference processing implementation.
 pub mod reference_processor;
 

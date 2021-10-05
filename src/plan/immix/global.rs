@@ -20,6 +20,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::RC_LOCK_BIT_SPEC;
 use crate::util::options::UnsafeOptionsWrapper;
+use crate::util::rc::ProcessDecs;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};

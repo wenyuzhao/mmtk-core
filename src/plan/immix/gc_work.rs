@@ -10,6 +10,7 @@ use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
 use crate::util::object_forwarding;
+use crate::util::rc::ProcessIncs;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
@@ -64,7 +65,7 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         object_forwarding::clear_forwarding_bits::<VM>(obj);
         if cfg!(debug_assertions) {
             if crate::flags::REF_COUNT {
-                crate::policy::immix::rc::assert_zero_ref_count::<VM>(obj);
+                crate::util::rc::assert_zero_ref_count::<VM>(obj);
                 for i in (0..bytes).step_by(8) {
                     debug_assert!(unsafe {
                         (obj.to_address() + i)
@@ -76,11 +77,11 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         }
         if crate::flags::REF_COUNT && !crate::flags::BLOCK_ONLY {
             if bytes > Line::BYTES {
-                crate::policy::immix::rc::mark_striddle_object::<VM>(obj);
+                crate::util::rc::mark_striddle_object::<VM>(obj);
             }
         }
         if crate::flags::REF_COUNT {
-            debug_assert_eq!(crate::policy::immix::rc::count(obj), 0);
+            debug_assert_eq!(crate::util::rc::count(obj), 0);
         }
     }
 }

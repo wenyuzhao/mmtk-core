@@ -1,7 +1,6 @@
 use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::Line;
-use super::rc::RC_TABLE;
 use super::{ImmixSpace, IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET};
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::immix::REF_COUNT;
@@ -237,7 +236,7 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
-        bzero_metadata(&RC_TABLE, self.start(), Block::BYTES);
+        bzero_metadata(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
@@ -277,11 +276,14 @@ impl Block {
         const LOG_BITS_IN_UINT: usize =
             (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
         debug_assert!(
-            Self::LOG_BYTES - super::rc::LOG_MIN_OBJECT_SIZE + super::rc::LOG_REF_COUNT_BITS
+            Self::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
+                + crate::util::rc::LOG_REF_COUNT_BITS
                 >= LOG_BITS_IN_UINT
         );
-        let start = address_to_meta_address(&RC_TABLE, self.start()).to_ptr::<UInt>();
-        let limit = address_to_meta_address(&RC_TABLE, self.end()).to_ptr::<UInt>();
+        let start =
+            address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()).to_ptr::<UInt>();
+        let limit =
+            address_to_meta_address(&crate::util::rc::RC_TABLE, self.end()).to_ptr::<UInt>();
         let rc_table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
         for x in rc_table {
             if *x != 0 {

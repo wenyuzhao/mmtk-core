@@ -3,7 +3,6 @@ use atomic::Ordering;
 use super::block::Block;
 use super::IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET;
 use crate::plan::barriers::LOGGED_VALUE;
-use crate::policy::immix::rc::RC_TABLE;
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
 use crate::{
@@ -106,20 +105,6 @@ impl Line {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe { side_metadata::load(&Self::MARK_TABLE, self.start()) as u8 == state }
     }
-    #[inline(always)]
-    fn rc_dead_slow(&self) -> bool {
-        debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(super::REF_COUNT);
-        debug_assert!(Line::LOG_BYTES + RC_TABLE.log_num_of_bits >= 9);
-        for i in (0..Self::BYTES).step_by(super::rc::MIN_OBJECT_SIZE) {
-            let a = self.start() + i;
-            let c = super::rc::count(unsafe { a.to_object_reference() });
-            if c != 0 {
-                return false;
-            }
-        }
-        true
-    }
 
     #[inline(always)]
     pub fn rc_dead(&self) -> bool {
@@ -129,22 +114,19 @@ impl Line {
         const LOG_BITS_IN_UINT: usize =
             (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
         debug_assert!(
-            Self::LOG_BYTES - super::rc::LOG_MIN_OBJECT_SIZE + super::rc::LOG_REF_COUNT_BITS
+            Self::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
+                + crate::util::rc::LOG_REF_COUNT_BITS
                 >= LOG_BITS_IN_UINT
         );
-        let start = address_to_meta_address(&RC_TABLE, self.start()).to_ptr::<UInt>();
-        let limit = address_to_meta_address(&RC_TABLE, self.end()).to_ptr::<UInt>();
+        let start =
+            address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()).to_ptr::<UInt>();
+        let limit =
+            address_to_meta_address(&crate::util::rc::RC_TABLE, self.end()).to_ptr::<UInt>();
         let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
         for x in table {
             if *x != 0 {
-                if cfg!(debug_assertions) {
-                    debug_assert!(!self.rc_dead_slow());
-                }
                 return false;
             }
-        }
-        if cfg!(debug_assertions) {
-            debug_assert!(self.rc_dead_slow());
         }
         true
     }

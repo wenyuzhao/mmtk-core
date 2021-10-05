@@ -4,7 +4,6 @@ pub mod chunk;
 pub mod defrag;
 pub mod immixspace;
 pub mod line;
-pub mod rc;
 
 pub use immixspace::*;
 
@@ -14,7 +13,7 @@ use crate::{
     util::metadata::side_metadata::{SideMetadataOffset, SideMetadataSpec},
 };
 
-use self::{chunk::ChunkMap, rc::RC_TABLE};
+use self::chunk::ChunkMap;
 
 use super::mallocspace::metadata::ACTIVE_PAGE_METADATA_SPEC;
 
@@ -45,7 +44,7 @@ const IMMIX_LOCAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 
 /// Immix's Last local side metadata. Used to calculate `LOCAL_SIDE_METADATA_VM_BASE_OFFSET`.
 pub const LAST_LOCAL_SIDE_METADATA: SideMetadataSpec = if crate::plan::immix::REF_COUNT {
-    RC_TABLE
+    crate::util::rc::RC_TABLE
 } else {
     ChunkMap::ALLOC_TABLE
 };
