@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     iter::Step,
     sync::{atomic::AtomicUsize, Arc},
 };
@@ -13,7 +12,7 @@ use crate::{
         EdgeIterator,
     },
     policy::{
-        immix::{block::Block, chunk::ChunkMap, line::Line},
+        immix::{block::Block, chunk::ChunkMap, line::Line, ImmixSpace},
         space::Space,
     },
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
@@ -33,7 +32,7 @@ use super::{
 pub const LOG_REF_COUNT_BITS: usize = 2;
 const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 1;
 
-pub const LOG_MIN_OBJECT_SIZE: usize = 4;
+pub const LOG_MIN_OBJECT_SIZE: usize = 3;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
 pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
@@ -42,6 +41,23 @@ pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
     log_num_of_bits: LOG_REF_COUNT_BITS,
     log_min_obj_size: LOG_MIN_OBJECT_SIZE as _,
 };
+
+#[inline(always)]
+pub fn fetch_update(
+    o: ObjectReference,
+    f: impl FnMut(usize) -> Option<usize>,
+) -> Result<usize, usize> {
+    debug_assert!(!o.is_null());
+    let r = side_metadata::fetch_update(
+        &RC_TABLE,
+        o.to_address(),
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+        f,
+    );
+    // println!("fetch_update {:?} {:?} -> {:?}", o, r, count(o));
+    r
+}
 
 #[inline(always)]
 pub fn inc(o: ObjectReference) -> Result<usize, usize> {
@@ -478,9 +494,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                 debug_assert_eq!(self::count(o), 0);
                 // Recursively decrease field ref counts
                 EdgeIterator::<VM>::iterate(o, |edge| {
-                    let o = unsafe { edge.load::<ObjectReference>() };
-                    if !o.is_null() {
-                        self.recursive_dec(o);
+                    let x = unsafe { edge.load::<ObjectReference>() };
+                    if !x.is_null() && immix.immix_space.in_space(x) {
+                        self.recursive_dec(x);
                     }
                 });
                 if !crate::flags::BLOCK_ONLY {
@@ -501,25 +517,19 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            // Finished processing all the decrements. Start releasing blocks.
-            let mut blocks = immix.immix_space.possibly_dead_mature_blocks.lock();
-            if immix.last_gc_was_cycle_collection() {
-                // Blocks are swept in `Release` stage.
-                blocks.clear();
-            } else {
-                SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &mut blocks);
-            }
+            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix.immix_space);
         }
     }
 }
 
-struct SweepBlocksAfterDecs {
+pub struct SweepBlocksAfterDecs {
     blocks: Vec<Block>,
 }
 
 impl SweepBlocksAfterDecs {
-    fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, blocks_set: &mut HashSet<Block>) {
+    pub fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, immix_space: &ImmixSpace<VM>) {
         // This may happen either within a pause, or in concurrent.
+        let mut blocks_set = immix_space.possibly_dead_mature_blocks.lock();
         let size = blocks_set.len();
         let num_bins = scheduler.num_workers() << 1;
         let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };

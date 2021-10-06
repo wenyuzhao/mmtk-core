@@ -202,20 +202,26 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        if !super::REF_COUNT || self.perform_cycle_collection() {
+        if !super::REF_COUNT {
             self.common.prepare(tls, true);
             self.immix_space.prepare();
         } else {
-            self.immix_space.prepare_rc();
+            if self.perform_cycle_collection() {
+                self.common.prepare(tls, true);
+            }
+            self.immix_space.prepare_rc(self.perform_cycle_collection());
         }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        if !super::REF_COUNT || self.perform_cycle_collection() {
+        if !super::REF_COUNT {
             self.common.release(tls, true);
             self.immix_space.release();
         } else {
-            self.immix_space.release_rc();
+            if self.perform_cycle_collection() {
+                self.common.release(tls, true);
+            }
+            self.immix_space.release_rc(self.perform_cycle_collection());
         }
         if super::REF_COUNT {
             let mut curr_roots = super::CURR_ROOTS.lock();
@@ -386,8 +392,13 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        if super::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease]
+                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Release]
+                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        }
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {

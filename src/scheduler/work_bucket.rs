@@ -147,7 +147,8 @@ impl WorkBucketStage {
     pub const RCProcessIncs: Self = Self::ProcessRoots;
     pub const RCEvacuateNursery: Self = Self::Closure;
     pub const RCReleaseNursery: Self = Self::RefClosure;
-    pub const RCProcessDecs: Self = Self::RefForwarding;
+    pub const RCFullHeapRelease: Self = Self::RefForwarding;
+    pub const RCProcessDecs: Self = Self::Release;
 
     pub const fn rc_process_incs_stage() -> Self {
         if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {

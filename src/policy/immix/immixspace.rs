@@ -64,8 +64,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        let mut x =
-            self.is_marked(object, self.mark_state) || ForwardingWord::is_forwarded::<VM>(object);
+        let mut x = self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
         if super::BLOCK_ONLY {
             x |= Block::containing::<VM>(object).get_state() == BlockState::Marked;
         } else if super::REF_COUNT {
@@ -223,19 +222,38 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare_rc(&mut self) {
+    pub fn prepare_rc(&mut self, cycle_collection: bool) {
         let space = unsafe { &mut *(self as *mut Self) };
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery]
             .add(ReleaseRCNursery { space });
+        if cycle_collection {
+            // Update mark_state
+            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
+                self.mark_state = Self::MARKED_STATE;
+            } else {
+                // For header metadata, we use cyclic mark bits.
+                unimplemented!("cyclic mark bits is not supported at the moment");
+            }
+            let space = unsafe { &mut *(self as *mut Self) };
+            let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
+            self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+        }
     }
 
-    pub fn release_rc(&mut self) {
-        if super::DEFRAG {
-            unimplemented!()
+    pub fn release_rc(&mut self, cycle_collection: bool) {
+        if cycle_collection {
+            let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
+            if crate::flags::LAZY_DECREMENTS {
+                self.scheduler().postpone_all(work_packets);
+            } else {
+                self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
+                    .bulk_add(work_packets);
+            }
         }
     }
 
     pub fn prepare(&mut self) {
+        debug_assert!(!crate::flags::REF_COUNT);
         self.block_allocation.reset();
         // Update mark_state
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -272,6 +290,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn release(&mut self) {
+        debug_assert!(!crate::flags::REF_COUNT);
         self.block_allocation.reset();
         // Update line_unavail_state for hole searching afte this GC.
         if !super::BLOCK_ONLY {
@@ -391,7 +410,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status)
-        } else if self.is_marked(object, self.mark_state) {
+        } else if self.is_marked(object) {
             ForwardingWord::clear_forwarding_bits::<VM>(object);
             object
         } else {
@@ -456,14 +475,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Check if an object is marked.
     #[inline(always)]
-    fn is_marked(&self, object: ObjectReference, mark_state: u8) -> bool {
+    pub fn is_marked(&self, object: ObjectReference) -> bool {
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             object,
             None,
             Some(Ordering::SeqCst),
         ) as u8;
-        old_value == mark_state
+        old_value == self.mark_state
     }
 
     /// Check if an object is pinned.

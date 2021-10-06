@@ -1,5 +1,6 @@
 use atomic_traits::Atomic;
 use std::fmt;
+use std::iter::Step;
 use std::mem;
 use std::ops::*;
 use std::sync::atomic::Ordering;
@@ -389,6 +390,25 @@ impl fmt::Display for Address {
 impl fmt::Debug for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:#x}", self.0)
+    }
+}
+
+impl Step for Address {
+    #[inline(always)]
+    #[allow(clippy::assertions_on_constants)]
+    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+        if start > end {
+            return None;
+        }
+        Some(*end - *start)
+    }
+    #[inline(always)]
+    fn forward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start + count)
+    }
+    #[inline(always)]
+    fn backward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start - count)
     }
 }
 

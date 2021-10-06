@@ -1,10 +1,12 @@
 use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
-use crate::plan::immix::Immix;
+use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
+use crate::util::rc::{ProcessDecs, SweepBlocksAfterDecs};
+use crate::util::ObjectReference;
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},
@@ -12,6 +14,8 @@ use crate::{
     MMTK,
 };
 use spin::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
 /// Data structure to reference a MMTk 4 MB chunk.
@@ -55,6 +59,12 @@ impl Chunk {
         let start = Block::from(Block::align(self.0));
         let end = Block::from(start.start() + (Self::BLOCKS << Block::LOG_BYTES));
         start..end
+    }
+
+    #[inline(always)]
+    pub fn committed_blocks(&self) -> impl Iterator<Item = Block> {
+        self.blocks()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
     }
 
     /// Sweep this chunk.
@@ -261,6 +271,15 @@ impl ChunkMap {
             nursery_only: rc,
         })
     }
+
+    /// Generate chunk sweep work packets.
+    pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        self.generate_tasks(|chunk| {
+            box SweepDeadCyclesChunk::new(chunk, unsafe {
+                CURRENT_CONC_DECS_COUNTER.clone().unwrap()
+            })
+        })
+    }
 }
 
 /// A work packet to prepare each block for GC.
@@ -336,6 +355,94 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             if super::DEFRAG {
                 self.space.defrag.add_completed_mark_histogram(histogram);
             }
+        }
+    }
+}
+
+/// Chunk sweeping work packet.
+struct SweepDeadCyclesChunk<VM: VMBinding> {
+    chunk: Chunk,
+    decs: Vec<ObjectReference>,
+    worker: *mut GCWorker<VM>,
+    /// Counter for the number of remaining `ProcessDecs` packages
+    count_down: Arc<AtomicUsize>,
+}
+
+unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
+
+impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
+    const CAPACITY: usize = 1024;
+
+    #[inline(always)]
+    fn worker(&self) -> &mut GCWorker<VM> {
+        unsafe { &mut *self.worker }
+    }
+
+    pub fn new(chunk: Chunk, count_down: Arc<AtomicUsize>) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
+        count_down.fetch_add(1, Ordering::SeqCst);
+        Self {
+            chunk,
+            decs: vec![],
+            worker: std::ptr::null_mut(),
+            count_down,
+        }
+    }
+
+    #[inline(always)]
+    pub fn add_dec(&mut self, o: ObjectReference) {
+        if self.decs.is_empty() {
+            self.decs.reserve(Self::CAPACITY);
+        }
+        self.decs.push(o);
+        if self.decs.len() > Self::CAPACITY {
+            self.flush()
+        }
+    }
+
+    #[inline]
+    pub fn flush(&mut self) {
+        if !self.decs.is_empty() {
+            let mut decs = vec![];
+            std::mem::swap(&mut decs, &mut self.decs);
+            self.worker().add_work(
+                WorkBucketStage::Unconstrained,
+                ProcessDecs::<VM>::new(decs, self.count_down.clone()),
+            );
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
+    #[inline]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
+        let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
+        for block in self.chunk.committed_blocks() {
+            // FIXME: Performance
+            for o in (block.start()..block.end())
+                .step_by(crate::util::rc::MIN_OBJECT_SIZE)
+                .map(|a| unsafe { a.to_object_reference() })
+            {
+                if crate::util::rc::count(o) != 0 && !immix_space.is_marked(o) {
+                    // Attempt to set refcount to 1
+                    let r = crate::util::rc::fetch_update(o, |c| {
+                        if c <= 1 {
+                            return None; // already dead
+                        }
+                        Some(1)
+                    });
+                    if r == Err(1) || r.is_ok() {
+                        // This is a dead object in a dead cycle. Perform cyclic decrements
+                        self.add_dec(o)
+                    }
+                }
+            }
+        }
+        self.flush();
+        // If all decs are finished, start sweeping blocks
+        if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
+            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix_space);
         }
     }
 }

@@ -108,16 +108,16 @@ pub mod flags {
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = false;
+    pub const BLOCK_ONLY: bool = true;
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
+    pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
-    pub const RC_EVACUATE_NURSERY: bool = true;
+    pub const RC_EVACUATE_NURSERY: bool = false;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
 
     // ---------- Barrier flags ---------- //
