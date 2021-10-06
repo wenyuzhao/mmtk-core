@@ -105,7 +105,7 @@ pub fn is_dead(o: ObjectReference) -> bool {
 #[inline(always)]
 pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
-    debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
+    // debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
     debug_assert!(size > Line::BYTES);
     let start_line = Line::forward(Line::containing::<VM>(o), 1);
@@ -118,7 +118,7 @@ pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
 #[inline(always)]
 pub fn unmark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
-    debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
+    // debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
     if size > Line::BYTES {
         let start_line = Line::forward(Line::containing::<VM>(o), 1);
@@ -174,6 +174,7 @@ impl ProcessIncs {
     #[inline(always)]
     fn lock_edge<VM: VMBinding>(&self, edge: Address) {
         loop {
+            std::hint::spin_loop();
             let v = load_metadata::<VM>(
                 &RC_LOCK_BIT_SPEC,
                 unsafe { edge.to_object_reference() },
@@ -220,30 +221,6 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn unlog_and_unlock_edge<VM: VMBinding>(edge: Address) {
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            UNLOGGED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
-        store_metadata::<VM>(
-            &RC_LOCK_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            UNLOCKED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
-    }
-
-    #[inline(always)]
-    fn should_skip_inc_processing<VM: VMBinding>(_mmtk: &'static MMTK<VM>) -> bool {
-        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        false
-    }
-
-    #[inline(always)]
     fn scan_nursery_object<VM: VMBinding>(
         &mut self,
         worker: &mut GCWorker<VM>,
@@ -284,16 +261,9 @@ impl ProcessIncs {
         worker: &mut GCWorker<VM>,
         cycle_collection: bool,
     ) -> ObjectReference {
-        if cfg!(debug_assertions)
-            && crate::flags::RC_EVACUATE_NURSERY
-            && !cycle_collection
-            && self::count(o) == 0
-        {
-            unreachable!()
-        }
         if let Ok(0) = self::inc(o) {
             self.scan_nursery_object::<VM>(worker, o);
-            debug_assert!(!Self::DELAYED_EVACUATION);
+            debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
             debug_assert!(!crate::flags::RC_EVACUATE_NURSERY || cycle_collection);
             if !crate::flags::BLOCK_ONLY {
                 // Young object is not evacuated. Mark as striddle in place if required.
@@ -314,6 +284,7 @@ impl ProcessIncs {
         copy_context: &mut CC,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
+        debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
         debug_assert!(!Self::DELAYED_EVACUATION);
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
@@ -390,8 +361,9 @@ impl ProcessIncs {
         }
         // Load mature object and unlog edge
         if !self.roots {
-            debug_assert!(unsafe { e.to_object_reference().is_logged::<VM>() });
+            debug_assert!(unsafe { e.to_object_reference().is_logged::<VM>() }, "{:?} {:?}", e, Block::from(Block::align(e)));
             self.lock_edge::<VM>(e);
+            debug_assert!(unsafe { e.to_object_reference().is_logged::<VM>() }, "{:?} {:?}", e, Block::from(Block::align(e)));
             Self::unlog_edge::<VM>(e);
         }
         let o: ObjectReference = unsafe { e.load() };
@@ -405,9 +377,7 @@ impl ProcessIncs {
 impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if Self::should_skip_inc_processing(mmtk) {
-            return;
-        }
+        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let tracing = immix.perform_cycle_collection();
         let rc_evacuation = crate::flags::RC_EVACUATE_NURSERY && !tracing;
@@ -424,6 +394,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
+            debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if Self::DELAYED_EVACUATION || !rc_evacuation {
                 self.process_inc(o, worker, tracing)
             } else {
