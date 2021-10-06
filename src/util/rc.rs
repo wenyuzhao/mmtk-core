@@ -406,14 +406,26 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
     }
 }
 
-pub struct ProcessDecs {
+pub struct ProcessDecs<VM: VMBinding> {
+    /// Decrements to process
     decs: Vec<ObjectReference>,
+    /// Counter for the number of remaining `ProcessDecs` packages
     count_down: Arc<AtomicUsize>,
+    /// Recursively generated new decrements
     new_decs: Vec<ObjectReference>,
+    /// Execution worker
+    worker: *mut GCWorker<VM>,
 }
 
-impl ProcessDecs {
+unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
+
+impl<VM: VMBinding> ProcessDecs<VM> {
     const CAPACITY: usize = 1024;
+
+    #[inline(always)]
+    fn worker(&self) -> &mut GCWorker<VM> {
+        unsafe { &mut *self.worker }
+    }
 
     pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
@@ -422,36 +434,38 @@ impl ProcessDecs {
             decs,
             count_down,
             new_decs: vec![],
+            worker: std::ptr::null_mut(),
         }
     }
 
     #[inline(always)]
-    pub fn recursive_dec<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, o: ObjectReference) {
+    pub fn recursive_dec(&mut self, o: ObjectReference) {
         if self.new_decs.is_empty() {
             self.new_decs.reserve(Self::CAPACITY);
         }
         self.new_decs.push(o);
         if self.new_decs.len() > Self::CAPACITY {
-            self.flush(worker)
+            self.flush()
         }
     }
 
     #[inline]
-    pub fn flush<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+    pub fn flush(&mut self) {
         if !self.new_decs.is_empty() {
             let mut new_decs = vec![];
             std::mem::swap(&mut new_decs, &mut self.new_decs);
-            worker.add_work(
+            self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::new(new_decs, self.count_down.clone()),
+                ProcessDecs::<VM>::new(new_decs, self.count_down.clone()),
             );
         }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
+impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut decs = vec![];
@@ -466,7 +480,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                 EdgeIterator::<VM>::iterate(o, |edge| {
                     let o = unsafe { edge.load::<ObjectReference>() };
                     if !o.is_null() {
-                        self.recursive_dec(worker, o);
+                        self.recursive_dec(o);
                     }
                 });
                 if !crate::flags::BLOCK_ONLY {
@@ -483,7 +497,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs {
                     .insert(Block::containing::<VM>(o));
             }
         }
-        self.flush(worker);
+        self.flush();
 
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
