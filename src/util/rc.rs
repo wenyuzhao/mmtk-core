@@ -26,7 +26,7 @@ use crate::{
 };
 
 use super::{
-    metadata::{compare_exchange_metadata, load_metadata, store_metadata, RC_LOCK_BIT_SPEC},
+    metadata::{compare_exchange_metadata, store_metadata, RC_LOCK_BIT_SPEC},
     Address,
 };
 
@@ -139,50 +139,48 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
     }
 }
 
-pub struct ProcessIncs {
+pub struct ProcessIncs<VM: VMBinding> {
+    /// Increments to process
     incs: Vec<Address>,
+    /// Recursively generated new increments
     new_incs: Vec<Address>,
+    /// Delayed nursery increments
     remset: Vec<Address>,
+    /// Root edges?
     roots: bool,
+    /// Execution worker
+    worker: *mut GCWorker<VM>,
 }
 
-impl ProcessIncs {
-    const CAPACITY: usize = 1024;
+unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
 
+impl<VM: VMBinding> ProcessIncs<VM> {
+    const CAPACITY: usize = 1024;
     pub const DELAYED_EVACUATION: bool = true;
 
-    pub fn new(incs: Vec<Address>) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
-        Self {
-            incs,
-            roots: false,
-            new_incs: vec![],
-            remset: vec![],
-        }
-    }
-
-    pub fn new_roots(incs: Vec<Address>) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
-        Self {
-            incs,
-            roots: true,
-            new_incs: vec![],
-            remset: vec![],
-        }
-    }
-
     #[inline(always)]
-    fn lock_edge<VM: VMBinding>(&self, edge: Address) {
+    fn worker(&self) -> &mut GCWorker<VM> {
+        unsafe { &mut *self.worker }
+    }
+
+    pub fn new(incs: Vec<Address>, roots: bool) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
+        Self {
+            incs,
+            roots,
+            new_incs: vec![],
+            remset: vec![],
+            worker: std::ptr::null_mut(),
+        }
+    }
+
+    /// Spin and lock edge
+    #[inline(always)]
+    fn lock_edge(&self, edge: Address) {
         loop {
             std::hint::spin_loop();
-            let v = load_metadata::<VM>(
-                &RC_LOCK_BIT_SPEC,
-                unsafe { edge.to_object_reference() },
-                None,
-                Some(Ordering::SeqCst),
-            );
-            if v == LOCKED_VALUE {
-                continue;
+            if edge.is_locked::<VM>() {
+                continue; // Spin
             }
             if compare_exchange_metadata::<VM>(
                 &RC_LOCK_BIT_SPEC,
@@ -191,7 +189,7 @@ impl ProcessIncs {
                 LOCKED_VALUE,
                 None,
                 Ordering::SeqCst,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
             ) {
                 return;
             }
@@ -199,7 +197,7 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn unlock_edge<VM: VMBinding>(edge: Address) {
+    fn unlock_edge(edge: Address) {
         store_metadata::<VM>(
             &RC_LOCK_BIT_SPEC,
             unsafe { edge.to_object_reference() },
@@ -210,7 +208,7 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn unlog_edge<VM: VMBinding>(edge: Address) {
+    fn unlog_edge(edge: Address) {
         store_metadata::<VM>(
             &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
@@ -221,48 +219,39 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn scan_nursery_object<VM: VMBinding>(
-        &mut self,
-        worker: &mut GCWorker<VM>,
-        o: ObjectReference,
-    ) {
+    fn scan_nursery_object(&mut self, o: ObjectReference) {
         EdgeIterator::<VM>::iterate(o, |edge| {
-            debug_assert!(unsafe { edge.to_object_reference().is_logged::<VM>() });
-            self.recursive_inc(worker, edge);
+            debug_assert!(edge.is_logged::<VM>());
+            self.recursive_inc(edge);
         });
     }
 
     #[inline(always)]
-    fn recursive_inc<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, e: Address) {
+    fn recursive_inc(&mut self, e: Address) {
         if self.new_incs.is_empty() {
             self.new_incs.reserve(Self::CAPACITY);
         }
         self.new_incs.push(e);
         if self.new_incs.len() > Self::CAPACITY {
-            self.flush(worker)
+            self.flush()
         }
     }
 
     #[inline(always)]
-    fn add_remset<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, e: Address) {
+    fn add_remset(&mut self, e: Address) {
         if self.remset.is_empty() {
             self.remset.reserve(Self::CAPACITY);
         }
         self.remset.push(e);
         if self.remset.len() > Self::CAPACITY {
-            self.flush(worker)
+            self.flush()
         }
     }
 
     #[inline(always)]
-    fn process_inc<VM: VMBinding>(
-        &mut self,
-        o: ObjectReference,
-        worker: &mut GCWorker<VM>,
-        cycle_collection: bool,
-    ) -> ObjectReference {
+    fn process_inc(&mut self, o: ObjectReference, cycle_collection: bool) -> ObjectReference {
         if let Ok(0) = self::inc(o) {
-            self.scan_nursery_object::<VM>(worker, o);
+            self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
             debug_assert!(!crate::flags::RC_EVACUATE_NURSERY || cycle_collection);
             if !crate::flags::BLOCK_ONLY {
@@ -277,12 +266,11 @@ impl ProcessIncs {
     }
 
     #[inline(always)]
-    fn process_inc_and_evacuate<VM: VMBinding, CC: CopyContext<VM = VM>>(
+    fn process_inc_and_evacuate(
         &mut self,
         e: Address,
         o: ObjectReference,
-        copy_context: &mut CC,
-        worker: &mut GCWorker<VM>,
+        copy_context: &mut impl CopyContext<VM = VM>,
     ) -> ObjectReference {
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
         debug_assert!(!Self::DELAYED_EVACUATION);
@@ -313,7 +301,7 @@ impl ProcessIncs {
                 if !crate::flags::BLOCK_ONLY {
                     self::unmark_striddle_object::<VM>(o);
                 }
-                self.scan_nursery_object::<VM>(worker, new);
+                self.scan_nursery_object(new);
                 new
             } else {
                 // Object is not moved.
@@ -324,19 +312,19 @@ impl ProcessIncs {
     }
 
     #[inline]
-    fn flush<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+    fn flush(&mut self) {
         if !self.new_incs.is_empty() {
             let mut new_incs = vec![];
             std::mem::swap(&mut new_incs, &mut self.new_incs);
-            worker.add_work(
+            self.worker().add_work(
                 WorkBucketStage::rc_process_incs_stage(),
-                ProcessIncs::new(new_incs),
+                ProcessIncs::<VM>::new(new_incs, false),
             );
         }
         if !self.remset.is_empty() {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.remset);
-            worker.add_work(
+            self.worker().add_work(
                 WorkBucketStage::RCEvacuateNursery,
                 RCEvacuateNursery::new(remset, self.roots),
             );
@@ -345,38 +333,38 @@ impl ProcessIncs {
 
     /// Return `None` if the increment of the edge should be delayed
     #[inline(always)]
-    fn load_mature_object_and_unlog_edge<VM: VMBinding>(
+    fn load_mature_object_and_unlog_edge(
         &mut self,
         e: Address,
         immix: &Immix<VM>,
-        worker: &mut GCWorker<VM>,
     ) -> Option<ObjectReference> {
         // Delay the increment if this object points to a young object
         if Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY {
             let o = unsafe { e.load() };
             if immix.immix_space.in_space(o) && self::count(o) == 0 {
-                self.add_remset(worker, e);
+                self.add_remset(e);
                 return None;
             }
         }
         // Load mature object and unlog edge
         if !self.roots {
-            debug_assert!(unsafe { e.to_object_reference().is_logged::<VM>() }, "{:?} {:?}", e, Block::from(Block::align(e)));
-            self.lock_edge::<VM>(e);
-            debug_assert!(unsafe { e.to_object_reference().is_logged::<VM>() }, "{:?} {:?}", e, Block::from(Block::align(e)));
-            Self::unlog_edge::<VM>(e);
+            debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+            self.lock_edge(e);
+            debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+            Self::unlog_edge(e);
         }
         let o: ObjectReference = unsafe { e.load() };
         if !self.roots {
-            Self::unlock_edge::<VM>(e);
+            Self::unlock_edge(e);
         }
         Some(o)
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
+impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let tracing = immix.perform_cycle_collection();
@@ -387,7 +375,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
         for e in incs {
-            let o = match self.load_mature_object_and_unlog_edge::<VM>(e, immix, worker) {
+            let o = match self.load_mature_object_and_unlog_edge(e, immix) {
                 Some(o) => o,
                 _ => continue,
             };
@@ -396,10 +384,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if Self::DELAYED_EVACUATION || !rc_evacuation {
-                self.process_inc(o, worker, tracing)
+                self.process_inc(o, tracing)
             } else {
                 debug_assert!(crate::flags::RC_EVACUATE_NURSERY && !tracing);
-                self.process_inc_and_evacuate(e, o, copy_context, worker)
+                self.process_inc_and_evacuate(e, o, copy_context)
             };
             if self.roots {
                 if !crate::flags::RC_EVACUATE_NURSERY || tracing {
@@ -414,7 +402,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs {
         } else {
             debug_assert!(roots.is_empty());
         }
-        self.flush(worker);
+        self.flush();
     }
 }
 
@@ -551,55 +539,64 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     }
 }
 
-pub struct RCEvacuateNursery {
+pub struct RCEvacuateNursery<VM: VMBinding> {
+    /// Edges to forward
     slots: Vec<Address>,
+    /// Recursively generated edges
     new_slots: Vec<Address>,
+    /// Root edges?
     roots: bool,
+    /// Execution worker
+    worker: *mut GCWorker<VM>,
 }
 
-impl RCEvacuateNursery {
+unsafe impl<VM: VMBinding> Send for RCEvacuateNursery<VM> {}
+
+impl<VM: VMBinding> RCEvacuateNursery<VM> {
     const CAPACITY: usize = 1024;
+
+    #[inline(always)]
+    fn worker(&mut self) -> &mut GCWorker<VM> {
+        unsafe { &mut *self.worker }
+    }
 
     pub fn new(slots: Vec<Address>, roots: bool) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
-        debug_assert!(ProcessIncs::DELAYED_EVACUATION);
+        debug_assert!(ProcessIncs::<VM>::DELAYED_EVACUATION);
         Self {
             slots,
             roots,
             new_slots: vec![],
+            worker: std::ptr::null_mut(),
         }
     }
 
     #[inline(always)]
-    fn scan_nursery_object<VM: VMBinding>(
-        &mut self,
-        worker: &mut GCWorker<VM>,
-        o: ObjectReference,
-    ) {
+    fn scan_nursery_object(&mut self, o: ObjectReference) {
         EdgeIterator::<VM>::iterate(o, |edge| {
-            self.add_new_slot(worker, edge);
+            self.add_new_slot(edge);
         });
     }
 
     #[inline(always)]
-    pub fn add_new_slot<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>, e: Address) {
+    pub fn add_new_slot(&mut self, e: Address) {
         debug_assert!(!e.is_locked::<VM>());
         if self.new_slots.is_empty() {
             self.new_slots.reserve(Self::CAPACITY);
         }
         self.new_slots.push(e);
         if self.new_slots.len() > Self::CAPACITY {
-            self.flush(worker)
+            self.flush()
         }
     }
 
     #[inline]
-    pub fn flush<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+    pub fn flush(&mut self) {
         if !self.new_slots.is_empty() {
             let mut new_slots = vec![];
             std::mem::swap(&mut new_slots, &mut self.new_slots);
-            worker.add_work(
+            self.worker().add_work(
                 WorkBucketStage::RCEvacuateNursery,
                 RCEvacuateNursery::new(new_slots, false),
             );
@@ -607,13 +604,12 @@ impl RCEvacuateNursery {
     }
 
     #[inline(always)]
-    fn forward<VM: VMBinding, CC: CopyContext<VM = VM>>(
+    fn forward(
         &mut self,
         e: Address,
         o: ObjectReference,
         immix: &Immix<VM>,
-        copy_context: &mut CC,
-        worker: &mut GCWorker<VM>,
+        copy_context: &mut impl CopyContext<VM = VM>,
     ) -> ObjectReference {
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
         if !immix.immix_space.in_space(o) {
@@ -627,7 +623,7 @@ impl RCEvacuateNursery {
                 if !crate::flags::BLOCK_ONLY && o.get_size::<VM>() > Line::BYTES {
                     self::mark_striddle_object::<VM>(o);
                 }
-                self.scan_nursery_object::<VM>(worker, o);
+                self.scan_nursery_object(o);
             }
             return o;
         }
@@ -658,15 +654,16 @@ impl RCEvacuateNursery {
             if !crate::flags::BLOCK_ONLY {
                 self::unmark_striddle_object::<VM>(o);
             }
-            self.scan_nursery_object::<VM>(worker, new);
+            self.scan_nursery_object(new);
             new
         }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery {
+impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let mut roots = vec![];
@@ -676,10 +673,10 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery {
         std::mem::swap(&mut slots, &mut self.slots);
         for e in slots {
             let o: ObjectReference = unsafe { e.load() };
-            let o = self.forward::<_, _>(e, o, immix, copy_context, worker);
+            let o = self.forward(e, o, immix, copy_context);
             if !self.roots {
                 debug_assert!(!e.is_locked::<VM>());
-                ProcessIncs::unlog_edge::<VM>(e);
+                ProcessIncs::<VM>::unlog_edge(e);
             } else {
                 if !o.is_null() {
                     roots.push(o);
@@ -693,6 +690,6 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery {
         } else {
             debug_assert!(roots.is_empty());
         }
-        self.flush(worker);
+        self.flush();
     }
 }

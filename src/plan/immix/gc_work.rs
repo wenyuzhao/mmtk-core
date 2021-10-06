@@ -67,11 +67,7 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
             if crate::flags::REF_COUNT {
                 crate::util::rc::assert_zero_ref_count::<VM>(obj);
                 for i in (0..bytes).step_by(8) {
-                    debug_assert!(unsafe {
-                        (obj.to_address() + i)
-                            .to_object_reference()
-                            .is_logged::<VM>()
-                    });
+                    debug_assert!((obj.to_address() + i).is_logged::<VM>());
                 }
             }
         }
@@ -261,7 +257,7 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.root_slots);
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new_roots(roots));
+            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
         }
     }
 }
@@ -365,7 +361,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEd
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.roots);
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new_roots(roots));
+            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
         }
     }
 

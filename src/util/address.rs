@@ -351,6 +351,17 @@ impl Address {
             Some(Ordering::SeqCst),
         ) == LOCKED_VALUE
     }
+
+    #[inline(always)]
+    pub fn is_logged<VM: VMBinding>(self) -> bool {
+        debug_assert!(!self.is_zero());
+        load_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { self.to_object_reference() },
+            None,
+            Some(Ordering::SeqCst),
+        ) == LOGGED_VALUE
+    }
 }
 
 /// allows print Address as upper-case hex value
@@ -523,17 +534,6 @@ impl ObjectReference {
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
         SFT_MAP.get(Address(self.0)).is_sane()
-    }
-
-    #[inline(always)]
-    pub fn is_logged<VM: VMBinding>(self) -> bool {
-        debug_assert!(!self.is_null());
-        load_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            self,
-            None,
-            Some(Ordering::SeqCst),
-        ) == LOGGED_VALUE
     }
 
     #[inline(always)]
