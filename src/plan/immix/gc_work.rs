@@ -78,6 +78,7 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         }
         if crate::flags::REF_COUNT {
             debug_assert_eq!(crate::util::rc::count(obj), 0);
+            self.immix.immix_space().attempt_mark(obj);
         }
     }
 }

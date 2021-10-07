@@ -381,7 +381,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
     ) -> ObjectReference {
-        if self.attempt_mark(object, self.mark_state) {
+        if self.attempt_mark(object) {
             // Mark block and lines
             if !super::BLOCK_ONLY {
                 if !super::MARK_LINE_AT_SCAN_TIME {
@@ -415,7 +415,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object
         } else {
             let new_object = if Self::is_pinned(object) || self.defrag.space_exhausted() {
-                self.attempt_mark(object, self.mark_state);
+                self.attempt_mark(object);
                 ForwardingWord::clear_forwarding_bits::<VM>(object);
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
                 object
@@ -446,7 +446,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Atomically mark an object.
     #[inline(always)]
-    fn attempt_mark(&self, object: ObjectReference, mark_state: u8) -> bool {
+    pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         loop {
             let old_value = load_metadata::<VM>(
                 &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
@@ -454,7 +454,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 None,
                 Some(Ordering::SeqCst),
             ) as u8;
-            if old_value == mark_state {
+            if old_value == self.mark_state {
                 return false;
             }
 
@@ -462,7 +462,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 object,
                 old_value as usize,
-                mark_state as usize,
+                self.mark_state as usize,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,

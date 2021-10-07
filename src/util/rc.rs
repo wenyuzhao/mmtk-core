@@ -268,11 +268,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn process_inc(&mut self, o: ObjectReference, cycle_collection: bool) -> ObjectReference {
+    fn process_inc(&mut self, o: ObjectReference) -> ObjectReference {
         if let Ok(0) = self::inc(o) {
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
-            debug_assert!(!crate::flags::RC_EVACUATE_NURSERY || cycle_collection);
+            debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
             if !crate::flags::BLOCK_ONLY {
                 // Young object is not evacuated. Mark as striddle in place if required.
                 // FIXME: Fix this when allocating young objects to recyclable lines or doing young evacuation in a tracing pause.
@@ -403,13 +403,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if Self::DELAYED_EVACUATION || !rc_evacuation {
-                self.process_inc(o, tracing)
+                self.process_inc(o)
             } else {
                 debug_assert!(crate::flags::RC_EVACUATE_NURSERY && !tracing);
                 self.process_inc_and_evacuate(e, o, copy_context)
             };
             if self.roots {
-                if !crate::flags::RC_EVACUATE_NURSERY || tracing {
+                if !crate::flags::RC_EVACUATE_NURSERY {
                     roots.push(o);
                 }
             }
@@ -601,6 +601,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
+        o.dump::<VM>();
         EdgeIterator::<VM>::iterate(o, |edge| {
             self.add_new_slot(edge);
         });
@@ -642,16 +643,10 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
         if !immix.immix_space.in_space(o) {
             return o;
         }
-        if immix.perform_cycle_collection() || self::count(o) != 0 {
+        if self::count(o) != 0 {
             // Points to a mature object. Remain in place and increment the object's refcount.
-            // FIXME: Evacuate in cycle collection.
             let r = self::inc(o);
-            if r == Ok(0) {
-                if !crate::flags::BLOCK_ONLY && o.get_size::<VM>() > Line::BYTES {
-                    self::mark_striddle_object::<VM>(o);
-                }
-                self.scan_nursery_object(o);
-            }
+            debug_assert_ne!(r, Ok(0));
             return o;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);

@@ -132,7 +132,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[inline(always)]
-    fn immix_space(&self) -> &'static ImmixSpace<VM> {
+    pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
         self.space
     }
 

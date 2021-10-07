@@ -135,6 +135,7 @@ pub enum WorkBucketStage {
     Prepare,
     ProcessRoots,
     Closure,
+    RCPostClosure,
     RefClosure,
     RefForwarding,
     Release,
@@ -145,7 +146,7 @@ pub enum WorkBucketStage {
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
     pub const RCProcessIncs: Self = Self::ProcessRoots;
-    pub const RCEvacuateNursery: Self = Self::Closure;
+    pub const RCEvacuateNursery: Self = Self::RCPostClosure;
     pub const RCReleaseNursery: Self = Self::RefClosure;
     pub const RCFullHeapRelease: Self = Self::RefForwarding;
     pub const RCProcessDecs: Self = Self::Release;

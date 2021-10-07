@@ -64,6 +64,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::ProcessRoots => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone()),
+                WorkBucketStage::RCPostClosure => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone()),
