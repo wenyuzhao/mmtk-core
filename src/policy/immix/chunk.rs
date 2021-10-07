@@ -424,7 +424,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 .step_by(crate::util::rc::MIN_OBJECT_SIZE)
                 .map(|a| unsafe { a.to_object_reference() })
             {
-                if crate::util::rc::count(o) != 0 && !immix_space.is_marked(o) {
+                let c = crate::util::rc::count(o);
+                if c != 0 && c != crate::util::rc::MARKER && !immix_space.is_marked(o) {
                     // Attempt to set refcount to 1
                     let r = crate::util::rc::fetch_update(o, |c| {
                         if c <= 1 {

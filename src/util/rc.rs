@@ -30,7 +30,8 @@ use super::{
 };
 
 pub const LOG_REF_COUNT_BITS: usize = 2;
-const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 1;
+const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 2;
+pub const MARKER: usize = MAX_REF_COUNT + 1;
 
 pub const LOG_MIN_OBJECT_SIZE: usize = 3;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
@@ -68,6 +69,7 @@ pub fn inc(o: ObjectReference) -> Result<usize, usize> {
         Ordering::SeqCst,
         Ordering::SeqCst,
         |x| {
+            debug_assert!(x <= MAX_REF_COUNT);
             if x == MAX_REF_COUNT {
                 None
             } else {
@@ -88,6 +90,7 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
         Ordering::SeqCst,
         Ordering::SeqCst,
         |x| {
+            debug_assert!(x <= MAX_REF_COUNT);
             if x == 0 || x == MAX_REF_COUNT
             /* sticky */
             {
@@ -127,7 +130,7 @@ pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
     let start_line = Line::forward(Line::containing::<VM>(o), 1);
     let end_line = Line::from(Line::align(o.to_address() + size));
     for line in start_line..end_line {
-        self::set(unsafe { line.start().to_object_reference() }, 1);
+        self::set(unsafe { line.start().to_object_reference() }, MARKER);
     }
 }
 
