@@ -21,7 +21,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         Self {
             space: None,
             clean_block_buffer: Default::default(),
-            refill_count: num_cpus::get(),
+            refill_count: 32, //num_cpus::get(),
         }
     }
 
@@ -85,7 +85,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         if crate::plan::immix::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
             block.clear_rc_table::<VM>();
         }
-        if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY {
+        if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY && !super::REF_COUNT {
             let current_state = self.space().line_mark_state.load(Ordering::Acquire);
             for line in block.lines() {
                 line.mark(current_state);

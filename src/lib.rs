@@ -127,7 +127,7 @@ pub mod flags {
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
     pub const LOG_PER_GC_STATE: bool = true;
-    pub const LOG_STAGES: bool = true;
+    pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
 
     pub fn validate_features() {
@@ -135,8 +135,8 @@ pub mod flags {
         validate!(DEFRAG => !CONCURRENT_MARKING);
         validate!(DEFRAG => !REF_COUNT);
         validate!(CONCURRENT_MARKING => !DEFRAG);
-        validate!(CONCURRENT_MARKING => !REF_COUNT);
-        validate!(REF_COUNT => !CONCURRENT_MARKING);
+        // validate!(CONCURRENT_MARKING => !REF_COUNT);
+        // validate!(REF_COUNT => !CONCURRENT_MARKING);
         validate!(REF_COUNT => !DEFRAG);
         validate!(EAGER_INCREMENTS => !RC_EVACUATE_NURSERY);
         validate!(RC_EVACUATE_NURSERY => !EAGER_INCREMENTS);

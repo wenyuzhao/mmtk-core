@@ -48,7 +48,6 @@ pub struct Immix<VM: VMBinding> {
     pub perform_cycle_collection: AtomicBool,
     current_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
-    last_gc_was_cycle_collection: AtomicBool,
 }
 
 #[inline(always)]
@@ -105,7 +104,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.base().collection_required(self, space_full, space) {
             return true;
         }
-        // Concurrent tracking finished
+        // Concurrent tracing finished
         if crate::flags::CONCURRENT_MARKING
             && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
             && crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
@@ -202,26 +201,32 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
+        let pause = self.current_pause().unwrap();
         if !super::REF_COUNT {
-            self.common.prepare(tls, true);
-            self.immix_space.prepare();
+            if pause != Pause::FinalMark {
+                self.common.prepare(tls, true);
+                self.immix_space.prepare();
+            }
         } else {
-            if self.perform_cycle_collection() {
+            if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
                 self.common.prepare(tls, true);
             }
-            self.immix_space.prepare_rc(self.perform_cycle_collection());
+            self.immix_space.prepare_rc(pause);
         }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        let pause = self.current_pause().unwrap();
         if !super::REF_COUNT {
-            self.common.release(tls, true);
-            self.immix_space.release();
+            if pause != Pause::InitialMark {
+                self.common.release(tls, true);
+                self.immix_space.release();
+            }
         } else {
-            if self.perform_cycle_collection() {
+            if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
                 self.common.release(tls, true);
             }
-            self.immix_space.release_rc(self.perform_cycle_collection());
+            self.immix_space.release_rc(pause);
         }
         if super::REF_COUNT {
             let mut curr_roots = super::CURR_ROOTS.lock();
@@ -247,9 +252,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
-        let perform_cycle_collection = self.perform_cycle_collection.load(Ordering::SeqCst);
-        self.last_gc_was_cycle_collection
-            .store(perform_cycle_collection, Ordering::SeqCst);
         crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
     }
 
@@ -304,7 +306,6 @@ impl<VM: VMBinding> Immix<VM> {
             ),
             perform_cycle_collection: AtomicBool::new(false),
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
-            last_gc_was_cycle_collection: AtomicBool::new(false),
             current_pause: Atomic::new(None),
         };
 
@@ -356,7 +357,7 @@ impl<VM: VMBinding> Immix<VM> {
             Pause::FullTraceDefrag
         } else if perform_cycle_collection && !concurrent {
             Pause::FullTraceFast
-        } else if perform_cycle_collection && concurrent {
+        } else if perform_cycle_collection || concurrent {
             debug_assert!(crate::flags::CONCURRENT_MARKING);
             Pause::InitialMark
         } else if !perform_cycle_collection {
@@ -419,24 +420,29 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false>;
         if super::REF_COUNT {
-            unreachable!();
             Self::process_prev_roots(scheduler);
         }
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        if super::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease]
+                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Release]
+                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        }
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false>;
         if super::REF_COUNT {
-            unreachable!();
             Self::process_prev_roots(scheduler);
         }
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
-        // scheduler.work_buckets[WorkBucketStage::Prepare]
-        //     .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
@@ -459,10 +465,6 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub fn perform_cycle_collection(&self) -> bool {
         self.perform_cycle_collection.load(Ordering::SeqCst)
-    }
-
-    pub fn last_gc_was_cycle_collection(&self) -> bool {
-        self.last_gc_was_cycle_collection.load(Ordering::SeqCst)
     }
 
     pub fn current_pause(&self) -> Option<Pause> {

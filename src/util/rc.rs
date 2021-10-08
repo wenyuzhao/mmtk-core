@@ -240,7 +240,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
         EdgeIterator::<VM>::iterate(o, |edge| {
-            debug_assert!(edge.is_logged::<VM>());
+            debug_assert!(edge.is_logged::<VM>(), "{:?}.{:?} is unlogged", o, edge);
             self.recursive_inc(edge);
         });
     }

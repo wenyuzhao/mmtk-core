@@ -310,12 +310,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn enqueue_node(&mut self, edge: Address) {
-        if crate::plan::immix::CONCURRENT_MARKING
-            && !BARRIER_MEASUREMENT
-            && !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
-        {
-            return;
-        }
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
@@ -324,28 +318,27 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             // Concurrent Marking
-            if crate::plan::immix::CONCURRENT_MARKING {
+            if crate::plan::immix::CONCURRENT_MARKING
+                && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+            {
                 self.edges.push(edge);
                 if !old.is_null() {
                     self.nodes.push(old);
                 }
-                if self.edges.len() >= Self::CAPACITY || self.nodes.len() >= Self::CAPACITY {
-                    self.flush();
-                }
             }
             // Reference counting
             if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
-                debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
                 if !old.is_null() {
                     self.decs.push(old);
                 }
                 self.incs.push(edge);
-                if self.edges.len() >= Self::CAPACITY
-                    || self.incs.len() >= Self::CAPACITY
-                    || self.decs.len() >= Self::CAPACITY
-                {
-                    self.flush();
-                }
+            }
+            // Flush
+            if self.edges.len() >= Self::CAPACITY
+                || self.incs.len() >= Self::CAPACITY
+                || self.decs.len() >= Self::CAPACITY
+            {
+                self.flush();
             }
         }
     }
@@ -378,15 +371,14 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         }
         // Concurrent Marking: Flush satb buffer
         if crate::plan::immix::CONCURRENT_MARKING {
-            if self.edges.is_empty() && self.nodes.is_empty() {
-                return;
+            if !self.edges.is_empty() || !self.nodes.is_empty() {
+                let mut edges = vec![];
+                std::mem::swap(&mut edges, &mut self.edges);
+                let mut nodes = vec![];
+                std::mem::swap(&mut nodes, &mut self.nodes);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                    .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
             }
-            let mut edges = vec![];
-            std::mem::swap(&mut edges, &mut self.edges);
-            let mut nodes = vec![];
-            std::mem::swap(&mut nodes, &mut self.nodes);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
         }
         // Flush inc buffer
         if !self.incs.is_empty() {

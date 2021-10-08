@@ -1,6 +1,7 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
+use crate::plan::immix::Pause;
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::space::SpaceOptions;
@@ -222,7 +223,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare_rc(&mut self, cycle_collection: bool) {
+    pub fn prepare_rc(&mut self, pause: Pause) {
+        debug_assert_ne!(pause, Pause::FullTraceDefrag);
         let num_workers = self.scheduler().worker_group().worker_count();
         let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
@@ -231,7 +233,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             unreachable!();
         };
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
-        if cycle_collection {
+        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
                 self.mark_state = Self::MARKED_STATE;
@@ -245,9 +247,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn release_rc(&mut self, cycle_collection: bool) {
+    pub fn release_rc(&mut self, pause: Pause) {
+        debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation.reset();
-        if cycle_collection {
+        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             if crate::flags::LAZY_DECREMENTS {
                 self.scheduler().postpone_all(work_packets);

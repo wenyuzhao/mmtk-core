@@ -315,7 +315,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             }
             // FIXME: Don't need this when doing RC
             if crate::flags::BARRIER_MEASUREMENT
-                || (crate::flags::CONCURRENT_MARKING && self.needs_log_bit)
+                || (crate::flags::CONCURRENT_MARKING
+                    && !crate::flags::REF_COUNT
+                    && self.needs_log_bit)
             {
                 block.initialize_log_table_as_unlogged::<VM>();
             }
