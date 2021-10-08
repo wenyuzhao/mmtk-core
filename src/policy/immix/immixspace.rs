@@ -38,7 +38,7 @@ pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pr: FreeListPageResource<VM>,
+    pub(super) pr: FreeListPageResource<VM>,
     /// Allocation status for all chunks in immix space
     pub chunk_map: ChunkMap,
     /// Current line mark state
@@ -223,10 +223,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, cycle_collection: bool) {
-        let num_workers = 1;//worker.scheduler().worker_group().worker_count();
+        let num_workers = self.scheduler().worker_group().worker_count();
         let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
-            self
-                .block_allocation
+            self.block_allocation
                 .reset_and_generate_nursery_sweep_tasks(num_workers)
         } else {
             unreachable!();
@@ -672,7 +671,6 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
                 .block_allocation
                 .reset_and_generate_nursery_sweep_tasks(num_workers)
         } else {
-            self.space.block_allocation.reset();
             let space: &'static ImmixSpace<VM> = unsafe { &*(self.space as *const ImmixSpace<VM>) };
             self.space.chunk_map.generate_sweep_tasks::<VM>(space, true)
         };

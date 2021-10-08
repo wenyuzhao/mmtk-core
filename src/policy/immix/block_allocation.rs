@@ -38,8 +38,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub fn reset(&mut self) {
-        // FIXME: Release blocks after the cursor.
         let mut buffer = self.clean_block_buffer.write();
+        let cursor = buffer.0.load(Ordering::SeqCst);
+        for i in cursor..buffer.1.len() {
+            self.space().pr.release_pages(buffer.1[i].start())
+        }
         buffer.0.store(0, Ordering::SeqCst);
         buffer.1.clear();
     }
