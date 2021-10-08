@@ -45,7 +45,7 @@ pub struct Immix<VM: VMBinding> {
     pub common: CommonPlan<VM>,
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.
-    pub perform_cycle_collection: AtomicBool,
+    perform_cycle_collection: AtomicBool,
     current_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
 }
@@ -344,6 +344,7 @@ impl<VM: VMBinding> Immix<VM> {
             || cc_force_full;
         let concurrent_marking_in_progress = crate::IN_CONCURRENT_GC.load(Ordering::SeqCst);
         perform_cycle_collection |= concurrent_marking_in_progress;
+        perform_cycle_collection |= concurrent;
         self.perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
         let pause = if concurrent_marking_in_progress {
@@ -357,7 +358,7 @@ impl<VM: VMBinding> Immix<VM> {
             Pause::FullTraceDefrag
         } else if perform_cycle_collection && !concurrent {
             Pause::FullTraceFast
-        } else if perform_cycle_collection || concurrent {
+        } else if perform_cycle_collection && concurrent {
             debug_assert!(crate::flags::CONCURRENT_MARKING);
             Pause::InitialMark
         } else if !perform_cycle_collection {

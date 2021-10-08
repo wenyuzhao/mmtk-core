@@ -386,8 +386,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         self.worker = worker;
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let tracing = immix.perform_cycle_collection();
-        let rc_evacuation = crate::flags::RC_EVACUATE_NURSERY && !tracing;
         let mut roots = vec![];
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
@@ -402,10 +400,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 continue;
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
-            let o = if Self::DELAYED_EVACUATION || !rc_evacuation {
+            let o = if !crate::flags::RC_EVACUATE_NURSERY || Self::DELAYED_EVACUATION {
                 self.process_inc(o)
             } else {
-                debug_assert!(crate::flags::RC_EVACUATE_NURSERY && !tracing);
                 self.process_inc_and_evacuate(e, o, copy_context)
             };
             if self.roots {
