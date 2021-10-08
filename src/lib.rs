@@ -128,7 +128,7 @@ pub mod flags {
     pub const HARNESS_PRETTY_PRINT: bool = false;
     pub const LOG_PER_GC_STATE: bool = true;
     pub const LOG_STAGES: bool = true;
-    pub const LOG_WORK_PACKETS: bool = true;
+    pub const LOG_WORK_PACKETS: bool = false;
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);

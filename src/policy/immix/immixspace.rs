@@ -223,9 +223,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, cycle_collection: bool) {
-        let space = unsafe { &mut *(self as *mut Self) };
-        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery]
-            .add(ReleaseRCNursery { space });
+        let num_workers = 1;//worker.scheduler().worker_group().worker_count();
+        let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+            self
+                .block_allocation
+                .reset_and_generate_nursery_sweep_tasks(num_workers)
+        } else {
+            unreachable!();
+        };
+        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
         if cycle_collection {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -241,6 +247,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn release_rc(&mut self, cycle_collection: bool) {
+        self.block_allocation.reset();
         if cycle_collection {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             if crate::flags::LAZY_DECREMENTS {

@@ -601,7 +601,6 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
-        o.dump::<VM>();
         EdgeIterator::<VM>::iterate(o, |edge| {
             self.add_new_slot(edge);
         });

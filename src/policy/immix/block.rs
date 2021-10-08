@@ -271,7 +271,7 @@ impl Block {
     }
 
     #[inline(always)]
-    fn rc_dead(&self) -> bool {
+    pub fn rc_dead(&self) -> bool {
         type UInt = u128;
         const LOG_BITS_IN_UINT: usize =
             (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
@@ -378,11 +378,17 @@ impl Block {
     #[inline(always)]
     pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
-        let live = !self.rc_dead();
-        if !live {
+        if crate::flags::RC_EVACUATE_NURSERY {
+            assert!(self.rc_dead(), "{:?} has live rc counts", self);
             space.release_block(*self, true);
+            true
+        } else {
+            let live = !self.rc_dead();
+            if !live {
+                space.release_block(*self, true);
+            }
+            return !live;
         }
-        return !live;
     }
 
     #[inline(always)]
