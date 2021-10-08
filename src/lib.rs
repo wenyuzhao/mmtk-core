@@ -108,7 +108,7 @@ pub mod flags {
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = true;
+    pub const BLOCK_ONLY: bool = false;
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
