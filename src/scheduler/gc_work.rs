@@ -710,3 +710,28 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
         }
     }
 }
+
+pub struct UnlogEdges {
+    edges: Vec<Address>,
+    meta: MetadataSpec,
+}
+
+impl UnlogEdges {
+    pub fn new(edges: Vec<Address>, meta: MetadataSpec) -> Self {
+        Self { edges, meta }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for UnlogEdges {
+    #[inline(always)]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        if !self.edges.is_empty() {
+            for edge in &self.edges {
+                let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
+                unsafe {
+                    ptr.store(0b11111111u8);
+                }
+            }
+        }
+    }
+}
