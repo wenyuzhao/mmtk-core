@@ -300,14 +300,9 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     #[inline(always)]
     fn log_edge_and_get_old_target(&self, edge: Address) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            if crate::flags::BARRIER_MEASUREMENT {
-                self.log_and_unlock_edge(edge);
-                Ok(unsafe { Address::ZERO.to_object_reference() })
-            } else {
-                let old: ObjectReference = unsafe { edge.load() };
-                self.log_and_unlock_edge(edge);
-                Ok(old)
-            }
+            let old: ObjectReference = unsafe { edge.load() };
+            self.log_and_unlock_edge(edge);
+            Ok(old)
         } else {
             Err(())
         }
@@ -328,12 +323,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            if crate::flags::BARRIER_MEASUREMENT {
-                self.edges.push(edge);
-                if self.edges.len() >= Self::CAPACITY {
-                    self.flush();
-                }
-            }
             // Concurrent Marking
             if crate::plan::immix::CONCURRENT_MARKING {
                 self.edges.push(edge);
@@ -345,7 +334,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 }
             }
             // Reference counting
-            if crate::plan::immix::REF_COUNT {
+            if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
                 debug_assert!(!crate::plan::immix::CONCURRENT_MARKING);
                 if !old.is_null() {
                     self.decs.push(old);
@@ -374,8 +363,21 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
 
     #[cold]
     fn flush(&mut self) {
+        // Barrier measurement: simply unlog remembered edges
+        if crate::flags::BARRIER_MEASUREMENT {
+            // Drop decs buffer
+            self.decs.clear();
+            // Unlog inc edges
+            if !self.incs.is_empty() {
+                let mut incs = vec![];
+                std::mem::swap(&mut incs, &mut self.incs);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                    .add(UnlogEdges::new(incs, self.meta));
+            }
+            return;
+        }
         // Concurrent Marking: Flush satb buffer
-        if crate::plan::immix::CONCURRENT_MARKING || crate::flags::BARRIER_MEASUREMENT {
+        if crate::plan::immix::CONCURRENT_MARKING {
             if self.edges.is_empty() && self.nodes.is_empty() {
                 return;
             }
