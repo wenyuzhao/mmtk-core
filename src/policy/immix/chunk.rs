@@ -331,6 +331,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             block.set_state(BlockState::Unmarked);
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
+            debug_assert_ne!(block.get_state(), BlockState::Nursery);
         }
     }
 }

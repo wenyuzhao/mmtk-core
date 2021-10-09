@@ -63,20 +63,14 @@ pub fn fetch_update(
 #[inline(always)]
 pub fn inc(o: ObjectReference) -> Result<usize, usize> {
     debug_assert!(!o.is_null());
-    let r = side_metadata::fetch_update(
-        &RC_TABLE,
-        o.to_address(),
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-        |x| {
-            debug_assert!(x <= MAX_REF_COUNT);
-            if x == MAX_REF_COUNT {
-                None
-            } else {
-                Some(x + 1)
-            }
-        },
-    );
+    let r = fetch_update(o, |x| {
+        debug_assert!(x <= MAX_REF_COUNT);
+        if x == MAX_REF_COUNT {
+            None
+        } else {
+            Some(x + 1)
+        }
+    });
     // println!("inc {:?} {:?} -> {:?}", o, r, count(o));
     r
 }
@@ -84,22 +78,16 @@ pub fn inc(o: ObjectReference) -> Result<usize, usize> {
 #[inline(always)]
 pub fn dec(o: ObjectReference) -> Result<usize, usize> {
     debug_assert!(!o.is_null());
-    let r = side_metadata::fetch_update(
-        &RC_TABLE,
-        o.to_address(),
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-        |x| {
-            debug_assert!(x <= MAX_REF_COUNT);
-            if x == 0 || x == MAX_REF_COUNT
-            /* sticky */
-            {
-                None
-            } else {
-                Some(x - 1)
-            }
-        },
-    );
+    let r = fetch_update(o, |x| {
+        debug_assert!(x <= MAX_REF_COUNT);
+        if x == 0 || x == MAX_REF_COUNT
+        /* sticky */
+        {
+            None
+        } else {
+            Some(x - 1)
+        }
+    });
     // println!("dec {:?} {:?} -> {:?}", o, r, count(o));
     r
 }

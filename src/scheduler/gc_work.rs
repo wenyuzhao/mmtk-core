@@ -86,44 +86,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareMutator<VM> {
     }
 }
 
-pub struct FlushMutator<VM: VMBinding> {
-    // The mutator reference has static lifetime.
-    // It is safe because the actual lifetime of this work-packet will not exceed the lifetime of a GC.
-    pub mutator: &'static mut Mutator<VM>,
-}
-
-impl<VM: VMBinding> FlushMutator<VM> {
-    pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
-        Self { mutator }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for FlushMutator<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        trace!("Prepare Mutator");
-        self.mutator.flush();
-    }
-}
-
-pub struct FlushMutators<VM: VMBinding> {
-    _p: PhantomData<VM>,
-}
-
-impl<VM: VMBinding> FlushMutators<VM> {
-    pub fn new() -> Self {
-        Self { _p: PhantomData }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for FlushMutators<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(FlushMutator::<VM>::new(mutator));
-        }
-    }
-}
-
 /// The collector GC Preparation Work
 #[derive(Default)]
 pub struct PrepareCollector<W: CopyContext + GCWorkerLocal>(PhantomData<W>);
@@ -691,10 +653,12 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         if !self.edges.is_empty() {
-            for edge in &self.edges {
-                let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
-                unsafe {
-                    ptr.store(0b11111111u8);
+            if !crate::flags::REF_COUNT {
+                for edge in &self.edges {
+                    let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
+                    unsafe {
+                        ptr.store(0b11111111u8);
+                    }
                 }
             }
             if !crate::plan::barriers::BARRIER_MEASUREMENT {

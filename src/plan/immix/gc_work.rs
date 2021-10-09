@@ -78,8 +78,8 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         }
         if crate::flags::REF_COUNT {
             debug_assert_eq!(crate::util::rc::count(obj), 0);
-            self.immix.immix_space().attempt_mark(obj);
         }
+        self.immix.immix_space().attempt_mark(obj);
     }
 }
 
@@ -320,12 +320,7 @@ impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
 
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEdges<VM, KIND> {
     type VM = VM;
-    const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
-        && if let TraceKind::Defrag = KIND {
-            true
-        } else {
-            false
-        };
+    const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
 
     fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {

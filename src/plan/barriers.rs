@@ -376,7 +376,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 std::mem::swap(&mut edges, &mut self.edges);
                 let mut nodes = vec![];
                 std::mem::swap(&mut nodes, &mut self.nodes);
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
             }
         }

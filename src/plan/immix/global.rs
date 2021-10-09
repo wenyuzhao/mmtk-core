@@ -205,7 +205,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if !super::REF_COUNT {
             if pause != Pause::FinalMark {
                 self.common.prepare(tls, true);
-                self.immix_space.prepare();
+                self.immix_space.prepare(true);
             }
         } else {
             if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
@@ -441,11 +441,15 @@ impl<VM: VMBinding> Immix<VM> {
             Self::process_prev_roots(scheduler);
         }
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
-        scheduler.work_buckets[WorkBucketStage::RefClosure].add(FlushMutators::<VM>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        if super::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease]
+                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Release]
+                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        }
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {

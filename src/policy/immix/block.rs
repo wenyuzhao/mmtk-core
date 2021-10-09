@@ -18,6 +18,8 @@ use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 pub enum BlockState {
     /// the block is not allocated.
     Unallocated,
+    /// the block is a young block.
+    Nursery,
     /// the block is allocated but not marked.
     Unmarked,
     /// the block is allocated and marked.
@@ -33,6 +35,7 @@ impl BlockState {
     const MARK_UNMARKED: u8 = u8::MAX;
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
+    const MARK_NURSERY: u8 = u8::MAX - 2;
 }
 
 impl From<u8> for BlockState {
@@ -42,6 +45,7 @@ impl From<u8> for BlockState {
             Self::MARK_UNALLOCATED => BlockState::Unallocated,
             Self::MARK_UNMARKED => BlockState::Unmarked,
             Self::MARK_MARKED => BlockState::Marked,
+            Self::MARK_NURSERY => BlockState::Nursery,
             unavailable_lines => BlockState::Reusable { unavailable_lines },
         }
     }
@@ -54,7 +58,14 @@ impl From<BlockState> for u8 {
             BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
-            BlockState::Reusable { unavailable_lines } => unavailable_lines,
+            BlockState::Nursery => BlockState::MARK_NURSERY,
+            BlockState::Reusable { unavailable_lines } => {
+                debug_assert_ne!(unavailable_lines, BlockState::MARK_UNALLOCATED);
+                debug_assert_ne!(unavailable_lines, BlockState::MARK_UNMARKED);
+                debug_assert_ne!(unavailable_lines, BlockState::MARK_MARKED);
+                debug_assert_ne!(unavailable_lines, BlockState::MARK_NURSERY);
+                unavailable_lines
+            }
         }
     }
 }
@@ -214,7 +225,7 @@ impl Block {
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
     pub fn init(&self, _copy: bool) {
-        self.set_state(BlockState::Marked);
+        self.set_state(BlockState::Nursery);
         side_metadata::store_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), 0, Ordering::SeqCst);
     }
 
@@ -325,7 +336,7 @@ impl Block {
                     space.release_block(*self, false);
                     true
                 }
-                BlockState::Marked => {
+                BlockState::Nursery | BlockState::Marked => {
                     // The block is live.
                     false
                 }

@@ -56,6 +56,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     pub block_allocation: BlockAllocation<VM>,
     pub possibly_dead_mature_blocks: Mutex<HashSet<Block>>,
+    initial_mark_pause: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -65,16 +66,23 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        let mut x = self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
-        if super::BLOCK_ONLY {
-            x |= Block::containing::<VM>(object).get_state() == BlockState::Marked;
-        } else if super::REF_COUNT {
-            x |= crate::util::rc::count(object) > 0;
-        } else {
-            x |= Line::containing::<VM>(object)
-                .is_marked(self.line_mark_state.load(Ordering::Relaxed));
+        if super::REF_COUNT {
+            return crate::util::rc::count(object) > 0;
         }
-        x
+        if self.initial_mark_pause {
+            return true;
+        }
+        let mut live = self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
+        if crate::flags::CONCURRENT_MARKING {
+            if super::BLOCK_ONLY {
+                let state = Block::containing::<VM>(object).get_state();
+                live |= state == BlockState::Marked || state == BlockState::Nursery;
+            } else {
+                live |= Line::containing::<VM>(object)
+                    .is_marked(self.line_mark_state.load(Ordering::Relaxed));
+            }
+        }
+        live
     }
     fn is_movable(&self) -> bool {
         super::DEFRAG
@@ -184,6 +192,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             scheduler,
             block_allocation: BlockAllocation::new(),
             possibly_dead_mature_blocks: Default::default(),
+            initial_mark_pause: false,
         }
     }
 
@@ -261,7 +270,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn prepare(&mut self) {
+    pub fn prepare(&mut self, initial_mark_pause: bool) {
+        self.initial_mark_pause = initial_mark_pause;
         debug_assert!(!crate::flags::REF_COUNT);
         self.block_allocation.reset();
         // Update mark_state
@@ -320,6 +330,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::DEFRAG {
             self.defrag.release(self)
         }
+        self.initial_mark_pause = false;
     }
 
     /// Release a block.
@@ -397,7 +408,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     self.mark_lines(object);
                 }
             } else {
-                Block::containing::<VM>(object).set_state(BlockState::Marked);
+                let block = Block::containing::<VM>(object);
+                if block.get_state() != BlockState::Nursery {
+                    block.set_state(BlockState::Marked);
+                }
             }
             // Visit node
             trace.process_node(object);
@@ -436,10 +450,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if !super::MARK_LINE_AT_SCAN_TIME {
                 self.mark_lines(new_object);
             }
-            debug_assert_eq!(
-                Block::containing::<VM>(new_object).get_state(),
-                BlockState::Marked
-            );
+            debug_assert!({
+                let state = Block::containing::<VM>(new_object).get_state();
+                state == BlockState::Marked || state == BlockState::Nursery
+            });
             trace.process_node(new_object);
             new_object
         }
@@ -485,6 +499,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Check if an object is marked.
     #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
+        if crate::flags::REF_COUNT
+            && crate::flags::CONCURRENT_MARKING
+            && !crate::flags::RC_EVACUATE_NURSERY
+        {
+            // Treat young objects as marked.
+            // FIXME: What about nursery object in reusable lines???
+            if Block::containing::<VM>(object).get_state() == BlockState::Nursery {
+                return true;
+            }
+        }
+        if !crate::flags::REF_COUNT && crate::flags::CONCURRENT_MARKING {
+            // Treat young objects as marked.
+            if Block::containing::<VM>(object).get_state() == BlockState::Nursery {
+                return true;
+            }
+        }
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             object,

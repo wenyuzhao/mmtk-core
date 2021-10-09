@@ -113,6 +113,8 @@ pub mod flags {
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
     pub const MARK_LINE_AT_SCAN_TIME: bool = true;
+
+    // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
     pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;

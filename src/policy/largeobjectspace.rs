@@ -34,6 +34,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     mark_state: usize,
     in_nursery_gc: bool,
     treadmill: TreadMill,
+    trace_in_progress: bool,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -41,6 +42,9 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
+        if self.trace_in_progress {
+            return true;
+        }
         self.test_mark_bit(object, self.mark_state)
     }
     fn is_movable(&self) -> bool {
@@ -159,10 +163,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             mark_state: 0,
             in_nursery_gc: false,
             treadmill: TreadMill::new(),
+            trace_in_progress: false,
         }
     }
 
     pub fn prepare(&mut self, full_heap: bool) {
+        self.trace_in_progress = true;
         if full_heap {
             debug_assert!(self.treadmill.from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
@@ -172,6 +178,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn release(&mut self, full_heap: bool) {
+        self.trace_in_progress = false;
         self.sweep_large_pages(true);
         debug_assert!(self.treadmill.nursery_empty());
         if full_heap {
