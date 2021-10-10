@@ -426,13 +426,8 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        if super::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease]
-                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
-        } else {
-            scheduler.work_buckets[WorkBucketStage::Release]
-                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
-        }
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {

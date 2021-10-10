@@ -72,17 +72,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.initial_mark_pause {
             return true;
         }
-        let mut live = self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
-        if crate::flags::CONCURRENT_MARKING {
-            if super::BLOCK_ONLY {
-                let state = Block::containing::<VM>(object).get_state();
-                live |= state == BlockState::Marked || state == BlockState::Nursery;
-            } else {
-                live |= Line::containing::<VM>(object)
-                    .is_marked(self.line_mark_state.load(Ordering::Relaxed));
-            }
-        }
-        live
+        self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object)
     }
     fn is_movable(&self) -> bool {
         super::DEFRAG
@@ -409,7 +399,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             } else {
                 let block = Block::containing::<VM>(object);
-                let state =  block.get_state();
+                let state = block.get_state();
                 if state != BlockState::Nursery && state != BlockState::Marked {
                     block.set_state(BlockState::Marked);
                 }
@@ -500,9 +490,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Check if an object is marked.
     #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
-        if crate::flags::REF_COUNT
-            && crate::flags::CONCURRENT_MARKING
-        {
+        if crate::flags::REF_COUNT && crate::flags::CONCURRENT_MARKING {
             debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
             // Treat young objects as marked.
             // FIXME: What about nursery object in reusable lines???

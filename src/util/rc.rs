@@ -5,13 +5,29 @@ use std::{
 
 use atomic::Ordering;
 
-use crate::{AllocationSemantics, CopyContext, MMTK, plan::{EdgeIterator, barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE}, immix::{Immix, ImmixCopyContext}}, policy::{
-        immix::{block::Block, chunk::ChunkMap, line::Line, ImmixSpace},
+use crate::{
+    plan::{
+        barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
+        immix::{Immix, ImmixCopyContext},
+        EdgeIterator,
+    },
+    policy::{
+        immix::{
+            block::{Block, BlockState},
+            chunk::ChunkMap,
+            line::Line,
+            ImmixSpace,
+        },
         space::Space,
-    }, scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage}, util::{
+    },
+    scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
+    util::{
         metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
         object_forwarding, ObjectReference,
-    }, vm::*};
+    },
+    vm::*,
+    AllocationSemantics, CopyContext, MMTK,
+};
 
 use super::{
     metadata::{compare_exchange_metadata, store_metadata, RC_LOCK_BIT_SPEC},
@@ -250,6 +266,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
+            Block::containing::<VM>(o).set_state(BlockState::Marked);
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
             debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);

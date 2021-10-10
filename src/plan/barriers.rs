@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
-use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::plan::immix::Immix;
+use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
 use crate::policy::space::Space;
@@ -322,6 +322,9 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
+            // if self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.in_space(old) {
+            //     assert_ne!(Block::containing::<E::VM>(old).get_state(), BlockState::Nursery, "Invald {:?}.{:?} -> {:?} new={:?} src: {:?} src block state {:?}", _src, edge, old, new, _src.dump_s::<E::VM>(), Block::containing::<E::VM>(_src).get_state());
+            // }
             // Concurrent Marking
             if crate::plan::immix::CONCURRENT_MARKING
                 && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
@@ -334,10 +337,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             // Reference counting
             if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
                 // println!("[B] {:?}.{:?} -> old={:?} new={:?}", _src, edge, old, new);
-                if !old.is_null() && Some(old) != new {
-                    // if self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.in_space(old) {
-                    //     assert_ne!(Block::containing::<E::VM>(old).get_state(), BlockState::Nursery, "Invald {:?}.{:?} -> {:?} new={:?} src: {:?} src block state {:?}", _src, edge, old, new, _src.dump_s::<E::VM>(), Block::containing::<E::VM>(_src).get_state());
-                    // }
+                if !old.is_null() {
                     self.decs.push(old);
                 }
                 self.incs.push(edge);

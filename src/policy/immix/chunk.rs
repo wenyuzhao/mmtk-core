@@ -246,13 +246,12 @@ impl ChunkMap {
     /// Generate chunk sweep work packets.
     pub fn generate_prepare_tasks<VM: VMBinding>(
         &self,
-        space: &'static ImmixSpace<VM>,
+        _space: &'static ImmixSpace<VM>,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
         self.generate_tasks(|chunk| box PrepareChunk {
             chunk,
             defrag_threshold,
-            needs_log_bit: space.common().needs_log_bit,
         })
     }
 
@@ -287,7 +286,6 @@ impl ChunkMap {
 struct PrepareChunk {
     chunk: Chunk,
     defrag_threshold: Option<usize>,
-    needs_log_bit: bool,
 }
 
 impl PrepareChunk {
@@ -305,7 +303,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         // Clear object mark table for this chunk
-        // Self::reset_object_mark::<VM>(self.chunk);
+        Self::reset_object_mark::<VM>(self.chunk);
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
@@ -313,14 +311,12 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             if state == BlockState::Unallocated {
                 continue;
             }
-            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-                side_metadata::bzero_metadata(&side, block.start(), Block::BYTES);
-            }
+            // if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+            //     side_metadata::bzero_metadata(&side, block.start(), Block::BYTES);
+            // }
             // FIXME: Don't need this when doing RC
             if crate::flags::BARRIER_MEASUREMENT
-                || (crate::flags::CONCURRENT_MARKING
-                    && !crate::flags::REF_COUNT
-                    && self.needs_log_bit)
+                || (crate::flags::CONCURRENT_MARKING && !crate::flags::REF_COUNT)
             {
                 block.initialize_log_table_as_unlogged::<VM>();
             }

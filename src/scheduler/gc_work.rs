@@ -1,8 +1,8 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::immix::Immix;
+use crate::plan::immix::Pause;
 use crate::plan::GcStatus;
-use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -662,14 +662,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 }
             }
             if !crate::plan::barriers::BARRIER_MEASUREMENT {
-                let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-                let mut modbuf = vec![];
-                ::std::mem::swap(&mut modbuf, &mut self.nodes);
-                GCWork::do_work(
-                    &mut ScanObjectsAndMarkLines::<E>::new(modbuf, false, &immix.immix_space),
-                    worker,
-                    mmtk,
-                );
+                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+                let mut w = E::new(edges, false, mmtk);
+                GCWork::do_work(&mut w, worker, mmtk);
             }
         }
     }

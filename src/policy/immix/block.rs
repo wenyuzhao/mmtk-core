@@ -246,6 +246,11 @@ impl Block {
     }
 
     #[inline(always)]
+    pub fn clear_mark_table(&self) {
+        bzero_metadata(&Self::MARK_TABLE, self.start(), Block::BYTES);
+    }
+
+    #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
         bzero_metadata(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
     }
