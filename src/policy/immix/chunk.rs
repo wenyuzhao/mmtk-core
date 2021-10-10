@@ -305,13 +305,16 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         // Clear object mark table for this chunk
-        Self::reset_object_mark::<VM>(self.chunk);
+        // Self::reset_object_mark::<VM>(self.chunk);
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;
+            }
+            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+                side_metadata::bzero_metadata(&side, block.start(), Block::BYTES);
             }
             // FIXME: Don't need this when doing RC
             if crate::flags::BARRIER_MEASUREMENT
@@ -422,6 +425,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         self.worker = worker;
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
         for block in self.chunk.committed_blocks() {
+            if block.get_state() == BlockState::Nursery {
+                continue;
+            }
             // FIXME: Performance
             for o in (block.start()..block.end())
                 .step_by(crate::util::rc::MIN_OBJECT_SIZE)

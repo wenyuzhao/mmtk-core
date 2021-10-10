@@ -409,7 +409,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             } else {
                 let block = Block::containing::<VM>(object);
-                if block.get_state() != BlockState::Nursery {
+                let state =  block.get_state();
+                if state != BlockState::Nursery && state != BlockState::Marked {
                     block.set_state(BlockState::Marked);
                 }
             }
@@ -501,8 +502,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn is_marked(&self, object: ObjectReference) -> bool {
         if crate::flags::REF_COUNT
             && crate::flags::CONCURRENT_MARKING
-            && !crate::flags::RC_EVACUATE_NURSERY
         {
+            debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
             // Treat young objects as marked.
             // FIXME: What about nursery object in reusable lines???
             if Block::containing::<VM>(object).get_state() == BlockState::Nursery {
@@ -515,6 +516,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 return true;
             }
         }
+        let old_value = load_metadata::<VM>(
+            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+            object,
+            None,
+            Some(Ordering::SeqCst),
+        ) as u8;
+        old_value == self.mark_state
+    }
+
+    #[inline(always)]
+    pub fn mark_bit(&self, object: ObjectReference) -> bool {
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             object,

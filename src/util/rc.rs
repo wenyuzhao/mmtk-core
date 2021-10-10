@@ -5,24 +5,13 @@ use std::{
 
 use atomic::Ordering;
 
-use crate::{
-    plan::{
-        barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
-        immix::{Immix, ImmixCopyContext},
-        EdgeIterator,
-    },
-    policy::{
+use crate::{AllocationSemantics, CopyContext, MMTK, plan::{EdgeIterator, barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE}, immix::{Immix, ImmixCopyContext}}, policy::{
         immix::{block::Block, chunk::ChunkMap, line::Line, ImmixSpace},
         space::Space,
-    },
-    scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
-    util::{
+    }, scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage}, util::{
         metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
         object_forwarding, ObjectReference,
-    },
-    vm::*,
-    AllocationSemantics, CopyContext, MMTK,
-};
+    }, vm::*};
 
 use super::{
     metadata::{compare_exchange_metadata, store_metadata, RC_LOCK_BIT_SPEC},
@@ -229,6 +218,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     fn scan_nursery_object(&mut self, o: ObjectReference) {
         EdgeIterator::<VM>::iterate(o, |edge| {
             debug_assert!(edge.is_logged::<VM>(), "{:?}.{:?} is unlogged", o, edge);
+            // println!(" - rec inc {:?}.{:?} -> {:?}", o, edge, unsafe { edge.load::<ObjectReference>() });
             self.recursive_inc(edge);
         });
     }
@@ -256,8 +246,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn process_inc(&mut self, o: ObjectReference) -> ObjectReference {
-        if let Ok(0) = self::inc(o) {
+    fn process_inc(&mut self, _e: Address, o: ObjectReference) -> ObjectReference {
+        let r = self::inc(o);
+        // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
+        if let Ok(0) = r {
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
             debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
@@ -380,16 +372,18 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
         for e in incs {
+            // println!(" - inc e {:?}", e);
             let o = match self.load_mature_object_and_unlog_edge(e, immix) {
                 Some(o) => o,
                 _ => continue,
             };
             if !immix.immix_space.in_space(o) {
+                // println!(" - inc skip {:?} -> {:?}", e, o);
                 continue;
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if !crate::flags::RC_EVACUATE_NURSERY || Self::DELAYED_EVACUATION {
-                self.process_inc(o)
+                self.process_inc(e, o)
             } else {
                 self.process_inc_and_evacuate(e, o, copy_context)
             };
@@ -478,12 +472,16 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
-            if let Ok(1) = self::dec(o) {
+            let r = self::dec(o);
+            // println!(" - dec {:?} rc: {:?} -> {:?}", o, r, count(o));
+            if let Ok(1) = r {
+                // println!(" - dead {:?}", o);
                 debug_assert_eq!(self::count(o), 0);
                 // Recursively decrease field ref counts
                 EdgeIterator::<VM>::iterate(o, |edge| {
                     let x = unsafe { edge.load::<ObjectReference>() };
                     if !x.is_null() && immix.immix_space.in_space(x) {
+                        // println!(" - rec dec {:?}.{:?} -> {:?} {} edge-logged={}", o, edge, x, count(x), edge.is_logged::<VM>());
                         self.recursive_dec(x);
                     }
                 });

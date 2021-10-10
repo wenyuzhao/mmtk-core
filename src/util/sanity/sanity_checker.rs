@@ -1,5 +1,6 @@
 use crate::plan::CopyContext;
 use crate::plan::Plan;
+use crate::plan::immix::Immix;
 use crate::policy::immix::block::Block;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::*;
@@ -163,9 +164,15 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             }
             assert!(
                 object.is_live(),
-                "{:?} is dead, {:?}",
+                "{:?}: {:?} is dead, {:?} {:?} {} {} {:?} {:?}",
+                slot,
                 object,
-                Block::containing::<VM>(object)
+                Block::containing::<VM>(object),
+                Block::containing::<VM>(object).get_state(),
+                crate::util::rc::count(object),
+                self.mmtk().plan.downcast_ref::<Immix<VM>>().unwrap().immix_space.mark_bit(object),
+                self.mmtk().plan.downcast_ref::<Immix<VM>>().unwrap().current_pause(),
+                object.dump_s::<VM>()
             );
             assert!(
                 unsafe { object.to_address().load::<usize>() } != 0xdead,

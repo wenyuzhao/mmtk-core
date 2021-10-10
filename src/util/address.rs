@@ -567,6 +567,12 @@ impl ObjectReference {
         debug_assert!(!self.is_null());
         VM::VMObjectModel::dump_object(self)
     }
+
+    #[inline(always)]
+    pub fn dump_s<VM: VMBinding>(self) -> String {
+        debug_assert!(!self.is_null());
+        VM::VMObjectModel::dump_object_s(self)
+    }
 }
 
 /// allows print Address as upper-case hex value

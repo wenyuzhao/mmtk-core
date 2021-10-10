@@ -5,6 +5,10 @@ use std::sync::atomic::AtomicUsize;
 use atomic::Ordering;
 
 use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
+use crate::plan::immix::Immix;
+use crate::policy::immix::block::Block;
+use crate::policy::immix::block::BlockState;
+use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
@@ -255,7 +259,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 LOCKED_VALUE,
                 None,
                 Ordering::SeqCst,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
             ) {
                 let logging_value = self.get_edge_logging_state(edge);
                 if logging_value == LOGGED_VALUE {
@@ -309,10 +313,11 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn enqueue_node(&mut self, edge: Address) {
+    fn enqueue_node(&mut self, _src: ObjectReference, edge: Address, new: Option<ObjectReference>) {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
+        // println!("(b) {:?}.{:?} -> new={:?}", _src, edge, new);
         if let Ok(old) = self.log_edge_and_get_old_target(edge) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -328,7 +333,11 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             }
             // Reference counting
             if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
-                if !old.is_null() {
+                // println!("[B] {:?}.{:?} -> old={:?} new={:?}", _src, edge, old, new);
+                if !old.is_null() && Some(old) != new {
+                    // if self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.in_space(old) {
+                    //     assert_ne!(Block::containing::<E::VM>(old).get_state(), BlockState::Nursery, "Invald {:?}.{:?} -> {:?} new={:?} src: {:?} src block state {:?}", _src, edge, old, new, _src.dump_s::<E::VM>(), Block::containing::<E::VM>(_src).get_state());
+                    // }
                     self.decs.push(old);
                 }
                 self.incs.push(edge);
@@ -376,7 +385,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 std::mem::swap(&mut edges, &mut self.edges);
                 let mut nodes = vec![];
                 std::mem::swap(&mut nodes, &mut self.nodes);
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
                     .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
             }
         }
@@ -403,8 +412,8 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     #[inline(always)]
     fn write_barrier(&mut self, target: WriteTarget) {
         match target {
-            WriteTarget::Field { slot, .. } => {
-                self.enqueue_node(slot);
+            WriteTarget::Field { src, slot, val, .. } => {
+                self.enqueue_node(src, slot, Some(val));
             }
             WriteTarget::ArrayCopy {
                 dst,
@@ -414,19 +423,19 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             } => {
                 let dst_base = dst.to_address() + dst_offset;
                 for i in 0..len {
-                    self.enqueue_node(dst_base + (i << 3));
+                    self.enqueue_node(dst, dst_base + (i << 3), None);
                 }
             }
             WriteTarget::Clone { dst, .. } => {
                 // How to deal with this?
-                // println!("Clone {:?}", src);
+                // println!("Clone {:?} -> {:?}", src, dst);
                 EdgeIterator::<E::VM>::iterate(dst, |edge| {
                     debug_assert!(
                         unsafe { edge.load::<ObjectReference>() }.is_null(),
                         "{:?}",
                         unsafe { edge.load::<ObjectReference>() }
                     );
-                    self.enqueue_node(edge);
+                    self.enqueue_node(dst, edge, None);
                 })
             }
         }
