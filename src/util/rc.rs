@@ -12,12 +12,7 @@ use crate::{
         EdgeIterator,
     },
     policy::{
-        immix::{
-            block::{Block, BlockState},
-            chunk::ChunkMap,
-            line::Line,
-            ImmixSpace,
-        },
+        immix::{block::Block, chunk::ChunkMap, line::Line, ImmixSpace},
         space::Space,
     },
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
@@ -266,7 +261,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
-            Block::containing::<VM>(o).set_state(BlockState::Marked);
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
             debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);

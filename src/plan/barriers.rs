@@ -4,11 +4,7 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
-use crate::plan::immix::Immix;
 use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
-use crate::policy::immix::block::Block;
-use crate::policy::immix::block::BlockState;
-use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
@@ -313,7 +309,12 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn enqueue_node(&mut self, _src: ObjectReference, edge: Address, new: Option<ObjectReference>) {
+    fn enqueue_node(
+        &mut self,
+        _src: ObjectReference,
+        edge: Address,
+        _new: Option<ObjectReference>,
+    ) {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }

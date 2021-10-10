@@ -1,7 +1,5 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::immix::Immix;
-use crate::plan::immix::Pause;
 use crate::plan::GcStatus;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;

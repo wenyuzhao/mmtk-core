@@ -2,7 +2,6 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
-use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{ProcessDecs, SweepBlocksAfterDecs};
