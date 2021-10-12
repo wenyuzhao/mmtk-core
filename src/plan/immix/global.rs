@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixProcessEdges, TraceKind};
+use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::{Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::global::BasePlan;
@@ -405,7 +405,7 @@ impl<VM: VMBinding> Immix<VM> {
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         debug_assert!(super::REF_COUNT);
-        type E<VM> = RCImmixProcessEdges<VM, { TraceKind::Fast }>;
+        type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         Self::process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
@@ -419,13 +419,17 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        const RC_EVACUATE_NURSERY: bool =
-            crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY;
-        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false, { RC_EVACUATE_NURSERY }>;
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        if crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY {
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new())
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<
+                ImmixProcessEdges<VM, { TraceKind::Fast }, false>,
+            >::new())
+        };
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]

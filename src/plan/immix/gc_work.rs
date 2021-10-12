@@ -107,23 +107,17 @@ pub enum TraceKind {
     Defrag,
 }
 
-pub struct ImmixProcessEdges<
-    VM: VMBinding,
-    const KIND: TraceKind,
-    const CONCURRENT: bool,
-    const NO_TRACE: bool = false,
-> {
+pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> {
     // Use a static ref to the specific plan to avoid overhead from dynamic dispatch or
     // downcast for each traced object.
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
-    mmtk: &'static MMTK<VM>,
     roots: bool,
     root_slots: Vec<Address>,
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool>
-    ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
+    ImmixProcessEdges<VM, KIND, CONCURRENT>
 {
     fn immix(&self) -> &'static Immix<VM> {
         self.plan
@@ -157,8 +151,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool>
-    ProcessEdgesWork for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesWork
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
 {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
@@ -177,7 +171,6 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
         Self {
             plan,
             base,
-            mmtk,
             roots,
             root_slots: vec![],
         }
@@ -205,7 +198,6 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
             // Further generated packets can either be postponed or run in the same pause.
             if self.immix().current_pause() == Some(Pause::InitialMark) {
                 debug_assert!(crate::flags::CONCURRENT_MARKING);
-                debug_assert!(!NO_TRACE);
                 let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, KIND, true>>::new(
                     new_nodes,
                     true,
@@ -250,22 +242,9 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
     #[inline]
     fn process_edges(&mut self) {
         if KIND == TraceKind::Fast {
-            if NO_TRACE {
-                if self.roots {
-                    self.root_slots = self
-                        .edges
-                        .iter()
-                        .filter(|x| unsafe { !x.load::<ObjectReference>().is_null() })
-                        .cloned()
-                        .collect();
-                } else {
-                    unreachable!();
-                }
-            } else {
-                for i in 0..self.edges.len() {
-                    // Use fast_process_edge since we don't need to forward any objects.
-                    self.fast_process_edge(self.edges[i])
-                }
+            for i in 0..self.edges.len() {
+                // Use fast_process_edge since we don't need to forward any objects.
+                self.fast_process_edge(self.edges[i])
             }
         } else {
             for i in 0..self.edges.len() {
@@ -276,13 +255,13 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.root_slots);
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
+            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
         }
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool> Deref
-    for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Deref
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
 {
     type Target = ProcessEdgesBase<Self>;
     #[inline]
@@ -291,8 +270,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool> DerefMut
-    for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> DerefMut
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
 {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -300,8 +279,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool> Drop
-    for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Drop
+    for ImmixProcessEdges<VM, KIND, CONCURRENT>
 {
     fn drop(&mut self) {
         if CONCURRENT {
@@ -310,81 +289,39 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRAC
     }
 }
 
-pub struct RCImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
-    // Use a static ref to the specific plan to avoid overhead from dynamic dispatch or
-    // downcast for each traced object.
-    plan: &'static Immix<VM>,
+pub struct RCImmixCollectRootEdges<VM: VMBinding> {
     base: ProcessEdgesBase<Self>,
-    mmtk: &'static MMTK<VM>,
-    roots: Vec<Address>,
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> RCImmixProcessEdges<VM, KIND> {
-    fn immix(&self) -> &'static Immix<VM> {
-        self.plan
-    }
-
-    #[inline(always)]
-    fn trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
-        if self.immix().immix_space.in_space(object) {
-            self.roots.push(slot);
-        }
-        object
-    }
-}
-
-impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for RCImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
+    const CAPACITY: usize = 4096;
+    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    fn new(edges: Vec<Address>, _roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, mmtk);
-        let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self {
-            plan,
-            base,
-            mmtk,
-            roots: vec![],
-        }
+        Self { base }
     }
 
-    /// Trace  and evacuate objects.
     fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
         unreachable!()
     }
 
-    #[inline(always)]
-    fn process_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
-        let new_object = self.trace_object(slot, object);
-        if Self::OVERWRITE_REFERENCE {
-            unsafe { slot.store(new_object) };
-        }
-    }
-
     #[inline]
     fn process_edges(&mut self) {
-        for i in 0..self.edges.len() {
-            self.process_edge(self.edges[i])
-        }
-        if !self.roots.is_empty() {
+        if !self.edges.is_empty() {
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.roots);
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
+            std::mem::swap(&mut roots, &mut self.edges);
+            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
         }
     }
-
-    const CAPACITY: usize = 4096;
-
-    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> Deref for RCImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
     type Target = ProcessEdgesBase<Self>;
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -392,7 +329,7 @@ impl<VM: VMBinding, const KIND: TraceKind> Deref for RCImmixProcessEdges<VM, KIN
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind> DerefMut for RCImmixProcessEdges<VM, KIND> {
+impl<VM: VMBinding> DerefMut for RCImmixCollectRootEdges<VM> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
