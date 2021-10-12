@@ -491,7 +491,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
         if crate::flags::REF_COUNT && crate::flags::CONCURRENT_MARKING {
-            debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
+            // debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
             // Treat young objects as marked.
             // FIXME: What about nursery object in reusable lines???
             if Block::containing::<VM>(object).get_state() == BlockState::Nursery {

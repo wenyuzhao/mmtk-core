@@ -79,7 +79,6 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         if crate::flags::REF_COUNT {
             debug_assert_eq!(crate::util::rc::count(obj), 0);
         }
-        self.immix.immix_space().attempt_mark(obj);
     }
 }
 
@@ -108,7 +107,12 @@ pub enum TraceKind {
     Defrag,
 }
 
-pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> {
+pub struct ImmixProcessEdges<
+    VM: VMBinding,
+    const KIND: TraceKind,
+    const CONCURRENT: bool,
+    const NO_TRACE: bool = false,
+> {
     // Use a static ref to the specific plan to avoid overhead from dynamic dispatch or
     // downcast for each traced object.
     plan: &'static Immix<VM>,
@@ -118,8 +122,8 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind, const CONCURR
     root_slots: Vec<Address>,
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
-    ImmixProcessEdges<VM, KIND, CONCURRENT>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool>
+    ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
 {
     fn immix(&self) -> &'static Immix<VM> {
         self.plan
@@ -153,8 +157,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesWork
-    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool>
+    ProcessEdgesWork for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
 {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
@@ -201,6 +205,7 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
             // Further generated packets can either be postponed or run in the same pause.
             if self.immix().current_pause() == Some(Pause::InitialMark) {
                 debug_assert!(crate::flags::CONCURRENT_MARKING);
+                debug_assert!(!NO_TRACE);
                 let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, KIND, true>>::new(
                     new_nodes,
                     true,
@@ -245,9 +250,22 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
     #[inline]
     fn process_edges(&mut self) {
         if KIND == TraceKind::Fast {
-            for i in 0..self.edges.len() {
-                // Use fast_process_edge since we don't need to forward any objects.
-                self.fast_process_edge(self.edges[i])
+            if NO_TRACE {
+                if self.roots {
+                    self.root_slots = self
+                        .edges
+                        .iter()
+                        .filter(|x| unsafe { !x.load::<ObjectReference>().is_null() })
+                        .cloned()
+                        .collect();
+                } else {
+                    unreachable!();
+                }
+            } else {
+                for i in 0..self.edges.len() {
+                    // Use fast_process_edge since we don't need to forward any objects.
+                    self.fast_process_edge(self.edges[i])
+                }
             }
         } else {
             for i in 0..self.edges.len() {
@@ -263,8 +281,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Deref
-    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool> Deref
+    for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
 {
     type Target = ProcessEdgesBase<Self>;
     #[inline]
@@ -273,8 +291,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Deref
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> DerefMut
-    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool> DerefMut
+    for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
 {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -282,8 +300,8 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> DerefMut
     }
 }
 
-impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> Drop
-    for ImmixProcessEdges<VM, KIND, CONCURRENT>
+impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool, const NO_TRACE: bool> Drop
+    for ImmixProcessEdges<VM, KIND, CONCURRENT, NO_TRACE>
 {
     fn drop(&mut self) {
         if CONCURRENT {

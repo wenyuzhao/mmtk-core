@@ -224,8 +224,12 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init(&self, _copy: bool) {
-        self.set_state(BlockState::Nursery);
+    pub fn init(&self, copy: bool) {
+        if copy {
+            self.set_state(BlockState::Marked);
+        } else {
+            self.set_state(BlockState::Nursery);
+        }
         side_metadata::store_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), 0, Ordering::SeqCst);
     }
 

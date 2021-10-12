@@ -3,12 +3,14 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use atomic::Ordering;
-
+use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::{
     plan::{
         barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
-        immix::{Immix, ImmixCopyContext},
+        immix::{
+            gc_work::{ImmixProcessEdges, TraceKind},
+            Immix, ImmixCopyContext, Pause,
+        },
         EdgeIterator,
     },
     policy::{
@@ -23,6 +25,7 @@ use crate::{
     vm::*,
     AllocationSemantics, CopyContext, MMTK,
 };
+use atomic::Ordering;
 
 use super::{
     metadata::{compare_exchange_metadata, store_metadata, RC_LOCK_BIT_SPEC},
@@ -263,7 +266,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if let Ok(0) = r {
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
-            debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
             if !crate::flags::BLOCK_ONLY {
                 // Young object is not evacuated. Mark as striddle in place if required.
                 // FIXME: Fix this when allocating young objects to recyclable lines or doing young evacuation in a tracing pause.
@@ -347,9 +349,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         &mut self,
         e: Address,
         immix: &Immix<VM>,
+        no_evacuation: bool,
     ) -> Option<ObjectReference> {
         // Delay the increment if this object points to a young object
-        if Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY {
+        if !no_evacuation && Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY {
             let o = unsafe { e.load() };
             if immix.immix_space.in_space(o) && self::count(o) == 0 {
                 self.add_remset(e);
@@ -357,16 +360,25 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             }
         }
         // Load mature object and unlog edge
-        if !self.roots {
-            debug_assert!(e.is_logged::<VM>(), "{:?}", e);
-            self.lock_edge(e);
-            debug_assert!(e.is_logged::<VM>(), "{:?}", e);
-            Self::unlog_edge(e);
-        }
-        let o: ObjectReference = unsafe { e.load() };
-        if !self.roots {
-            Self::unlock_edge(e);
-        }
+        let o = if crate::flags::EAGER_INCREMENTS {
+            if !self.roots {
+                debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+                self.lock_edge(e);
+                debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+                Self::unlog_edge(e);
+            }
+            let o: ObjectReference = unsafe { e.load() };
+            if !self.roots {
+                Self::unlock_edge(e);
+            }
+            o
+        } else {
+            if !self.roots {
+                debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+                Self::unlog_edge(e);
+            }
+            unsafe { e.load() }
+        };
         Some(o)
     }
 }
@@ -382,14 +394,17 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
+        let should_skip_evacuation = false; //immix.current_pause() == Some(Pause::InitialMark);// || immix.current_pause() == Some(Pause::FinalMark);
         for e in incs {
             // println!(" - inc e {:?}", e);
-            let o = match self.load_mature_object_and_unlog_edge(e, immix) {
+            let o = match self.load_mature_object_and_unlog_edge(e, immix, should_skip_evacuation) {
                 Some(o) => o,
                 _ => continue,
             };
             if !immix.immix_space.in_space(o) {
-                // println!(" - inc skip {:?} -> {:?}", e, o);
+                if self.roots && !o.is_null() {
+                    roots.push(o);
+                }
                 continue;
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
@@ -399,13 +414,22 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 self.process_inc_and_evacuate(e, o, copy_context)
             };
             if self.roots {
-                if !crate::flags::RC_EVACUATE_NURSERY {
-                    roots.push(o);
-                }
+                roots.push(o);
             }
         }
         if self.roots {
             if !roots.is_empty() {
+                if crate::flags::CONCURRENT_MARKING
+                    && crate::flags::RC_EVACUATE_NURSERY
+                    && immix.current_pause() == Some(Pause::InitialMark)
+                {
+                    // Mark roots and create concurrent scanning packets.
+                    let edges: Vec<Address> = roots.iter().map(|e| Address::from_ptr(e)).collect();
+                    let mut w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(
+                        edges, false, mmtk,
+                    );
+                    GCWork::do_work(&mut w, worker, mmtk);
+                }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }
         } else {
@@ -666,6 +690,12 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             // Update RC counts
             debug_assert_eq!(self::count(o), 0);
             let _ = self::inc(new);
+            // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
+            if immix.current_pause() == Some(Pause::FinalMark)
+                || immix.current_pause() == Some(Pause::FullTraceFast)
+            {
+                immix.immix_space.attempt_mark(new);
+            }
             if !crate::flags::BLOCK_ONLY {
                 self::unmark_striddle_object::<VM>(o);
             }
@@ -700,6 +730,16 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
         }
         if self.roots {
             if !roots.is_empty() {
+                if crate::flags::CONCURRENT_MARKING
+                    && immix.current_pause() == Some(Pause::InitialMark)
+                {
+                    // Mark roots and create concurrent scanning packets.
+                    let edges = roots.iter().map(|e| Address::from_ptr(e)).collect();
+                    let mut w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(
+                        edges, false, mmtk,
+                    );
+                    GCWork::do_work(&mut w, worker, mmtk);
+                }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }
         } else {

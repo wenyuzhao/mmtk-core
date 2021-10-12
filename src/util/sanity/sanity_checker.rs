@@ -164,7 +164,7 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             }
             assert!(
                 object.is_live(),
-                "{:?}: {:?} is dead, o@{:?}({:?}) o.end={:} o.rc={} o.mark={} {:?} {:?}",
+                "{:?}: {:?} is dead, o@{:?}({:?}) o.end={:} o.rc={} o.mark={} {:?} ",
                 slot,
                 object,
                 Block::containing::<VM>(object),
@@ -186,7 +186,7 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                     .downcast_ref::<Immix<VM>>()
                     .unwrap()
                     .current_pause(),
-                object.dump_s::<VM>()
+                // object.dump_s::<VM>()
             );
             assert!(
                 unsafe { object.to_address().load::<usize>() } != 0xdead,

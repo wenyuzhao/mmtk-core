@@ -420,9 +420,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         self.worker = worker;
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
         for block in self.chunk.committed_blocks() {
-            if block.get_state() == BlockState::Nursery {
-                continue;
-            }
             // FIXME: Performance
             for o in (block.start()..block.end())
                 .step_by(crate::util::rc::MIN_OBJECT_SIZE)

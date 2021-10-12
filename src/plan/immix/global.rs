@@ -419,7 +419,9 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false>;
+        const RC_EVACUATE_NURSERY: bool =
+            crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY;
+        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false, { RC_EVACUATE_NURSERY }>;
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
