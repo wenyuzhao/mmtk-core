@@ -87,7 +87,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                     .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
             }
         }
-
+        // Concurrent marking: allocate as marked
+        self.test_and_mark(object, self.mark_state);
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit(object);
         let cell = VM::VMObjectModel::object_start_ref(object);

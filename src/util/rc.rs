@@ -425,10 +425,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 {
                     // Mark roots and create concurrent scanning packets.
                     let edges: Vec<Address> = roots.iter().map(|e| Address::from_ptr(e)).collect();
-                    let mut w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(
+                    let w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(
                         edges, false, mmtk,
                     );
-                    GCWork::do_work(&mut w, worker, mmtk);
+                    self.worker().add_work(WorkBucketStage::ProcessRoots, w);
                 }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }
