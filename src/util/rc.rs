@@ -36,7 +36,7 @@ pub const LOG_REF_COUNT_BITS: usize = 2;
 const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 2;
 pub const MARKER: usize = MAX_REF_COUNT + 1;
 
-pub const LOG_MIN_OBJECT_SIZE: usize = 3;
+pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
 pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
@@ -229,6 +229,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
+    fn promote(o: ObjectReference) {
+        o.log_start_address::<VM>();
+    }
+
+    #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
         EdgeIterator::<VM>::iterate(o, |edge| {
             debug_assert!(edge.is_logged::<VM>(), "{:?}.{:?} is unlogged", o, edge);
@@ -264,6 +269,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
+            Self::promote(o);
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
             if !crate::flags::BLOCK_ONLY {
@@ -313,6 +319,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 if !crate::flags::BLOCK_ONLY {
                     self::unmark_striddle_object::<VM>(o);
                 }
+                let _ = self::inc(new);
+                Self::promote(new);
                 self.scan_nursery_object(new);
                 new
             } else {
@@ -523,6 +531,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                 if !crate::flags::BLOCK_ONLY {
                     self::unmark_striddle_object::<VM>(o);
                 }
+                o.clear_start_address_log::<VM>();
                 #[cfg(feature = "sanity")]
                 unsafe {
                     o.to_address().store(0xdeadusize);
@@ -699,6 +708,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             if !crate::flags::BLOCK_ONLY {
                 self::unmark_striddle_object::<VM>(o);
             }
+            ProcessIncs::<VM>::promote(new);
             self.scan_nursery_object(new);
             new
         }

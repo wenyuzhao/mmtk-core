@@ -8,11 +8,13 @@ use std::sync::atomic::Ordering;
 use crate::mmtk::{MMAPPER, SFT_MAP};
 use crate::plan::barriers::LOCKED_VALUE;
 use crate::plan::barriers::LOGGED_VALUE;
+use crate::plan::barriers::UNLOGGED_VALUE;
+use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
 use crate::util::metadata::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
-use super::metadata::load_metadata;
+use super::metadata::{load_metadata, store_metadata};
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -572,6 +574,44 @@ impl ObjectReference {
     pub fn dump_s<VM: VMBinding>(self) -> String {
         debug_assert!(!self.is_null());
         VM::VMObjectModel::dump_object_s(self)
+    }
+
+    #[inline(always)]
+    pub fn log_start_address<VM: VMBinding>(self) {
+        debug_assert!(!self.is_null());
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            self,
+            UNLOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { (self.to_address() + BYTES_IN_ADDRESS).to_object_reference() },
+            LOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
+
+    #[inline(always)]
+    pub fn clear_start_address_log<VM: VMBinding>(self) {
+        debug_assert!(!self.is_null());
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            self,
+            LOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { (self.to_address() + BYTES_IN_ADDRESS).to_object_reference() },
+            LOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        );
     }
 }
 

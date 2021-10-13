@@ -2,6 +2,7 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
+use crate::util::constants::BYTES_IN_WORD;
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{ProcessDecs, SweepBlocksAfterDecs};
@@ -421,12 +422,15 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
         for block in self.chunk.committed_blocks() {
             // FIXME: Performance
-            for o in (block.start()..block.end())
+            for mut o in (block.start()..block.end())
                 .step_by(crate::util::rc::MIN_OBJECT_SIZE)
                 .map(|a| unsafe { a.to_object_reference() })
             {
                 let c = crate::util::rc::count(o);
                 if c != 0 && c != crate::util::rc::MARKER && !immix_space.is_marked(o) {
+                    if !(o.to_address() + BYTES_IN_WORD).is_logged::<VM>() {
+                        o = unsafe { (o.to_address() + BYTES_IN_WORD).to_object_reference() };
+                    }
                     // Attempt to set refcount to 1
                     let r = crate::util::rc::fetch_update(o, |c| {
                         if c <= 1 {
