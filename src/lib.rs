@@ -105,7 +105,7 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 /// Immix or barrier related flags
 pub mod flags {
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = false;
+    pub const CONCURRENT_MARKING: bool = true;
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
@@ -120,7 +120,7 @@ pub mod flags {
     pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
-    pub const RC_EVACUATE_NURSERY: bool = true;
+    pub const RC_EVACUATE_NURSERY: bool = false;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
 
     // ---------- Barrier flags ---------- //

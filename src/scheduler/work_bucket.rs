@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     /// A priority queue
-    queue: SegQueue<Box<dyn GCWork<VM>>>,
+    queue: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,
@@ -27,10 +27,10 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
     pub fn swap_queue(
-        &mut self,
+        &self,
         mut queue: SegQueue<Box<dyn GCWork<VM>>>,
     ) -> SegQueue<Box<dyn GCWork<VM>>> {
-        std::mem::swap(&mut self.queue, &mut queue);
+        std::mem::swap::<SegQueue<Box<dyn GCWork<VM>>>>(&mut self.queue.write(), &mut queue);
         queue
     }
     pub fn set_group(&mut self, group: Arc<WorkerGroup<VM>>) {
@@ -69,7 +69,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Test if the bucket is drained
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+        self.queue.read().is_empty()
     }
     #[inline(always)]
     pub fn is_drained(&self) -> bool {
@@ -77,13 +77,16 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     /// Disable the bucket
     pub fn deactivate(&self) {
-        debug_assert!(self.queue.is_empty(), "Bucket not drained before close");
+        debug_assert!(
+            self.queue.read().is_empty(),
+            "Bucket not drained before close"
+        );
         self.active.store(false, Ordering::SeqCst);
     }
     #[inline(always)]
     /// Add a work packet to this bucket, with a given priority
     pub fn add_with_priority(&self, _priority: usize, work: Box<dyn GCWork<VM>>) {
-        self.queue.push(work);
+        self.queue.read().push(work);
         self.notify_one_worker(); // FIXME: Performance
     }
     /// Add a work packet to this bucket, with a default priority (1000)
@@ -94,7 +97,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     #[inline(always)]
     pub fn bulk_add_with_priority(&self, _priority: usize, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         for w in work_vec {
-            self.queue.push(w)
+            self.queue.read().push(w)
         }
         self.notify_all_workers(); // FIXME: Performance
     }
@@ -111,7 +114,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         if !self.active.load(Ordering::SeqCst) {
             return None;
         }
-        self.queue.pop()
+        self.queue.read().pop()
     }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(box pred);

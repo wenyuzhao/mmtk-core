@@ -8,7 +8,7 @@ use crate::vm::VMBinding;
 use crossbeam_queue::SegQueue;
 use enum_map::{enum_map, EnumMap};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -43,8 +43,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
-    postponed_concurrent_work: SegQueue<Box<dyn GCWork<VM>>>,
-    pub drop_postponed_work: AtomicBool,
+    postponed_concurrent_work: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -77,20 +76,33 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             startup: Mutex::new(None),
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
-            postponed_concurrent_work: SegQueue::new(),
-            drop_postponed_work: AtomicBool::new(false),
+            postponed_concurrent_work: Default::default(),
         })
     }
 
     #[inline]
+    pub fn pause_concurrent_work_packets_during_gc(&self) {
+        let concurrent_queue =
+            self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(Default::default());
+        if !concurrent_queue.is_empty() {
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("Pause {} concurrent packets", concurrent_queue.len());
+            }
+            let mut postponed_concurrent_work = self.postponed_concurrent_work.write();
+            debug_assert!(postponed_concurrent_work.is_empty());
+            *postponed_concurrent_work = concurrent_queue;
+        }
+    }
+
+    #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
-        self.postponed_concurrent_work.push(box w)
+        self.postponed_concurrent_work.read().push(box w)
     }
 
     #[inline]
     pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
-        ws.into_iter()
-            .for_each(|w| self.postponed_concurrent_work.push(w));
+        let queue = self.postponed_concurrent_work.read();
+        ws.into_iter().for_each(|w| queue.push(w));
     }
 
     #[inline]
@@ -259,22 +271,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
         let mut unconstrained_bucket_refilled = false;
-        if !self.postponed_concurrent_work.is_empty() {
-            let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        if !self.postponed_concurrent_work.read().is_empty() {
             let mut queue = Default::default();
-            std::mem::swap(&mut me.postponed_concurrent_work, &mut queue);
-            if !self.drop_postponed_work.load(Ordering::SeqCst) {
-                if crate::flags::LOG_PER_GC_STATE {
-                    println!("Postponed {} packets", queue.len());
-                }
-                let old_queue = me.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
-                debug_assert!(old_queue.is_empty());
-                unconstrained_bucket_refilled = true;
-            } else {
-                debug_assert!(me.postponed_concurrent_work.is_empty());
+            std::mem::swap::<SegQueue<Box<dyn GCWork<VM>>>>(
+                &mut self.postponed_concurrent_work.write(),
+                &mut queue,
+            );
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("Postponed {} packets", queue.len());
             }
+            let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
+            debug_assert!(old_queue.is_empty());
+            unconstrained_bucket_refilled = true;
         }
-        self.drop_postponed_work.store(false, Ordering::SeqCst);
         if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
             self.process_coordinator_work(finalizer);
         }
