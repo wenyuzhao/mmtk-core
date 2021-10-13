@@ -71,11 +71,6 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
                 }
             }
         }
-        if crate::flags::REF_COUNT && !crate::flags::BLOCK_ONLY {
-            if bytes > Line::BYTES {
-                crate::util::rc::mark_striddle_object::<VM>(obj);
-            }
-        }
         if crate::flags::REF_COUNT {
             debug_assert_eq!(crate::util::rc::count(obj), 0);
         }

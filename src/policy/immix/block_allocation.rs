@@ -91,7 +91,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 line.mark(current_state);
             }
         }
-        // println!("Alloc {:?}", block);
+        // println!("Alloc {:?} {}", block, copy);
         block.init(copy);
         if cfg!(debug_assertions) {
             if crate::flags::BARRIER_MEASUREMENT || self.space().common().needs_log_bit {

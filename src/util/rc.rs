@@ -231,6 +231,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn promote(o: ObjectReference) {
         o.log_start_address::<VM>();
+        if !crate::flags::BLOCK_ONLY {
+            if o.get_size::<VM>() > Line::BYTES {
+                self::mark_striddle_object::<VM>(o);
+            }
+        }
     }
 
     #[inline(always)]
@@ -272,13 +277,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             Self::promote(o);
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
-            if !crate::flags::BLOCK_ONLY {
-                // Young object is not evacuated. Mark as striddle in place if required.
-                // FIXME: Fix this when allocating young objects to recyclable lines or doing young evacuation in a tracing pause.
-                if o.get_size::<VM>() > Line::BYTES {
-                    self::mark_striddle_object::<VM>(o);
-                }
-            }
         }
         o
     }
@@ -301,11 +299,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     e.store(new);
                 }
             }
-            let r = self::inc(new);
-            debug_assert_ne!(r, Ok(0));
+            let _ = self::inc(new);
             new
         } else {
-            if let Ok(0) = self::inc(o) {
+            if self::count(o) == 0 {
                 // Evacuate the object
                 let new = object_forwarding::forward_object::<VM, _>(
                     o,
@@ -316,14 +313,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     e.store(new);
                 }
                 self::set(o, 0);
-                if !crate::flags::BLOCK_ONLY {
-                    self::unmark_striddle_object::<VM>(o);
-                }
                 let _ = self::inc(new);
                 Self::promote(new);
                 self.scan_nursery_object(new);
                 new
             } else {
+                let _ = self::inc(o);
                 // Object is not moved.
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 o
@@ -704,9 +699,6 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
                 || immix.current_pause() == Some(Pause::FullTraceFast)
             {
                 immix.immix_space.attempt_mark(new);
-            }
-            if !crate::flags::BLOCK_ONLY {
-                self::unmark_striddle_object::<VM>(o);
             }
             ProcessIncs::<VM>::promote(new);
             self.scan_nursery_object(new);
