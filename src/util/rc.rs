@@ -28,12 +28,17 @@ use crate::{
 use atomic::Ordering;
 
 use super::{
-    metadata::{compare_exchange_metadata, store_metadata, RC_LOCK_BIT_SPEC},
+    metadata::{
+        compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata,
+        RC_LOCK_BIT_SPEC,
+    },
     Address,
 };
 
 pub const LOG_REF_COUNT_BITS: usize = 2;
-const MAX_REF_COUNT: usize = (1 << (1 << LOG_REF_COUNT_BITS)) - 2;
+pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
+const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 2;
+pub const REF_COUNT_MASK: usize = (1 << REF_COUNT_BITS) - 1;
 pub const MARKER: usize = MAX_REF_COUNT + 1;
 
 pub const LOG_MIN_OBJECT_SIZE: usize = 4;
@@ -103,6 +108,19 @@ pub fn set(o: ObjectReference, count: usize) {
 
 pub fn count(o: ObjectReference) -> usize {
     side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst)
+}
+
+pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
+    debug_assert!({
+        let log_bits_in_uint: usize = (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
+        Block::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
+            + crate::util::rc::LOG_REF_COUNT_BITS
+            >= log_bits_in_uint
+    });
+    let start = address_to_meta_address(&crate::util::rc::RC_TABLE, b.start()).to_ptr::<UInt>();
+    let limit = address_to_meta_address(&crate::util::rc::RC_TABLE, b.end()).to_ptr::<UInt>();
+    let rc_table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
+    rc_table
 }
 
 #[allow(unused)]

@@ -19,6 +19,7 @@
 #![feature(const_trait_impl)]
 #![feature(const_option)]
 #![feature(const_fn_trait_bound)]
+#![feature(core_intrinsics)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 

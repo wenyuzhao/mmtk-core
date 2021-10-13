@@ -2,10 +2,10 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
-use crate::util::constants::BYTES_IN_WORD;
+use crate::util::constants::{BYTES_IN_WORD, LOG_BITS_IN_BYTE};
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
-use crate::util::rc::{ProcessDecs, SweepBlocksAfterDecs};
+use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
 use crate::util::ObjectReference;
 use crate::{
     scheduler::*,
@@ -14,6 +14,7 @@ use crate::{
     MMTK,
 };
 use spin::Mutex;
+use std::intrinsics::{likely, unlikely};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
@@ -413,6 +414,24 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             );
         }
     }
+
+    #[inline(always)]
+    fn process_dead_object(&mut self, mut o: ObjectReference) {
+        if !(o.to_address() + BYTES_IN_WORD).is_logged::<VM>() {
+            o = unsafe { (o.to_address() + BYTES_IN_WORD).to_object_reference() };
+        }
+        // Attempt to set refcount to 1
+        let r = crate::util::rc::fetch_update(o, |c| {
+            if c <= 1 {
+                return None; // already dead
+            }
+            Some(1)
+        });
+        if r == Err(1) || r.is_ok() {
+            // This is a dead object in a dead cycle. Perform cyclic decrements
+            self.add_dec(o)
+        }
+    }
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
@@ -421,29 +440,69 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         self.worker = worker;
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
         for block in self.chunk.committed_blocks() {
-            // FIXME: Performance
-            for mut o in (block.start()..block.end())
-                .step_by(crate::util::rc::MIN_OBJECT_SIZE)
-                .map(|a| unsafe { a.to_object_reference() })
-            {
-                let c = crate::util::rc::count(o);
-                if c != 0 && c != crate::util::rc::MARKER && !immix_space.is_marked(o) {
-                    if !(o.to_address() + BYTES_IN_WORD).is_logged::<VM>() {
-                        o = unsafe { (o.to_address() + BYTES_IN_WORD).to_object_reference() };
+            const LOG_OBJECTS_IN_BYTE: usize = LOG_BITS_IN_BYTE as usize - rc::LOG_REF_COUNT_BITS;
+            const OBJECTS_IN_BYTE: usize = 1 << LOG_OBJECTS_IN_BYTE;
+
+            type UInt = u128;
+            const LOG_BITS_IN_ENTRY: usize =
+                (std::mem::size_of::<UInt>() << LOG_BITS_IN_BYTE).trailing_zeros() as _;
+            const LOG_OBJECTS_IN_ENTRY: usize = LOG_BITS_IN_ENTRY - rc::LOG_REF_COUNT_BITS;
+            let rc_table = crate::util::rc::rc_table_range::<UInt>(block);
+            for (i, entry) in rc_table.iter().enumerate() {
+                let entry = *entry;
+                if likely(entry == 0) {
+                    continue;
+                }
+                let base = block.start() + (i << (LOG_OBJECTS_IN_ENTRY + rc::LOG_MIN_OBJECT_SIZE));
+                for (j, byte) in entry.to_le_bytes().iter().enumerate() {
+                    let byte = *byte;
+                    if likely(byte == 0) {
+                        continue;
                     }
-                    // Attempt to set refcount to 1
-                    let r = crate::util::rc::fetch_update(o, |c| {
-                        if c <= 1 {
-                            return None; // already dead
+                    let base = base + (j << (LOG_OBJECTS_IN_BYTE + rc::LOG_MIN_OBJECT_SIZE));
+                    for k in 0..OBJECTS_IN_BYTE {
+                        let c =
+                            (byte >> (k << rc::LOG_REF_COUNT_BITS)) as usize & rc::REF_COUNT_MASK;
+                        if unlikely(c != 0 && c != rc::MARKER) {
+                            let o = unsafe {
+                                (base + (k << rc::LOG_MIN_OBJECT_SIZE)).to_object_reference()
+                            };
+                            if !immix_space.is_marked(o) {
+                                self.process_dead_object(o)
+                            }
                         }
-                        Some(1)
-                    });
-                    if r == Err(1) || r.is_ok() {
-                        // This is a dead object in a dead cycle. Perform cyclic decrements
-                        self.add_dec(o)
                     }
                 }
             }
+
+            // let rc_table = crate::util::rc::rc_table_range::<u8>(block);
+            // for (i, entry) in rc_table.iter().enumerate() {
+            //     let entry = *entry;
+            //     if likely(entry == 0) {
+            //         continue
+            //     }
+            //     let base = block.start() + (i << (LOG_OBJECTS_IN_BYTE + rc::LOG_MIN_OBJECT_SIZE));
+            //     for j in 0..OBJECTS_IN_BYTE {
+            //         let c = (entry >> (j << rc::LOG_REF_COUNT_BITS)) as usize & rc::REF_COUNT_MASK;
+            //         if unlikely(c != 0 && c != rc::MARKER) {
+            //             let o = unsafe { (base + (j << rc::LOG_MIN_OBJECT_SIZE)).to_object_reference() };
+            //             if !immix_space.is_marked(o) {
+            //                 self.process_dead_object(o)
+            //             }
+            //         }
+            //     }
+            // }
+
+            // FIXME: Performance
+            // for o in (block.start()..block.end())
+            //     .step_by(crate::util::rc::MIN_OBJECT_SIZE)
+            //     .map(|a| unsafe { a.to_object_reference() })
+            // {
+            //     let c = crate::util::rc::count(o);
+            //     if c != 0 && c != crate::util::rc::MARKER && !immix_space.is_marked(o) {
+            //         self.process_dead_object(o)
+            //     }
+            // }
         }
         self.flush();
         // If all decs are finished, start sweeping blocks

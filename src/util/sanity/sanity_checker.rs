@@ -162,12 +162,7 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             if !object.is_sane() {
                 panic!("Invalid reference {:?} -> {:?}", slot, object);
             }
-            assert!(
-                object.is_live(),
-                "{:?}: {:?} is dead",
-                slot,
-                object,
-            );
+            assert!(object.is_live(), "{:?}: {:?} is dead", slot, object,);
             assert!(
                 object.is_live(),
                 "{:?}: {:?} is dead, o@{:?}({:?}) o.end={:} o.rc={} o.mark={} {:?} ",

@@ -3,7 +3,6 @@ use atomic::Ordering;
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::line::Line;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
