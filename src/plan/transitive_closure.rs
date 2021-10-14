@@ -3,6 +3,8 @@
 use std::marker::PhantomData;
 use std::mem;
 
+use atomic::Ordering;
+
 use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
@@ -80,8 +82,18 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
         }
         let mut new_edges = Vec::new();
         mem::swap(&mut new_edges, &mut self.buffer);
-        self.worker
-            .add_work(self.edge_bucket, E::new(new_edges, false, self.mmtk));
+        let w = E::new(new_edges, false, self.mmtk);
+        if self.edge_bucket == WorkBucketStage::Unconstrained
+            && self
+                .worker
+                .scheduler()
+                .pause_concurrent_work_packets_during_gc
+                .load(Ordering::SeqCst)
+        {
+            self.worker.scheduler().postpone(w);
+        } else {
+            self.worker.add_work(self.edge_bucket, w);
+        }
     }
 }
 

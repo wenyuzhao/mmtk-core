@@ -106,9 +106,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         // Concurrent tracing finished
         if crate::flags::CONCURRENT_MARKING
-            && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
-            && crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
+            && crate::concurrent_marking_in_progress()
+            && crate::concurrent_marking_packets_drained()
         {
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("[Concurrent marking finished]");
+            }
             return true;
         }
         // RC nursery full
@@ -117,6 +120,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && self.immix_space.block_allocation.nursery_blocks()
                 >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
         {
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("[RC Nursery full]");
+            }
             return true;
         }
         false
@@ -125,9 +131,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn concurrent_collection_required(&self) -> bool {
         super::CONCURRENT_MARKING
             && !crate::plan::barriers::BARRIER_MEASUREMENT
+            && !crate::concurrent_marking_in_progress()
             && self.base().gc_status() == GcStatus::NotInGC
             && self.get_pages_reserved() * 100 / 45 > self.get_total_pages()
-            && !crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
@@ -252,11 +258,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
+        if self.current_pause().unwrap() == Pause::FinalMark {
+            crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.store(false, Ordering::SeqCst);
+        }
         crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
     }
 
     fn gc_pause_end(&self) {
         if self.current_pause().unwrap() == Pause::InitialMark {
+            crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.store(true, Ordering::SeqCst);
+        }
+        if self.current_pause().unwrap() == Pause::InitialMark
+            || !crate::concurrent_marking_packets_drained()
+        {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
@@ -333,21 +347,26 @@ impl<VM: VMBinding> Immix<VM> {
             self.base().options.full_heap_system_gc,
         );
         let cc_force_full = self.base().options.full_heap_system_gc;
+        let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
+            || self.is_emergency_collection()
+            || cc_force_full;
         let mut perform_cycle_collection = !super::REF_COUNT
             || crate::plan::barriers::BARRIER_MEASUREMENT
             || self
                 .next_gc_may_perform_cycle_collection
-                .load(Ordering::SeqCst);
-        perform_cycle_collection |= (self.base().cur_collection_attempts.load(Ordering::SeqCst)
-            > 1)
-            || self.is_emergency_collection()
-            || cc_force_full;
-        let concurrent_marking_in_progress = crate::IN_CONCURRENT_GC.load(Ordering::SeqCst);
-        perform_cycle_collection |= concurrent_marking_in_progress;
+                .load(Ordering::SeqCst)
+            || emergency_collection;
+        let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
+        perform_cycle_collection |=
+            concurrent_marking_in_progress && concurrent_marking_packets_drained;
+        // perform_cycle_collection |= crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.load(Ordering::SeqCst);
         perform_cycle_collection |= concurrent;
         self.perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
-        let pause = if concurrent_marking_in_progress {
+        let pause = if concurrent_marking_in_progress
+            && (concurrent_marking_packets_drained || emergency_collection)
+        {
             debug_assert!(crate::flags::CONCURRENT_MARKING);
             debug_assert!(perform_cycle_collection);
             debug_assert!(!concurrent);
@@ -357,8 +376,16 @@ impl<VM: VMBinding> Immix<VM> {
             debug_assert!(!concurrent);
             Pause::FullTraceDefrag
         } else if perform_cycle_collection && !concurrent {
-            Pause::FullTraceFast
+            if concurrent_marking_in_progress
+                || !concurrent_marking_packets_drained
+                || crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.load(Ordering::SeqCst)
+            {
+                Pause::FinalMark
+            } else {
+                Pause::FullTraceFast
+            }
         } else if perform_cycle_collection && concurrent {
+            debug_assert!(!concurrent_marking_in_progress);
             debug_assert!(crate::flags::CONCURRENT_MARKING);
             Pause::InitialMark
         } else if !perform_cycle_collection {
@@ -404,6 +431,9 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if crate::flags::CONCURRENT_MARKING {
+            scheduler.pause_concurrent_work_packets_during_gc();
+        }
         debug_assert!(super::REF_COUNT);
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.

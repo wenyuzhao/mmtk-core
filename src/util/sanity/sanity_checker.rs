@@ -165,9 +165,11 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             assert!(object.is_live(), "{:?}: {:?} is dead", slot, object,);
             assert!(
                 object.is_live(),
-                "{:?}: {:?} is dead, o@{:?}({:?}) o.end={:} o.rc={} o.mark={} {:?} ",
+                "{:?}: {:?} is dead, e@{:?}({:?}), o@{:?}({:?}) o.end={:} o.rc={} o.mark={} {:?} ",
                 slot,
                 object,
+                Block::from(slot),
+                Block::from(slot).get_state(),
                 Block::containing::<VM>(object),
                 Block::containing::<VM>(object).get_state(),
                 object.to_address() + object.get_size::<VM>(),

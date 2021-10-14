@@ -8,7 +8,7 @@ use crate::vm::VMBinding;
 use crossbeam_queue::SegQueue;
 use enum_map::{enum_map, EnumMap};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
@@ -44,6 +44,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
     postponed_concurrent_work: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
+    pub pause_concurrent_work_packets_during_gc: AtomicBool,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -77,6 +78,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
             postponed_concurrent_work: Default::default(),
+            pause_concurrent_work_packets_during_gc: Default::default(),
         })
     }
 
@@ -92,6 +94,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             debug_assert!(postponed_concurrent_work.is_empty());
             *postponed_concurrent_work = concurrent_queue;
         }
+        self.pause_concurrent_work_packets_during_gc
+            .store(true, Ordering::SeqCst);
     }
 
     #[inline]
@@ -284,6 +288,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             debug_assert!(old_queue.is_empty());
             unconstrained_bucket_refilled = true;
         }
+        self.pause_concurrent_work_packets_during_gc
+            .store(false, Ordering::SeqCst);
         if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
             self.process_coordinator_work(finalizer);
         }

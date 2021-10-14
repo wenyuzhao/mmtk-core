@@ -417,7 +417,11 @@ impl Block {
         debug_assert_ne!(self.get_state(), BlockState::Unallocated);
         let live = !self.rc_dead();
         if !live {
-            space.release_block(*self, false);
+            if crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.load(Ordering::SeqCst) {
+                space.pending_release.push(*self);
+            } else {
+                space.release_block(*self, false);
+            }
         } else if !crate::flags::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.

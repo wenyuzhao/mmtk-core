@@ -77,6 +77,7 @@ use std::{
 };
 
 use crate::util::constants;
+use atomic::Ordering;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
@@ -96,8 +97,19 @@ pub use crate::plan::{
     TransitiveClosure,
 };
 
+static CONCURRENT_MARKING_IS_NOT_FINISHED_YET: AtomicBool = AtomicBool::new(false);
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
+
+#[inline(always)]
+fn concurrent_marking_in_progress() -> bool {
+    crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+}
+
+#[inline(always)]
+fn concurrent_marking_packets_drained() -> bool {
+    crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
+}
 
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
@@ -109,7 +121,7 @@ pub mod flags {
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = false;
+    pub const BLOCK_ONLY: bool = true;
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
@@ -130,8 +142,9 @@ pub mod flags {
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
     pub const LOG_PER_GC_STATE: bool = true;
-    pub const LOG_STAGES: bool = false;
+    pub const LOG_STAGES: bool = true;
     pub const LOG_WORK_PACKETS: bool = false;
+    pub const SLOW_CONCURRENT_MARKING: bool = true;
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);

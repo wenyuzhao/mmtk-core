@@ -25,6 +25,7 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
+use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
@@ -57,6 +58,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub block_allocation: BlockAllocation<VM>,
     pub possibly_dead_mature_blocks: Mutex<HashSet<Block>>,
     initial_mark_pause: bool,
+    pub pending_release: SegQueue<Block>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -183,6 +185,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             block_allocation: BlockAllocation::new(),
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
+            pending_release: Default::default(),
         }
     }
 
@@ -256,6 +259,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
                     .bulk_add(work_packets);
+            }
+            while let Some(x) = self.pending_release.pop() {
+                self.release_block(x, false);
             }
         }
     }

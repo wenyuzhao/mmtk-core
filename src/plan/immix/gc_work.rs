@@ -3,6 +3,7 @@ use atomic::Ordering;
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -123,7 +124,13 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            self.immix().immix_space.fast_trace_object(self, object);
+            let no_trace = {
+                let state = Block::containing::<VM>(object).get_state();
+                state == BlockState::Unallocated || state == BlockState::Nursery
+            };
+            if !no_trace {
+                self.immix().immix_space.fast_trace_object(self, object);
+            }
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
                 if self.roots {
                     self.root_slots.push(slot);
@@ -235,6 +242,9 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
 
     #[inline]
     fn process_edges(&mut self) {
+        if CONCURRENT && crate::flags::SLOW_CONCURRENT_MARKING {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         if KIND == TraceKind::Fast {
             for i in 0..self.edges.len() {
                 // Use fast_process_edge since we don't need to forward any objects.
