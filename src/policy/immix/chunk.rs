@@ -1,7 +1,8 @@
 use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
-use crate::plan::immix::{CURRENT_CONC_DECS_COUNTER, Immix, Pause};
+use super::line::Line;
+use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
@@ -499,7 +500,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 .map(|a| unsafe { a.to_object_reference() })
             {
                 let c = rc::count(o);
-                if c != 0 && c != rc::MARKER && !immix_space.is_marked(o) {
+                if c != 0 && !immix_space.is_marked(o) {
+                    if Line::is_aligned(o.to_address()) {
+                        if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
+                            continue;
+                        } else {
+                            std::sync::atomic::fence(Ordering::SeqCst);
+                            if rc::count(o) == 0 {
+                                continue;
+                            }
+                        }
+                    }
                     self.process_dead_object(o)
                 }
             }

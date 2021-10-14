@@ -37,16 +37,22 @@ use super::{
 
 pub const LOG_REF_COUNT_BITS: usize = 2;
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
-const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 2;
 pub const REF_COUNT_MASK: usize = (1 << REF_COUNT_BITS) - 1;
-pub const MARKER: usize = MAX_REF_COUNT + 1;
+const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;
 
 pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
-pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
+pub const RC_STRADDLE_LINES: SideMetadataSpec = SideMetadataSpec {
     is_global: false,
     offset: SideMetadataOffset::layout_after(&ChunkMap::ALLOC_TABLE),
+    log_num_of_bits: 0,
+    log_min_obj_size: Line::LOG_BYTES,
+};
+
+pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
+    is_global: false,
+    offset: SideMetadataOffset::layout_after(&RC_STRADDLE_LINES),
     log_num_of_bits: LOG_REF_COUNT_BITS,
     log_min_obj_size: LOG_MIN_OBJECT_SIZE as _,
 };
@@ -131,6 +137,12 @@ pub fn is_dead(o: ObjectReference) -> bool {
 }
 
 #[inline(always)]
+pub fn is_straddle_line(line: Line) -> bool {
+    let v = side_metadata::load_atomic(&RC_STRADDLE_LINES, line.start(), Ordering::SeqCst);
+    v != 0
+}
+
+#[inline(always)]
 pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
     // debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
@@ -139,7 +151,8 @@ pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     let start_line = Line::forward(Line::containing::<VM>(o), 1);
     let end_line = Line::from(Line::align(o.to_address() + size));
     for line in start_line..end_line {
-        self::set(unsafe { line.start().to_object_reference() }, MARKER);
+        side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 1, Ordering::SeqCst);
+        self::set(unsafe { line.start().to_object_reference() }, 1);
     }
 }
 
@@ -153,6 +166,9 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
         let end_line = Line::from(Line::align(o.to_address() + size));
         for line in start_line..end_line {
             self::set(unsafe { line.start().to_object_reference() }, 0);
+            std::sync::atomic::fence(Ordering::SeqCst);
+            side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 0, Ordering::SeqCst);
+            std::sync::atomic::fence(Ordering::SeqCst);
         }
     }
 }
