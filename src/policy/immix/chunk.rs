@@ -1,7 +1,7 @@
 use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
-use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
+use crate::plan::immix::{CURRENT_CONC_DECS_COUNTER, Immix, Pause};
 use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
@@ -434,11 +434,12 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let immix_space = &immix.immix_space;
         for block in self.chunk.committed_blocks() {
-            if block.get_state() == BlockState::Nursery {
-                continue;
-            }
+            // if immix.current_pause() == Some(Pause::FinalMark) && block.get_state() == BlockState::Nursery {
+            //     continue;
+            // }
             // const LOG_OBJECTS_IN_BYTE: usize = LOG_BITS_IN_BYTE as usize - rc::LOG_REF_COUNT_BITS;
             // const OBJECTS_IN_BYTE: usize = 1 << LOG_OBJECTS_IN_BYTE;
 

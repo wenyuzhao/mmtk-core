@@ -716,7 +716,11 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             if immix.current_pause() == Some(Pause::FinalMark)
                 || immix.current_pause() == Some(Pause::FullTraceFast)
             {
-                immix.immix_space.attempt_mark(new);
+                if immix.immix_space.mark_bit(o) {
+                    immix.immix_space.attempt_mark(new);
+                } else {
+                    debug_assert!(!immix.immix_space.mark_bit(new));
+                }
             }
             ProcessIncs::<VM>::promote(new);
             self.scan_nursery_object(new);

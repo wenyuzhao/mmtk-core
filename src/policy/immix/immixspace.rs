@@ -501,6 +501,35 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         true
     }
 
+    /// Atomically mark an object.
+    #[inline(always)]
+    pub fn unmark(&self, object: ObjectReference) -> bool {
+        loop {
+            let old_value = load_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                object,
+                None,
+                Some(Ordering::SeqCst),
+            ) as u8;
+            if old_value == Self::UNMARKED_STATE {
+                return false;
+            }
+
+            if compare_exchange_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                object,
+                Self::MARKED_STATE as _,
+                Self::UNMARKED_STATE as _,
+                None,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                break;
+            }
+        }
+        true
+    }
+
     /// Check if an object is marked.
     #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
