@@ -131,7 +131,7 @@ pub fn is_dead(o: ObjectReference) -> bool {
 }
 
 #[inline(always)]
-pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
+pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
     // debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
@@ -144,7 +144,7 @@ pub fn mark_striddle_object<VM: VMBinding>(o: ObjectReference) {
 }
 
 #[inline(always)]
-pub fn unmark_striddle_object<VM: VMBinding>(o: ObjectReference) {
+pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::flags::BLOCK_ONLY);
     // debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
     let size = VM::VMObjectModel::get_current_size(o);
@@ -251,7 +251,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         o.log_start_address::<VM>();
         if !crate::flags::BLOCK_ONLY {
             if o.get_size::<VM>() > Line::BYTES {
-                self::mark_striddle_object::<VM>(o);
+                self::mark_straddle_object::<VM>(o);
             }
         }
     }
@@ -542,7 +542,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                     }
                 });
                 if !crate::flags::BLOCK_ONLY {
-                    self::unmark_striddle_object::<VM>(o);
+                    self::unmark_straddle_object::<VM>(o);
                 }
                 o.clear_start_address_log::<VM>();
                 #[cfg(feature = "sanity")]

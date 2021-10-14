@@ -119,7 +119,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
-        let mut x = metadata::extract_side_metadata(&if super::BLOCK_ONLY {
+        if crate::plan::immix::REF_COUNT {
+            return metadata::extract_side_metadata(&vec![
+                MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
+                MetadataSpec::OnSide(Block::MARK_TABLE),
+                MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
+                *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                MetadataSpec::OnSide(crate::util::rc::RC_TABLE),
+            ]);
+        }
+        metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
@@ -134,11 +143,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             ]
-        });
-        if crate::plan::immix::REF_COUNT {
-            x.push(crate::util::rc::RC_TABLE);
-        }
-        x
+        })
     }
 
     pub fn new(
@@ -461,6 +466,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
+        if crate::flags::REF_COUNT {
+            return;
+        }
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
     }
 
