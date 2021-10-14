@@ -140,10 +140,11 @@ pub mod flags {
 
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = true;
+    pub const LOG_PER_GC_STATE: bool = false;
     pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
-    pub const SLOW_CONCURRENT_MARKING: bool = true;
+    pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = true;
+    pub const SLOW_CONCURRENT_MARKING: bool = !NO_RC_PAUSES_DURING_CONCURRENT_MARKING;
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);

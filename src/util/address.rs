@@ -14,6 +14,7 @@ use crate::util::heap::layout::mmapper::Mmapper;
 use crate::util::metadata::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
+use super::constants::BYTES_IN_WORD;
 use super::metadata::{load_metadata, store_metadata};
 
 /// size in bytes
@@ -612,6 +613,20 @@ impl ObjectReference {
             None,
             Some(Ordering::SeqCst),
         );
+    }
+
+    #[inline(always)]
+    pub fn class_pointer(self) -> Address {
+        unsafe { (self.to_address() + BYTES_IN_WORD).load() }
+    }
+
+    #[inline(always)]
+    pub fn fix_start_address<VM: VMBinding>(self) -> Self {
+        if !(self.to_address() + BYTES_IN_WORD).is_logged::<VM>() {
+            unsafe { (self.to_address() + BYTES_IN_WORD).to_object_reference() }
+        } else {
+            self
+        }
     }
 }
 

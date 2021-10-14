@@ -3,7 +3,6 @@ use atomic::Ordering;
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -119,16 +118,30 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
     }
 
     #[inline(always)]
-    fn fast_trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
+    fn fast_trace_object(&mut self, slot: Address, mut object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            let no_trace = {
-                let state = Block::containing::<VM>(object).get_state();
-                state == BlockState::Unallocated || state == BlockState::Nursery
-            };
+            let no_trace = CONCURRENT
+                && crate::flags::REF_COUNT
+                && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+                && crate::util::rc::count(object) == 0;
             if !no_trace {
+                if CONCURRENT
+                    && crate::flags::REF_COUNT
+                    && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+                {
+                    debug_assert!(!self.roots);
+                    object = object.fix_start_address::<VM>();
+                    debug_assert_eq!(
+                        object.class_pointer().as_usize() & 0xff0000000000,
+                        0x7f0000000000,
+                        "{:?} has invalid class pointer {:?}",
+                        object,
+                        object.class_pointer()
+                    );
+                }
                 self.immix().immix_space.fast_trace_object(self, object);
             }
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {

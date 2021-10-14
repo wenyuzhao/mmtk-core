@@ -109,9 +109,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
         {
-            if crate::flags::LOG_PER_GC_STATE {
-                println!("[Concurrent marking finished]");
-            }
             return true;
         }
         // RC nursery full
@@ -120,9 +117,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && self.immix_space.block_allocation.nursery_blocks()
                 >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
         {
-            if crate::flags::LOG_PER_GC_STATE {
-                println!("[RC Nursery full]");
-            }
             return true;
         }
         false
@@ -367,7 +361,11 @@ impl<VM: VMBinding> Immix<VM> {
         } else if concurrent {
             Pause::InitialMark
         } else {
-            if (super::REF_COUNT && !force_no_rc) || concurrent_marking_in_progress {
+            if !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+                && concurrent_marking_in_progress
+            {
+                Pause::FinalMark
+            } else if (super::REF_COUNT && !force_no_rc) || concurrent_marking_in_progress {
                 Pause::RefCount
             } else {
                 full_trace()
