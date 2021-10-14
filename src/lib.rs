@@ -97,7 +97,6 @@ pub use crate::plan::{
     TransitiveClosure,
 };
 
-static CONCURRENT_MARKING_IS_NOT_FINISHED_YET: AtomicBool = AtomicBool::new(false);
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
@@ -142,7 +141,7 @@ pub mod flags {
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
     pub const LOG_PER_GC_STATE: bool = true;
-    pub const LOG_STAGES: bool = true;
+    pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
     pub const SLOW_CONCURRENT_MARKING: bool = true;
 

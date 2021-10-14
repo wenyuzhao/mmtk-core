@@ -417,7 +417,7 @@ impl Block {
         debug_assert_ne!(self.get_state(), BlockState::Unallocated);
         let live = !self.rc_dead();
         if !live {
-            if crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.load(Ordering::SeqCst) {
+            if crate::concurrent_marking_in_progress() {
                 space.pending_release.push(*self);
             } else {
                 space.release_block(*self, false);

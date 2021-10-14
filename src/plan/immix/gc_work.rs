@@ -243,7 +243,7 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
     #[inline]
     fn process_edges(&mut self) {
         if CONCURRENT && crate::flags::SLOW_CONCURRENT_MARKING {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_micros(500));
         }
         if KIND == TraceKind::Fast {
             for i in 0..self.edges.len() {

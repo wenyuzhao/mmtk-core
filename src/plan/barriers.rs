@@ -327,9 +327,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             //     assert_ne!(Block::containing::<E::VM>(old).get_state(), BlockState::Nursery, "Invald {:?}.{:?} -> {:?} new={:?} src: {:?} src block state {:?}", _src, edge, old, new, _src.dump_s::<E::VM>(), Block::containing::<E::VM>(_src).get_state());
             // }
             // Concurrent Marking
-            if crate::plan::immix::CONCURRENT_MARKING
-                && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
-            {
+            if crate::plan::immix::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
                 self.edges.push(edge);
                 if !old.is_null() {
                     self.nodes.push(old);

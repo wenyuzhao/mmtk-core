@@ -63,7 +63,9 @@ impl Defrag {
                 || (collection_attempts > 1)
                 || !exhausted_reusable_space
                 || Self::DEFRAG_STRESS
-                || (collect_whole_heap && user_triggered && full_heap_system_gc));
+                || (collect_whole_heap && user_triggered && full_heap_system_gc))
+            && !crate::flags::REF_COUNT
+            && !crate::flags::CONCURRENT_MARKING;
         // println!("Defrag: {}", in_defrag);
         self.in_defrag_collection
             .store(in_defrag, Ordering::Release)

@@ -339,6 +339,15 @@ pub trait Plan: 'static + Sync + Downcast {
     }
 
     fn reset_collection_trigger(&self) {
+        self.base().last_internal_triggered_collection.store(
+            self.base()
+                .internal_triggered_collection
+                .load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.base()
+            .internal_triggered_collection
+            .store(false, Ordering::Relaxed);
         self.base()
             .user_triggered_collection
             .store(false, Ordering::Relaxed)
@@ -409,6 +418,8 @@ pub struct BasePlan<VM: VMBinding> {
     pub ro_space: ImmortalSpace<VM>,
     #[cfg(feature = "vm_space")]
     pub vm_space: ImmortalSpace<VM>,
+    last_internal_triggered_collection: AtomicBool,
+    internal_triggered_collection: AtomicBool,
 }
 
 #[cfg(feature = "vm_space")]
@@ -522,6 +533,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             allocation_bytes: AtomicUsize::new(0),
             #[cfg(feature = "analysis")]
             analysis_manager,
+            last_internal_triggered_collection: AtomicBool::new(false),
+            internal_triggered_collection: AtomicBool::new(false),
         }
     }
 
@@ -699,14 +712,17 @@ impl<VM: VMBinding> BasePlan<VM> {
 
     fn trigger_internal_collection_request(&self) {
         // Mark this as a user triggered collection
-        // internalTriggeredCollection = lastInternalTriggeredCollection = true;
+        self.internal_triggered_collection
+            .store(true, Ordering::Relaxed);
+        self.last_internal_triggered_collection
+            .store(true, Ordering::Relaxed);
         // Request the collection
         self.control_collector_context.request(true);
     }
 
     fn is_internal_triggered_collection(&self) -> bool {
-        // FIXME
-        false
+        self.last_internal_triggered_collection
+            .load(Ordering::Relaxed)
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {

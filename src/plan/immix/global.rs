@@ -259,18 +259,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn gc_pause_start(&self) {
         if self.current_pause().unwrap() == Pause::FinalMark {
-            crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.store(false, Ordering::SeqCst);
+            crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
         }
-        crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
     }
 
     fn gc_pause_end(&self) {
         if self.current_pause().unwrap() == Pause::InitialMark {
-            crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.store(true, Ordering::SeqCst);
-        }
-        if self.current_pause().unwrap() == Pause::InitialMark
-            || !crate::concurrent_marking_packets_drained()
-        {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
@@ -346,57 +340,42 @@ impl<VM: VMBinding> Immix<VM> {
             self.base().is_user_triggered_collection(),
             self.base().options.full_heap_system_gc,
         );
-        let cc_force_full = self.base().options.full_heap_system_gc;
-        let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
-            || self.is_emergency_collection()
-            || cc_force_full;
-        let mut perform_cycle_collection = !super::REF_COUNT
-            || crate::plan::barriers::BARRIER_MEASUREMENT
-            || self
-                .next_gc_may_perform_cycle_collection
-                .load(Ordering::SeqCst)
-            || emergency_collection;
-        let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        perform_cycle_collection |=
-            concurrent_marking_in_progress && concurrent_marking_packets_drained;
-        // perform_cycle_collection |= crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.load(Ordering::SeqCst);
-        perform_cycle_collection |= concurrent;
-        self.perform_cycle_collection
-            .store(perform_cycle_collection, Ordering::SeqCst);
-        let pause = if concurrent_marking_in_progress
-            && (concurrent_marking_packets_drained || emergency_collection)
-        {
-            debug_assert!(crate::flags::CONCURRENT_MARKING);
-            debug_assert!(perform_cycle_collection);
-            debug_assert!(!concurrent);
-            Pause::FinalMark
-        } else if in_defrag {
-            debug_assert!(perform_cycle_collection);
-            debug_assert!(!concurrent);
-            Pause::FullTraceDefrag
-        } else if perform_cycle_collection && !concurrent {
-            if concurrent_marking_in_progress
-                || !concurrent_marking_packets_drained
-                || crate::CONCURRENT_MARKING_IS_NOT_FINISHED_YET.load(Ordering::SeqCst)
-            {
-                Pause::FinalMark
+        let full_trace = || {
+            if in_defrag {
+                Pause::FullTraceDefrag
             } else {
                 Pause::FullTraceFast
             }
-        } else if perform_cycle_collection && concurrent {
-            debug_assert!(!concurrent_marking_in_progress);
-            debug_assert!(crate::flags::CONCURRENT_MARKING);
+        };
+        let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
+            || self.is_emergency_collection()
+            || self.base().options.full_heap_system_gc;
+
+        let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
+        let force_no_rc = self
+            .next_gc_may_perform_cycle_collection
+            .load(Ordering::SeqCst);
+        let pause = if emergency_collection {
+            if concurrent_marking_in_progress {
+                Pause::FinalMark
+            } else {
+                full_trace()
+            }
+        } else if concurrent_marking_in_progress && concurrent_marking_packets_drained {
+            Pause::FinalMark
+        } else if concurrent {
             Pause::InitialMark
-        } else if !perform_cycle_collection {
-            debug_assert!(!in_defrag);
-            debug_assert!(!concurrent);
-            debug_assert!(crate::flags::REF_COUNT);
-            Pause::RefCount
         } else {
-            unreachable!()
+            if (super::REF_COUNT && !force_no_rc) || concurrent_marking_in_progress {
+                Pause::RefCount
+            } else {
+                full_trace()
+            }
         };
         self.current_pause.store(Some(pause), Ordering::SeqCst);
+        self.perform_cycle_collection
+            .store(pause != Pause::RefCount, Ordering::SeqCst);
         if crate::flags::LOG_PER_GC_STATE {
             println!(
                 "[STW] {:?} emergency={}",
