@@ -361,7 +361,7 @@ impl<VM: VMBinding> Immix<VM> {
         } else if concurrent {
             Pause::InitialMark
         } else {
-            if !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+            if crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
                 && concurrent_marking_in_progress
             {
                 Pause::FinalMark

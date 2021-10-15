@@ -729,14 +729,16 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             debug_assert_eq!(self::count(o), 0);
             let _ = self::inc(new);
             // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
-            if immix.current_pause() == Some(Pause::FinalMark)
-                || immix.current_pause() == Some(Pause::FullTraceFast)
-            {
+            let pause = immix.current_pause().unwrap();
+            if pause == Pause::InitialMark || pause == Pause::FullTraceFast {
                 if immix.immix_space.mark_bit(o) {
                     immix.immix_space.attempt_mark(new);
                 } else {
                     debug_assert!(!immix.immix_space.mark_bit(new));
                 }
+            }
+            if pause == Pause::FinalMark {
+                immix.immix_space.attempt_mark(new);
             }
             ProcessIncs::<VM>::promote(new);
             self.scan_nursery_object(new);
