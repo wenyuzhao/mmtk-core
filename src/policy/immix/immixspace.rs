@@ -534,20 +534,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Check if an object is marked.
     #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
-        if crate::flags::REF_COUNT && crate::flags::CONCURRENT_MARKING {
-            // debug_assert!(!crate::flags::RC_EVACUATE_NURSERY);
-            // Treat young objects as marked.
-            // FIXME: What about nursery object in reusable lines???
-            if Block::containing::<VM>(object).get_state() == BlockState::Nursery {
-                return true;
-            }
-        }
-        if !crate::flags::REF_COUNT && crate::flags::CONCURRENT_MARKING {
-            // Treat young objects as marked.
-            if Block::containing::<VM>(object).get_state() == BlockState::Nursery {
-                return true;
-            }
-        }
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             object,
@@ -582,10 +568,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ///
     /// Returns None if the search could not find any more holes.
     #[allow(clippy::assertions_on_constants)]
-    pub fn get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
+    pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
         if super::REF_COUNT {
-            self.rc_get_next_available_lines(search_start)
+            self.rc_get_next_available_lines(copy, search_start)
         } else {
             self.normal_get_next_available_lines(search_start)
         }
@@ -594,7 +580,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Search holes by ref-counts instead of line marks
     #[allow(clippy::assertions_on_constants)]
     #[inline]
-    pub fn rc_get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
+    pub fn rc_get_next_available_lines(&self, _copy: bool, search_start: Line) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
         let block = search_start.block();
@@ -629,7 +615,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let end = cursor;
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
+            Line::clear_mark_table::<VM>(start..end);
         }
+        // if !copy {
+        //     // println!("{:?}", start..end);
+        // }
         Some(start..end)
     }
 

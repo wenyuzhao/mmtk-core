@@ -168,6 +168,23 @@ impl Line {
             );
         }
     }
+
+    #[inline(always)]
+    pub fn clear_mark_table<VM: VMBinding>(lines: Range<Line>) {
+        // FIXME: Performance
+        let start = lines.start.start();
+        let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
+        for i in (0..size).step_by(16) {
+            let a = start + i;
+            store_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                unsafe { a.to_object_reference() },
+                0,
+                None,
+                Some(Ordering::SeqCst),
+            );
+        }
+    }
 }
 
 #[allow(clippy::assertions_on_constants)]

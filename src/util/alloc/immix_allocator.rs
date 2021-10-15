@@ -60,7 +60,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 
         if new_cursor > self.limit {
             trace!("Thread local buffer used up, go to alloc slow path");
-            if crate::flags::REF_COUNT && !self.copy {
+            if crate::flags::REF_COUNT && !crate::flags::ALLOC_NURSERY_TO_RECYCLABLE_LINES && !self.copy {
                 // only bump allocate into clean blocks
                 debug_assert!(!self.request_for_large);
                 self.alloc_slow(size, align, offset)
@@ -166,7 +166,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: isize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
-            if let Some(lines) = self.immix_space().get_next_available_lines(line) {
+            if let Some(lines) = self.immix_space().get_next_available_lines(self.copy, line) {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.cursor = lines.start.start();
                 self.limit = lines.end.start();
