@@ -408,7 +408,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if crate::flags::CONCURRENT_MARKING {
+        if crate::flags::CONCURRENT_MARKING && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             scheduler.pause_concurrent_work_packets_during_gc();
         }
         debug_assert!(super::REF_COUNT);
