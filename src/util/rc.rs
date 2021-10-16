@@ -544,6 +544,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
+            if crate::flags::DEC_REUSE_CONFLICT_LOCK {
+                o.to_address().lock::<VM>();
+            }
             let r = self::dec(o);
             // println!(" - dec {:?} rc: {:?} -> {:?}", o, r, count(o));
             if let Ok(1) = r {
@@ -561,6 +564,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                     self::unmark_straddle_object::<VM>(o);
                 }
                 o.clear_start_address_log::<VM>();
+                if crate::flags::DEC_REUSE_CONFLICT_LOCK {
+                    o.to_address().unlock::<VM>();
+                }
                 #[cfg(feature = "sanity")]
                 unsafe {
                     o.to_address().store(0xdeadusize);
@@ -570,6 +576,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                     .possibly_dead_mature_blocks
                     .lock()
                     .insert(Block::containing::<VM>(o));
+            } else {
+                if crate::flags::DEC_REUSE_CONFLICT_LOCK {
+                    o.to_address().unlock::<VM>();
+                }
             }
         }
         self.flush();
@@ -762,7 +772,7 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
             let o: ObjectReference = unsafe { e.load() };
             let o = self.forward(e, o, immix, copy_context);
             if !self.roots {
-                debug_assert!(!e.is_locked::<VM>());
+                // debug_assert!(!e.is_locked::<VM>());
                 ProcessIncs::<VM>::unlog_edge(e);
             } else {
                 if !o.is_null() {

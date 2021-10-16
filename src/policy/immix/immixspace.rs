@@ -59,6 +59,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub possibly_dead_mature_blocks: Mutex<HashSet<Block>>,
     initial_mark_pause: bool,
     pub pending_release: SegQueue<Block>,
+    pub mutator_recycled_blocks: SegQueue<Block>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -192,6 +193,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
             pending_release: Default::default(),
+            mutator_recycled_blocks: Default::default(),
         }
     }
 
@@ -233,6 +235,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
+        while let Some(x) = self.mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Nursery);
+        }
         let num_workers = self.scheduler().worker_group().worker_count();
         let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
@@ -580,7 +585,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Search holes by ref-counts instead of line marks
     #[allow(clippy::assertions_on_constants)]
     #[inline]
-    pub fn rc_get_next_available_lines(&self, _copy: bool, search_start: Line) -> Option<Range<Line>> {
+    pub fn rc_get_next_available_lines(
+        &self,
+        copy: bool,
+        search_start: Line,
+    ) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
         let block = search_start.block();
@@ -588,7 +597,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let limit = block.lines().end;
         // Find start
         while cursor < limit {
-            if cursor.rc_dead() {
+            if cursor.rc_dead::<VM>(!copy && crate::flags::DEC_REUSE_CONFLICT_LOCK) {
                 break;
             }
             cursor = Line::forward(cursor, 1);
@@ -601,7 +610,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start = cursor;
         // Find limit
         while cursor < limit {
-            if !cursor.rc_dead() {
+            if !cursor.rc_dead::<VM>(!copy && crate::flags::DEC_REUSE_CONFLICT_LOCK) {
                 break;
             }
             // if crate::plan::immix::CONCURRENT_MARKING {

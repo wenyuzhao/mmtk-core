@@ -24,6 +24,8 @@ pub enum BlockState {
     Unmarked,
     /// the block is allocated and marked.
     Marked,
+    /// RC mutator recycled blocks.
+    Reusing,
     /// the block is marked as reusable.
     Reusable { unavailable_lines: u8 },
 }
@@ -36,6 +38,7 @@ impl BlockState {
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
     const MARK_NURSERY: u8 = u8::MAX - 2;
+    const MARK_REUSING: u8 = u8::MAX - 3;
 }
 
 impl From<u8> for BlockState {
@@ -46,6 +49,7 @@ impl From<u8> for BlockState {
             Self::MARK_UNMARKED => BlockState::Unmarked,
             Self::MARK_MARKED => BlockState::Marked,
             Self::MARK_NURSERY => BlockState::Nursery,
+            Self::MARK_REUSING => BlockState::Reusing,
             unavailable_lines => BlockState::Reusable { unavailable_lines },
         }
     }
@@ -59,6 +63,7 @@ impl From<BlockState> for u8 {
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
             BlockState::Nursery => BlockState::MARK_NURSERY,
+            BlockState::Reusing => BlockState::MARK_REUSING,
             BlockState::Reusable { unavailable_lines } => {
                 debug_assert_ne!(unavailable_lines, BlockState::MARK_UNALLOCATED);
                 debug_assert_ne!(unavailable_lines, BlockState::MARK_UNMARKED);
@@ -176,6 +181,23 @@ impl Block {
         side_metadata::store_atomic(&Self::MARK_TABLE, self.start(), state, Ordering::SeqCst);
     }
 
+    /// Set block mark state.
+    #[inline(always)]
+    pub fn fetch_update_state(
+        &self,
+        mut f: impl FnMut(BlockState) -> Option<BlockState>,
+    ) -> Result<BlockState, BlockState> {
+        side_metadata::fetch_update(
+            &Self::MARK_TABLE,
+            self.start(),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |s| f((s as u8).into()).map(|x| u8::from(x) as usize),
+        )
+        .map(|x| (x as u8).into())
+        .map_err(|x| (x as u8).into())
+    }
+
     // Defrag byte
 
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
@@ -224,8 +246,11 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init(&self, copy: bool) {
-        if copy {
+    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
+        if !copy && reuse {
+            self.set_state(BlockState::Reusing);
+            space.mutator_recycled_blocks.push(*self);
+        } else if copy {
             self.set_state(BlockState::Marked);
         } else {
             self.set_state(BlockState::Nursery);
@@ -345,11 +370,11 @@ impl Block {
                     space.release_block(*self, false);
                     true
                 }
-                BlockState::Nursery | BlockState::Marked => {
+                BlockState::Nursery | BlockState::Marked | BlockState::Reusing => {
                     // The block is live.
                     false
                 }
-                _ => unreachable!(),
+                BlockState::Reusable { .. } => unreachable!(),
             }
         } else {
             // Calculate number of marked lines and holes.
@@ -417,18 +442,44 @@ impl Block {
         debug_assert_ne!(self.get_state(), BlockState::Unallocated);
         let live = !self.rc_dead();
         if !live {
-            if crate::concurrent_marking_in_progress() {
-                space.pending_release.push(*self);
-            } else {
+            if !crate::flags::IGNORE_REUSING_BLOCKS
+                || self
+                    .fetch_update_state(|s| {
+                        if s == BlockState::Reusing {
+                            None
+                        } else {
+                            Some(BlockState::Unallocated)
+                        }
+                    })
+                    .is_ok()
+            {
                 space.release_block(*self, false);
             }
         } else if !crate::flags::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.
-            if !self.get_state().is_reusable() {
-                self.set_state(BlockState::Reusable {
-                    unavailable_lines: 1 as _,
-                });
+            let add_as_reusable = if !crate::flags::IGNORE_REUSING_BLOCKS {
+                if !self.get_state().is_reusable() {
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: 1 as _,
+                    });
+                    true
+                } else {
+                    false
+                }
+            } else {
+                self.fetch_update_state(|s| {
+                    if s == BlockState::Reusing || s.is_reusable() {
+                        None
+                    } else {
+                        Some(BlockState::Reusable {
+                            unavailable_lines: 1,
+                        })
+                    }
+                })
+                .is_ok()
+            };
+            if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
                 space.reusable_blocks.push(*self)
             }

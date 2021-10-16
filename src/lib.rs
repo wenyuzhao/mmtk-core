@@ -116,7 +116,7 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 /// Immix or barrier related flags
 pub mod flags {
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = true;
+    pub const CONCURRENT_MARKING: bool = false;
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
@@ -133,7 +133,7 @@ pub mod flags {
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
-    pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;
+    pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = false;
 
     // ---------- Barrier flags ---------- //
     pub const BARRIER_MEASUREMENT: bool = false;
@@ -146,6 +146,12 @@ pub mod flags {
     pub const LOG_WORK_PACKETS: bool = false;
     pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = true;
     pub const SLOW_CONCURRENT_MARKING: bool = !NO_RC_PAUSES_DURING_CONCURRENT_MARKING;
+
+    // ---------- Derived flags ---------- //
+    pub const DEC_REUSE_CONFLICT_LOCK: bool =
+        REF_COUNT && LAZY_DECREMENTS && ALLOC_NURSERY_TO_RECYCLABLE_LINES;
+    pub const IGNORE_REUSING_BLOCKS: bool =
+        REF_COUNT && LAZY_DECREMENTS && ALLOC_NURSERY_TO_RECYCLABLE_LINES;
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);

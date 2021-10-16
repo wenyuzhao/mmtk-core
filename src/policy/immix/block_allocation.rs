@@ -92,7 +92,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         }
         // println!("Alloc {:?} {}", block, copy);
-        block.init(copy);
+        block.init(copy, false, self.space());
         if cfg!(debug_assertions) {
             if crate::flags::BARRIER_MEASUREMENT || self.space().common().needs_log_bit {
                 block.assert_log_table_cleared::<VM>(&RC_LOCK_BIT_SIDE_METADATA_SPEC);
@@ -199,7 +199,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                         continue;
                     }
                 }
-                block.init(copy);
+                block.init(copy, true, self.space());
                 return Some(block);
             } else {
                 return None;

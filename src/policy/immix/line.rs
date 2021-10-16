@@ -107,7 +107,7 @@ impl Line {
     }
 
     #[inline(always)]
-    pub fn rc_dead(&self) -> bool {
+    pub fn rc_dead<VM: VMBinding>(&self, lock: bool) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
         type UInt = u64;
@@ -118,6 +118,9 @@ impl Line {
                 + crate::util::rc::LOG_REF_COUNT_BITS
                 >= LOG_BITS_IN_UINT
         );
+        if lock {
+            self.start().lock::<VM>();
+        }
         let start =
             address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()).to_ptr::<UInt>();
         let limit =
@@ -125,8 +128,14 @@ impl Line {
         let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
         for x in table {
             if *x != 0 {
+                if lock {
+                    self.start().unlock::<VM>();
+                }
                 return false;
             }
+        }
+        if lock {
+            self.start().unlock::<VM>();
         }
         true
     }

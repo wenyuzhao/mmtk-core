@@ -60,7 +60,10 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 
         if new_cursor > self.limit {
             trace!("Thread local buffer used up, go to alloc slow path");
-            if crate::flags::REF_COUNT && !crate::flags::ALLOC_NURSERY_TO_RECYCLABLE_LINES && !self.copy {
+            if crate::flags::REF_COUNT
+                && !crate::flags::ALLOC_NURSERY_TO_RECYCLABLE_LINES
+                && !self.copy
+            {
                 // only bump allocate into clean blocks
                 debug_assert!(!self.request_for_large);
                 self.alloc_slow(size, align, offset)
