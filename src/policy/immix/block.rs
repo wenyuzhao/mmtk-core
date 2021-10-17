@@ -439,9 +439,13 @@ impl Block {
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
-        debug_assert_ne!(self.get_state(), BlockState::Unallocated);
+        debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
         let live = !self.rc_dead();
         if !live {
+            if crate::concurrent_marking_in_progress() {
+                space.pending_release.push(*self);
+                return false;
+            }
             if !crate::flags::IGNORE_REUSING_BLOCKS
                 || self
                     .fetch_update_state(|s| {

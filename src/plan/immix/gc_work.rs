@@ -118,7 +118,7 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
     }
 
     #[inline(always)]
-    fn fast_trace_object(&mut self, slot: Address, mut object: ObjectReference) -> ObjectReference {
+    fn fast_trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -128,20 +128,13 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool>
                 && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
                 && crate::util::rc::count(object) == 0;
             if !no_trace {
-                if CONCURRENT
-                    && crate::flags::REF_COUNT
-                    && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-                {
-                    debug_assert!(!self.roots);
-                    object = object.fix_start_address::<VM>();
-                    debug_assert_eq!(
-                        object.class_pointer().as_usize() & 0xff0000000000,
-                        0x7f0000000000,
-                        "{:?} has invalid class pointer {:?}",
-                        object,
-                        object.class_pointer()
-                    );
-                }
+                debug_assert_eq!(
+                    object.class_pointer().as_usize() & 0xff0000000000,
+                    0x7f0000000000,
+                    "{:?} has invalid class pointer {:?}",
+                    object,
+                    object.class_pointer()
+                );
                 self.immix().immix_space.fast_trace_object(self, object);
             }
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
@@ -210,7 +203,10 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
         } else {
             // This packet is executed within a GC pause.
             // Further generated packets can either be postponed or run in the same pause.
-            if self.immix().current_pause() == Some(Pause::InitialMark) {
+            if self.immix().current_pause() == Some(Pause::InitialMark)
+                || (self.immix().current_pause() == Some(Pause::RefCount)
+                    && crate::concurrent_marking_in_progress())
+            {
                 debug_assert!(crate::flags::CONCURRENT_MARKING);
                 let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, KIND, true>>::new(
                     new_nodes,
@@ -256,7 +252,7 @@ impl<VM: VMBinding, const KIND: TraceKind, const CONCURRENT: bool> ProcessEdgesW
     #[inline]
     fn process_edges(&mut self) {
         if CONCURRENT && crate::flags::SLOW_CONCURRENT_MARKING {
-            std::thread::sleep(std::time::Duration::from_micros(500));
+            std::thread::sleep(std::time::Duration::from_micros(200));
         }
         if KIND == TraceKind::Fast {
             for i in 0..self.edges.len() {

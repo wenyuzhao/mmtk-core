@@ -501,7 +501,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             {
                 let c = rc::count(o);
                 if c != 0 && !immix_space.is_marked(o) {
-                    if Line::is_aligned(o.to_address()) {
+                    if !crate::flags::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
                         if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
                             continue;
                         } else {

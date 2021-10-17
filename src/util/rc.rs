@@ -304,11 +304,19 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn process_inc(&mut self, _e: Address, o: ObjectReference) -> ObjectReference {
+    fn process_inc(
+        &mut self,
+        _e: Address,
+        o: ObjectReference,
+        immix: &Immix<VM>,
+    ) -> ObjectReference {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
             Self::promote(o);
+            if crate::concurrent_marking_in_progress() || immix.current_pause() == Some(Pause::FinalMark) {
+                immix.immix_space.attempt_mark(o);
+            }
             self.scan_nursery_object(o);
             debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
         }
@@ -446,7 +454,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if !crate::flags::RC_EVACUATE_NURSERY || Self::DELAYED_EVACUATION {
-                self.process_inc(e, o)
+                self.process_inc(e, o, immix)
             } else {
                 self.process_inc_and_evacuate(e, o, copy_context)
             };
@@ -540,6 +548,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut decs = vec![];
         std::mem::swap(&mut decs, &mut self.decs);
+        let mut objects_to_trace = vec![];
         for o in decs {
             if !immix.immix_space.in_space(o) {
                 continue;
@@ -550,14 +559,21 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             let r = self::dec(o);
             // println!(" - dec {:?} rc: {:?} -> {:?}", o, r, count(o));
             if let Ok(1) = r {
+                let trace = immix.immix_space.attempt_mark(o);
                 // println!(" - dead {:?}", o);
                 debug_assert_eq!(self::count(o), 0);
                 // Recursively decrease field ref counts
                 EdgeIterator::<VM>::iterate(o, |edge| {
                     let x = unsafe { edge.load::<ObjectReference>() };
-                    if !x.is_null() && immix.immix_space.in_space(x) {
-                        // println!(" - rec dec {:?}.{:?} -> {:?} {} edge-logged={}", o, edge, x, count(x), edge.is_logged::<VM>());
-                        self.recursive_dec(x);
+                    if !x.is_null() {
+                        if immix.immix_space.in_space(x) {
+                            // println!(" - rec dec {:?}.{:?} -> {:?} {} edge-logged={}", o, edge, x, count(x), edge.is_logged::<VM>());
+                            self.recursive_dec(x);
+                        } else {
+                            if trace {
+                                objects_to_trace.push(x);
+                            }
+                        }
                     }
                 });
                 if !crate::flags::BLOCK_ONLY {
@@ -587,6 +603,15 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
             SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix.immix_space);
+        }
+
+        if crate::concurrent_marking_in_progress() {
+            let edges: Vec<Address> = objects_to_trace
+                .iter()
+                .map(|e| Address::from_ptr(e))
+                .collect();
+            let w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(edges, false, mmtk);
+            self.worker().add_work(WorkBucketStage::Closure, w);
         }
     }
 }
@@ -740,14 +765,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             let _ = self::inc(new);
             // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
             let pause = immix.current_pause().unwrap();
-            if pause == Pause::InitialMark || pause == Pause::FullTraceFast {
-                if immix.immix_space.mark_bit(o) {
-                    immix.immix_space.attempt_mark(new);
-                } else {
-                    debug_assert!(!immix.immix_space.mark_bit(new));
-                }
-            }
-            if pause == Pause::FinalMark {
+            if crate::concurrent_marking_in_progress() || immix.current_pause() == Some(Pause::FinalMark) {
                 immix.immix_space.attempt_mark(new);
             }
             ProcessIncs::<VM>::promote(new);
