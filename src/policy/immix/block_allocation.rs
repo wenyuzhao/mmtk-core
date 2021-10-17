@@ -21,7 +21,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         Self {
             space: None,
             clean_block_buffer: Default::default(),
-            refill_count: 32, //num_cpus::get(),
+            refill_count: num_cpus::get(),
         }
     }
 

@@ -169,6 +169,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool) {
+        #[cfg(feature = "nogc_no_zeroing")]
+        if true {
+            unreachable!();
+        }
         let pause = self.select_collection_kind(concurrent);
         match pause {
             Pause::FullTraceFast => self
@@ -266,6 +270,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "nogc_no_zeroing")]
+    fn handle_user_collection_request(&self, _tls: crate::util::VMMutatorThread, _force: bool) {
+        println!("Warning: User attempted a collection request. The request is ignored.");
     }
 }
 
