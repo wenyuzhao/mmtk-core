@@ -342,6 +342,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
+        // println!("Release {:?} {}", block, nursery);
         if crate::flags::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);

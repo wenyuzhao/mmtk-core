@@ -764,7 +764,6 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             debug_assert_eq!(self::count(o), 0);
             let _ = self::inc(new);
             // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
-            let pause = immix.current_pause().unwrap();
             if crate::concurrent_marking_in_progress() || immix.current_pause() == Some(Pause::FinalMark) {
                 immix.immix_space.attempt_mark(new);
             }

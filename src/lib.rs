@@ -128,7 +128,7 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
+    pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const RC_EVACUATE_NURSERY: bool = false;
@@ -144,7 +144,7 @@ pub mod flags {
     pub const LOG_PER_GC_STATE: bool = true;
     pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
-    pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = false;
+    pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = true;
     pub const SLOW_CONCURRENT_MARKING: bool = !NO_RC_PAUSES_DURING_CONCURRENT_MARKING;
 
     // ---------- Derived flags ---------- //
