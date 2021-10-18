@@ -62,7 +62,6 @@ pub fn fetch_update(
     o: ObjectReference,
     f: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, usize> {
-    debug_assert!(!o.is_null());
     let r = side_metadata::fetch_update(
         &RC_TABLE,
         o.to_address(),
@@ -76,7 +75,6 @@ pub fn fetch_update(
 
 #[inline(always)]
 pub fn inc(o: ObjectReference) -> Result<usize, usize> {
-    debug_assert!(!o.is_null());
     let r = fetch_update(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == MAX_REF_COUNT {
@@ -91,7 +89,6 @@ pub fn inc(o: ObjectReference) -> Result<usize, usize> {
 
 #[inline(always)]
 pub fn dec(o: ObjectReference) -> Result<usize, usize> {
-    debug_assert!(!o.is_null());
     let r = fetch_update(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == 0 || x == MAX_REF_COUNT
@@ -108,7 +105,6 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
 
 #[inline(always)]
 pub fn set(o: ObjectReference, count: usize) {
-    debug_assert!(!o.is_null());
     side_metadata::store_atomic(&RC_TABLE, o.to_address(), count, Ordering::SeqCst)
 }
 

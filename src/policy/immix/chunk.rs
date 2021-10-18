@@ -429,7 +429,9 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         //     self.add_dec(o)
         // }
         rc::set(o, 0);
-        rc::unmark_straddle_object::<VM>(o)
+        if !crate::flags::BLOCK_ONLY {
+            rc::unmark_straddle_object::<VM>(o)
+        }
     }
 }
 

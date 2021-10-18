@@ -322,7 +322,9 @@ pub fn ensure_metadata_is_mapped(metadata_spec: &SideMetadataSpec, data_addr: Ad
         data_addr, meta_start
     );
 
-    memory::panic_if_unmapped(meta_start, BYTES_IN_PAGE);
+    if cfg!(feature = "extreme_assertions") {
+        memory::panic_if_unmapped(meta_start, BYTES_IN_PAGE);
+    }
 }
 
 #[inline(always)]
