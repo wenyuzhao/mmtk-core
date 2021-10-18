@@ -3,14 +3,11 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use crate::scheduler::gc_work::ProcessEdgesWork;
+use crate::plan::immix::gc_work::ImmixConcurrentTraceObject;
 use crate::{
     plan::{
         barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
-        immix::{
-            gc_work::{ImmixProcessEdges, TraceKind},
-            Immix, ImmixCopyContext, Pause,
-        },
+        immix::{Immix, ImmixCopyContext, Pause},
         EdgeIterator,
     },
     policy::{
@@ -464,15 +461,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         if self.roots {
             if !roots.is_empty() {
                 if crate::flags::CONCURRENT_MARKING
-                    && crate::flags::RC_EVACUATE_NURSERY
                     && immix.current_pause() == Some(Pause::InitialMark)
                 {
-                    // Mark roots and create concurrent scanning packets.
-                    let edges: Vec<Address> = roots.iter().map(|e| Address::from_ptr(e)).collect();
-                    let w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(
-                        edges, false, mmtk,
-                    );
-                    self.worker().add_work(WorkBucketStage::ProcessRoots, w);
+                    worker
+                        .scheduler()
+                        .postpone(ImmixConcurrentTraceObject::<VM>::new(roots.clone(), mmtk));
                 }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }
@@ -610,14 +603,14 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix.immix_space);
         }
 
-        if crate::concurrent_marking_in_progress() {
-            let edges: Vec<Address> = objects_to_trace
-                .iter()
-                .map(|e| Address::from_ptr(e))
-                .collect();
-            let w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(edges, false, mmtk);
-            self.worker().add_work(WorkBucketStage::Closure, w);
-        }
+        // if crate::concurrent_marking_in_progress() {
+        //     let edges: Vec<Address> = objects_to_trace
+        //         .iter()
+        //         .map(|e| Address::from_ptr(e))
+        //         .collect();
+        //     let w = ImmixProcessEdges::<VM, { TraceKind::Fast }>::new(edges, false, mmtk);
+        //     self.worker().add_work(WorkBucketStage::Closure, w)
+        // }
     }
 }
 
@@ -810,12 +803,9 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
                 if crate::flags::CONCURRENT_MARKING
                     && immix.current_pause() == Some(Pause::InitialMark)
                 {
-                    // Mark roots and create concurrent scanning packets.
-                    let edges = roots.iter().map(|e| Address::from_ptr(e)).collect();
-                    let mut w = ImmixProcessEdges::<VM, { TraceKind::Fast }, false>::new(
-                        edges, false, mmtk,
-                    );
-                    GCWork::do_work(&mut w, worker, mmtk);
+                    worker
+                        .scheduler()
+                        .postpone(ImmixConcurrentTraceObject::<VM>::new(roots.clone(), mmtk));
                 }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }

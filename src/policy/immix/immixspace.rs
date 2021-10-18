@@ -688,6 +688,7 @@ impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
         concurrent: bool,
         immix_space: &'static ImmixSpace<Edges::VM>,
     ) -> Self {
+        debug_assert!(!concurrent);
         if concurrent {
             crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         }
@@ -702,16 +703,7 @@ impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjectsAndMarkLines");
-        let mut closure = ObjectsClosure::<E>::new(
-            mmtk,
-            vec![],
-            worker,
-            if self.concurrent {
-                WorkBucketStage::Unconstrained
-            } else {
-                WorkBucketStage::Closure
-            },
-        );
+        let mut closure = ObjectsClosure::<E>::new(mmtk, vec![], worker);
         for object in &self.buffer {
             <E::VM as VMBinding>::VMScanning::scan_object(
                 &mut closure,

@@ -72,12 +72,12 @@ pub fn create_immix_mutator<VM: VMBinding>(
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
         barrier: if get_active_barrier() == BarrierSelector::ObjectBarrier {
-            box ObjectRememberingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }, false>>::new(
+            box ObjectRememberingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
                 mmtk,
                 *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             )
         } else {
-            box FieldLoggingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }, false>>::new(
+            box FieldLoggingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
                 mmtk,
                 *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             )

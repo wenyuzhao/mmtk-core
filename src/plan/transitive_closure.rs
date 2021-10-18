@@ -3,8 +3,6 @@
 use std::marker::PhantomData;
 use std::mem;
 
-use atomic::Ordering;
-
 use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
@@ -36,7 +34,6 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
     buffer: Vec<Address>,
     worker: &'a mut GCWorker<E::VM>,
-    edge_bucket: WorkBucketStage,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -44,13 +41,11 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         mmtk: &'static MMTK<E::VM>,
         buffer: Vec<Address>,
         worker: &'a mut GCWorker<E::VM>,
-        edge_bucket: WorkBucketStage,
     ) -> Self {
         Self {
             mmtk,
             buffer,
             worker,
-            edge_bucket,
         }
     }
 }
@@ -65,8 +60,10 @@ impl<'a, E: ProcessEdgesWork> TransitiveClosure for ObjectsClosure<'a, E> {
         if self.buffer.len() >= E::CAPACITY {
             let mut new_edges = Vec::new();
             mem::swap(&mut new_edges, &mut self.buffer);
-            self.worker
-                .add_work(self.edge_bucket, E::new(new_edges, false, self.mmtk));
+            self.worker.add_work(
+                WorkBucketStage::Closure,
+                E::new(new_edges, false, self.mmtk),
+            );
         }
     }
     fn process_node(&mut self, _object: ObjectReference) {
@@ -83,17 +80,7 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
         let mut new_edges = Vec::new();
         mem::swap(&mut new_edges, &mut self.buffer);
         let w = E::new(new_edges, false, self.mmtk);
-        if self.edge_bucket == WorkBucketStage::Unconstrained
-            && self
-                .worker
-                .scheduler()
-                .pause_concurrent_work_packets_during_gc
-                .load(Ordering::SeqCst)
-        {
-            self.worker.scheduler().postpone(w);
-        } else {
-            self.worker.add_work(self.edge_bucket, w);
-        }
+        self.worker.add_work(WorkBucketStage::Closure, w);
     }
 }
 

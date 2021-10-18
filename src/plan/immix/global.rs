@@ -176,11 +176,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let pause = self.select_collection_kind(concurrent);
         match pause {
             Pause::FullTraceFast => self
-                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }, false>>(
-                    scheduler,
-                ),
+                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler),
             Pause::FullTraceDefrag => self
-                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }, false>>(
+                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(
                     scheduler,
                 ),
             Pause::RefCount => self.schedule_rc_collection(scheduler),
@@ -439,13 +437,12 @@ impl<VM: VMBinding> Immix<VM> {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
-        if crate::flags::REF_COUNT && crate::flags::RC_EVACUATE_NURSERY {
+        if crate::flags::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new())
         } else {
-            scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<
-                ImmixProcessEdges<VM, { TraceKind::Fast }, false>,
-            >::new())
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new())
         };
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
@@ -454,7 +451,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }, false>;
+        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }>;
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
