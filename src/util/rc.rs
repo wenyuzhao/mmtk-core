@@ -314,7 +314,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
             Self::promote(o);
-            if crate::concurrent_marking_in_progress() || immix.current_pause() == Some(Pause::FinalMark) {
+            if crate::concurrent_marking_in_progress()
+                || immix.current_pause() == Some(Pause::FinalMark)
+                || immix.current_pause() == Some(Pause::FullTraceFast)
+            {
                 immix.immix_space.attempt_mark(o);
             }
             self.scan_nursery_object(o);
@@ -538,6 +541,45 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             );
         }
     }
+
+    #[inline]
+    fn process_dead_object(
+        &mut self,
+        o: ObjectReference,
+        immix: &Immix<VM>,
+        objects_to_trace: &mut Vec<ObjectReference>,
+    ) {
+        let trace = immix.immix_space.attempt_mark(o);
+        // println!(" - dead {:?}", o);
+        // debug_assert_eq!(self::count(o), 0);
+        // Recursively decrease field ref counts
+        EdgeIterator::<VM>::iterate(o, |edge| {
+            let x = unsafe { edge.load::<ObjectReference>() };
+            if !x.is_null() {
+                if immix.immix_space.in_space(x) {
+                    // println!(" - rec dec {:?}.{:?} -> {:?} {} edge-logged={}", o, edge, x, count(x), edge.is_logged::<VM>());
+                    self.recursive_dec(x);
+                } else {
+                    if trace {
+                        objects_to_trace.push(x);
+                    }
+                }
+            }
+        });
+        if !crate::flags::BLOCK_ONLY {
+            self::unmark_straddle_object::<VM>(o);
+        }
+        o.clear_start_address_log::<VM>();
+        #[cfg(feature = "sanity")]
+        unsafe {
+            o.to_address().store(0xdeadusize);
+        }
+        immix
+            .immix_space
+            .possibly_dead_mature_blocks
+            .lock()
+            .insert(Block::containing::<VM>(o));
+    }
 }
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
@@ -553,50 +595,17 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
-            if crate::flags::DEC_REUSE_CONFLICT_LOCK {
-                o.to_address().lock::<VM>();
-            }
-            let r = self::dec(o);
-            // println!(" - dec {:?} rc: {:?} -> {:?}", o, r, count(o));
-            if let Ok(1) = r {
-                let trace = immix.immix_space.attempt_mark(o);
-                // println!(" - dead {:?}", o);
-                debug_assert_eq!(self::count(o), 0);
-                // Recursively decrease field ref counts
-                EdgeIterator::<VM>::iterate(o, |edge| {
-                    let x = unsafe { edge.load::<ObjectReference>() };
-                    if !x.is_null() {
-                        if immix.immix_space.in_space(x) {
-                            // println!(" - rec dec {:?}.{:?} -> {:?} {} edge-logged={}", o, edge, x, count(x), edge.is_logged::<VM>());
-                            self.recursive_dec(x);
-                        } else {
-                            if trace {
-                                objects_to_trace.push(x);
-                            }
-                        }
-                    }
-                });
-                if !crate::flags::BLOCK_ONLY {
-                    self::unmark_straddle_object::<VM>(o);
+            let _ = self::fetch_update(o, |c| {
+                if c == 1 {
+                    self.process_dead_object(o, immix, &mut objects_to_trace);
                 }
-                o.clear_start_address_log::<VM>();
-                if crate::flags::DEC_REUSE_CONFLICT_LOCK {
-                    o.to_address().unlock::<VM>();
+                debug_assert!(c <= MAX_REF_COUNT);
+                if c == 0 || c == MAX_REF_COUNT {
+                    None /* sticky */
+                } else {
+                    Some(c - 1)
                 }
-                #[cfg(feature = "sanity")]
-                unsafe {
-                    o.to_address().store(0xdeadusize);
-                }
-                immix
-                    .immix_space
-                    .possibly_dead_mature_blocks
-                    .lock()
-                    .insert(Block::containing::<VM>(o));
-            } else {
-                if crate::flags::DEC_REUSE_CONFLICT_LOCK {
-                    o.to_address().unlock::<VM>();
-                }
-            }
+            });
         }
         self.flush();
 
@@ -764,7 +773,10 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             debug_assert_eq!(self::count(o), 0);
             let _ = self::inc(new);
             // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
-            if crate::concurrent_marking_in_progress() || immix.current_pause() == Some(Pause::FinalMark) {
+            if crate::concurrent_marking_in_progress()
+                || immix.current_pause() == Some(Pause::FinalMark)
+                || immix.current_pause() == Some(Pause::FullTraceFast)
+            {
                 immix.immix_space.attempt_mark(new);
             }
             ProcessIncs::<VM>::promote(new);

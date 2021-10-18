@@ -418,16 +418,18 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
         // Attempt to set refcount to 1
-        let r = crate::util::rc::fetch_update(o, |c| {
-            if c <= 1 {
-                return None; // already dead
-            }
-            Some(1)
-        });
-        if r == Err(1) || r.is_ok() {
-            // This is a dead object in a dead cycle. Perform cyclic decrements
-            self.add_dec(o)
-        }
+        // let r = crate::util::rc::fetch_update(o, |c| {
+        //     if c <= 1 {
+        //         return None; // already dead
+        //     }
+        //     Some(1)
+        // });
+        // if r == Err(1) || r.is_ok() {
+        //     // This is a dead object in a dead cycle. Perform cyclic decrements
+        //     self.add_dec(o)
+        // }
+        rc::set(o, 0);
+        rc::unmark_straddle_object::<VM>(o)
     }
 }
 
@@ -495,6 +497,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             // }
 
             // FIXME: Performance
+            let mut has_dead_object = false;
             for o in (block.start()..block.end())
                 .step_by(rc::MIN_OBJECT_SIZE)
                 .map(|a| unsafe { a.to_object_reference() })
@@ -511,11 +514,15 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                             }
                         }
                     }
-                    self.process_dead_object(o)
+                    self.process_dead_object(o);
+                    has_dead_object = true;
                 }
             }
+            if has_dead_object {
+                immix_space.possibly_dead_mature_blocks.lock().insert(block);
+            }
         }
-        self.flush();
+        // self.flush();
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
             SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix_space);

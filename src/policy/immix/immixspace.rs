@@ -588,7 +588,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn rc_get_next_available_lines(
         &self,
-        copy: bool,
+        _copy: bool,
         search_start: Line,
     ) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
@@ -598,7 +598,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let limit = block.lines().end;
         // Find start
         while cursor < limit {
-            if cursor.rc_dead::<VM>(!copy && crate::flags::DEC_REUSE_CONFLICT_LOCK) {
+            if cursor.rc_dead::<VM>(false) {
                 break;
             }
             cursor = Line::forward(cursor, 1);
@@ -611,7 +611,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start = cursor;
         // Find limit
         while cursor < limit {
-            if !cursor.rc_dead::<VM>(!copy && crate::flags::DEC_REUSE_CONFLICT_LOCK) {
+            if !cursor.rc_dead::<VM>(false) {
                 break;
             }
             // if crate::plan::immix::CONCURRENT_MARKING {
