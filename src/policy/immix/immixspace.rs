@@ -410,16 +410,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
-            // Mark block and lines
-            if !super::BLOCK_ONLY {
-                if !super::MARK_LINE_AT_SCAN_TIME {
-                    self.mark_lines(object);
-                }
-            } else {
-                let block = Block::containing::<VM>(object);
-                let state = block.get_state();
-                if state != BlockState::Nursery && state != BlockState::Marked {
-                    block.set_state(BlockState::Marked);
+            // println!("Mark {:?}", object);
+            if !crate::flags::REF_COUNT {
+                // Mark block and lines
+                if !super::BLOCK_ONLY {
+                    if !super::MARK_LINE_AT_SCAN_TIME {
+                        self.mark_lines(object);
+                    }
+                } else {
+                    let block = Block::containing::<VM>(object);
+                    let state = block.get_state();
+                    if state != BlockState::Nursery && state != BlockState::Marked {
+                        block.set_state(BlockState::Marked);
+                    }
                 }
             }
             // Visit node
@@ -625,7 +628,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let end = cursor;
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
-            Line::clear_mark_table::<VM>(start..end);
         }
         // if !copy {
         //     // println!("{:?}", start..end);

@@ -1,6 +1,9 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::GcStatus;
+use crate::plan::immix::Immix;
+use crate::plan::immix::Pause;
+use crate::plan::immix::gc_work::ImmixConcurrentTraceObject;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -650,6 +653,7 @@ impl<E: ProcessEdgesWork> ProcessModBufSATB<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
         if !self.edges.is_empty() {
             if !crate::flags::REF_COUNT {
                 for edge in &self.edges {
@@ -659,11 +663,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                     }
                 }
             }
-            if !crate::plan::barriers::BARRIER_MEASUREMENT {
-                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = E::new(edges, false, mmtk);
-                GCWork::do_work(&mut w, worker, mmtk);
-            }
+            let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+            let mut w = E::new(edges, false, mmtk);
+            GCWork::do_work(&mut w, worker, mmtk);
         }
     }
 }

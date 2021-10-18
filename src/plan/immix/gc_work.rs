@@ -181,10 +181,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         // This packet is executed within a GC pause.
         // Further generated packets can either be postponed or run in the same pause.
         if self.immix().current_pause() == Some(Pause::InitialMark)
-            || (self.immix().current_pause() == Some(Pause::RefCount)
-                && crate::concurrent_marking_in_progress())
         {
             debug_assert!(crate::flags::CONCURRENT_MARKING);
+            debug_assert!(!crate::flags::REF_COUNT);
+            unreachable!();
             let w = ImmixConcurrentTraceObject::<VM>::new(new_nodes, self.mmtk());
             self.mmtk().scheduler.postpone(w);
         } else {
@@ -338,7 +338,10 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObject<VM> {
 
     #[inline]
     fn process_node(&mut self, object: ObjectReference) {
-        EdgeIterator::<VM>::iterate(object, |e| self.process_edge(e))
+        EdgeIterator::<VM>::iterate(object, |e| {
+            // println!("Trace {:?}.{:?} -> {:?}", object, e, unsafe { e.load::<Address>() });
+            self.process_edge(e)
+        })
     }
 }
 

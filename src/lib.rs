@@ -120,7 +120,7 @@ pub mod flags {
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = false;
+    pub const BLOCK_ONLY: bool = true;
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
@@ -128,10 +128,10 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = true;
+    pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
-    pub const RC_EVACUATE_NURSERY: bool = true;
+    pub const RC_EVACUATE_NURSERY: bool = false;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
     pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;
 
@@ -144,7 +144,7 @@ pub mod flags {
     pub const LOG_PER_GC_STATE: bool = true;
     pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
-    pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = true;
+    pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = false;
     pub const SLOW_CONCURRENT_MARKING: bool = !NO_RC_PAUSES_DURING_CONCURRENT_MARKING;
 
     // ---------- Derived flags ---------- //

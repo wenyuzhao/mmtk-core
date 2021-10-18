@@ -428,6 +428,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         //     // This is a dead object in a dead cycle. Perform cyclic decrements
         //     self.add_dec(o)
         // }
+        // println!("kill cyclic {:?}", o);
         rc::set(o, 0);
         if !crate::flags::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
