@@ -15,10 +15,14 @@ use super::metadata_address_range_size;
 // XXX: We updated the base address to start from the second 4Mb chunk for 32-bit architectures,
 // as otherwise for side metadatas with a large `min_obj_size`, we were overlapping with system
 // reserved addresses such as 0x0.
-// public, VM bingdings may need to use this
+// XXXX: I updated the base address for 32 bit to 0x1000_0000. For what I tested on, the library
+// and the malloc heap often starts at 0x800_0000. If we start the metadata from the second 4Mb chunk (i.e. the chunk `[0x40_0000, 0x80_0000)`),
+// we won't be guaranteed enough space before 0x800_0000. For example, the alloc bit is 1 bit per 4 bytes
+// (1 word in 32bits), and it will take the address range of [0x40_000, 0x840_0000) which clashes with
+// the library/heap. So I move this to 0x1000_0000.
+// This is made public, as VM bingdings may need to use this.
 #[cfg(target_pointer_width = "32")]
-pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address =
-    unsafe { Address::from_usize(BYTES_IN_CHUNK) };
+pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address = unsafe { Address::from_usize(0x1000_0000) };
 #[cfg(target_pointer_width = "64")]
 pub const GLOBAL_SIDE_METADATA_BASE_ADDRESS: Address =
     unsafe { Address::from_usize(0x0000_0600_0000_0000usize) };
@@ -30,10 +34,11 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 pub const ALLOC_SIDE_METADATA_ADDR: Address = crate::util::alloc_bit::ALLOC_SIDE_METADATA_ADDR;
 
 pub const RC_LOCK_BIT_SIDE_METADATA_SPEC: SideMetadataSpec = SideMetadataSpec {
+    name: "rc-lock-bits",
     is_global: true,
     offset: SideMetadataOffset::layout_after(&ACTIVE_CHUNK_METADATA_SPEC),
     log_num_of_bits: 0,
-    log_min_obj_size: crate::flags::LOG_BYTES_PER_RC_LOCK_BIT,
+    log_bytes_in_region: crate::flags::LOG_BYTES_PER_RC_LOCK_BIT,
 };
 
 /// This constant represents the worst-case ratio of source data size to global side metadata.

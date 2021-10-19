@@ -40,17 +40,19 @@ pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
 pub const RC_STRADDLE_LINES: SideMetadataSpec = SideMetadataSpec {
+    name: "rc-straddle-lines",
     is_global: false,
     offset: SideMetadataOffset::layout_after(&ChunkMap::ALLOC_TABLE),
     log_num_of_bits: 0,
-    log_min_obj_size: Line::LOG_BYTES,
+    log_bytes_in_region: Line::LOG_BYTES,
 };
 
 pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
+    name: "refcount",
     is_global: false,
     offset: SideMetadataOffset::layout_after(&RC_STRADDLE_LINES),
     log_num_of_bits: LOG_REF_COUNT_BITS,
-    log_min_obj_size: LOG_MIN_OBJECT_SIZE as _,
+    log_bytes_in_region: LOG_MIN_OBJECT_SIZE as _,
 };
 
 #[inline(always)]
