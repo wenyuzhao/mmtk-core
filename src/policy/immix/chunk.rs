@@ -2,11 +2,11 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
-use crate::util::metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec};
-use crate::util::metadata::MetadataSpec;
-use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
+use crate::plan::immix::{CURRENT_CONC_DECS_COUNTER, Immix};
 use crate::util::ObjectReference;
+use crate::util::metadata::MetadataSpec;
+use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
+use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},
@@ -177,13 +177,8 @@ pub struct ChunkMap {
 
 impl ChunkMap {
     /// Chunk alloc table
-    pub const ALLOC_TABLE: SideMetadataSpec = SideMetadataSpec {
-        name: "ImmixChunkMap",
-        is_global: false,
-        offset: SideMetadataOffset::layout_after(&Block::MARK_TABLE),
-        log_num_of_bits: 3,
-        log_bytes_in_region: Chunk::LOG_BYTES,
-    };
+    pub const ALLOC_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_CHUNK_MARK;
 
     pub fn new() -> Self {
         Self {

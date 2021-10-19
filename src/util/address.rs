@@ -13,7 +13,7 @@ use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
 use crate::util::metadata::compare_exchange_metadata;
-use crate::util::metadata::RC_LOCK_BIT_SPEC;
+use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
 use super::constants::BYTES_IN_WORD;

@@ -23,10 +23,10 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use super::metadata::MetadataSpec;
 use super::{
     metadata::{
         compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata,
-        RC_LOCK_BIT_SPEC,
     },
     Address,
 };
@@ -39,21 +39,12 @@ const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;
 pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
-pub const RC_STRADDLE_LINES: SideMetadataSpec = SideMetadataSpec {
-    name: "rc-straddle-lines",
-    is_global: false,
-    offset: SideMetadataOffset::layout_after(&ChunkMap::ALLOC_TABLE),
-    log_num_of_bits: 0,
-    log_bytes_in_region: Line::LOG_BYTES,
-};
+pub const RC_STRADDLE_LINES: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_STRADDLE_LINES;
 
-pub const RC_TABLE: SideMetadataSpec = SideMetadataSpec {
-    name: "refcount",
-    is_global: false,
-    offset: SideMetadataOffset::layout_after(&RC_STRADDLE_LINES),
-    log_num_of_bits: LOG_REF_COUNT_BITS,
-    log_bytes_in_region: LOG_MIN_OBJECT_SIZE as _,
-};
+pub const RC_TABLE: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_TABLE;
+
+pub const RC_LOCK_BITS: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_LOCK_BITS;
+pub const RC_LOCK_BIT_SPEC: MetadataSpec = MetadataSpec::OnSide(RC_LOCK_BITS);
 
 #[inline(always)]
 pub fn fetch_update(

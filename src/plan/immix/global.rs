@@ -21,7 +21,7 @@ use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
-use crate::util::metadata::RC_LOCK_BIT_SPEC;
+use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::util::rc::ProcessDecs;
 #[cfg(feature = "sanity")]

@@ -1,11 +1,5 @@
 use super::{block::Block, chunk::ChunkState, ImmixSpace};
-use crate::{
-    policy::space::Space,
-    scheduler::{GCWork, GCWorker},
-    util::{metadata::side_metadata::RC_LOCK_BIT_SIDE_METADATA_SPEC, VMMutatorThread, VMThread},
-    vm::*,
-    MMTK,
-};
+use crate::{MMTK, policy::space::Space, scheduler::{GCWork, GCWorker}, util::{VMMutatorThread, VMThread, rc::RC_LOCK_BITS}, vm::*};
 use atomic::Ordering;
 use spin::RwLock;
 use std::sync::atomic::AtomicUsize;
@@ -94,7 +88,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         block.init(copy, false, self.space());
         if cfg!(debug_assertions) {
             if crate::flags::BARRIER_MEASUREMENT || self.space().common().needs_log_bit {
-                block.assert_log_table_cleared::<VM>(&RC_LOCK_BIT_SIDE_METADATA_SPEC);
+                block.assert_log_table_cleared::<VM>(&RC_LOCK_BITS);
                 block.assert_log_table_cleared::<VM>(
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         .as_spec()
