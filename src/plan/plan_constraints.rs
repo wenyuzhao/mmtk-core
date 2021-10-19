@@ -7,6 +7,7 @@ use crate::util::constants::*;
 /// Most of the constraints are constants. Each plan should declare a constant of this struct,
 /// and use the constant wherever possible. However, for plan-neutral implementations,
 /// these constraints are not constant.
+#[derive(Clone, Debug)]
 pub struct PlanConstraints {
     pub moves_objects: bool,
     pub gc_header_bits: usize,

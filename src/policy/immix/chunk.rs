@@ -2,11 +2,11 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::immix::{CURRENT_CONC_DECS_COUNTER, Immix};
-use crate::util::ObjectReference;
-use crate::util::metadata::MetadataSpec;
+use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
+use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
+use crate::util::ObjectReference;
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},

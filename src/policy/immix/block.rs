@@ -3,6 +3,7 @@ use super::defrag::Histogram;
 use super::line::Line;
 use super::ImmixSpace;
 use crate::plan::barriers::LOGGED_VALUE;
+use crate::policy::space::Space;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
@@ -10,7 +11,6 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use spin::{Mutex, MutexGuard};
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
-use crate::policy::space::Space;
 
 /// The block allocation state.
 #[derive(Debug, PartialEq, Clone, Copy)]

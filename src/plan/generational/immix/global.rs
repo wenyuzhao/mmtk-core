@@ -25,6 +25,7 @@ use crate::vm::*;
 use crate::MMTK;
 
 use enum_map::EnumMap;
+use spin::Lazy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -44,34 +45,25 @@ pub struct GenImmix<VM: VMBinding> {
     pub last_gc_was_defrag: AtomicBool,
 }
 
-pub fn genimmix_constraints() -> &'static PlanConstraints {
-    static mut X: Option<PlanConstraints> = None;
-    unsafe {
-        if X.is_none() {
-            let c = crate::plan::generational::gen_constraints();
-            X = Some(PlanConstraints {
-                // The maximum object size that can be allocated without LOS is restricted by the max immix object size.
-                // This might be too restrictive, as our default allocator is bump pointer (nursery allocator) which
-                // can allocate objects larger than max immix object size. However, for copying, we haven't implemented
-                // copying to LOS so we always copy from nursery to the mature immix space. In this case, we should not
-                // allocate objects larger than the max immix object size to nursery as well.
-                // TODO: We may want to fix this, as this possibly has negative performance impact.
-                max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
-                    crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-                    c.max_non_los_default_alloc_bytes,
-                ),
-                ..*c
-            });
-        }
-        X.as_ref().unwrap()
-    }
-}
+pub static GENIMMIX_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
+    // The maximum object size that can be allocated without LOS is restricted by the max immix object size.
+    // This might be too restrictive, as our default allocator is bump pointer (nursery allocator) which
+    // can allocate objects larger than max immix object size. However, for copying, we haven't implemented
+    // copying to LOS so we always copy from nursery to the mature immix space. In this case, we should not
+    // allocate objects larger than the max immix object size to nursery as well.
+    // TODO: We may want to fix this, as this possibly has negative performance impact.
+    max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
+        crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+        crate::plan::generational::GEN_CONSTRAINTS.max_non_los_default_alloc_bytes,
+    ),
+    ..*crate::plan::generational::GEN_CONSTRAINTS
+});
 
 impl<VM: VMBinding> Plan for GenImmix<VM> {
     type VM = VM;
 
     fn constraints(&self) -> &'static PlanConstraints {
-        genimmix_constraints()
+        &GENIMMIX_CONSTRAINTS
     }
 
     fn create_worker_local(
@@ -118,7 +110,11 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     // in different if branches.
     #[allow(clippy::if_same_then_else)]
     #[allow(clippy::branches_sharing_code)]
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>, _concurrent: bool) {
+    fn schedule_collection(
+        &'static self,
+        scheduler: &GCWorkScheduler<Self::VM>,
+        _concurrent: bool,
+    ) {
         let is_full_heap = self.request_full_heap_collection();
 
         self.base().set_collection_kind::<Self>(self);
@@ -139,7 +135,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             debug!("Nursery GC");
             self.common()
                 .schedule_common::<GenNurseryProcessEdges<VM, GenImmixCopyContext<VM>>>(
-                    genimmix_constraints(),
+                    &GENIMMIX_CONSTRAINTS,
                     scheduler,
                 );
             // Stop & scan mutators (mutator scanning can happen before STW)
@@ -150,7 +146,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             debug!("Full heap GC Defrag");
             self.common()
                 .schedule_common::<GenImmixMatureProcessEdges<VM, { TraceKind::Defrag }>>(
-                    genimmix_constraints(),
+                    &GENIMMIX_CONSTRAINTS,
                     scheduler,
                 );
             // Stop & scan mutators (mutator scanning can happen before STW)
@@ -161,7 +157,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             debug!("Full heap GC Fast");
             self.common()
                 .schedule_common::<GenImmixMatureProcessEdges<VM, { TraceKind::Fast }>>(
-                    genimmix_constraints(),
+                    &GENIMMIX_CONSTRAINTS,
                     scheduler,
                 );
             // Stop & scan mutators (mutator scanning can happen before STW)
@@ -273,14 +269,14 @@ impl<VM: VMBinding> GenImmix<VM> {
             &mut heap,
             scheduler,
             global_metadata_specs.clone(),
-            genimmix_constraints(),
+            &GENIMMIX_CONSTRAINTS,
         );
 
         let genimmix = GenImmix {
             gen: Gen::new(
                 heap,
                 global_metadata_specs,
-                genimmix_constraints(),
+                &GENIMMIX_CONSTRAINTS,
                 vm_map,
                 mmapper,
                 options,

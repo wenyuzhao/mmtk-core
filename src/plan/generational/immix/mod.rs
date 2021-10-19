@@ -6,4 +6,4 @@ pub(in crate::plan) mod mutator;
 
 pub use self::global::GenImmix;
 
-pub use self::global::genimmix_constraints;
+pub use self::global::GENIMMIX_CONSTRAINTS;

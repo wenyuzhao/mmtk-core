@@ -1,5 +1,11 @@
 use super::{block::Block, chunk::ChunkState, ImmixSpace};
-use crate::{MMTK, policy::space::Space, scheduler::{GCWork, GCWorker}, util::{VMMutatorThread, VMThread, rc::RC_LOCK_BITS}, vm::*};
+use crate::{
+    policy::space::Space,
+    scheduler::{GCWork, GCWorker},
+    util::{rc::RC_LOCK_BITS, VMMutatorThread, VMThread},
+    vm::*,
+    MMTK,
+};
 use atomic::Ordering;
 use spin::RwLock;
 use std::sync::atomic::AtomicUsize;

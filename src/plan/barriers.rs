@@ -9,10 +9,10 @@ use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::store_metadata;
-use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::rc::ProcessDecs;
 use crate::util::rc::ProcessIncs;
+use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::MMTK;
 

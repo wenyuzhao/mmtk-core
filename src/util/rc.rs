@@ -25,9 +25,7 @@ use std::{
 
 use super::metadata::MetadataSpec;
 use super::{
-    metadata::{
-        compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata,
-    },
+    metadata::{compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata},
     Address,
 };
 
@@ -39,11 +37,13 @@ const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;
 pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
-pub const RC_STRADDLE_LINES: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_STRADDLE_LINES;
+pub const RC_STRADDLE_LINES: SideMetadataSpec =
+    crate::util::metadata::side_metadata::spec_defs::RC_STRADDLE_LINES;
 
 pub const RC_TABLE: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_TABLE;
 
-pub const RC_LOCK_BITS: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::RC_LOCK_BITS;
+pub const RC_LOCK_BITS: SideMetadataSpec =
+    crate::util::metadata::side_metadata::spec_defs::RC_LOCK_BITS;
 pub const RC_LOCK_BIT_SPEC: MetadataSpec = MetadataSpec::OnSide(RC_LOCK_BITS);
 
 #[inline(always)]

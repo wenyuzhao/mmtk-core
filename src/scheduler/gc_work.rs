@@ -237,7 +237,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 }
             }
         }
-        mmtk.scheduler.work_buckets[WorkBucketStage::ScanGlobalRoots].add(ScanVMSpecificRoots::<E>::new());
+        mmtk.scheduler.work_buckets[WorkBucketStage::ScanGlobalRoots]
+            .add(ScanVMSpecificRoots::<E>::new());
     }
 }
 

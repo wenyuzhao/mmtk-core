@@ -68,7 +68,6 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for ScheduleSanityGC
         scheduler.reset_state();
 
         plan.base().inside_sanity.store(true, Ordering::SeqCst);
-        <<P as Plan>::VM as VMBinding>::VMScanning::prepare_for_sanity_roots_scanning();
         // Stop & scan mutators (mutator scanning can happen before STW)
 
         // We use the cached roots for sanity gc, based on the assumption that

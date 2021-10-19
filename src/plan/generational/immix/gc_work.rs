@@ -26,7 +26,7 @@ impl<VM: VMBinding> CopyContext for GenImmixCopyContext<VM> {
     type VM = VM;
 
     fn constraints(&self) -> &'static PlanConstraints {
-        super::global::genimmix_constraints()
+        &super::global::GENIMMIX_CONSTRAINTS
     }
 
     fn init(&mut self, tls: VMWorkerThread) {
@@ -55,9 +55,9 @@ impl<VM: VMBinding> CopyContext for GenImmixCopyContext<VM> {
         _semantics: crate::AllocationSemantics,
     ) -> Address {
         debug_assert!(
-            bytes <= super::genimmix_constraints().max_non_los_default_alloc_bytes,
+            bytes <= super::GENIMMIX_CONSTRAINTS.max_non_los_default_alloc_bytes,
             "Attempted to copy an object of {} bytes (> {}) which should be allocated with LOS and not be copied.",
-            bytes, super::genimmix_constraints().max_non_los_default_alloc_bytes,
+            bytes, super::GENIMMIX_CONSTRAINTS.max_non_los_default_alloc_bytes,
         );
         debug_assert!(VM::VMActivePlan::global().base().gc_in_progress_proper());
         if self.plan.immix.in_defrag() {

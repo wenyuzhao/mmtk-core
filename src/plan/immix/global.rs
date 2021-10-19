@@ -21,18 +21,14 @@ use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
-use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::util::rc::ProcessDecs;
+use crate::util::rc::RC_LOCK_BIT_SPEC;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
-use crate::{
-    mmtk::MMTK,
-    policy::immix::{block::Block, ImmixSpace},
-    util::opaque_pointer::VMWorkerThread,
-};
+use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -40,6 +36,7 @@ use std::sync::Arc;
 
 use atomic::{Atomic, Ordering};
 use enum_map::EnumMap;
+use spin::Lazy;
 
 pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 
@@ -55,51 +52,35 @@ pub struct Immix<VM: VMBinding> {
     last_gc_was_defrag: AtomicBool,
 }
 
-#[inline(always)]
-pub fn get_active_barrier() -> BarrierSelector {
-    static mut V: Option<BarrierSelector> = None;
-    unsafe {
-        *V.get_or_insert_with(|| {
-            if crate::plan::barriers::BARRIER_MEASUREMENT {
-                match env::var("BARRIER") {
-                    Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
-                    Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
-                    Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
-                    _ => unreachable!("Please explicitly specify barrier"),
-                }
-            } else if super::CONCURRENT_MARKING || super::REF_COUNT {
-                BarrierSelector::FieldLoggingBarrier
-            } else {
-                BarrierSelector::NoBarrier
-            }
-        })
+pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
+    if crate::plan::barriers::BARRIER_MEASUREMENT {
+        match env::var("BARRIER") {
+            Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
+            Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
+            Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
+            _ => unreachable!("Please explicitly specify barrier"),
+        }
+    } else if super::CONCURRENT_MARKING || super::REF_COUNT {
+        BarrierSelector::FieldLoggingBarrier
+    } else {
+        BarrierSelector::NoBarrier
     }
-}
+});
 
-#[inline(always)]
-pub fn get_immix_constraints() -> &'static PlanConstraints {
-    static mut C: PlanConstraints = PlanConstraints {
-        moves_objects: true,
-        gc_header_bits: 2,
-        gc_header_words: 0,
-        num_specialized_scans: 1,
-        /// Max immix object size is half of a block.
-        max_non_los_default_alloc_bytes: Block::BYTES >> 1,
-        barrier: BarrierSelector::NoBarrier,
-        needs_log_bit: false,
-        needs_field_log_bit: false,
-        ..PlanConstraints::default()
-    };
-    unsafe {
-        let barrier = get_active_barrier();
-        C.barrier = barrier;
-        C.needs_log_bit =
-            crate::flags::BARRIER_MEASUREMENT || barrier != BarrierSelector::NoBarrier;
-        C.needs_field_log_bit = barrier == BarrierSelector::FieldLoggingBarrier
-            || (crate::flags::BARRIER_MEASUREMENT && barrier == BarrierSelector::NoBarrier);
-        &C
-    }
-}
+pub static IMMIX_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
+    moves_objects: true,
+    gc_header_bits: 2,
+    gc_header_words: 0,
+    num_specialized_scans: 1,
+    /// Max immix object size is half of a block.
+    max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+    barrier: *ACTIVE_BARRIER,
+    needs_log_bit: crate::flags::BARRIER_MEASUREMENT
+        || *ACTIVE_BARRIER != BarrierSelector::NoBarrier,
+    needs_field_log_bit: *ACTIVE_BARRIER == BarrierSelector::FieldLoggingBarrier
+        || (crate::flags::BARRIER_MEASUREMENT && *ACTIVE_BARRIER == BarrierSelector::NoBarrier),
+    ..PlanConstraints::default()
+});
 
 impl<VM: VMBinding> Plan for Immix<VM> {
     type VM = VM;
@@ -141,7 +122,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
-        get_immix_constraints()
+        &IMMIX_CONSTRAINTS
     }
 
     fn create_worker_local(
@@ -170,7 +151,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         );
         println!("CONCURRENT_MARKING: {}", super::CONCURRENT_MARKING);
         println!("REF_COUNT: {}", super::REF_COUNT);
-        println!("BARRIER: {:?}", get_active_barrier());
+        println!("BARRIER: {:?}", *ACTIVE_BARRIER);
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
         unsafe {
@@ -246,8 +227,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
         }
         // release the collected region
-        self.last_gc_was_defrag
-            .store(self.current_pause().unwrap() == Pause::FullTraceDefrag, Ordering::Relaxed);
+        self.last_gc_was_defrag.store(
+            self.current_pause().unwrap() == Pause::FullTraceDefrag,
+            Ordering::Relaxed,
+        );
     }
 
     fn get_collection_reserve(&self) -> usize {
@@ -302,16 +285,15 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
-        let immix_specs = if crate::flags::BARRIER_MEASUREMENT
-            || get_active_barrier() != BarrierSelector::NoBarrier
-        {
-            metadata::extract_side_metadata(&[
-                RC_LOCK_BIT_SPEC,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            ])
-        } else {
-            vec![]
-        };
+        let immix_specs =
+            if crate::flags::BARRIER_MEASUREMENT || *ACTIVE_BARRIER != BarrierSelector::NoBarrier {
+                metadata::extract_side_metadata(&[
+                    RC_LOCK_BIT_SPEC,
+                    *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+                ])
+            } else {
+                vec![]
+            };
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let immix = Immix {
             immix_space: ImmixSpace::new(
@@ -321,14 +303,14 @@ impl<VM: VMBinding> Immix<VM> {
                 &mut heap,
                 scheduler,
                 global_metadata_specs.clone(),
-                get_immix_constraints(),
+                &IMMIX_CONSTRAINTS,
             ),
             common: CommonPlan::new(
                 vm_map,
                 mmapper,
                 options,
                 heap,
-                get_immix_constraints(),
+                &IMMIX_CONSTRAINTS,
                 global_metadata_specs,
             ),
             perform_cycle_collection: AtomicBool::new(false),

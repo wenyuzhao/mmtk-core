@@ -2,6 +2,9 @@ pub mod gc_work;
 pub(super) mod global;
 pub(super) mod mutator;
 
+pub use self::global::Immix;
+pub use self::global::IMMIX_CONSTRAINTS;
+
 use std::sync::{atomic::AtomicUsize, Arc};
 
 use spin::Mutex;
@@ -9,7 +12,6 @@ use spin::Mutex;
 use crate::util::ObjectReference;
 
 pub use self::gc_work::ImmixCopyContext;
-pub use self::global::{get_active_barrier, Immix};
 
 pub const CONCURRENT_MARKING: bool = crate::flags::CONCURRENT_MARKING;
 

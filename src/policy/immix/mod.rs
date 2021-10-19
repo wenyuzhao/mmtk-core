@@ -5,8 +5,8 @@ pub mod defrag;
 pub mod immixspace;
 pub mod line;
 
-pub use immixspace::*;
 pub use crate::plan::immix::{CONCURRENT_MARKING, REF_COUNT};
+pub use immixspace::*;
 
 use crate::policy::immix::block::Block;
 

@@ -26,6 +26,7 @@ use crate::util::sanity::sanity_checker::*;
 use crate::util::VMWorkerThread;
 use crate::vm::*;
 use enum_map::EnumMap;
+use spin::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -38,16 +39,14 @@ pub struct GenCopy<VM: VMBinding> {
     pub copyspace1: CopySpace<VM>,
 }
 
-#[inline(always)]
-pub fn gencopy_constaints() -> &'static PlanConstraints {
-    crate::plan::generational::gen_constraints()
-}
+pub static GENCOPY_CONSTRAINTS: Lazy<PlanConstraints> =
+    Lazy::new(|| (*crate::plan::generational::GEN_CONSTRAINTS).clone());
 
 impl<VM: VMBinding> Plan for GenCopy<VM> {
     type VM = VM;
 
     fn constraints(&self) -> &'static PlanConstraints {
-        gencopy_constaints()
+        &GENCOPY_CONSTRAINTS
     }
 
     fn create_worker_local(
@@ -97,7 +96,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
             debug!("Nursery GC");
             self.common()
                 .schedule_common::<GenNurseryProcessEdges<VM, GenCopyCopyContext<VM>>>(
-                    gencopy_constaints(),
+                    &GENCOPY_CONSTRAINTS,
                     scheduler,
                 );
             // Stop & scan mutators (mutator scanning can happen before STW)
@@ -107,7 +106,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         } else {
             debug!("Full heap GC");
             self.common()
-                .schedule_common::<GenCopyMatureProcessEdges<VM>>(gencopy_constaints(), scheduler);
+                .schedule_common::<GenCopyMatureProcessEdges<VM>>(&GENCOPY_CONSTRAINTS, scheduler);
             // Stop & scan mutators (mutator scanning can happen before STW)
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<GenCopyMatureProcessEdges<VM>>::new());
@@ -228,7 +227,7 @@ impl<VM: VMBinding> GenCopy<VM> {
             gen: Gen::new(
                 heap,
                 global_metadata_specs,
-                gencopy_constaints(),
+                &GENCOPY_CONSTRAINTS,
                 vm_map,
                 mmapper,
                 options,
