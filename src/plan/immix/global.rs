@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges, TraceKind};
+use super::gc_work::{CMImmixCollectRootEdges, ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::{Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::global::BasePlan;
@@ -377,11 +377,11 @@ impl<VM: VMBinding> Immix<VM> {
         } else if concurrent {
             Pause::InitialMark
         } else {
-            if crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+            if (!super::REF_COUNT || crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
                 && concurrent_marking_in_progress
             {
                 Pause::FinalMark
-            } else if (super::REF_COUNT && !force_no_rc) || concurrent_marking_in_progress {
+            } else if super::REF_COUNT && (!force_no_rc || concurrent_marking_in_progress) {
                 Pause::RefCount
             } else {
                 full_trace()
@@ -453,7 +453,7 @@ impl<VM: VMBinding> Immix<VM> {
                 .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new())
         } else {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new())
+                .add(StopMutators::<CMImmixCollectRootEdges<VM>>::new())
         };
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));

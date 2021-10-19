@@ -75,6 +75,12 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.initial_mark_pause {
             return true;
         }
+        if crate::flags::CONCURRENT_MARKING {
+            let block_state = Block::containing::<VM>(object).get_state();
+            if block_state == BlockState::Nursery {
+                return true;
+            }
+        }
         self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object)
     }
     fn is_movable(&self) -> bool {
