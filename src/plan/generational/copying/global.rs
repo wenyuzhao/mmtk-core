@@ -83,7 +83,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
 
         // TODO: We should have a schedule_generational
 
-        self.base().set_collection_kind();
+        self.base().set_collection_kind(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         if !is_full_heap {
             debug!("Nursery GC");

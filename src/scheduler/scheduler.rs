@@ -3,10 +3,13 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
+use crate::plan::immix::gc_work::ImmixConcurrentTraceObject;
 use crate::util::opaque_pointer::*;
+use crate::util::rc::ProcessDecs;
 use crate::vm::VMBinding;
 use crossbeam_queue::SegQueue;
 use enum_map::{enum_map, EnumMap};
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -85,17 +88,46 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn pause_concurrent_work_packets_during_gc(&self) {
         let concurrent_queue =
-            self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(Default::default());
-        if !concurrent_queue.is_empty() {
-            if crate::flags::LOG_PER_GC_STATE {
-                println!("Pause {} concurrent packets", concurrent_queue.len());
+            self.work_buckets[WorkBucketStage::Unconstrained].queue.read();
+        let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        let mut postponed = 0usize;
+        let mut no_postpone = vec![];
+        while let Some(w) = concurrent_queue.pop() {
+            if w.type_id() == TypeId::of::<ImmixConcurrentTraceObject<VM>>() {
+                postponed_concurrent_work.push(w);
+                postponed += 1;
+            } else {
+                no_postpone.push(w)
             }
-            let mut postponed_concurrent_work = self.postponed_concurrent_work.write();
-            debug_assert!(postponed_concurrent_work.is_empty());
-            *postponed_concurrent_work = concurrent_queue;
+        }
+        self.work_buckets[WorkBucketStage::Unconstrained].bulk_add(no_postpone);
+        if crate::flags::LOG_PER_GC_STATE {
+            println!("Pause {} concurrent packets", postponed);
         }
         self.pause_concurrent_work_packets_during_gc
             .store(true, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub fn process_lazy_decrement_packets(&self) {
+        crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
+        if crate::flags::LOG_PER_GC_STATE {
+            println!("process_lazy_decrement_packets");
+        }
+        let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        let mut no_postpone = vec![];
+        let mut cm_packets = vec![];
+        while let Some(w) = postponed_concurrent_work.pop() {
+            if w.type_id() == TypeId::of::<ProcessDecs<VM>>() {
+                no_postpone.push(w)
+            } else {
+                cm_packets.push(w)
+            }
+        }
+        for w in cm_packets {
+            postponed_concurrent_work.push(w)
+        }
+        self.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(no_postpone);
     }
 
     #[inline]

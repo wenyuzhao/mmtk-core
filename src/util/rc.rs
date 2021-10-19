@@ -2,8 +2,7 @@ use std::{
     iter::Step,
     sync::{atomic::AtomicUsize, Arc},
 };
-use crate::scheduler::gc_work::ProcessEdgesWork;
-use crate::plan::immix::gc_work::{ImmixConcurrentTraceObject, ImmixProcessEdges, TraceKind};
+use crate::plan::immix::gc_work::{ImmixConcurrentTraceObject};
 use crate::{
     plan::{
         barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},

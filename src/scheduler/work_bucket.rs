@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     /// A priority queue
-    queue: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
+    pub queue: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,

@@ -110,6 +110,14 @@ fn concurrent_marking_packets_drained() -> bool {
     crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
 }
 
+
+static DISABLE_LASY_DEC_FOR_CURRENT_GC: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+fn disable_lasy_dec_for_current_gc() -> bool {
+    crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.load(Ordering::SeqCst)
+}
+
 static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 
@@ -128,10 +136,11 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
+    pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
-    pub const RC_EVACUATE_NURSERY: bool = false;
+    pub const NO_LAZY_DEC_THRESHOLD: usize = 500;
+    pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
     pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;
 
@@ -145,7 +154,7 @@ pub mod flags {
     pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
     pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = false;
-    pub const SLOW_CONCURRENT_MARKING: bool = !NO_RC_PAUSES_DURING_CONCURRENT_MARKING;
+    pub const SLOW_CONCURRENT_MARKING: bool = false;
 
     // ---------- Derived flags ---------- //
     pub const IGNORE_REUSING_BLOCKS: bool =

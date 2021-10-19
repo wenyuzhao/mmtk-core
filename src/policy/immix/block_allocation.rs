@@ -50,7 +50,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn reset_and_generate_nursery_sweep_tasks(
         &mut self,
         num_workers: usize,
-    ) -> Vec<Box<dyn GCWork<VM>>> {
+    ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
         let mut buffer = self.clean_block_buffer.write();
         let blocks = buffer.1.len();
         let num_bins = num_workers << 1;
@@ -68,9 +68,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         buffer.0.store(0, Ordering::SeqCst);
         buffer.1.clear();
         let space = self.space();
-        bins.into_iter()
+        let packets = bins.into_iter()
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
-            .collect()
+            .collect();
+        (packets, blocks)
     }
 
     const fn space(&self) -> &'static ImmixSpace<VM> {

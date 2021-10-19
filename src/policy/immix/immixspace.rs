@@ -239,12 +239,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             x.set_state(BlockState::Nursery);
         }
         let num_workers = self.scheduler().worker_group().worker_count();
-        let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+        let (work_packets, nursery_blocks) = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
                 .reset_and_generate_nursery_sweep_tasks(num_workers)
         } else {
             unreachable!();
         };
+        if nursery_blocks < crate::flags::NO_LAZY_DEC_THRESHOLD {
+            crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
+        }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
@@ -263,9 +266,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn release_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation.reset();
+        let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
+        if disable_lasy_dec_for_current_gc {
+            self.scheduler().process_lazy_decrement_packets();
+        }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
-            if crate::flags::LAZY_DECREMENTS {
+            if crate::flags::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
             } else {
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
@@ -727,24 +734,5 @@ impl<E: ProcessEdgesWork> Drop for ScanObjectsAndMarkLines<E> {
         if self.concurrent {
             crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         }
-    }
-}
-
-pub struct ReleaseRCNursery<VM: VMBinding> {
-    space: &'static mut ImmixSpace<VM>,
-}
-
-impl<VM: VMBinding> GCWork<VM> for ReleaseRCNursery<VM> {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let num_workers = worker.scheduler().worker_group().worker_count();
-        let work_packets = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
-            self.space
-                .block_allocation
-                .reset_and_generate_nursery_sweep_tasks(num_workers)
-        } else {
-            let space: &'static ImmixSpace<VM> = unsafe { &*(self.space as *const ImmixSpace<VM>) };
-            self.space.chunk_map.generate_sweep_tasks::<VM>(space, true)
-        };
-        worker.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
     }
 }

@@ -364,6 +364,10 @@ pub trait Plan: 'static + Sync + Downcast {
 
     fn gc_pause_start(&self) {}
     fn gc_pause_end(&self) {}
+
+    fn last_collection_was_exhaustive(&self) -> bool {
+        true
+    }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -641,7 +645,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.release();
     }
 
-    pub fn set_collection_kind(&self) {
+    pub fn set_collection_kind(&self, p: &dyn Plan<VM=VM>) {
         self.cur_collection_attempts.store(
             if self.is_user_triggered_collection() {
                 1
@@ -652,7 +656,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         );
 
         let emergency_collection = !self.is_internal_triggered_collection()
-            && self.last_collection_was_exhaustive()
+            && p.last_collection_was_exhaustive()
             && self.cur_collection_attempts.load(Ordering::Relaxed) > 1;
         self.emergency_collection
             .store(emergency_collection, Ordering::Relaxed);
@@ -723,10 +727,6 @@ impl<VM: VMBinding> BasePlan<VM> {
     fn is_internal_triggered_collection(&self) -> bool {
         self.last_internal_triggered_collection
             .load(Ordering::Relaxed)
-    }
-
-    fn last_collection_was_exhaustive(&self) -> bool {
-        true
     }
 
     fn force_full_heap_collection(&self) {}

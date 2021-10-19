@@ -47,6 +47,7 @@ pub struct Immix<VM: VMBinding> {
     /// For RC immix, this is used for enable backup tracing.
     perform_cycle_collection: AtomicBool,
     current_pause: Atomic<Option<Pause>>,
+    previous_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
 }
 
@@ -263,6 +264,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.current_pause().unwrap() == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
+        self.previous_pause.store(Some(self.current_pause.load(Ordering::SeqCst).unwrap()), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
@@ -274,6 +276,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     #[cfg(feature = "nogc_no_zeroing")]
     fn handle_user_collection_request(&self, _tls: crate::util::VMMutatorThread, _force: bool) {
         println!("Warning: User attempted a collection request. The request is ignored.");
+    }
+
+    fn last_collection_was_exhaustive(&self) -> bool {
+        let x = self.previous_pause.load(Ordering::SeqCst);
+        x == Some(Pause::FullTraceFast) || x == Some(Pause::FullTraceDefrag)
     }
 }
 
@@ -317,6 +324,7 @@ impl<VM: VMBinding> Immix<VM> {
             perform_cycle_collection: AtomicBool::new(false),
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
             current_pause: Atomic::new(None),
+            previous_pause: Atomic::new(None),
         };
 
         {
@@ -333,7 +341,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn select_collection_kind(&self, concurrent: bool) -> Pause {
-        self.base().set_collection_kind();
+        self.base().set_collection_kind(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         let in_defrag = self.immix_space.decide_whether_to_defrag(
             self.is_emergency_collection(),
@@ -418,7 +426,9 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if crate::flags::CONCURRENT_MARKING && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
         {
-            scheduler.pause_concurrent_work_packets_during_gc();
+            if crate::concurrent_marking_in_progress() {
+                scheduler.pause_concurrent_work_packets_during_gc();
+            }
         }
         debug_assert!(super::REF_COUNT);
         type E<VM> = RCImmixCollectRootEdges<VM>;

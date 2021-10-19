@@ -1,7 +1,7 @@
 use super::worker::*;
 use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
-use std::any::{type_name, TypeId};
+use std::any::{Any, TypeId, type_name};
 
 /// A special kind of work that will execute on the coordinator (i.e. controller) thread
 ///
@@ -10,7 +10,7 @@ use std::any::{type_name, TypeId};
 /// For this case, use `WorkBucket::add_with_priority_unsync` instead.
 pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
 
-pub trait GCWork<VM: VMBinding>: 'static + Send {
+pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>);
     #[inline]
     fn do_work_with_stat(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
