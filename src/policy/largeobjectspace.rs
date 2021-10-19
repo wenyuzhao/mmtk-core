@@ -207,6 +207,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 let cell = VM::VMObjectModel::object_start_ref(object);
                 self.treadmill.copy(cell, nursery_object);
                 self.clear_nursery(object);
+                // We just moved the object out of the logical nursery, mark it as unlogged.
+                if !crate::flags::REF_COUNT && nursery_object && self.common.needs_log_bit {
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                }
                 trace.process_node(object);
             }
         }

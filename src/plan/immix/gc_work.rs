@@ -153,7 +153,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         };
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
         Self {
             plan,
@@ -361,7 +361,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         debug_assert!(roots);
-        let base = ProcessEdgesBase::new(edges, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }
     }
 
@@ -408,7 +408,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         debug_assert!(roots);
-        let base = ProcessEdgesBase::new(edges, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }
     }
 
