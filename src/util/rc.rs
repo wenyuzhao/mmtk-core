@@ -6,12 +6,12 @@ use crate::{
         EdgeIterator,
     },
     policy::{
-        immix::{block::Block, chunk::ChunkMap, line::Line, ImmixSpace},
+        immix::{block::Block, line::Line, ImmixSpace},
         space::Space,
     },
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::{
-        metadata::side_metadata::{self, SideMetadataOffset, SideMetadataSpec},
+        metadata::side_metadata::{self, SideMetadataSpec},
         object_forwarding, ObjectReference,
     },
     vm::*,

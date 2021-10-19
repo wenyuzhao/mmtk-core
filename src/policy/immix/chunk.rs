@@ -368,6 +368,7 @@ struct SweepDeadCyclesChunk<VM: VMBinding> {
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
 
+#[allow(unused)]
 impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     const CAPACITY: usize = 1024;
 

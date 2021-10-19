@@ -1,4 +1,3 @@
-use crate::policy::mallocspace::metadata::ACTIVE_CHUNK_METADATA_SPEC;
 use crate::util::heap::layout::vm_layout_constants::LOG_ADDRESS_SPACE;
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::{BYTES_IN_CHUNK, LOG_BYTES_IN_CHUNK};
