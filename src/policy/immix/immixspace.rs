@@ -290,17 +290,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn prepare(&mut self, initial_mark_pause: bool) {
+    pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
         self.initial_mark_pause = initial_mark_pause;
         debug_assert!(!crate::flags::REF_COUNT);
         self.block_allocation.reset();
-        // Update mark_state
-        if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
-            self.mark_state = Self::MARKED_STATE;
-        } else {
-            // For header metadata, we use cyclic mark bits.
-            unimplemented!("cyclic mark bits is not supported at the moment");
+        if major_gc {
+            // Update mark_state
+            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
+                self.mark_state = Self::MARKED_STATE;
+            } else {
+                // For header metadata, we use cyclic mark bits.
+                unimplemented!("cyclic mark bits is not supported at the moment");
+            }
         }
+
         // Prepare defrag info
         if super::DEFRAG {
             self.defrag.prepare(self);
@@ -328,15 +331,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn release(&mut self) {
+    /// Release for the immix space. This is called when a GC finished.
+    /// Return whether this GC was a defrag GC, as a plan may want to know this.
+    pub fn release(&mut self, major_gc: bool) -> bool {
         debug_assert!(!crate::flags::REF_COUNT);
         self.block_allocation.reset();
-        // Update line_unavail_state for hole searching afte this GC.
-        if !super::BLOCK_ONLY {
-            self.line_unavail_state.store(
-                self.line_mark_state.load(Ordering::Acquire),
-                Ordering::Release,
-            );
+        let did_defrag = self.defrag.in_defrag();
+        if major_gc {
+            // Update line_unavail_state for hole searching afte this GC.
+            if !super::BLOCK_ONLY {
+                self.line_unavail_state.store(
+                    self.line_mark_state.load(Ordering::Acquire),
+                    Ordering::Release,
+                );
+            }
         }
         // Clear reusable blocks list
         if !super::BLOCK_ONLY {
@@ -348,9 +356,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let work_packets = self.chunk_map.generate_sweep_tasks(space, false);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
-            self.defrag.release(self)
+            self.defrag.release(self);
         }
         self.initial_mark_pause = false;
+        did_defrag
     }
 
     /// Release a block.

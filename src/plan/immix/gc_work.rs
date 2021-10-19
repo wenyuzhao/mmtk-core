@@ -169,17 +169,13 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         if self.nodes.is_empty() {
             return;
         }
-        let mut new_nodes = vec![];
-        mem::swap(&mut new_nodes, &mut self.nodes);
-        // This packet is executed within a GC pause.
-        // Further generated packets can either be postponed or run in the same pause.
         debug_assert_ne!(self.immix().current_pause(), Some(Pause::InitialMark));
-        let w = ScanObjectsAndMarkLines::<Self>::new(new_nodes, false, &self.immix().immix_space);
-        if Self::SCAN_OBJECTS_IMMEDIATELY {
-            self.worker().do_work(w);
-        } else {
-            self.worker().add_work(WorkBucketStage::Closure, w);
-        }
+        let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
+            self.pop_nodes(),
+            false,
+            &self.immix().immix_space,
+        );
+        self.new_scan_work(scan_objects_work);
     }
 
     /// Trace  and evacuate objects.

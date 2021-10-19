@@ -211,7 +211,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if !super::REF_COUNT {
             if pause != Pause::FinalMark {
                 self.common.prepare(tls, true);
-                self.immix_space.prepare(true);
+                self.immix_space.prepare(true, true);
             }
         } else {
             if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
@@ -226,7 +226,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if !super::REF_COUNT {
             if pause != Pause::InitialMark {
                 self.common.release(tls, true);
-                self.immix_space.release();
+                self.immix_space.release(true);
             }
         } else {
             if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
