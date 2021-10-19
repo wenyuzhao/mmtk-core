@@ -68,7 +68,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         buffer.0.store(0, Ordering::SeqCst);
         buffer.1.clear();
         let space = self.space();
-        let packets = bins.into_iter()
+        let packets = bins
+            .into_iter()
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
             .collect();
         (packets, blocks)

@@ -110,7 +110,6 @@ fn concurrent_marking_packets_drained() -> bool {
     crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
 }
 
-
 static DISABLE_LASY_DEC_FOR_CURRENT_GC: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]

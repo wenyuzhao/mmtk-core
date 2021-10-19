@@ -645,7 +645,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.release();
     }
 
-    pub fn set_collection_kind(&self, p: &dyn Plan<VM=VM>) {
+    pub fn set_collection_kind(&self, p: &dyn Plan<VM = VM>) {
         self.cur_collection_attempts.store(
             if self.is_user_triggered_collection() {
                 1

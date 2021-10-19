@@ -1,7 +1,7 @@
 use super::worker::*;
 use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
-use std::any::{Any, TypeId, type_name};
+use std::any::{type_name, Any, TypeId};
 
 /// A special kind of work that will execute on the coordinator (i.e. controller) thread
 ///

@@ -87,8 +87,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     #[inline]
     pub fn pause_concurrent_work_packets_during_gc(&self) {
-        let concurrent_queue =
-            self.work_buckets[WorkBucketStage::Unconstrained].queue.read();
+        let concurrent_queue = self.work_buckets[WorkBucketStage::Unconstrained]
+            .queue
+            .read();
         let postponed_concurrent_work = self.postponed_concurrent_work.read();
         let mut postponed = 0usize;
         let mut no_postpone = vec![];

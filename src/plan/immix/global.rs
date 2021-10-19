@@ -1,4 +1,7 @@
-use super::gc_work::{CMImmixCollectRootEdges, ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges, TraceKind};
+use super::gc_work::{
+    CMImmixCollectRootEdges, ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges,
+    TraceKind,
+};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::{Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::global::BasePlan;
@@ -264,7 +267,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.current_pause().unwrap() == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
-        self.previous_pause.store(Some(self.current_pause.load(Ordering::SeqCst).unwrap()), Ordering::SeqCst);
+        self.previous_pause.store(
+            Some(self.current_pause.load(Ordering::SeqCst).unwrap()),
+            Ordering::SeqCst,
+        );
         self.current_pause.store(None, Ordering::SeqCst);
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
