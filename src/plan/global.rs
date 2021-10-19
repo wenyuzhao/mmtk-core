@@ -185,6 +185,15 @@ pub fn create_plan<VM: VMBinding>(
 /// 3. Initialize all the spaces the plan uses with the heap meta, and the global metadata specs vector.
 /// 4. Create a `SideMetadataSanity` object, and invoke verify_side_metadata_sanity() for each space (or
 ///    invoke verify_side_metadata_sanity() in `CommonPlan`/`BasePlan` for the spaces in the common/base plan).
+///
+/// Methods in this trait:
+///
+/// Only methods that will be overridden by each specific plan should be included in this trait. The trait may
+/// provide a default implementation, and each plan can override the implementation. For methods that won't be
+/// overridden, we should implement those methods in BasePlan (or CommonPlan) and call them from there instead.
+/// We should avoid having methods with the same name in both Plan and BasePlan, as this may confuse people, and
+/// they may call a wrong method by mistake.
+// TODO: Some methods that are not overriden can be moved from the trait to BasePlan.
 pub trait Plan: 'static + Sync + Downcast {
     type VM: VMBinding;
 
@@ -333,31 +342,24 @@ pub trait Plan: 'static + Sync + Downcast {
         self.get_total_pages() - self.get_pages_used()
     }
 
+    /// The application code has requested a collection.
     fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
-        if force || !self.options().ignore_system_g_c {
-            info!("User triggering collection");
-            self.base()
-                .user_triggered_collection
-                .store(true, Ordering::Relaxed);
-            self.base().control_collector_context.request(false);
-            <Self::VM as VMBinding>::VMCollection::block_for_gc(tls);
-        }
+        self.base().handle_user_collection_request(tls, force)
     }
 
-    fn reset_collection_trigger(&self) {
-        self.base().last_internal_triggered_collection.store(
-            self.base()
-                .internal_triggered_collection
-                .load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        self.base()
-            .internal_triggered_collection
-            .store(false, Ordering::Relaxed);
-        self.base()
-            .user_triggered_collection
-            .store(false, Ordering::Relaxed)
+    /// Return whether last GC was an exhaustive attempt to collect the heap.
+    /// For many collectors this is the same as asking whether the last GC was a full heap collection.
+    fn last_collection_was_exhaustive(&self) -> bool {
+        self.last_collection_full_heap()
     }
+
+    /// Return whether last GC is a full GC.
+    fn last_collection_full_heap(&self) -> bool {
+        true
+    }
+
+    /// Force the next collection to be full heap.
+    fn force_full_heap_collection(&self) {}
 
     fn modify_check(&self, object: ObjectReference) {
         if self.base().gc_in_progress_proper() && object.is_movable() {
@@ -370,10 +372,6 @@ pub trait Plan: 'static + Sync + Downcast {
 
     fn gc_pause_start(&self) {}
     fn gc_pause_end(&self) {}
-
-    fn last_collection_was_exhaustive(&self) -> bool {
-        true
-    }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -396,6 +394,8 @@ pub struct BasePlan<VM: VMBinding> {
     pub stacks_prepared: AtomicBool,
     pub emergency_collection: AtomicBool,
     pub user_triggered_collection: AtomicBool,
+    pub internal_triggered_collection: AtomicBool,
+    pub last_internal_triggered_collection: AtomicBool,
     // Has an allocation succeeded since the emergency collection?
     pub allocation_success: AtomicBool,
     // Maximum number of failed attempts by a single thread
@@ -428,8 +428,6 @@ pub struct BasePlan<VM: VMBinding> {
     pub ro_space: ImmortalSpace<VM>,
     #[cfg(feature = "vm_space")]
     pub vm_space: ImmortalSpace<VM>,
-    last_internal_triggered_collection: AtomicBool,
-    internal_triggered_collection: AtomicBool,
 }
 
 #[cfg(feature = "vm_space")]
@@ -527,6 +525,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             stacks_prepared: AtomicBool::new(false),
             emergency_collection: AtomicBool::new(false),
             user_triggered_collection: AtomicBool::new(false),
+            internal_triggered_collection: AtomicBool::new(false),
+            last_internal_triggered_collection: AtomicBool::new(false),
             allocation_success: AtomicBool::new(false),
             max_collection_attempts: AtomicUsize::new(0),
             cur_collection_attempts: AtomicUsize::new(0),
@@ -543,8 +543,6 @@ impl<VM: VMBinding> BasePlan<VM> {
             allocation_bytes: AtomicUsize::new(0),
             #[cfg(feature = "analysis")]
             analysis_manager,
-            last_internal_triggered_collection: AtomicBool::new(false),
-            internal_triggered_collection: AtomicBool::new(false),
         }
     }
 
@@ -575,6 +573,40 @@ impl<VM: VMBinding> BasePlan<VM> {
             self.vm_space.init(vm_map);
             self.vm_space.ensure_mapped();
         }
+    }
+
+    /// The application code has requested a collection.
+    pub fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
+        if force || !self.options.ignore_system_g_c {
+            info!("User triggering collection");
+            self.user_triggered_collection
+                .store(true, Ordering::Relaxed);
+            self.control_collector_context.request(false);
+            VM::VMCollection::block_for_gc(tls);
+        }
+    }
+
+    /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).
+    // This is not used, as we do not have a concurrent plan.
+    #[allow(unused)]
+    pub fn trigger_internal_collection_request(&self) {
+        self.last_internal_triggered_collection
+            .store(true, Ordering::Relaxed);
+        self.internal_triggered_collection
+            .store(true, Ordering::Relaxed);
+        self.control_collector_context.request(true);
+    }
+
+    /// Reset collection state information.
+    pub fn reset_collection_trigger(&self) {
+        self.last_internal_triggered_collection.store(
+            self.internal_triggered_collection.load(Ordering::SeqCst),
+            Ordering::Relaxed,
+        );
+        self.internal_triggered_collection
+            .store(false, Ordering::SeqCst);
+        self.user_triggered_collection
+            .store(false, Ordering::Relaxed);
     }
 
     // Depends on what base spaces we use, unsync may be unused.
@@ -651,7 +683,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.release();
     }
 
-    pub fn set_collection_kind(&self, p: &dyn Plan<VM = VM>) {
+    pub fn set_collection_kind<P: Plan>(&self, plan: &P) {
         self.cur_collection_attempts.store(
             if self.is_user_triggered_collection() {
                 1
@@ -662,13 +694,13 @@ impl<VM: VMBinding> BasePlan<VM> {
         );
 
         let emergency_collection = !self.is_internal_triggered_collection()
-            && p.last_collection_was_exhaustive()
+            && plan.last_collection_was_exhaustive()
             && self.cur_collection_attempts.load(Ordering::Relaxed) > 1;
         self.emergency_collection
             .store(emergency_collection, Ordering::Relaxed);
 
         if emergency_collection {
-            self.force_full_heap_collection();
+            plan.force_full_heap_collection();
         }
     }
 
@@ -705,10 +737,6 @@ impl<VM: VMBinding> BasePlan<VM> {
         *self.gc_status.lock().unwrap() == GcStatus::GcProper
     }
 
-    pub fn is_user_triggered_collection(&self) -> bool {
-        self.user_triggered_collection.load(Ordering::Relaxed)
-    }
-
     fn determine_collection_attempts(&self) -> usize {
         if !self.allocation_success.load(Ordering::Relaxed) {
             self.max_collection_attempts.fetch_add(1, Ordering::Relaxed);
@@ -720,22 +748,18 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.max_collection_attempts.load(Ordering::Relaxed)
     }
 
-    fn trigger_internal_collection_request(&self) {
-        // Mark this as a user triggered collection
-        self.internal_triggered_collection
-            .store(true, Ordering::Relaxed);
-        self.last_internal_triggered_collection
-            .store(true, Ordering::Relaxed);
-        // Request the collection
-        self.control_collector_context.request(true);
+    /// Return true if this collection was triggered by application code.
+    pub fn is_user_triggered_collection(&self) -> bool {
+        self.user_triggered_collection.load(Ordering::Relaxed)
     }
 
-    fn is_internal_triggered_collection(&self) -> bool {
-        self.last_internal_triggered_collection
-            .load(Ordering::Relaxed)
+    /// Return true if this collection was triggered internally.
+    pub fn is_internal_triggered_collection(&self) -> bool {
+        let is_internal_triggered = self
+            .last_internal_triggered_collection
+            .load(Ordering::SeqCst);
+        is_internal_triggered
     }
-
-    fn force_full_heap_collection(&self) {}
 
     pub fn increase_allocation_bytes_by(&self, size: usize) {
         let old_allocation_bytes = self.allocation_bytes.fetch_add(size, Ordering::SeqCst);

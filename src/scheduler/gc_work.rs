@@ -290,12 +290,10 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         }
 
         mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
-        mmtk.plan.reset_collection_trigger();
-        // println!(
-        //     "End of GC: {} / {}",
-        //     mmtk.plan.get_pages_reserved(),
-        //     mmtk.plan.get_total_pages()
-        // );
+
+        // Reset the triggering information.
+        mmtk.plan.base().reset_collection_trigger();
+
         <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
     }
 }

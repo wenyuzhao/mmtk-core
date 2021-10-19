@@ -52,6 +52,7 @@ pub struct Immix<VM: VMBinding> {
     current_pause: Atomic<Option<Pause>>,
     previous_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
+    last_gc_was_defrag: AtomicBool,
 }
 
 #[inline(always)]
@@ -132,6 +133,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !crate::concurrent_marking_in_progress()
             && self.base().gc_status() == GcStatus::NotInGC
             && self.get_pages_reserved() * 100 / 45 > self.get_total_pages()
+    }
+
+    fn last_collection_was_exhaustive(&self) -> bool {
+        let x = self.previous_pause.load(Ordering::SeqCst);
+        x == Some(Pause::FullTraceFast) || x == Some(Pause::FullTraceDefrag)
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
@@ -239,6 +245,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut old_roots = super::PREV_ROOTS.lock();
             std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
         }
+        // release the collected region
+        self.last_gc_was_defrag
+            .store(self.current_pause().unwrap() == Pause::FullTraceDefrag, Ordering::Relaxed);
     }
 
     fn get_collection_reserve(&self) -> usize {
@@ -283,11 +292,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn handle_user_collection_request(&self, _tls: crate::util::VMMutatorThread, _force: bool) {
         println!("Warning: User attempted a collection request. The request is ignored.");
     }
-
-    fn last_collection_was_exhaustive(&self) -> bool {
-        let x = self.previous_pause.load(Ordering::SeqCst);
-        x == Some(Pause::FullTraceFast) || x == Some(Pause::FullTraceDefrag)
-    }
 }
 
 impl<VM: VMBinding> Immix<VM> {
@@ -331,6 +335,7 @@ impl<VM: VMBinding> Immix<VM> {
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
+            last_gc_was_defrag: AtomicBool::new(false),
         };
 
         {
@@ -347,7 +352,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn select_collection_kind(&self, concurrent: bool) -> Pause {
-        self.base().set_collection_kind(self);
+        self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         let in_defrag = self.immix_space.decide_whether_to_defrag(
             self.is_emergency_collection(),
