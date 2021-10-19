@@ -1,6 +1,5 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::immix::gc_work::ImmixConcurrentTraceObject;
 use crate::plan::GcStatus;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
@@ -668,52 +667,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for EdgesProcessModBuf<E> {
             }
         } else {
             // Do nothing
-        }
-    }
-}
-
-pub struct ProcessModBufSATB<E: ProcessEdgesWork> {
-    edges: Vec<Address>,
-    nodes: Vec<ObjectReference>,
-    phantom: PhantomData<E>,
-    meta: MetadataSpec,
-}
-
-impl<E: ProcessEdgesWork> ProcessModBufSATB<E> {
-    pub fn new(edges: Vec<Address>, nodes: Vec<ObjectReference>, meta: MetadataSpec) -> Self {
-        Self {
-            edges,
-            nodes,
-            meta,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
-    #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
-        if !self.edges.is_empty() {
-            if !crate::flags::REF_COUNT {
-                for edge in &self.edges {
-                    let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
-                    unsafe {
-                        ptr.store(0b11111111u8);
-                    }
-                }
-            }
-            if crate::concurrent_marking_in_progress() {
-                GCWork::do_work(
-                    &mut ImmixConcurrentTraceObject::<E::VM>::new(self.nodes.clone(), mmtk),
-                    worker,
-                    mmtk,
-                );
-            } else {
-                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = E::new(edges, false, mmtk);
-                GCWork::do_work(&mut w, worker, mmtk);
-            }
         }
     }
 }

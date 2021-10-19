@@ -1,7 +1,4 @@
-use super::gc_work::{
-    CMImmixCollectRootEdges, ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges,
-    TraceKind,
-};
+use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::{Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::global::BasePlan;
@@ -15,6 +12,7 @@ use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
+use crate::util::cm::CMImmixCollectRootEdges;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};

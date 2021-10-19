@@ -7,6 +7,7 @@ use atomic::Ordering;
 use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
+use crate::util::cm::ProcessModBufSATB;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};

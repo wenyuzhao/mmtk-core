@@ -3,7 +3,7 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
-use crate::plan::immix::gc_work::ImmixConcurrentTraceObject;
+use crate::util::cm::ImmixConcurrentTraceObjects;
 use crate::util::opaque_pointer::*;
 use crate::util::rc::ProcessDecs;
 use crate::vm::VMBinding;
@@ -94,7 +94,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut postponed = 0usize;
         let mut no_postpone = vec![];
         while let Some(w) = concurrent_queue.pop() {
-            if w.type_id() == TypeId::of::<ImmixConcurrentTraceObject<VM>>() {
+            if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
                 postponed_concurrent_work.push(w);
                 postponed += 1;
             } else {

@@ -1,4 +1,3 @@
-use crate::plan::immix::gc_work::ImmixConcurrentTraceObject;
 use crate::{
     plan::{
         barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
@@ -11,6 +10,7 @@ use crate::{
     },
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::{
+        cm::ImmixConcurrentTraceObjects,
         metadata::side_metadata::{self, SideMetadataSpec},
         object_forwarding, ObjectReference,
     },
@@ -457,7 +457,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 {
                     worker
                         .scheduler()
-                        .postpone(ImmixConcurrentTraceObject::<VM>::new(roots.clone(), mmtk));
+                        .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
                 }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }
@@ -797,7 +797,7 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
                 {
                     worker
                         .scheduler()
-                        .postpone(ImmixConcurrentTraceObject::<VM>::new(roots.clone(), mmtk));
+                        .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
                 }
                 crate::plan::immix::CURR_ROOTS.lock().push(roots);
             }
