@@ -603,14 +603,14 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix.immix_space);
         }
 
-        if crate::concurrent_marking_in_progress() {
-            let edges: Vec<Address> = objects_to_trace
-                .iter()
-                .map(|e| Address::from_ptr(e))
-                .collect();
-            let w = ImmixProcessEdges::<VM, { TraceKind::Fast }>::new(edges, false, mmtk);
-            self.worker().add_work(WorkBucketStage::Closure, w)
-        }
+        // if crate::concurrent_marking_in_progress() {
+        //     let edges: Vec<Address> = objects_to_trace
+        //         .iter()
+        //         .map(|e| Address::from_ptr(e))
+        //         .collect();
+        //     let w = ImmixProcessEdges::<VM, { TraceKind::Fast }>::new(edges, false, mmtk);
+        //     self.worker().add_work(WorkBucketStage::Closure, w)
+        // }
     }
 }
 

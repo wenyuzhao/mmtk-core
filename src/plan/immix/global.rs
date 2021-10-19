@@ -263,6 +263,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.current_pause().unwrap() == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
+        self.current_pause.store(None, Ordering::SeqCst);
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
         self.next_gc_may_perform_cycle_collection

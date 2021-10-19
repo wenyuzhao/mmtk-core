@@ -347,10 +347,12 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObject<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObject<VM> {
     #[inline]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         if crate::flags::SLOW_CONCURRENT_MARKING {
-            std::thread::sleep(std::time::Duration::from_micros(200));
+            if mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().current_pause().is_none() {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
         }
         for i in 0..self.objects.len() {
             self.trace_object(self.objects[i]);

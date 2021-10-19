@@ -663,9 +663,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                     }
                 }
             }
-            let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-            let mut w = E::new(edges, false, mmtk);
-            GCWork::do_work(&mut w, worker, mmtk);
+            if crate::concurrent_marking_in_progress() {
+                GCWork::do_work(&mut ImmixConcurrentTraceObject::<E::VM>::new(self.nodes.clone(), mmtk), worker, mmtk);
+            } else {
+                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+                let mut w = E::new(edges, false, mmtk);
+                GCWork::do_work(&mut w, worker, mmtk);
+            }
         }
     }
 }
