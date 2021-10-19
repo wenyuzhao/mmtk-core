@@ -85,7 +85,7 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         self.copyspace1.init(vm_map);
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, _: bool) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         let is_full_heap = self.request_full_heap_collection();
 
         // TODO: We should have a schedule_generational

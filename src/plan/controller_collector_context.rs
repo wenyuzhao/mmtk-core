@@ -19,7 +19,7 @@ pub struct ControllerCollectorContext<VM: VMBinding> {
     request_condvar: Condvar,
     scheduler: RwLock<Option<Arc<GCWorkScheduler<VM>>>>,
     request_flag: AtomicBool,
-    pub concurrent: AtomicBool,
+    concurrent: AtomicBool,
     phantom: PhantomData<VM>,
 }
 
@@ -43,6 +43,11 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
             concurrent: AtomicBool::new(false),
             phantom: PhantomData,
         }
+    }
+
+    #[inline]
+    pub fn is_concurrent_collection(&self) -> bool {
+        self.concurrent.load(Ordering::SeqCst)
     }
 
     pub fn scheduler(&self) -> Arc<GCWorkScheduler<VM>> {
@@ -70,9 +75,7 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
             let scheduler = self.scheduler.read().unwrap();
             let scheduler = scheduler.as_ref().unwrap();
             scheduler.initialize_worker(tls);
-            scheduler.set_initializer(Some(ScheduleCollection(
-                self.concurrent.load(Ordering::SeqCst),
-            )));
+            scheduler.set_initializer(Some(ScheduleCollection));
             scheduler.wait_for_completion();
             debug!("[STWController: Worker threads complete!]");
         }

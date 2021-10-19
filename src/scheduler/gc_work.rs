@@ -13,14 +13,14 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
-pub struct ScheduleCollection(pub bool);
+pub struct ScheduleCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if crate::flags::LOG_PER_GC_STATE {
             *crate::GC_TRIGGER_TIME.lock() = Some(SystemTime::now());
         }
-        mmtk.plan.schedule_collection(worker.scheduler(), self.0);
+        mmtk.plan.schedule_collection(worker.scheduler());
     }
 }
 

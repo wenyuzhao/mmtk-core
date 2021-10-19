@@ -110,11 +110,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     // in different if branches.
     #[allow(clippy::if_same_then_else)]
     #[allow(clippy::branches_sharing_code)]
-    fn schedule_collection(
-        &'static self,
-        scheduler: &GCWorkScheduler<Self::VM>,
-        _concurrent: bool,
-    ) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>) {
         let is_full_heap = self.request_full_heap_collection();
 
         self.base().set_collection_kind::<Self>(self);

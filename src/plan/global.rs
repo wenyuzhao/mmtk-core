@@ -204,11 +204,7 @@ pub trait Plan: 'static + Sync + Downcast {
         mmtk: &'static MMTK<Self::VM>,
     ) -> GCWorkerLocalPtr;
     fn base(&self) -> &BasePlan<Self::VM>;
-    fn schedule_collection(
-        &'static self,
-        _scheduler: &GCWorkScheduler<Self::VM>,
-        _concurrent: bool,
-    );
+    fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
     fn common(&self) -> &CommonPlan<Self::VM> {
         panic!("Common Plan not handled!")
     }
@@ -705,8 +701,7 @@ impl<VM: VMBinding> BasePlan<VM> {
     }
 
     pub fn gc_status(&self) -> GcStatus {
-        let gc_status = self.gc_status.lock().unwrap();
-        *gc_status
+        *self.gc_status.lock().unwrap()
     }
 
     pub fn set_gc_status(&self, s: GcStatus) {

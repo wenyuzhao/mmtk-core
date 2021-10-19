@@ -159,12 +159,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
-    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>, concurrent: bool) {
+    fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         #[cfg(feature = "nogc_no_zeroing")]
         if true {
             unreachable!();
         }
-        let pause = self.select_collection_kind(concurrent);
+        let pause = self.select_collection_kind(
+            self.base()
+                .control_collector_context
+                .is_concurrent_collection(),
+        );
         match pause {
             Pause::FullTraceFast => self
                 .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler),
