@@ -13,13 +13,14 @@
 #![feature(trait_alias)]
 #![feature(const_panic)]
 #![feature(step_trait)]
-#![feature(const_generics)]
 #![feature(once_cell)]
 #![feature(const_generics_defaults)]
 #![feature(const_trait_impl)]
 #![feature(const_option)]
 #![feature(const_fn_trait_bound)]
 #![feature(core_intrinsics)]
+#![feature(adt_const_params)]
+#![feature(generic_const_exprs)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 
