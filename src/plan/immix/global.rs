@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, RCImmixCollectRootEdges, TraceKind};
+use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::{Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::global::BasePlan;
@@ -20,8 +20,8 @@ use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::options::UnsafeOptionsWrapper;
-use crate::util::rc::ProcessDecs;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
+use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};

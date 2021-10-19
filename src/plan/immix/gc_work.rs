@@ -100,7 +100,6 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     // downcast for each traced object.
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
-    roots: bool,
     root_slots: Vec<Address>,
 }
 
@@ -152,7 +151,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         Self {
             plan,
             base,
-            roots,
             root_slots: vec![],
         }
     }
@@ -222,53 +220,6 @@ impl<VM: VMBinding, const KIND: TraceKind> Deref for ImmixProcessEdges<VM, KIND>
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> DerefMut for ImmixProcessEdges<VM, KIND> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base
-    }
-}
-
-pub struct RCImmixCollectRootEdges<VM: VMBinding> {
-    base: ProcessEdgesBase<Self>,
-}
-
-impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
-    type VM = VM;
-    const OVERWRITE_REFERENCE: bool = false;
-    const RC_ROOTS: bool = true;
-    const CAPACITY: usize = 4096;
-    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
-
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        debug_assert!(roots);
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
-        Self { base }
-    }
-
-    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
-        unreachable!()
-    }
-
-    #[inline]
-    fn process_edges(&mut self) {
-        if !self.edges.is_empty() {
-            let bucket = WorkBucketStage::rc_process_incs_stage();
-            let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.edges);
-            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
-        }
-    }
-}
-
-impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
-    type Target = ProcessEdgesBase<Self>;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.base
-    }
-}
-
-impl<VM: VMBinding> DerefMut for RCImmixCollectRootEdges<VM> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base

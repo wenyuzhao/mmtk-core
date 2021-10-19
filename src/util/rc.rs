@@ -1,3 +1,8 @@
+use super::metadata::MetadataSpec;
+use super::{
+    metadata::{compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata},
+    Address,
+};
 use crate::{
     plan::{
         barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
@@ -8,7 +13,10 @@ use crate::{
         immix::{block::Block, line::Line, ImmixSpace},
         space::Space,
     },
-    scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
+    scheduler::{
+        gc_work::ProcessEdgesBase, GCWork, GCWorkScheduler, GCWorker, ProcessEdgesWork,
+        WorkBucketStage,
+    },
     util::{
         cm::ImmixConcurrentTraceObjects,
         metadata::side_metadata::{self, SideMetadataSpec},
@@ -18,15 +26,10 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
+use std::ops::{Deref, DerefMut};
 use std::{
     iter::Step,
     sync::{atomic::AtomicUsize, Arc},
-};
-
-use super::metadata::MetadataSpec;
-use super::{
-    metadata::{compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata},
-    Address,
 };
 
 pub const LOG_REF_COUNT_BITS: usize = 2;
@@ -805,5 +808,52 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
             debug_assert!(roots.is_empty());
         }
         self.flush();
+    }
+}
+
+pub struct RCImmixCollectRootEdges<VM: VMBinding> {
+    base: ProcessEdgesBase<Self>,
+}
+
+impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
+    type VM = VM;
+    const OVERWRITE_REFERENCE: bool = false;
+    const RC_ROOTS: bool = true;
+    const CAPACITY: usize = 4096;
+    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
+
+    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        debug_assert!(roots);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        Self { base }
+    }
+
+    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
+        unreachable!()
+    }
+
+    #[inline]
+    fn process_edges(&mut self) {
+        if !self.edges.is_empty() {
+            let bucket = WorkBucketStage::rc_process_incs_stage();
+            let mut roots = vec![];
+            std::mem::swap(&mut roots, &mut self.edges);
+            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
+        }
+    }
+}
+
+impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
+    type Target = ProcessEdgesBase<Self>;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<VM: VMBinding> DerefMut for RCImmixCollectRootEdges<VM> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
     }
 }
