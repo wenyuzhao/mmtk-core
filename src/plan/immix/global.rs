@@ -7,6 +7,7 @@ use crate::plan::global::GcStatus;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -500,15 +501,23 @@ impl<VM: VMBinding> Immix<VM> {
         }
     }
 
+    #[inline(always)]
     pub fn perform_cycle_collection(&self) -> bool {
         self.perform_cycle_collection.load(Ordering::SeqCst)
     }
 
+    #[inline(always)]
     pub fn current_pause(&self) -> Option<Pause> {
         self.current_pause.load(Ordering::SeqCst)
     }
 
+    #[inline(always)]
     pub fn previous_pause(&self) -> Option<Pause> {
         self.previous_pause.load(Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    pub fn in_defrag(&self, o: ObjectReference) -> bool {
+        self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
     }
 }

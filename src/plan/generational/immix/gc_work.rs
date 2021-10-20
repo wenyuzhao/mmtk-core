@@ -141,6 +141,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork
         let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
             self.pop_nodes(),
             false,
+            None,
             &self.plan.immix,
         );
         self.new_scan_work(scan_objects_work);

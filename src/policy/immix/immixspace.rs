@@ -1,8 +1,8 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::Pause;
-use crate::plan::ObjectsClosure;
+use crate::plan::immix::{Immix, Pause};
+use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -19,23 +19,20 @@ use crate::vm::*;
 use crate::{
     plan::TransitiveClosure,
     scheduler::{gc_work::ProcessEdgesWork, GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
-    util::{
-        heap::FreeListPageResource,
-        opaque_pointer::{VMThread, VMWorkerThread},
-    },
+    util::{heap::FreeListPageResource, opaque_pointer::VMThread},
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
-use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
     ops::Range,
     sync::{atomic::AtomicU8, Arc},
 };
+use std::{mem, ptr};
 
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
@@ -753,14 +750,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     buffer: Vec<ObjectReference>,
     concurrent: bool,
+    immix: Option<&'static Immix<Edges::VM>>,
     immix_space: &'static ImmixSpace<Edges::VM>,
+    edges: Vec<Address>,
+    worker: *mut GCWorker<Edges::VM>,
+    mature_evac_remset: Vec<ObjectReference>,
+    mmtk: *const MMTK<Edges::VM>,
 }
 
-impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
+unsafe impl<E: ProcessEdgesWork> Send for ScanObjectsAndMarkLines<E> {}
+
+impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     pub fn new(
         buffer: Vec<ObjectReference>,
         concurrent: bool,
-        immix_space: &'static ImmixSpace<Edges::VM>,
+        immix: Option<&'static Immix<E::VM>>,
+        immix_space: &'static ImmixSpace<E::VM>,
     ) -> Self {
         debug_assert!(!concurrent);
         if concurrent {
@@ -769,7 +774,57 @@ impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
         Self {
             buffer,
             concurrent,
+            immix,
             immix_space,
+            edges: vec![],
+            worker: ptr::null_mut(),
+            mature_evac_remset: vec![],
+            mmtk: ptr::null_mut(),
+        }
+    }
+
+    const fn worker(&self) -> &mut GCWorker<E::VM> {
+        unsafe { &mut *self.worker }
+    }
+
+    fn process_node(&mut self, o: ObjectReference) {
+        let check_mature_evac_remset = self
+            .immix
+            .map(|ix| ix.current_pause() == Some(Pause::FinalMark))
+            .unwrap_or(false);
+        let mut should_add_to_mature_evac_remset = false;
+        EdgeIterator::<E::VM>::iterate(o, |e| {
+            self.edges.push(e);
+            if check_mature_evac_remset && !should_add_to_mature_evac_remset {
+                let immix = unsafe { self.immix.unwrap_unchecked() };
+                if !immix.in_defrag(o) && immix.in_defrag(unsafe { e.load() }) {
+                    should_add_to_mature_evac_remset = true;
+                }
+            }
+            if self.edges.len() >= E::CAPACITY {
+                self.flush();
+            }
+        });
+        if should_add_to_mature_evac_remset {
+            self.mature_evac_remset.push(o);
+        }
+    }
+
+    fn flush(&mut self) {
+        if !self.edges.is_empty() {
+            let mut new_edges = Vec::new();
+            mem::swap(&mut new_edges, &mut self.edges);
+            self.worker().add_work(
+                WorkBucketStage::Closure,
+                E::new(new_edges, false, unsafe { &*self.mmtk }),
+            );
+        }
+        if !self.mature_evac_remset.is_empty() {
+            debug_assert_eq!(self.immix.unwrap().current_pause(), Some(Pause::FinalMark));
+            let mut remset = vec![];
+            mem::swap(&mut remset, &mut self.mature_evac_remset);
+            let w = EvacuateMatureObjects::new(remset);
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
         }
     }
 }
@@ -777,20 +832,20 @@ impl<Edges: ProcessEdgesWork> ScanObjectsAndMarkLines<Edges> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjectsAndMarkLines");
-        let mut closure = ObjectsClosure::<E>::new(mmtk, vec![], worker);
-        for object in &self.buffer {
-            <E::VM as VMBinding>::VMScanning::scan_object(
-                &mut closure,
-                *object,
-                VMWorkerThread(VMThread::UNINITIALIZED),
-            );
+        self.mmtk = mmtk;
+        self.worker = worker;
+        let mut buffer = vec![];
+        mem::swap(&mut buffer, &mut self.buffer);
+        for object in buffer {
+            self.process_node(object);
             if super::MARK_LINE_AT_SCAN_TIME
                 && !super::BLOCK_ONLY
-                && self.immix_space.in_space(*object)
+                && self.immix_space.in_space(object)
             {
-                self.immix_space.mark_lines(*object);
+                self.immix_space.mark_lines(object);
             }
         }
+        self.flush();
     }
 }
 

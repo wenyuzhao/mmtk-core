@@ -197,6 +197,11 @@ impl Block {
         byte == Self::DEFRAG_SOURCE_STATE
     }
 
+    #[inline(always)]
+    pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
+        Block::containing::<VM>(o).is_defrag_source()
+    }
+
     /// Mark the block for defragmentation.
     #[inline(always)]
     pub fn set_as_defrag_source(&self, defrag: bool) {

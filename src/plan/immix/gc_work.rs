@@ -1,6 +1,7 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -102,8 +103,7 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
     root_slots: Vec<Address>,
-    remset: Vec<ObjectReference>,
-    roots_remset: Vec<Address>,
+    mature_evac_remset_roots: Vec<Address>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
@@ -118,14 +118,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         }
         if self.immix().immix_space.in_space(object) {
             if self.plan.current_pause() == Some(Pause::FinalMark) {
-                if self.roots {
-                    self.roots_remset.push(slot);
-                    if self.roots_remset.len() >= Self::CAPACITY {
-                        self.flush();
-                    }
-                } else {
-                    self.remset.push(object);
-                    if self.remset.len() >= Self::CAPACITY {
+                if self.roots && Block::in_defrag_block::<VM>(object) {
+                    self.mature_evac_remset_roots.push(slot);
+                    if self.mature_evac_remset_roots.len() >= Self::CAPACITY {
                         self.flush();
                     }
                 }
@@ -168,8 +163,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             plan,
             base,
             root_slots: vec![],
-            remset: vec![],
-            roots_remset: vec![],
+            mature_evac_remset_roots: vec![],
         }
     }
 
@@ -180,21 +174,15 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
                 self.pop_nodes(),
                 false,
+                Some(self.immix()),
                 &self.immix().immix_space,
             );
             self.new_scan_work(scan_objects_work);
         }
-        if !self.remset.is_empty() {
-            debug_assert_eq!(self.immix().current_pause(), Some(Pause::FinalMark));
-            let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.mmtk().scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
-        }
-        if !self.roots_remset.is_empty() {
+        if !self.mature_evac_remset_roots.is_empty() {
             debug_assert_eq!(self.immix().current_pause(), Some(Pause::FinalMark));
             let mut roots_remset = vec![];
-            mem::swap(&mut roots_remset, &mut self.roots_remset);
+            mem::swap(&mut roots_remset, &mut self.mature_evac_remset_roots);
             let w = EvacuateMatureObjects::new_roots(roots_remset);
             self.mmtk().scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
         }
