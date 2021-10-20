@@ -1,7 +1,7 @@
 use crate::plan::immix::Immix;
+use crate::plan::immix::Pause;
 use crate::plan::CopyContext;
 use crate::plan::Plan;
-use crate::plan::immix::Pause;
 use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -192,22 +192,40 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                 panic!("Invalid reference {:?} -> {:?}", slot, object);
             }
             if let Some(immix) = self.mmtk().plan.downcast_ref::<Immix<VM>>() {
-
-            assert!(! immix.current_pause().is_none());
+                assert!(!immix.current_pause().is_none());
                 if immix.immix_space.in_space(object) {
                     if immix.current_pause() == Some(Pause::FinalMark) {
-                    // println!("ix {:?} rc={:?} defrag={}", object, crate::util::rc::count(object), Block::containing::<VM>(object).is_defrag_source());
-                    assert!(!Block::containing::<VM>(object).is_defrag_source(), "ix {:?} -> {:?} rc={:?} defrag={}", slot, object, crate::util::rc::count(object), Block::containing::<VM>(object).is_defrag_source());
+                        // println!("ix {:?} rc={:?} defrag={}", object, crate::util::rc::count(object), Block::containing::<VM>(object).is_defrag_source());
+                        assert!(
+                            !Block::containing::<VM>(object).is_defrag_source(),
+                            "ix {:?} -> {:?} rc={:?} defrag={}",
+                            slot,
+                            object,
+                            crate::util::rc::count(object),
+                            Block::containing::<VM>(object).is_defrag_source()
+                        );
                     }
                 }
             }
             if !object.is_live() {
                 if let Some(immix) = self.mmtk().plan.downcast_ref::<Immix<VM>>() {
                     if immix.immix_space.in_space(object) {
-                        println!("[object] ix {:?} {:?} rc={:?} defrag={} mark={}", object, Block::containing::<VM>(object).get_state(), crate::util::rc::count(object), Block::containing::<VM>(object).is_defrag_source(), immix.immix_space.mark_bit(object));
+                        println!(
+                            "[object] ix {:?} {:?} rc={:?} defrag={} mark={}",
+                            object,
+                            Block::containing::<VM>(object).get_state(),
+                            crate::util::rc::count(object),
+                            Block::containing::<VM>(object).is_defrag_source(),
+                            immix.immix_space.mark_bit(object)
+                        );
                     }
                     if immix.immix_space.address_in_space(slot) {
-                        println!("[slot] ix {:?} {:?} defrag={}", slot, Block::from(Block::align(slot)).get_state(), Block::from(Block::align(slot)).is_defrag_source());
+                        println!(
+                            "[slot] ix {:?} {:?} defrag={}",
+                            slot,
+                            Block::from(Block::align(slot)).get_state(),
+                            Block::from(Block::align(slot)).is_defrag_source()
+                        );
                     }
                 }
             }

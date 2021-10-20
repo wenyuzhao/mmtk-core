@@ -35,5 +35,4 @@ fn validate_features() {
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
 
-
 pub static LARGE_NURSERY_OBJECTS: Mutex<Vec<ObjectReference>> = Mutex::new(vec![]);

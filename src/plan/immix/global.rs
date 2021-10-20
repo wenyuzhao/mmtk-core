@@ -24,7 +24,7 @@ use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
-use crate::util::{ObjectReference, metadata, object_forwarding};
+use crate::util::{metadata, object_forwarding, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector};

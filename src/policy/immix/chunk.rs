@@ -225,17 +225,15 @@ impl ChunkMap {
     }
 
     pub fn committed_chunks(&self) -> impl Iterator<Item = Chunk> {
-        self
-            .all_chunks()
-            .filter(|c| {
-                let byte = unsafe { side_metadata::load(&Self::ALLOC_TABLE, c.start()) as u8 };
-                let state = match byte {
-                    0 => ChunkState::Free,
-                    1 => ChunkState::Allocated,
-                    _ => unreachable!(),
-                };
-                state == ChunkState::Allocated
-            })
+        self.all_chunks().filter(|c| {
+            let byte = unsafe { side_metadata::load(&Self::ALLOC_TABLE, c.start()) as u8 };
+            let state = match byte {
+                0 => ChunkState::Free,
+                1 => ChunkState::Allocated,
+                _ => unreachable!(),
+            };
+            state == ChunkState::Allocated
+        })
     }
 
     /// Helper function to create per-chunk processing work packets.

@@ -92,14 +92,16 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
 
     fn add_remset(&mut self, src: ObjectReference) {
         self.remset.push(src);
-            if self.remset.len() >= Self::CAPACITY {
-                self.flush();
-            }
+        if self.remset.len() >= Self::CAPACITY {
+            self.flush();
+        }
     }
 
     fn build_remset(&mut self, src: ObjectReference, slot: Address, val: ObjectReference) {
-        let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
-        let val_in_defrag_source = self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
+        let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot)
+            || !Block::from(Block::align(slot)).is_defrag_source();
+        let val_in_defrag_source =
+            self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
         if src_not_in_defrag_source && val_in_defrag_source {
             self.remset.push(src);
             if self.remset.len() >= Self::CAPACITY {

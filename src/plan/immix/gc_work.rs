@@ -119,17 +119,18 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         }
         if self.immix().immix_space.in_space(object) {
             if self.plan.current_pause() == Some(Pause::FinalMark) {
-            if self.roots {
-                self.roots_remset.push(slot);
-                if self.roots_remset.len() >= Self::CAPACITY {
-                    self.flush();
+                if self.roots {
+                    self.roots_remset.push(slot);
+                    if self.roots_remset.len() >= Self::CAPACITY {
+                        self.flush();
+                    }
+                } else {
+                    self.remset.push(object);
+                    if self.remset.len() >= Self::CAPACITY {
+                        self.flush();
+                    }
                 }
-            } else {
-                self.remset.push(object);
-                if self.remset.len() >= Self::CAPACITY {
-                    self.flush();
-                }
-            }}
+            }
             // self.build_remset(slot, object);
             self.immix().immix_space.fast_trace_object(self, object);
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {

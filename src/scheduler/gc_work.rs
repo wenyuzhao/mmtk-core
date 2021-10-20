@@ -2,20 +2,20 @@ use atomic_traits::Atomic;
 
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::EdgeIterator;
-use crate::plan::GcStatus;
 use crate::plan::immix::Immix;
 use crate::plan::immix::ImmixCopyContext;
 use crate::plan::immix::Pause;
-use crate::policy::immix::ImmixSpace;
+use crate::plan::EdgeIterator;
+use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
+use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
-use crate::util::*;
 use crate::util::rc::ProcessIncs;
+use crate::util::*;
 use crate::vm::*;
 use crate::*;
 use std::marker::PhantomData;
@@ -706,7 +706,6 @@ impl<VM: VMBinding> GCWork<VM> for UnlogEdges {
     }
 }
 
-
 pub struct EvacuateMatureObjects<VM: VMBinding> {
     remset: Vec<ObjectReference>,
     roots: Vec<Address>,
@@ -723,12 +722,24 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     pub fn new(remset: Vec<ObjectReference>) -> Self {
         // println!("EvacuateMatureObjects {:?}", remset.iter().map(|o| (o.to_address()..o.to_address()+o.get_size::<VM>())).collect::<Vec<_>>());
-        Self { remset, next_remset: vec![], mmtk: None, roots: vec![], worker: std::ptr::null_mut() }
+        Self {
+            remset,
+            next_remset: vec![],
+            mmtk: None,
+            roots: vec![],
+            worker: std::ptr::null_mut(),
+        }
     }
 
     pub fn new_roots(roots: Vec<Address>) -> Self {
         // println!("EvacuateMatureObjects {:?} {}", remset, roots);
-        Self { remset: vec![], next_remset: vec![], mmtk: None, roots, worker: std::ptr::null_mut() }
+        Self {
+            remset: vec![],
+            next_remset: vec![],
+            mmtk: None,
+            roots,
+            worker: std::ptr::null_mut(),
+        }
     }
 
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -792,10 +803,12 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return;
         }
         // println!("fwd 3 {:?} {} {:?}", e, root, o);
-        let new = self.forward(o, immix_space) ;
+        let new = self.forward(o, immix_space);
         // println!("fwd {:?}: {:?} -> {:?}", e, o.to_address()..o.to_address()+o.get_size::<VM>(), new.to_address()..new.to_address()+new.get_size::<VM>());
         // println!("fwd 4 {:?} {} {:?}", e, root, o);
-        unsafe { e.store(new); }
+        unsafe {
+            e.store(new);
+        }
     }
 }
 
@@ -821,17 +834,21 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         for mut o in remset {
             // println!("scan {:?}", o);
             if o.is_null() {
-                continue
+                continue;
             }
             debug_assert!(o.is_mapped());
-            if immix_space.in_space(o) && (rc::count(o) == 0 || Block::containing::<VM>(o).is_defrag_source()) {
+            if immix_space.in_space(o)
+                && (rc::count(o) == 0 || Block::containing::<VM>(o).is_defrag_source())
+            {
                 // println!("scan {:?}", o.to_address()..o.to_address()+o.get_size::<VM>());
                 // println!("scan {:?} skip", o);
                 continue;
             }
             if !crate::flags::BLOCK_ONLY && immix_space.in_space(o) {
                 let line = Line::containing::<VM>(o);
-                if rc::count(unsafe { line.start().to_object_reference() }) == 1 && rc::is_straddle_line(line) {
+                if rc::count(unsafe { line.start().to_object_reference() }) == 1
+                    && rc::is_straddle_line(line)
+                {
                     continue;
                 }
             }
@@ -839,11 +856,16 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                 let a = unsafe { Address::from_usize(o.to_address().as_usize() >> 4 << 4) };
                 let b = a + 8usize;
                 let o2 = o.fix_start_address::<VM>();
-                let x = unsafe { Address::from_usize(o2.to_address().as_usize() ^ 0b1000).to_object_reference() };
+                let x = unsafe {
+                    Address::from_usize(o2.to_address().as_usize() ^ 0b1000).to_object_reference()
+                };
                 o = o2;
                 println!("scan x {:?} {:?} cls={:?} o?={:?} cls={:?} log({:?})={} log({:?})={} straddle={}", o, o2, o2.class_pointer(), x, x.class_pointer(), a, a.is_logged::<VM>(), b, b.is_logged::<VM>(), rc::is_straddle_line(Line::from(Line::align(o.to_address()))));
             }
-            if !crate::flags::BLOCK_ONLY && immix_space.in_space(o) && Line::is_aligned(o.to_address()) {
+            if !crate::flags::BLOCK_ONLY
+                && immix_space.in_space(o)
+                && Line::is_aligned(o.to_address())
+            {
                 if rc::count(o) == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
                     println!("scan {:?} skip", o);
                     continue;
@@ -857,7 +879,13 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             //     // }
             // }
             if immix_space.in_space(o) {
-                println!("scan x {:?} rc={} mark={} defrag={}", o, rc::count(o), immix_space.mark_bit(o), Block::containing::<VM>(o).is_defrag_source());
+                println!(
+                    "scan x {:?} rc={} mark={} defrag={}",
+                    o,
+                    rc::count(o),
+                    immix_space.mark_bit(o),
+                    Block::containing::<VM>(o).is_defrag_source()
+                );
             }
             EdgeIterator::<VM>::iterate(o, |e| {
                 // println!("scan {:?}.{:?}", o, e);
@@ -865,7 +893,6 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             });
             // println!("scan {:?} done", o);
         }
-
 
         // for e in remset {
         //     // println!(" E {:?÷} 0", e);

@@ -597,7 +597,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
-            let o = if object_forwarding::is_forwarded::<VM>(o) { object_forwarding::read_forwarding_pointer::<VM>(o) } else { o };
+            let o = if object_forwarding::is_forwarded::<VM>(o) {
+                object_forwarding::read_forwarding_pointer::<VM>(o)
+            } else {
+                o
+            };
             let mut dead = false;
             let _ = self::fetch_update(o, |c| {
                 if c == 1 {
@@ -753,7 +757,6 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
         }
     }
 
-
     fn add_remset(&mut self, src: ObjectReference) {
         self.remset.push(src);
         if self.remset.len() >= Self::CAPACITY {
@@ -761,12 +764,16 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
         }
     }
     fn build_remset(&mut self, src: ObjectReference, slot: Address, val: ObjectReference) {
-        let immix = unsafe { &*self.immix};
-        if immix.current_pause() != Some(Pause::FinalMark) && !crate::concurrent_marking_in_progress() {
-            return
+        let immix = unsafe { &*self.immix };
+        if immix.current_pause() != Some(Pause::FinalMark)
+            && !crate::concurrent_marking_in_progress()
+        {
+            return;
         }
-        let src_not_in_defrag_source = !immix.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
-        let val_in_defrag_source = immix.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
+        let src_not_in_defrag_source = !immix.immix_space.address_in_space(slot)
+            || !Block::from(Block::align(slot)).is_defrag_source();
+        let val_in_defrag_source =
+            immix.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
 
         if src_not_in_defrag_source && val_in_defrag_source {
             self.remset.push(src);

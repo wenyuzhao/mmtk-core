@@ -277,7 +277,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if pause == Pause::InitialMark {
                 let mut total_mature_blocks = 0;
                 for c in self.chunk_map.committed_chunks() {
-                    for b in c.committed_blocks().filter(|c| c.get_state() != BlockState::Nursery) {
+                    for b in c
+                        .committed_blocks()
+                        .filter(|c| c.get_state() != BlockState::Nursery)
+                    {
                         debug_assert!(!b.is_defrag_source(), "{:?}", b);
                         total_mature_blocks += 1;
                     }
@@ -285,7 +288,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let n = total_mature_blocks / 2;
                 println!("Defrag {:?} / {} blocks", n, total_mature_blocks);
                 for c in self.chunk_map.committed_chunks() {
-                    for b in c.committed_blocks().filter(|c| c.get_state() != BlockState::Nursery) {
+                    for b in c
+                        .committed_blocks()
+                        .filter(|c| c.get_state() != BlockState::Nursery)
+                    {
                         // println!(" - defrag {:?} {:?}", b, b.get_state());
                         b.set_as_defrag_source(true);
                     }
@@ -430,12 +436,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.remsets.lock());
         println!("process_mature_evacuation_remset {}", remsets.len());
-        for w in remsets  {
+        for w in remsets {
             self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
         }
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut super::LARGE_NURSERY_OBJECTS.lock());
-        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(EvacuateMatureObjects::new(remsets));
+        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature]
+            .add(EvacuateMatureObjects::new(remsets));
     }
 
     /// Trace and mark objects without evacuation.
@@ -698,7 +705,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::clear_log_table::<VM>(start..end);
         }
         // if !copy {
-            // println!("reuse {:?} copy={}", start..end, _copy);
+        // println!("reuse {:?} copy={}", start..end, _copy);
         // }
         Some(start..end)
     }

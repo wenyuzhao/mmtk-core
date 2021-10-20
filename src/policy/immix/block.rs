@@ -242,10 +242,20 @@ impl Block {
                 debug_assert!(!self.is_defrag_source());
             }
             self.set_state(BlockState::Marked);
-            side_metadata::store_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), 0, Ordering::SeqCst);
+            side_metadata::store_atomic(
+                &Self::DEFRAG_STATE_TABLE,
+                self.start(),
+                0,
+                Ordering::SeqCst,
+            );
         } else {
             self.set_state(BlockState::Nursery);
-            side_metadata::store_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), 0, Ordering::SeqCst);
+            side_metadata::store_atomic(
+                &Self::DEFRAG_STATE_TABLE,
+                self.start(),
+                0,
+                Ordering::SeqCst,
+            );
         }
     }
 
@@ -428,7 +438,11 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, release_defrag: bool) -> bool {
+    pub fn rc_sweep_mature<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        release_defrag: bool,
+    ) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
         debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
         let live = !self.rc_dead();
