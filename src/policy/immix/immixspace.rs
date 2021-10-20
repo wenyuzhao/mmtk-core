@@ -400,9 +400,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
         // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
-        // if block.is_defrag_source() {
-        //     println!("release defrag {:?}", block);
-        // }
         if crate::flags::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
@@ -705,7 +702,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::clear_log_table::<VM>(start..end);
         }
         // if !copy {
-        // println!("reuse {:?} copy={}", start..end, _copy);
+        //     println!("reuse {:?} copy={}", start..end, _copy);
         // }
         Some(start..end)
     }

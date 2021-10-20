@@ -1,5 +1,3 @@
-use atomic_traits::Atomic;
-
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::immix::Immix;
@@ -8,7 +6,6 @@ use crate::plan::immix::Pause;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
@@ -853,76 +850,25 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                 }
             }
             if immix_space.in_space(o) {
-                let a = unsafe { Address::from_usize(o.to_address().as_usize() >> 4 << 4) };
-                let b = a + 8usize;
+                // let a = unsafe { Address::from_usize(o.to_address().as_usize() >> 4 << 4) };
+                // let b = a + 8usize;
                 let o2 = o.fix_start_address::<VM>();
-                let x = unsafe {
-                    Address::from_usize(o2.to_address().as_usize() ^ 0b1000).to_object_reference()
-                };
+                // let x = unsafe {
+                //     Address::from_usize(o2.to_address().as_usize() ^ 0b1000).to_object_reference()
+                // };
                 o = o2;
-                println!("scan x {:?} {:?} cls={:?} o?={:?} cls={:?} log({:?})={} log({:?})={} straddle={}", o, o2, o2.class_pointer(), x, x.class_pointer(), a, a.is_logged::<VM>(), b, b.is_logged::<VM>(), rc::is_straddle_line(Line::from(Line::align(o.to_address()))));
+                // println!("scan x {:?} {:?} cls={:?} o?={:?} cls={:?} log({:?})={} log({:?})={} straddle={}", o, o2, o2.class_pointer(), x, x.class_pointer(), a, a.is_logged::<VM>(), b, b.is_logged::<VM>(), rc::is_straddle_line(Line::from(Line::align(o.to_address()))));
             }
             if !crate::flags::BLOCK_ONLY
                 && immix_space.in_space(o)
                 && Line::is_aligned(o.to_address())
             {
                 if rc::count(o) == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
-                    println!("scan {:?} skip", o);
                     continue;
                 }
             }
-            // o = o.fix_start_address::<VM>();
-            // if o.fix_start_address::<VM>() != o {
-            //     // if rc::count(o) == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
-            //         // println!("scan {:?} skip 2", o);
-            //         continue;
-            //     // }
-            // }
-            if immix_space.in_space(o) {
-                println!(
-                    "scan x {:?} rc={} mark={} defrag={}",
-                    o,
-                    rc::count(o),
-                    immix_space.mark_bit(o),
-                    Block::containing::<VM>(o).is_defrag_source()
-                );
-            }
-            EdgeIterator::<VM>::iterate(o, |e| {
-                // println!("scan {:?}.{:?}", o, e);
-                self.forward_edge(e, false, immix_space)
-            });
-            // println!("scan {:?} done", o);
+            EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix_space));
         }
-
-        // for e in remset {
-        //     // println!(" E {:?÷} 0", e);
-        //     if immix_space.address_in_space(e) || immix.common().los.address_in_space(e) {
-        //         ProcessIncs::<VM>::unlog_edge(e);
-        //     }
-        //     // println!(" E {:?} 1", e);
-        //     let o = unsafe { e.load::<ObjectReference>() };
-        //     // println!(" E {:?} 2 {:?}", e, o);
-        //     if !immix_space.in_space(o) || !immix_space.chunk_map.is_mapped(o.to_address()) || !Block::containing::<VM>(o).is_defrag_source() {
-        //         // println!("skip fwd1 {:?}: {:?}", e, o);
-        //         continue;
-        //     }
-        //     // println!(" E {:?} 3", e);
-        //     debug_assert_ne!(Block::containing::<VM>(o).get_state(), BlockState::Unallocated, "{:?} is released", Block::containing::<VM>(o));
-        //     // println!(" E {:?} 4", e);
-        //     // Evacuate this object
-        //     if !immix_space.mark_bit(o) {
-        //         // This object is dead
-        //         // println!("skip fwd2 {:?}: {:?}", e, o);
-        //         continue;
-        //     }
-        //     // println!(" E {:?} 5", e);
-        //     // println!("fwd {:?}: {:?} {:?}", e, o.to_address()..o.to_address() + o.get_size::<VM>(), mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().current_pause());
-        //     let new = self.forward(o, unsafe { worker.local::<ImmixCopyContext<VM>>() }, immix_space) ;
-        //     // println!(" E {:?} 6", e);
-        //     // println!("{:?}: {:?} -> {:?}", e, o, new.to_address()..new.to_address() + new.get_size::<VM>());
-        //     unsafe { e.store(new); }
-
-        // }
         self.flush();
     }
 }

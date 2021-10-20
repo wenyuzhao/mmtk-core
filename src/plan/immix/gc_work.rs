@@ -1,7 +1,6 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -131,7 +130,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
                     }
                 }
             }
-            // self.build_remset(slot, object);
             self.immix().immix_space.fast_trace_object(self, object);
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
                 if self.roots {
@@ -152,38 +150,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         let object = unsafe { slot.load::<ObjectReference>() };
         self.fast_trace_object(slot, object);
     }
-
-    // fn add_remset(&mut self, src: Option<ObjectReference>, slot: Address, val: ObjectReference) {
-    //     if self.plan.current_pause() != Some(Pause::FinalMark) {
-    //         return
-    //     }
-    //     let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
-    //     let val_in_defrag_source = self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
-
-    //     println!(" - test {} {:?} -> {:?} {} {}", self.roots, slot, val, src_not_in_defrag_source, val_in_defrag_source);
-    //     if src_not_in_defrag_source && val_in_defrag_source {
-    //         self.remset.push(slot);
-    //         if self.remset.len() >= Self::CAPACITY {
-    //             self.flush();
-    //         }
-    //     }
-    // }
-
-    // fn build_remset(&mut self, src: Option<ObjectReference>, slot: Address, val: ObjectReference) {
-    //     if self.plan.current_pause() != Some(Pause::FinalMark) {
-    //         return
-    //     }
-    //     let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
-    //     let val_in_defrag_source = self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
-
-    //     println!(" - test {} {:?} -> {:?} {} {}", self.roots, slot, val, src_not_in_defrag_source, val_in_defrag_source);
-    //     if src_not_in_defrag_source && val_in_defrag_source {
-    //         self.remset.push(slot);
-    //         if self.remset.len() >= Self::CAPACITY {
-    //             self.flush();
-    //         }
-    //     }
-    // }
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdges<VM, KIND> {
@@ -256,9 +222,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     #[inline]
     fn process_edges(&mut self) {
-        if self.roots {
-            println!("ROOTS {:?}", self.edges);
-        }
         if KIND == TraceKind::Fast {
             for i in 0..self.edges.len() {
                 // Use fast_process_edge since we don't need to forward any objects.

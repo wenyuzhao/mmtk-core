@@ -1,5 +1,4 @@
 use super::{metadata::MetadataSpec, Address, ObjectReference};
-use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
@@ -96,19 +95,6 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             self.flush();
         }
     }
-
-    fn build_remset(&mut self, src: ObjectReference, slot: Address, val: ObjectReference) {
-        let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot)
-            || !Block::from(Block::align(slot)).is_defrag_source();
-        let val_in_defrag_source =
-            self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
-        if src_not_in_defrag_source && val_in_defrag_source {
-            self.remset.push(src);
-            if self.remset.len() >= Self::CAPACITY {
-                self.flush();
-            }
-        }
-    }
 }
 
 impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
@@ -129,7 +115,6 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         self.add_remset(object);
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            // self.build_remset(object, e, t);
             // println!("Trace {:?}.{:?} -> {:?}", object, e, unsafe { e.load::<Address>() });
             self.next_objects.push(t);
             if self.next_objects.len() >= Self::CAPACITY {
