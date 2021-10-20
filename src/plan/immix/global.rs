@@ -24,7 +24,7 @@ use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
-use crate::util::{metadata, ObjectReference};
+use crate::util::{ObjectReference, metadata, object_forwarding};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector};
@@ -206,6 +206,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
                 self.common.prepare(tls, true);
             }
+            if pause == Pause::FinalMark {
+                self.immix_space.process_mature_evacuation_remset()
+            }
             self.immix_space.prepare_rc(pause);
         }
     }
@@ -227,6 +230,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut curr_roots = super::CURR_ROOTS.lock();
             let mut old_roots = super::PREV_ROOTS.lock();
             std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
+            debug_assert!(curr_roots.is_empty());
+            for x in old_roots.iter_mut() {
+                for o in x.iter_mut() {
+                    if object_forwarding::is_forwarded::<VM>(*o) {
+                        *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
+                    };
+                }
+            }
         }
         // release the collected region
         self.last_gc_was_defrag.store(
@@ -495,5 +506,9 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub fn current_pause(&self) -> Option<Pause> {
         self.current_pause.load(Ordering::SeqCst)
+    }
+
+    pub fn previous_pause(&self) -> Option<Pause> {
+        self.previous_pause.load(Ordering::SeqCst)
     }
 }

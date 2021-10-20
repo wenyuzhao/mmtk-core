@@ -3,6 +3,7 @@ use super::{
     metadata::{compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata},
     Address,
 };
+use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
         barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
@@ -26,6 +27,7 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::{
     iter::Step,
@@ -178,10 +180,12 @@ pub struct ProcessIncs<VM: VMBinding> {
     new_incs: Vec<Address>,
     /// Delayed nursery increments
     remset: Vec<Address>,
+    mature_remset: Vec<ObjectReference>,
     /// Root edges?
     roots: bool,
     /// Execution worker
     worker: *mut GCWorker<VM>,
+    immix: *const Immix<VM>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -203,6 +207,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             new_incs: vec![],
             remset: vec![],
             worker: std::ptr::null_mut(),
+            mature_remset: vec![],
+            immix: std::ptr::null(),
         }
     }
 
@@ -240,7 +246,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn unlog_edge(edge: Address) {
+    pub fn unlog_edge(edge: Address) {
         store_metadata::<VM>(
             &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             unsafe { edge.to_object_reference() },
@@ -377,6 +383,17 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 RCEvacuateNursery::new(remset, self.roots),
             );
         }
+        if !self.mature_remset.is_empty() {
+            let mut mature_remset = vec![];
+            mem::swap(&mut mature_remset, &mut self.mature_remset);
+            // println!(" - add N EvacuateMatureObjects {} {:?}", self.roots, mature_remset);
+            let w = EvacuateMatureObjects::new(mature_remset);
+            if crate::concurrent_marking_in_progress() {
+                unsafe { (*self.immix).immix_space.remsets.lock().push(w) }
+            } else {
+                self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+            }
+        }
     }
 
     /// Return `None` if the increment of the edge should be delayed
@@ -425,6 +442,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         self.worker = worker;
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        self.immix = immix;
         let mut roots = vec![];
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
@@ -556,7 +574,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         o.clear_start_address_log::<VM>();
         #[cfg(feature = "sanity")]
         unsafe {
-            o.to_address().store(0xdeadusize);
+            // o.to_address().store(0xdeadusize);
         }
         immix
             .immix_space
@@ -579,8 +597,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
+            let o = if object_forwarding::is_forwarded::<VM>(o) { object_forwarding::read_forwarding_pointer::<VM>(o) } else { o };
+            let mut dead = false;
             let _ = self::fetch_update(o, |c| {
                 if c == 1 {
+                    dead = true;
                     self.process_dead_object(o, immix, &mut objects_to_trace);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
@@ -590,6 +611,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
+            if dead {
+                debug_assert_eq!(self::count(o), 0);
+            }
         }
         self.flush();
 
@@ -644,8 +668,9 @@ impl SweepBlocksAfterDecs {
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let release_defrag = !crate::concurrent_marking_in_progress();
         for b in &self.blocks {
-            b.rc_sweep_mature::<VM>(&immix.immix_space);
+            b.rc_sweep_mature::<VM>(&immix.immix_space, release_defrag);
         }
     }
 }
@@ -659,6 +684,8 @@ pub struct RCEvacuateNursery<VM: VMBinding> {
     roots: bool,
     /// Execution worker
     worker: *mut GCWorker<VM>,
+    remset: Vec<ObjectReference>,
+    immix: *const Immix<VM>,
 }
 
 unsafe impl<VM: VMBinding> Send for RCEvacuateNursery<VM> {}
@@ -680,6 +707,8 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             roots,
             new_slots: vec![],
             worker: std::ptr::null_mut(),
+            remset: vec![],
+            immix: std::ptr::null(),
         }
     }
 
@@ -706,11 +735,44 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     pub fn flush(&mut self) {
         if !self.new_slots.is_empty() {
             let mut new_slots = vec![];
-            std::mem::swap(&mut new_slots, &mut self.new_slots);
+            mem::swap(&mut new_slots, &mut self.new_slots);
             self.worker().add_work(
                 WorkBucketStage::RCEvacuateNursery,
                 RCEvacuateNursery::new(new_slots, false),
             );
+        }
+        if !self.remset.is_empty() {
+            let mut remset = vec![];
+            mem::swap(&mut remset, &mut self.remset);
+            let w = EvacuateMatureObjects::new(remset);
+            if crate::concurrent_marking_in_progress() {
+                unsafe { (*self.immix).immix_space.remsets.lock().push(w) }
+            } else if unsafe { &*self.immix }.current_pause() == Some(Pause::FinalMark) {
+                self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+            }
+        }
+    }
+
+
+    fn add_remset(&mut self, src: ObjectReference) {
+        self.remset.push(src);
+        if self.remset.len() >= Self::CAPACITY {
+            self.flush();
+        }
+    }
+    fn build_remset(&mut self, src: ObjectReference, slot: Address, val: ObjectReference) {
+        let immix = unsafe { &*self.immix};
+        if immix.current_pause() != Some(Pause::FinalMark) && !crate::concurrent_marking_in_progress() {
+            return
+        }
+        let src_not_in_defrag_source = !immix.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
+        let val_in_defrag_source = immix.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
+
+        if src_not_in_defrag_source && val_in_defrag_source {
+            self.remset.push(src);
+            if self.remset.len() >= Self::CAPACITY {
+                self.flush();
+            }
         }
     }
 
@@ -765,6 +827,9 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             }
             ProcessIncs::<VM>::promote(new);
             self.scan_nursery_object(new);
+            // if immix.current_pause() == Some(Pause::FinalMark) {
+            self.add_remset(new);
+            // }
             new
         }
     }
@@ -776,6 +841,7 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
         self.worker = worker;
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        self.immix = immix;
         let mut roots = vec![];
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };

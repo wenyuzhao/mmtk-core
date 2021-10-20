@@ -20,6 +20,8 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 
+use super::immix::LARGE_NURSERY_OBJECTS;
+
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
 const MARK_BIT: usize = 0b01;
@@ -100,6 +102,9 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         crate::util::alloc_bit::set_alloc_bit(object);
         let cell = VM::VMObjectModel::object_start_ref(object);
         self.treadmill.add_to_treadmill(cell, alloc);
+        if crate::concurrent_marking_in_progress() {
+            LARGE_NURSERY_OBJECTS.lock().push(object);
+        }
     }
 }
 

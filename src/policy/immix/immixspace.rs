@@ -6,6 +6,7 @@ use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
+use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
@@ -28,6 +29,7 @@ use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
+use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
@@ -60,6 +62,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub pending_release: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
+    pub remsets: Mutex<Vec<EvacuateMatureObjects<VM>>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -200,6 +203,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             initial_mark_pause: false,
             pending_release: Default::default(),
             mutator_recycled_blocks: Default::default(),
+            remsets: Default::default(),
         }
     }
 
@@ -241,9 +245,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
+        // Mutator reused blocks cannot be released until reaching a RC pause.
+        // Remaing the block state as "reusing" and reset them here.
         while let Some(x) = self.mutator_recycled_blocks.pop() {
             x.set_state(BlockState::Nursery);
         }
+        // Reclaim nursery blocks
         let num_workers = self.scheduler().worker_group().worker_count();
         let (work_packets, nursery_blocks) = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
@@ -251,10 +258,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             unreachable!();
         };
+        // If there are not too much nursery blocks for release, we
+        // reclain mature blocks as well.
         if nursery_blocks < crate::flags::NO_LAZY_DEC_THRESHOLD {
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
+        // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -263,6 +273,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // For header metadata, we use cyclic mark bits.
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
+            // Select mature defrag blocks
+            if pause == Pause::InitialMark {
+                let mut total_mature_blocks = 0;
+                for c in self.chunk_map.committed_chunks() {
+                    for b in c.committed_blocks().filter(|c| c.get_state() != BlockState::Nursery) {
+                        debug_assert!(!b.is_defrag_source(), "{:?}", b);
+                        total_mature_blocks += 1;
+                    }
+                }
+                let n = total_mature_blocks / 2;
+                println!("Defrag {:?} / {} blocks", n, total_mature_blocks);
+                for c in self.chunk_map.committed_chunks() {
+                    for b in c.committed_blocks().filter(|c| c.get_state() != BlockState::Nursery) {
+                        // println!(" - defrag {:?} {:?}", b, b.get_state());
+                        b.set_as_defrag_source(true);
+                    }
+                }
+            }
+            // Reset block mark and object mark table.
             let space = unsafe { &mut *(self as *mut Self) };
             let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
             self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
@@ -274,7 +303,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.block_allocation.reset();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
-            self.scheduler().process_lazy_decrement_packets();
+            // self.scheduler().process_lazy_decrement_packets();
         }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
@@ -364,7 +393,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
-        // println!("Release {:?} {}", block, nursery);
+        // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
+        // if block.is_defrag_source() {
+        //     println!("release defrag {:?}", block);
+        // }
         if crate::flags::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
@@ -390,6 +422,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
         self.block_allocation.get_reusable_block(copy)
+    }
+
+    /// Trace and mark objects without evacuation.
+    #[inline(always)]
+    pub fn process_mature_evacuation_remset(&self) {
+        let mut remsets = vec![];
+        mem::swap(&mut remsets, &mut self.remsets.lock());
+        println!("process_mature_evacuation_remset {}", remsets.len());
+        for w in remsets  {
+            self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+        }
+        let mut remsets = vec![];
+        mem::swap(&mut remsets, &mut super::LARGE_NURSERY_OBJECTS.lock());
+        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(EvacuateMatureObjects::new(remsets));
     }
 
     /// Trace and mark objects without evacuation.
@@ -652,7 +698,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::clear_log_table::<VM>(start..end);
         }
         // if !copy {
-        //     // println!("{:?}", start..end);
+            // println!("reuse {:?} copy={}", start..end, _copy);
         // }
         Some(start..end)
     }

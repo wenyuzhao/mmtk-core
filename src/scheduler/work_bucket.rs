@@ -139,6 +139,7 @@ pub enum WorkBucketStage {
     ProcessRoots,
     Closure,
     RefClosure,
+    EvacuateMature,
     RefForwarding,
     Release,
     Final,
@@ -149,6 +150,7 @@ pub enum WorkBucketStage {
 impl WorkBucketStage {
     pub const RCProcessIncs: Self = Self::ScanGlobalRoots;
     pub const RCEvacuateNursery: Self = Self::RefClosure;
+    pub const RCEvacuateMature: Self = Self::EvacuateMature;
     pub const RCReleaseNursery: Self = Self::RefForwarding;
     pub const RCFullHeapRelease: Self = Self::RefForwarding;
     pub const RCProcessDecs: Self = Self::Release;

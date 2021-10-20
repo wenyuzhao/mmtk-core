@@ -21,6 +21,8 @@
 #![feature(core_intrinsics)]
 #![feature(adt_const_params)]
 #![feature(generic_const_exprs)]
+#![feature(const_raw_ptr_deref)]
+#![feature(const_mut_refs)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 
@@ -136,7 +138,7 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = true;
+    pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 500;
@@ -151,7 +153,7 @@ pub mod flags {
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
     pub const LOG_PER_GC_STATE: bool = true;
-    pub const LOG_STAGES: bool = false;
+    pub const LOG_STAGES: bool = true;
     pub const LOG_WORK_PACKETS: bool = false;
     pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = false;
     pub const SLOW_CONCURRENT_MARKING: bool = false;

@@ -1,6 +1,7 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -14,6 +15,7 @@ use crate::{
     plan::CopyContext,
     util::opaque_pointer::{VMThread, VMWorkerThread},
 };
+use std::mem;
 use std::ops::{Deref, DerefMut};
 
 /// Immix copy allocator
@@ -101,6 +103,8 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
     root_slots: Vec<Address>,
+    remset: Vec<ObjectReference>,
+    roots_remset: Vec<Address>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
@@ -114,6 +118,19 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
             return object;
         }
         if self.immix().immix_space.in_space(object) {
+            if self.plan.current_pause() == Some(Pause::FinalMark) {
+            if self.roots {
+                self.roots_remset.push(slot);
+                if self.roots_remset.len() >= Self::CAPACITY {
+                    self.flush();
+                }
+            } else {
+                self.remset.push(object);
+                if self.remset.len() >= Self::CAPACITY {
+                    self.flush();
+                }
+            }}
+            // self.build_remset(slot, object);
             self.immix().immix_space.fast_trace_object(self, object);
             if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
                 if self.roots {
@@ -134,6 +151,38 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         let object = unsafe { slot.load::<ObjectReference>() };
         self.fast_trace_object(slot, object);
     }
+
+    // fn add_remset(&mut self, src: Option<ObjectReference>, slot: Address, val: ObjectReference) {
+    //     if self.plan.current_pause() != Some(Pause::FinalMark) {
+    //         return
+    //     }
+    //     let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
+    //     let val_in_defrag_source = self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
+
+    //     println!(" - test {} {:?} -> {:?} {} {}", self.roots, slot, val, src_not_in_defrag_source, val_in_defrag_source);
+    //     if src_not_in_defrag_source && val_in_defrag_source {
+    //         self.remset.push(slot);
+    //         if self.remset.len() >= Self::CAPACITY {
+    //             self.flush();
+    //         }
+    //     }
+    // }
+
+    // fn build_remset(&mut self, src: Option<ObjectReference>, slot: Address, val: ObjectReference) {
+    //     if self.plan.current_pause() != Some(Pause::FinalMark) {
+    //         return
+    //     }
+    //     let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
+    //     let val_in_defrag_source = self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
+
+    //     println!(" - test {} {:?} -> {:?} {} {}", self.roots, slot, val, src_not_in_defrag_source, val_in_defrag_source);
+    //     if src_not_in_defrag_source && val_in_defrag_source {
+    //         self.remset.push(slot);
+    //         if self.remset.len() >= Self::CAPACITY {
+    //             self.flush();
+    //         }
+    //     }
+    // }
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdges<VM, KIND> {
@@ -152,21 +201,36 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             plan,
             base,
             root_slots: vec![],
+            remset: vec![],
+            roots_remset: vec![],
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if self.nodes.is_empty() {
-            return;
+        if !self.nodes.is_empty() {
+            debug_assert_ne!(self.immix().current_pause(), Some(Pause::InitialMark));
+            let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
+                self.pop_nodes(),
+                false,
+                &self.immix().immix_space,
+            );
+            self.new_scan_work(scan_objects_work);
         }
-        debug_assert_ne!(self.immix().current_pause(), Some(Pause::InitialMark));
-        let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
-            self.pop_nodes(),
-            false,
-            &self.immix().immix_space,
-        );
-        self.new_scan_work(scan_objects_work);
+        if !self.remset.is_empty() {
+            debug_assert_eq!(self.immix().current_pause(), Some(Pause::FinalMark));
+            let mut remset = vec![];
+            mem::swap(&mut remset, &mut self.remset);
+            let w = EvacuateMatureObjects::new(remset);
+            self.mmtk().scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+        }
+        if !self.roots_remset.is_empty() {
+            debug_assert_eq!(self.immix().current_pause(), Some(Pause::FinalMark));
+            let mut roots_remset = vec![];
+            mem::swap(&mut roots_remset, &mut self.roots_remset);
+            let w = EvacuateMatureObjects::new_roots(roots_remset);
+            self.mmtk().scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+        }
     }
 
     /// Trace  and evacuate objects.
@@ -191,6 +255,9 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     #[inline]
     fn process_edges(&mut self) {
+        if self.roots {
+            println!("ROOTS {:?}", self.edges);
+        }
         if KIND == TraceKind::Fast {
             for i in 0..self.edges.len() {
                 // Use fast_process_edge since we don't need to forward any objects.
@@ -208,6 +275,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             std::mem::swap(&mut roots, &mut self.root_slots);
             self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
         }
+        self.flush();
     }
 }
 

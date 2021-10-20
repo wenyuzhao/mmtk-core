@@ -658,10 +658,11 @@ impl ObjectReference {
 
     #[inline(always)]
     pub fn fix_start_address<VM: VMBinding>(self) -> Self {
-        if !(self.to_address() + BYTES_IN_WORD).is_logged::<VM>() {
-            unsafe { (self.to_address() + BYTES_IN_WORD).to_object_reference() }
+        let a = unsafe { Address::from_usize(self.to_address().as_usize() >> 4 << 4) };
+        if !(a + BYTES_IN_WORD).is_logged::<VM>() {
+            unsafe { (a + BYTES_IN_WORD).to_object_reference() }
         } else {
-            self
+            unsafe { a.to_object_reference() }
         }
     }
 }

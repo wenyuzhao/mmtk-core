@@ -224,6 +224,20 @@ impl ChunkMap {
         self.chunk_range.lock().clone()
     }
 
+    pub fn committed_chunks(&self) -> impl Iterator<Item = Chunk> {
+        self
+            .all_chunks()
+            .filter(|c| {
+                let byte = unsafe { side_metadata::load(&Self::ALLOC_TABLE, c.start()) as u8 };
+                let state = match byte {
+                    0 => ChunkState::Free,
+                    1 => ChunkState::Allocated,
+                    _ => unreachable!(),
+                };
+                state == ChunkState::Allocated
+            })
+    }
+
     /// Helper function to create per-chunk processing work packets.
     fn generate_tasks<VM: VMBinding>(
         &self,
@@ -319,7 +333,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
                 block.set_as_defrag_source(true);
-            } else {
+            } else if !crate::flags::REF_COUNT {
                 block.set_as_defrag_source(false);
             }
             // Clear block mark data.
@@ -497,6 +511,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             // }
 
             // FIXME: Performance
+            // println!(" - satb reclaim {:?} defrag={}", block, block.is_defrag_source());
+            block.set_as_defrag_source(false);
             let mut has_dead_object = false;
             for o in (block.start()..block.end())
                 .step_by(rc::MIN_OBJECT_SIZE)

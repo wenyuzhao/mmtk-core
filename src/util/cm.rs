@@ -1,5 +1,7 @@
 use super::{metadata::MetadataSpec, Address, ObjectReference};
+use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
+use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -24,6 +26,7 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
     objects: Vec<ObjectReference>,
     next_objects: Vec<ObjectReference>,
     worker: *mut GCWorker<VM>,
+    remset: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
@@ -40,6 +43,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             objects,
             next_objects: vec![],
             worker: ptr::null_mut(),
+            remset: vec![],
         }
     }
 
@@ -50,15 +54,20 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
 
     #[cold]
     fn flush(&mut self) {
-        if self.next_objects.is_empty() {
-            return;
+        if !self.next_objects.is_empty() {
+            let mut new_nodes = vec![];
+            mem::swap(&mut new_nodes, &mut self.next_objects);
+            // This packet is executed in concurrent.
+            debug_assert!(crate::flags::CONCURRENT_MARKING);
+            let w = ImmixConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
+            self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
-        let mut new_nodes = vec![];
-        mem::swap(&mut new_nodes, &mut self.next_objects);
-        // This packet is executed in concurrent.
-        debug_assert!(crate::flags::CONCURRENT_MARKING);
-        let w = ImmixConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
-        self.worker().add_work(WorkBucketStage::Unconstrained, w);
+        if !self.remset.is_empty() {
+            let mut remset = vec![];
+            mem::swap(&mut remset, &mut self.remset);
+            let w = EvacuateMatureObjects::new(remset);
+            self.plan.immix_space.remsets.lock().push(w);
+        }
     }
 
     #[inline(always)]
@@ -80,15 +89,30 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
                 .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
         }
     }
+
+    fn add_remset(&mut self, src: ObjectReference) {
+        self.remset.push(src);
+            if self.remset.len() >= Self::CAPACITY {
+                self.flush();
+            }
+    }
+
+    fn build_remset(&mut self, src: ObjectReference, slot: Address, val: ObjectReference) {
+        let src_not_in_defrag_source = !self.plan.immix_space.address_in_space(slot) || !Block::from(Block::align(slot)).is_defrag_source();
+        let val_in_defrag_source = self.plan.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
+        if src_not_in_defrag_source && val_in_defrag_source {
+            self.remset.push(src);
+            if self.remset.len() >= Self::CAPACITY {
+                self.flush();
+            }
+        }
+    }
 }
 
 impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
     #[inline(always)]
-    fn process_edge(&mut self, slot: Address) {
-        self.next_objects.push(unsafe { slot.load() });
-        if self.next_objects.len() >= Self::CAPACITY {
-            self.flush();
-        }
+    fn process_edge(&mut self, _: Address) {
+        unreachable!()
     }
 
     #[inline]
@@ -99,9 +123,16 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         {
             self.plan.immix_space.mark_lines(object);
         }
+        // println!("Mark {:?}", object.to_address());
+        self.add_remset(object);
         EdgeIterator::<VM>::iterate(object, |e| {
+            let t = unsafe { e.load() };
+            // self.build_remset(object, e, t);
             // println!("Trace {:?}.{:?} -> {:?}", object, e, unsafe { e.load::<Address>() });
-            self.process_edge(e)
+            self.next_objects.push(t);
+            if self.next_objects.len() >= Self::CAPACITY {
+                self.flush();
+            }
         })
     }
 }
