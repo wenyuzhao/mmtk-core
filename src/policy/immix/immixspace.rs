@@ -59,7 +59,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub pending_release: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
-    pub mature_evac_remsets: Mutex<Vec<EvacuateMatureObjects<VM>>>,
+    pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     num_defrag_blocks: AtomicUsize,
 }
 
@@ -449,13 +449,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
-        for w in remsets {
-            self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
-        }
-        let mut remsets = vec![];
-        mem::swap(&mut remsets, &mut super::LARGE_NURSERY_OBJECTS.lock());
-        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature]
-            .add(EvacuateMatureObjects::new(remsets));
+        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
     }
 
     /// Trace and mark objects without evacuation.

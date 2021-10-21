@@ -387,7 +387,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             if crate::concurrent_marking_in_progress() {
-                self.immix().immix_space.mature_evac_remsets.lock().push(w)
+                self.immix()
+                    .immix_space
+                    .mature_evac_remsets
+                    .lock()
+                    .push(box w)
             } else {
                 self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
             }
@@ -771,7 +775,11 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             if crate::concurrent_marking_in_progress() {
-                self.immix().immix_space.mature_evac_remsets.lock().push(w);
+                self.immix()
+                    .immix_space
+                    .mature_evac_remsets
+                    .lock()
+                    .push(box w);
             } else {
                 let pause = self.immix().current_pause().unwrap();
                 if pause == Pause::FinalMark || pause == Pause::FullTraceFast {

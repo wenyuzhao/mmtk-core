@@ -65,7 +65,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
-            self.plan.immix_space.mature_evac_remsets.lock().push(w);
+            self.plan.immix_space.mature_evac_remsets.lock().push(box w);
         }
     }
 

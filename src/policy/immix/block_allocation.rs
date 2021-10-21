@@ -190,7 +190,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 if copy && block.is_defrag_source() {
                     continue;
                 }
-                if block.is_defrag_source() {
+                if crate::flags::RC_MATURE_EVACUATION && block.is_defrag_source() {
                     continue;
                 }
                 if crate::flags::REF_COUNT {

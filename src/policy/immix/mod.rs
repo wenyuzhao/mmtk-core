@@ -7,9 +7,8 @@ pub mod line;
 
 pub use crate::plan::immix::{CONCURRENT_MARKING, REF_COUNT};
 pub use immixspace::*;
-use spin::Mutex;
 
-use crate::{policy::immix::block::Block, util::ObjectReference};
+use crate::policy::immix::block::Block;
 
 /// The max object size for immix: half of a block
 pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES >> 1;
@@ -34,5 +33,3 @@ fn validate_features() {
     // Number of lines in a block should not exceed BlockState::MARK_MARKED
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
-
-pub static LARGE_NURSERY_OBJECTS: Mutex<Vec<ObjectReference>> = Mutex::new(vec![]);

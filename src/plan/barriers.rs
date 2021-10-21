@@ -424,7 +424,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 .immix_space
                 .mature_evac_remsets
                 .lock()
-                .push(w);
+                .push(box w);
         }
     }
 

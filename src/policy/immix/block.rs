@@ -247,20 +247,10 @@ impl Block {
                 debug_assert!(!self.is_defrag_source());
             }
             self.set_state(BlockState::Marked);
-            side_metadata::store_atomic(
-                &Self::DEFRAG_STATE_TABLE,
-                self.start(),
-                0,
-                Ordering::SeqCst,
-            );
+            self.set_as_defrag_source(false);
         } else {
             self.set_state(BlockState::Nursery);
-            side_metadata::store_atomic(
-                &Self::DEFRAG_STATE_TABLE,
-                self.start(),
-                0,
-                Ordering::SeqCst,
-            );
+            self.set_as_defrag_source(false);
         }
     }
 
