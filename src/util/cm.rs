@@ -65,7 +65,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
-            self.plan.immix_space.remsets.lock().push(w);
+            self.plan.immix_space.mature_evac_remsets.lock().push(w);
         }
     }
 
@@ -107,11 +107,9 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            if !should_add_to_mature_evac_remset {
+            if crate::flags::RC_MATURE_EVACUATION && !should_add_to_mature_evac_remset {
                 if !self.plan.in_defrag(object) && self.plan.in_defrag(t) {
                     should_add_to_mature_evac_remset = true;
-                } else {
-                    // println!("Skip {:?}.{:?} -> {:?}", object, e, t);
                 }
             }
             self.next_objects.push(t);
@@ -120,7 +118,6 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
             }
         });
         if should_add_to_mature_evac_remset {
-            // println!("CM Record {:?}", object.range::<VM>());
             self.mature_evac_remset.push(object);
         }
     }

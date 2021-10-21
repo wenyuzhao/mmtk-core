@@ -6,7 +6,7 @@ use super::{
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
-        barriers::{LOCKED_VALUE, UNLOCKED_VALUE, UNLOGGED_VALUE},
+        barriers::{LOCKED_VALUE, UNLOCKED_VALUE},
         immix::{Immix, ImmixCopyContext, Pause},
         EdgeIterator,
     },
@@ -251,14 +251,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    pub fn unlog_edge(edge: Address) {
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            UNLOGGED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
+    fn unlog_edge(edge: Address) {
+        edge.unlog::<VM>()
     }
 
     #[inline(always)]
@@ -389,11 +383,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             );
         }
         if !self.mature_evac_remset.is_empty() {
+            debug_assert!(crate::flags::RC_MATURE_EVACUATION);
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             if crate::concurrent_marking_in_progress() {
-                self.immix().immix_space.remsets.lock().push(w)
+                self.immix().immix_space.mature_evac_remsets.lock().push(w)
             } else {
                 self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
             }
@@ -602,15 +597,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
-            let o = if object_forwarding::is_forwarded::<VM>(o) {
+            let o = if crate::flags::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(o) {
                 object_forwarding::read_forwarding_pointer::<VM>(o)
             } else {
                 o
             };
-            let mut dead = false;
             let _ = self::fetch_update(o, |c| {
                 if c == 1 {
-                    dead = true;
                     self.process_dead_object(o, immix, &mut objects_to_trace);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
@@ -620,9 +613,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
-            if dead {
-                debug_assert_eq!(self::count(o), 0);
-            }
         }
         self.flush();
 
@@ -730,7 +720,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     fn scan_nursery_object(&mut self, o: ObjectReference) {
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            if !should_add_to_mature_evac_remset {
+            if crate::flags::RC_MATURE_EVACUATION && !should_add_to_mature_evac_remset {
                 if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {
                     should_add_to_mature_evac_remset = true;
                 }
@@ -768,13 +758,17 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             );
         }
         if !self.mature_evac_remset.is_empty() {
+            debug_assert!(crate::flags::RC_MATURE_EVACUATION);
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             if crate::concurrent_marking_in_progress() {
-                self.immix().immix_space.remsets.lock().push(w);
-            } else if self.immix().current_pause() == Some(Pause::FinalMark) {
-                self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+                self.immix().immix_space.mature_evac_remsets.lock().push(w);
+            } else {
+                let pause = self.immix().current_pause().unwrap();
+                if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+                    self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+                }
             }
         }
     }

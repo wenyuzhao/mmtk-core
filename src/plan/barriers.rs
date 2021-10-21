@@ -345,7 +345,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 }
                 self.incs.push(edge);
             }
-            if crate::concurrent_marking_in_progress() {
+            if crate::flags::RC_MATURE_EVACUATION && crate::concurrent_marking_in_progress() {
                 self.mature_evac_remset.push(src);
             }
             // Flush
@@ -419,7 +419,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
-            self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.remsets.lock().push(w);
+            self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.mature_evac_remsets.lock().push(w);
         }
     }
 

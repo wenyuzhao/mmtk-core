@@ -402,6 +402,18 @@ impl Address {
             Some(Ordering::SeqCst),
         ) == LOGGED_VALUE
     }
+
+    #[inline(always)]
+    pub fn unlog<VM: VMBinding>(self) {
+        debug_assert!(!self.is_zero());
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { self.to_object_reference() },
+            UNLOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        )
+    }
 }
 
 /// allows print Address as upper-case hex value

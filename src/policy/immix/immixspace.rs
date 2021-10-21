@@ -59,7 +59,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub pending_release: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
-    pub remsets: Mutex<Vec<EvacuateMatureObjects<VM>>>,
+    pub mature_evac_remsets: Mutex<Vec<EvacuateMatureObjects<VM>>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -200,7 +200,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             initial_mark_pause: false,
             pending_release: Default::default(),
             mutator_recycled_blocks: Default::default(),
-            remsets: Default::default(),
+            mature_evac_remsets: Default::default(),
         }
     }
 
@@ -240,6 +240,32 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
+    pub fn select_mature_evacuation_candidates(&self) {            // Select mature defrag blocks
+        let mut total_mature_blocks = 0;
+        for c in self.chunk_map.committed_chunks() {
+            for b in c
+                .committed_blocks()
+                .filter(|c| c.get_state() != BlockState::Nursery)
+            {
+                debug_assert!(!b.is_defrag_source(), "{:?}", b);
+                total_mature_blocks += 1;
+            }
+        }
+        let n = total_mature_blocks / 2;
+        if crate::flags::LOG_PER_GC_STATE {
+            println!("Defrag {:?} / {} mature blocks", n, total_mature_blocks);
+        }
+        for c in self.chunk_map.committed_chunks() {
+            for b in c
+                .committed_blocks()
+                .filter(|c| c.get_state() != BlockState::Nursery)
+            {
+                // println!(" - defrag {:?} {:?}", b, b.get_state());
+                b.set_as_defrag_source(true);
+            }
+        }
+    }
+
     pub fn prepare_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Mutator reused blocks cannot be released until reaching a RC pause.
@@ -270,30 +296,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // For header metadata, we use cyclic mark bits.
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
-            // Select mature defrag blocks
-            if pause == Pause::InitialMark {
-                let mut total_mature_blocks = 0;
-                for c in self.chunk_map.committed_chunks() {
-                    for b in c
-                        .committed_blocks()
-                        .filter(|c| c.get_state() != BlockState::Nursery)
-                    {
-                        debug_assert!(!b.is_defrag_source(), "{:?}", b);
-                        total_mature_blocks += 1;
-                    }
-                }
-                let n = total_mature_blocks / 2;
-                println!("Defrag {:?} / {} blocks", n, total_mature_blocks);
-                for c in self.chunk_map.committed_chunks() {
-                    for b in c
-                        .committed_blocks()
-                        .filter(|c| c.get_state() != BlockState::Nursery)
-                    {
-                        // println!(" - defrag {:?} {:?}", b, b.get_state());
-                        b.set_as_defrag_source(true);
-                    }
-                }
-            }
             // Reset block mark and object mark table.
             let space = unsafe { &mut *(self as *mut Self) };
             let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
@@ -306,7 +308,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.block_allocation.reset();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
-            // self.scheduler().process_lazy_decrement_packets();
+            self.scheduler().process_lazy_decrement_packets();
         }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
@@ -428,8 +430,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
-        mem::swap(&mut remsets, &mut self.remsets.lock());
-        println!("process_mature_evacuation_remset {}", remsets.len());
+        mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
         for w in remsets {
             self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
         }
@@ -788,9 +789,12 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     }
 
     fn process_node(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = self
+        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION && self
             .immix
-            .map(|ix| ix.current_pause() == Some(Pause::FinalMark))
+            .map(|ix| {
+                let pause = ix.current_pause();
+                pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
+            })
             .unwrap_or(false);
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<E::VM>::iterate(o, |e| {
@@ -820,7 +824,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             );
         }
         if !self.mature_evac_remset.is_empty() {
-            debug_assert_eq!(self.immix.unwrap().current_pause(), Some(Pause::FinalMark));
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);

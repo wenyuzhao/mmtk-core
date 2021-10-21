@@ -117,7 +117,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            if self.plan.current_pause() == Some(Pause::FinalMark) {
+            if self.plan.current_pause() == Some(Pause::FinalMark) || self.plan.current_pause() == Some(Pause::FullTraceFast) {
                 if self.roots && Block::in_defrag_block::<VM>(object) {
                     self.mature_evac_remset_roots.push(slot);
                     if self.mature_evac_remset_roots.len() >= Self::CAPACITY {
@@ -180,7 +180,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             self.new_scan_work(scan_objects_work);
         }
         if !self.mature_evac_remset_roots.is_empty() {
-            debug_assert_eq!(self.immix().current_pause(), Some(Pause::FinalMark));
             let mut roots_remset = vec![];
             mem::swap(&mut roots_remset, &mut self.mature_evac_remset_roots);
             let w = EvacuateMatureObjects::new_roots(roots_remset);

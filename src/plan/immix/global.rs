@@ -207,7 +207,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
                 self.common.prepare(tls, true);
             }
-            if pause == Pause::FinalMark {
+            if crate::flags::RC_MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::FullTraceFast) {
                 self.immix_space.process_mature_evacuation_remset()
             }
             self.immix_space.prepare_rc(pause);
@@ -232,11 +232,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut old_roots = super::PREV_ROOTS.lock();
             std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
             debug_assert!(curr_roots.is_empty());
-            for x in old_roots.iter_mut() {
-                for o in x.iter_mut() {
-                    if object_forwarding::is_forwarded::<VM>(*o) {
-                        *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
-                    };
+            if crate::flags::RC_MATURE_EVACUATION {
+                for x in old_roots.iter_mut() {
+                    for o in x.iter_mut() {
+                        if object_forwarding::is_forwarded::<VM>(*o) {
+                            *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
+                        };
+                    }
                 }
             }
         }
@@ -415,6 +417,9 @@ impl<VM: VMBinding> Immix<VM> {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
+        if crate::flags::RC_MATURE_EVACUATION {
+            self.immix_space.select_mature_evacuation_candidates();
+        }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
@@ -454,6 +459,9 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
+        }
+        if crate::flags::RC_MATURE_EVACUATION {
+            self.immix_space.select_mature_evacuation_candidates();
         }
         if crate::flags::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]

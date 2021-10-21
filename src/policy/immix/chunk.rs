@@ -509,7 +509,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             // }
 
             // FIXME: Performance
-            // println!(" - satb reclaim {:?} defrag={}", block, block.is_defrag_source());
             block.set_as_defrag_source(false);
             let mut has_dead_object = false;
             for o in (block.start()..block.end())
