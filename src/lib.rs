@@ -141,12 +141,12 @@ pub mod flags {
     pub const EAGER_INCREMENTS: bool = false;
     pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
-    pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
+    pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 4000;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
     pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;
-    pub const RC_MATURE_EVACUATION: bool = true;
+    pub const RC_MATURE_EVACUATION: bool = false;
 
     // ---------- Barrier flags ---------- //
     pub const BARRIER_MEASUREMENT: bool = false;
@@ -154,7 +154,7 @@ pub mod flags {
 
     // ---------- Debugging flags ---------- //
     pub const HARNESS_PRETTY_PRINT: bool = false;
-    pub const LOG_PER_GC_STATE: bool = true;
+    pub const LOG_PER_GC_STATE: bool = false;
     pub const LOG_STAGES: bool = false;
     pub const LOG_WORK_PACKETS: bool = false;
     pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = false;
