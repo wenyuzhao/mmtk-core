@@ -139,7 +139,7 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
+    pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 500;
