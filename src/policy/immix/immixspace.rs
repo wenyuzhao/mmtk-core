@@ -240,7 +240,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn select_mature_evacuation_candidates(&self) {            // Select mature defrag blocks
+    pub fn select_mature_evacuation_candidates(&self) {
+        // Select mature defrag blocks
         let mut total_mature_blocks = 0;
         for c in self.chunk_map.committed_chunks() {
             for b in c
@@ -789,13 +790,15 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     }
 
     fn process_node(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION && self
-            .immix
-            .map(|ix| {
-                let pause = ix.current_pause();
-                pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
-            })
-            .unwrap_or(false);
+        let check_mature_evac_remset = crate::flags::REF_COUNT
+            && crate::flags::RC_MATURE_EVACUATION
+            && self
+                .immix
+                .map(|ix| {
+                    let pause = ix.current_pause();
+                    pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
+                })
+                .unwrap_or(false);
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<E::VM>::iterate(o, |e| {
             self.edges.push(e);

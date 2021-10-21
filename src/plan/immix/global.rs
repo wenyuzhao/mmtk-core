@@ -207,7 +207,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
                 self.common.prepare(tls, true);
             }
-            if crate::flags::RC_MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::FullTraceFast) {
+            if crate::flags::REF_COUNT
+                && crate::flags::RC_MATURE_EVACUATION
+                && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
+            {
                 self.immix_space.process_mature_evacuation_remset()
             }
             self.immix_space.prepare_rc(pause);
@@ -416,9 +419,9 @@ impl<VM: VMBinding> Immix<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-        }
-        if crate::flags::RC_MATURE_EVACUATION {
-            self.immix_space.select_mature_evacuation_candidates();
+            if crate::flags::RC_MATURE_EVACUATION {
+                self.immix_space.select_mature_evacuation_candidates();
+            }
         }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -459,9 +462,9 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-        }
-        if crate::flags::RC_MATURE_EVACUATION {
-            self.immix_space.select_mature_evacuation_candidates();
+            if crate::flags::RC_MATURE_EVACUATION {
+                self.immix_space.select_mature_evacuation_candidates();
+            }
         }
         if crate::flags::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]

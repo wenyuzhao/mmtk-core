@@ -383,7 +383,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             );
         }
         if !self.mature_evac_remset.is_empty() {
-            debug_assert!(crate::flags::RC_MATURE_EVACUATION);
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
@@ -597,7 +596,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if !immix.immix_space.in_space(o) {
                 continue;
             }
-            let o = if crate::flags::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(o) {
+            let o = if crate::flags::REF_COUNT
+                && crate::flags::RC_MATURE_EVACUATION
+                && object_forwarding::is_forwarded::<VM>(o)
+            {
                 object_forwarding::read_forwarding_pointer::<VM>(o)
             } else {
                 o
@@ -720,7 +722,10 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     fn scan_nursery_object(&mut self, o: ObjectReference) {
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            if crate::flags::RC_MATURE_EVACUATION && !should_add_to_mature_evac_remset {
+            if crate::flags::REF_COUNT
+                && crate::flags::RC_MATURE_EVACUATION
+                && !should_add_to_mature_evac_remset
+            {
                 if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {
                     should_add_to_mature_evac_remset = true;
                 }
@@ -758,7 +763,6 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             );
         }
         if !self.mature_evac_remset.is_empty() {
-            debug_assert!(crate::flags::RC_MATURE_EVACUATION);
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);

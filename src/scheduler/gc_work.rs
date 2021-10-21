@@ -717,6 +717,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     const CAPACITY: usize = 1024;
 
     pub fn new(remset: Vec<ObjectReference>) -> Self {
+        debug_assert!(crate::flags::REF_COUNT);
         debug_assert!(crate::flags::RC_MATURE_EVACUATION);
         Self {
             remset,
@@ -805,7 +806,10 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         self.mmtk = Some(mmtk);
         self.worker = worker;
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        debug_assert!(immix.current_pause() == Some(Pause::FinalMark) || immix.current_pause() == Some(Pause::FullTraceFast));
+        debug_assert!(
+            immix.current_pause() == Some(Pause::FinalMark)
+                || immix.current_pause() == Some(Pause::FullTraceFast)
+        );
         let immix_space = &immix.immix_space;
         // Roots
         let mut roots = vec![];

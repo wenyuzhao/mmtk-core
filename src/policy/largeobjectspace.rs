@@ -102,7 +102,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         crate::util::alloc_bit::set_alloc_bit(object);
         let cell = VM::VMObjectModel::object_start_ref(object);
         self.treadmill.add_to_treadmill(cell, alloc);
-        if crate::flags::RC_MATURE_EVACUATION && crate::concurrent_marking_in_progress() {
+        if crate::flags::REF_COUNT
+            && crate::flags::RC_MATURE_EVACUATION
+            && crate::concurrent_marking_in_progress()
+        {
             LARGE_NURSERY_OBJECTS.lock().push(object);
         }
     }

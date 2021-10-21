@@ -107,7 +107,10 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            if crate::flags::RC_MATURE_EVACUATION && !should_add_to_mature_evac_remset {
+            if crate::flags::REF_COUNT
+                && crate::flags::RC_MATURE_EVACUATION
+                && !should_add_to_mature_evac_remset
+            {
                 if !self.plan.in_defrag(object) && self.plan.in_defrag(t) {
                     should_add_to_mature_evac_remset = true;
                 }

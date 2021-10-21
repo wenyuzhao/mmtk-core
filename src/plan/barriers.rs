@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
-use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::plan::immix::Immix;
+use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::cm::ProcessModBufSATB;
@@ -313,12 +313,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn enqueue_node(
-        &mut self,
-        src: ObjectReference,
-        edge: Address,
-        _new: Option<ObjectReference>,
-    ) {
+    fn enqueue_node(&mut self, src: ObjectReference, edge: Address, _new: Option<ObjectReference>) {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
@@ -345,7 +340,10 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 }
                 self.incs.push(edge);
             }
-            if crate::flags::RC_MATURE_EVACUATION && crate::concurrent_marking_in_progress() {
+            if crate::flags::REF_COUNT
+                && crate::flags::RC_MATURE_EVACUATION
+                && crate::concurrent_marking_in_progress()
+            {
                 self.mature_evac_remset.push(src);
             }
             // Flush
@@ -419,7 +417,14 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
-            self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.mature_evac_remsets.lock().push(w);
+            self.mmtk
+                .plan
+                .downcast_ref::<Immix<E::VM>>()
+                .unwrap()
+                .immix_space
+                .mature_evac_remsets
+                .lock()
+                .push(w);
         }
     }
 

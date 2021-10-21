@@ -616,10 +616,10 @@ impl ObjectReference {
     #[inline(always)]
     pub fn range<VM: VMBinding>(self) -> Range<Address> {
         if self.is_null() {
-            return self.to_address()..self.to_address()
+            return self.to_address()..self.to_address();
         }
         let a = VM::VMObjectModel::object_start_ref(self);
-        a..a+self.get_size::<VM>()
+        a..a + self.get_size::<VM>()
     }
 
     #[inline(always)]
