@@ -479,7 +479,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
-            // println!("Mark {:?}", object);
+            // println!("Mark {:?}", object.range::<VM>());
             if !crate::flags::REF_COUNT {
                 // Mark block and lines
                 if !super::BLOCK_ONLY {

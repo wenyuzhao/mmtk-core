@@ -106,7 +106,7 @@ static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 #[inline(always)]
 fn concurrent_marking_in_progress() -> bool {
-    crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+    crate::flags::CONCURRENT_MARKING && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
 }
 
 #[inline(always)]

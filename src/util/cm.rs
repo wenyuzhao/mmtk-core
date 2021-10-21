@@ -25,7 +25,7 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
     objects: Vec<ObjectReference>,
     next_objects: Vec<ObjectReference>,
     worker: *mut GCWorker<VM>,
-    remset: Vec<ObjectReference>,
+    mature_evac_remset: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
@@ -42,7 +42,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             objects,
             next_objects: vec![],
             worker: ptr::null_mut(),
-            remset: vec![],
+            mature_evac_remset: vec![],
         }
     }
 
@@ -61,9 +61,9 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             let w = ImmixConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
-        if !self.remset.is_empty() {
+        if !self.mature_evac_remset.is_empty() {
             let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.remset);
+            mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             self.plan.immix_space.remsets.lock().push(w);
         }
@@ -88,13 +88,6 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
                 .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
         }
     }
-
-    fn add_remset(&mut self, src: ObjectReference) {
-        self.remset.push(src);
-        if self.remset.len() >= Self::CAPACITY {
-            self.flush();
-        }
-    }
 }
 
 impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
@@ -111,16 +104,25 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         {
             self.plan.immix_space.mark_lines(object);
         }
-        // println!("Mark {:?}", object.to_address());
-        self.add_remset(object);
+        let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            // println!("Trace {:?}.{:?} -> {:?}", object, e, unsafe { e.load::<Address>() });
+            if !should_add_to_mature_evac_remset {
+                if !self.plan.in_defrag(object) && self.plan.in_defrag(t) {
+                    should_add_to_mature_evac_remset = true;
+                } else {
+                    // println!("Skip {:?}.{:?} -> {:?}", object, e, t);
+                }
+            }
             self.next_objects.push(t);
             if self.next_objects.len() >= Self::CAPACITY {
                 self.flush();
             }
-        })
+        });
+        if should_add_to_mature_evac_remset {
+            // println!("CM Record {:?}", object.range::<VM>());
+            self.mature_evac_remset.push(object);
+        }
     }
 }
 

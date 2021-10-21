@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicUsize;
 use atomic::Ordering;
 
 use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
+use crate::plan::immix::Immix;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::cm::ProcessModBufSATB;
@@ -193,6 +194,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     meta: MetadataSpec,
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
+    mature_evac_remset: Vec<ObjectReference>,
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
@@ -205,6 +207,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             meta,
             incs: vec![],
             decs: vec![],
+            mature_evac_remset: vec![],
         }
     }
 
@@ -312,7 +315,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     #[inline(always)]
     fn enqueue_node(
         &mut self,
-        _src: ObjectReference,
+        src: ObjectReference,
         edge: Address,
         _new: Option<ObjectReference>,
     ) {
@@ -342,10 +345,14 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 }
                 self.incs.push(edge);
             }
+            if crate::concurrent_marking_in_progress() {
+                self.mature_evac_remset.push(src);
+            }
             // Flush
             if self.edges.len() >= Self::CAPACITY
                 || self.incs.len() >= Self::CAPACITY
                 || self.decs.len() >= Self::CAPACITY
+                || self.mature_evac_remset.len() >= Self::CAPACITY
             {
                 self.flush();
             }
@@ -406,6 +413,13 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             } else {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
             }
+        }
+        // Flush dec buffer
+        if !self.mature_evac_remset.is_empty() {
+            let mut remset = vec![];
+            std::mem::swap(&mut remset, &mut self.mature_evac_remset);
+            let w = EvacuateMatureObjects::new(remset);
+            self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.remsets.lock().push(w);
         }
     }
 
