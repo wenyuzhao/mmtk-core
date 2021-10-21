@@ -60,6 +60,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub pending_release: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
     pub mature_evac_remsets: Mutex<Vec<EvacuateMatureObjects<VM>>>,
+    num_defrag_blocks: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -201,6 +202,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             pending_release: Default::default(),
             mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
+            num_defrag_blocks: AtomicUsize::new(0),
         }
     }
 
@@ -241,6 +243,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn select_mature_evacuation_candidates(&self) {
+        debug_assert!(crate::flags::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         let mut total_mature_blocks = 0;
         for c in self.chunk_map.committed_chunks() {
@@ -265,6 +268,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 b.set_as_defrag_source(true);
             }
         }
+        self.num_defrag_blocks.store(n, Ordering::SeqCst);
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
@@ -284,7 +288,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
-        if nursery_blocks < crate::flags::NO_LAZY_DEC_THRESHOLD {
+        let mature_blocks = if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+            self.num_defrag_blocks.load(Ordering::SeqCst)
+        } else {
+            0
+        };
+        if (nursery_blocks + mature_blocks) < crate::flags::NO_LAZY_DEC_THRESHOLD {
+            if crate::flags::LOG_PER_GC_STATE {
+                println!(
+                    "disable lazy dec: nursery_blocks={} mature_blocks={} threshold={}",
+                    nursery_blocks,
+                    mature_blocks,
+                    crate::flags::NO_LAZY_DEC_THRESHOLD
+                );
+            }
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);

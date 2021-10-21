@@ -142,7 +142,7 @@ pub mod flags {
     pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1000;
-    pub const NO_LAZY_DEC_THRESHOLD: usize = 500;
+    pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
     pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;

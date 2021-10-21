@@ -113,9 +113,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn process_lazy_decrement_packets(&self) {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
-        if crate::flags::LOG_PER_GC_STATE {
-            println!("process_lazy_decrement_packets");
-        }
         let postponed_concurrent_work = self.postponed_concurrent_work.read();
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
