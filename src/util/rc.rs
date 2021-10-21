@@ -180,7 +180,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     new_incs: Vec<Address>,
     /// Delayed nursery increments
     remset: Vec<Address>,
-    mature_remset: Vec<ObjectReference>,
+    mature_evac_remset: Vec<ObjectReference>,
     /// Root edges?
     roots: bool,
     /// Execution worker
@@ -195,8 +195,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     pub const DELAYED_EVACUATION: bool = true;
 
     #[inline(always)]
-    fn worker(&self) -> &mut GCWorker<VM> {
+    const fn worker(&self) -> &mut GCWorker<VM> {
         unsafe { &mut *self.worker }
+    }
+
+    #[inline(always)]
+    const fn immix(&self) -> &Immix<VM> {
+        unsafe { &*self.immix }
     }
 
     pub fn new(incs: Vec<Address>, roots: bool) -> Self {
@@ -207,7 +212,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             new_incs: vec![],
             remset: vec![],
             worker: std::ptr::null_mut(),
-            mature_remset: vec![],
+            mature_evac_remset: vec![],
             immix: std::ptr::null(),
         }
     }
@@ -383,16 +388,16 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 RCEvacuateNursery::new(remset, self.roots),
             );
         }
-        if !self.mature_remset.is_empty() {
-            let mut mature_remset = vec![];
-            mem::swap(&mut mature_remset, &mut self.mature_remset);
-            // println!(" - add N EvacuateMatureObjects {} {:?}", self.roots, mature_remset);
-            let w = EvacuateMatureObjects::new(mature_remset);
+        if !self.mature_evac_remset.is_empty() {
+            let mut remset = vec![];
+            mem::swap(&mut remset, &mut self.mature_evac_remset);
+            let w = EvacuateMatureObjects::new(remset);
             if crate::concurrent_marking_in_progress() {
-                unsafe { (*self.immix).immix_space.remsets.lock().push(w) }
+                self.immix().immix_space.remsets.lock().push(w)
             } else {
                 self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
             }
+            unreachable!();
         }
     }
 
@@ -506,7 +511,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     const CAPACITY: usize = 1024;
 
     #[inline(always)]
-    fn worker(&self) -> &mut GCWorker<VM> {
+    const fn worker(&self) -> &mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
 
@@ -574,7 +579,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         o.clear_start_address_log::<VM>();
         #[cfg(feature = "sanity")]
         unsafe {
-            // o.to_address().store(0xdeadusize);
+            o.to_address().store(0xdeadusize);
         }
         immix
             .immix_space
@@ -688,7 +693,7 @@ pub struct RCEvacuateNursery<VM: VMBinding> {
     roots: bool,
     /// Execution worker
     worker: *mut GCWorker<VM>,
-    remset: Vec<ObjectReference>,
+    mature_evac_remset: Vec<ObjectReference>,
     immix: *const Immix<VM>,
 }
 
@@ -698,8 +703,13 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     const CAPACITY: usize = 1024;
 
     #[inline(always)]
-    fn worker(&mut self) -> &mut GCWorker<VM> {
+    const fn worker(&mut self) -> &mut GCWorker<VM> {
         unsafe { &mut *self.worker }
+    }
+
+    #[inline(always)]
+    const fn immix(&self) -> &Immix<VM> {
+        unsafe { &*self.immix }
     }
 
     pub fn new(slots: Vec<Address>, roots: bool) -> Self {
@@ -711,16 +721,28 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             roots,
             new_slots: vec![],
             worker: std::ptr::null_mut(),
-            remset: vec![],
+            mature_evac_remset: vec![],
             immix: std::ptr::null(),
         }
     }
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
+        let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
+            if !should_add_to_mature_evac_remset {
+                if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {
+                    should_add_to_mature_evac_remset = true;
+                }
+            }
             self.add_new_slot(edge);
         });
+        if should_add_to_mature_evac_remset {
+            self.mature_evac_remset.push(o);
+            if self.mature_evac_remset.len() >= Self::CAPACITY {
+                self.flush();
+            }
+        }
     }
 
     #[inline(always)]
@@ -745,40 +767,14 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
                 RCEvacuateNursery::new(new_slots, false),
             );
         }
-        if !self.remset.is_empty() {
+        if !self.mature_evac_remset.is_empty() {
             let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.remset);
+            mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             if crate::concurrent_marking_in_progress() {
-                unsafe { (*self.immix).immix_space.remsets.lock().push(w) }
-            } else if unsafe { &*self.immix }.current_pause() == Some(Pause::FinalMark) {
+                self.immix().immix_space.remsets.lock().push(w);
+            } else if self.immix().current_pause() == Some(Pause::FinalMark) {
                 self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
-            }
-        }
-    }
-
-    fn add_remset(&mut self, src: ObjectReference) {
-        self.remset.push(src);
-        if self.remset.len() >= Self::CAPACITY {
-            self.flush();
-        }
-    }
-    fn build_remset(&mut self, src: ObjectReference, slot: Address, val: ObjectReference) {
-        let immix = unsafe { &*self.immix };
-        if immix.current_pause() != Some(Pause::FinalMark)
-            && !crate::concurrent_marking_in_progress()
-        {
-            return;
-        }
-        let src_not_in_defrag_source = !immix.immix_space.address_in_space(slot)
-            || !Block::from(Block::align(slot)).is_defrag_source();
-        let val_in_defrag_source =
-            immix.immix_space.in_space(val) && Block::containing::<VM>(val).is_defrag_source();
-
-        if src_not_in_defrag_source && val_in_defrag_source {
-            self.remset.push(src);
-            if self.remset.len() >= Self::CAPACITY {
-                self.flush();
             }
         }
     }
@@ -834,9 +830,6 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             }
             ProcessIncs::<VM>::promote(new);
             self.scan_nursery_object(new);
-            // if immix.current_pause() == Some(Pause::FinalMark) {
-            self.add_remset(new);
-            // }
             new
         }
     }

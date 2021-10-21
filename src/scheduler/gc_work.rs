@@ -763,9 +763,8 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 }
             }
             rc::set(new, rc::count(o));
-            rc::set(o, 0);
-            rc::unmark_straddle_object::<VM>(o);
             immix_space.attempt_mark(new);
+            immix_space.unmark(o);
             self.process_node(new);
             new
         }
