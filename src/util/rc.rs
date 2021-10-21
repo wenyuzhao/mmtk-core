@@ -719,10 +719,11 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION && (crate::concurrent_marking_in_progress() || {
-            let p = self.immix().current_pause();
-            p == Some(Pause::FinalMark) || p == Some(Pause::FullTraceFast)
-        });
+        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION
+            && (crate::concurrent_marking_in_progress() || {
+                let p = self.immix().current_pause();
+                p == Some(Pause::FinalMark) || p == Some(Pause::FullTraceFast)
+            });
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
             if crate::flags::RC_MATURE_EVACUATION

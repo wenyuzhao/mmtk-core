@@ -292,7 +292,11 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_striddle_table<VM: VMBinding>(&self) {
-        bzero_metadata(&crate::util::rc::RC_STRADDLE_LINES, self.start(), Block::BYTES);
+        bzero_metadata(
+            &crate::util::rc::RC_STRADDLE_LINES,
+            self.start(),
+            Block::BYTES,
+        );
     }
 
     #[inline(always)]
@@ -448,10 +452,7 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_mature<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-    ) {
+    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         debug_assert!(crate::flags::REF_COUNT);
         debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
         if self.is_defrag_source() {

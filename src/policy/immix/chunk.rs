@@ -443,29 +443,29 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline]
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
         let mut has_dead_object = false;
-            for o in (block.start()..block.end())
-                .step_by(rc::MIN_OBJECT_SIZE)
-                .map(|a| unsafe { a.to_object_reference() })
-            {
-                let c = rc::count(o);
-                if c != 0 && !immix_space.is_marked(o) {
-                    if !crate::flags::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
-                        if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
+        for o in (block.start()..block.end())
+            .step_by(rc::MIN_OBJECT_SIZE)
+            .map(|a| unsafe { a.to_object_reference() })
+        {
+            let c = rc::count(o);
+            if c != 0 && !immix_space.is_marked(o) {
+                if !crate::flags::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
+                    if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
+                        continue;
+                    } else {
+                        std::sync::atomic::fence(Ordering::SeqCst);
+                        if rc::count(o) == 0 {
                             continue;
-                        } else {
-                            std::sync::atomic::fence(Ordering::SeqCst);
-                            if rc::count(o) == 0 {
-                                continue;
-                            }
                         }
                     }
-                    self.process_dead_object(o);
-                    has_dead_object = true;
                 }
+                self.process_dead_object(o);
+                has_dead_object = true;
             }
-            if has_dead_object {
-                immix_space.possibly_dead_mature_blocks.lock().insert(block);
-            }
+        }
+        if has_dead_object {
+            immix_space.possibly_dead_mature_blocks.lock().insert(block);
+        }
     }
 }
 
