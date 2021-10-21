@@ -291,6 +291,11 @@ impl Block {
     }
 
     #[inline(always)]
+    pub fn clear_striddle_table<VM: VMBinding>(&self) {
+        bzero_metadata(&crate::util::rc::RC_STRADDLE_LINES, self.start(), Block::BYTES);
+    }
+
+    #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
         bzero_metadata(
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -446,15 +451,13 @@ impl Block {
     pub fn rc_sweep_mature<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
-        release_defrag: bool,
-    ) -> bool {
+    ) {
         debug_assert!(crate::flags::REF_COUNT);
         debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
-        let live = !self.rc_dead();
-        if !live {
-            if !release_defrag && self.is_defrag_source() {
-                return !live;
-            }
+        if self.is_defrag_source() {
+            return;
+        }
+        if self.rc_dead() {
             if !crate::flags::IGNORE_REUSING_BLOCKS
                 || self
                     .fetch_update_state(|s| {
@@ -497,7 +500,6 @@ impl Block {
                 space.reusable_blocks.push(*self)
             }
         }
-        return !live;
     }
 }
 

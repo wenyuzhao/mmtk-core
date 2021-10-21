@@ -669,9 +669,8 @@ impl SweepBlocksAfterDecs {
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let release_defrag = !crate::concurrent_marking_in_progress();
         for b in &self.blocks {
-            b.rc_sweep_mature::<VM>(&immix.immix_space, release_defrag);
+            b.rc_sweep_mature::<VM>(&immix.immix_space);
         }
     }
 }
@@ -720,10 +719,14 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
+        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION && (crate::concurrent_marking_in_progress() || {
+            let p = self.immix().current_pause();
+            p == Some(Pause::FinalMark) || p == Some(Pause::FullTraceFast)
+        });
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            if crate::flags::REF_COUNT
-                && crate::flags::RC_MATURE_EVACUATION
+            if crate::flags::RC_MATURE_EVACUATION
+                && check_mature_evac_remset
                 && !should_add_to_mature_evac_remset
             {
                 if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {

@@ -426,91 +426,23 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline(always)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
-        // Attempt to set refcount to 1
-        // let r = crate::util::rc::fetch_update(o, |c| {
-        //     if c <= 1 {
-        //         return None; // already dead
-        //     }
-        //     Some(1)
-        // });
-        // if r == Err(1) || r.is_ok() {
-        //     // This is a dead object in a dead cycle. Perform cyclic decrements
-        //     self.add_dec(o)
-        // }
-        // println!("kill cyclic {:?}", o);
         rc::set(o, 0);
         if !crate::flags::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
         }
     }
-}
 
-impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     #[inline]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.worker = worker;
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let immix_space = &immix.immix_space;
-        for block in self.chunk.committed_blocks() {
-            // if immix.current_pause() == Some(Pause::FinalMark) && block.get_state() == BlockState::Nursery {
-            //     continue;
-            // }
-            // const LOG_OBJECTS_IN_BYTE: usize = LOG_BITS_IN_BYTE as usize - rc::LOG_REF_COUNT_BITS;
-            // const OBJECTS_IN_BYTE: usize = 1 << LOG_OBJECTS_IN_BYTE;
+    fn process_defrag_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
+        block.set_as_defrag_source(false);
+        block.clear_rc_table::<VM>();
+        block.clear_striddle_table::<VM>();
+        immix_space.possibly_dead_mature_blocks.lock().insert(block);
+    }
 
-            // type UInt = u128;
-            // const LOG_BITS_IN_ENTRY: usize =
-            //     (std::mem::size_of::<UInt>() << LOG_BITS_IN_BYTE).trailing_zeros() as _;
-            // const LOG_OBJECTS_IN_ENTRY: usize = LOG_BITS_IN_ENTRY - rc::LOG_REF_COUNT_BITS;
-            // let rc_table = crate::util::rc::rc_table_range::<UInt>(block);
-            // for (i, entry) in rc_table.iter().enumerate() {
-            //     let entry = *entry;
-            //     if likely(entry == 0) {
-            //         continue;
-            //     }
-            //     let base = block.start() + (i << (LOG_OBJECTS_IN_ENTRY + rc::LOG_MIN_OBJECT_SIZE));
-            //     for (j, byte) in entry.to_le_bytes().iter().enumerate() {
-            //         let byte = *byte;
-            //         if likely(byte == 0) {
-            //             continue;
-            //         }
-            //         let base = base + (j << (LOG_OBJECTS_IN_BYTE + rc::LOG_MIN_OBJECT_SIZE));
-            //         for k in 0..OBJECTS_IN_BYTE {
-            //             let c =
-            //                 (byte >> (k << rc::LOG_REF_COUNT_BITS)) as usize & rc::REF_COUNT_MASK;
-            //             if unlikely(c != 0 && c != rc::MARKER) {
-            //                 let o = unsafe {
-            //                     (base + (k << rc::LOG_MIN_OBJECT_SIZE)).to_object_reference()
-            //                 };
-            //                 if !immix_space.is_marked(o) {
-            //                     self.process_dead_object(o)
-            //                 }
-            //             }
-            //         }
-            //     }
-            // }
-
-            // let rc_table = crate::util::rc::rc_table_range::<u8>(block);
-            // for (i, entry) in rc_table.iter().enumerate() {
-            //     let entry = *entry;
-            //     if likely(entry == 0) {
-            //         continue
-            //     }
-            //     let base = block.start() + (i << (LOG_OBJECTS_IN_BYTE + rc::LOG_MIN_OBJECT_SIZE));
-            //     for j in 0..OBJECTS_IN_BYTE {
-            //         let c = (entry >> (j << rc::LOG_REF_COUNT_BITS)) as usize & rc::REF_COUNT_MASK;
-            //         if unlikely(c != 0 && c != rc::MARKER) {
-            //             let o = unsafe { (base + (j << rc::LOG_MIN_OBJECT_SIZE)).to_object_reference() };
-            //             if !immix_space.is_marked(o) {
-            //                 self.process_dead_object(o)
-            //             }
-            //         }
-            //     }
-            // }
-
-            // FIXME: Performance
-            block.set_as_defrag_source(false);
-            let mut has_dead_object = false;
+    #[inline]
+    fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
+        let mut has_dead_object = false;
             for o in (block.start()..block.end())
                 .step_by(rc::MIN_OBJECT_SIZE)
                 .map(|a| unsafe { a.to_object_reference() })
@@ -533,6 +465,21 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             }
             if has_dead_object {
                 immix_space.possibly_dead_mature_blocks.lock().insert(block);
+            }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
+    #[inline]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let immix_space = &immix.immix_space;
+        for block in self.chunk.committed_blocks() {
+            if block.is_defrag_source() {
+                self.process_defrag_block(block, immix_space)
+            } else {
+                self.process_block(block, immix_space)
             }
         }
         // self.flush();
