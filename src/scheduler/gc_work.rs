@@ -769,6 +769,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
+    #[inline]
     fn process_node(&mut self, o: ObjectReference) {
         self.next_remset.push(o);
         if self.next_remset.len() >= Self::CAPACITY {

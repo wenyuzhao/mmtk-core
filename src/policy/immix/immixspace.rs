@@ -806,6 +806,7 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         unsafe { &mut *self.worker }
     }
 
+    #[inline(always)]
     fn process_node(&mut self, o: ObjectReference) {
         let check_mature_evac_remset = crate::flags::REF_COUNT
             && crate::flags::RC_MATURE_EVACUATION
