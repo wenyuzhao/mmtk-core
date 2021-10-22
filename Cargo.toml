@@ -34,7 +34,7 @@ atomic-traits = "0.2.0"
 atomic = "0.4.6"
 spin = "0.9.2"
 env_logger = "0.8.2"
-pfm = {version = "0.0.9", optional = true}
+pfm = { git = "https://github.com/wenyuzhao/pfm", branch = "fix-libc", optional = true }
 
 [dev-dependencies]
 crossbeam = "0.7.3"
@@ -42,7 +42,8 @@ rand = "0.7.3"
 
 [features]
 # default = ["sanity"]
-default = []
+default = ["perf_counter"]
+# default = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
