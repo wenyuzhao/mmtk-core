@@ -131,6 +131,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
+        debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(box w)
     }
 

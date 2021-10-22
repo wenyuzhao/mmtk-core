@@ -198,6 +198,8 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
+    const CAPACITY: usize = 1024;
+
     #[allow(unused)]
     pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
         Self {
@@ -233,21 +235,17 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
-        // println!("try lock {:?}", edge);
         loop {
             std::hint::spin_loop();
             let logging_value = self.get_edge_logging_state(edge);
             // Bailout if logged
             if logging_value == LOGGED_VALUE {
-                // println!("quit lock {:?}", edge);
                 return false;
             }
             debug_assert_eq!(logging_value, UNLOGGED_VALUE);
             let lock_value = self.get_edge_lock_state(edge);
-            // println!(" - {:?} lock_value={}", edge, lock_value);
             // Spin if locked
             if lock_value == LOCKED_VALUE {
-                // println!("quit lock {:?}", edge);
                 continue;
             }
             debug_assert_eq!(lock_value, UNLOCKED_VALUE);
@@ -317,14 +315,10 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        // println!("(b) {:?}.{:?} -> new={:?}", _src, edge, new);
         if let Ok(old) = self.log_edge_and_get_old_target(edge) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            // if self.mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap().immix_space.in_space(old) {
-            //     assert_ne!(Block::containing::<E::VM>(old).get_state(), BlockState::Nursery, "Invald {:?}.{:?} -> {:?} new={:?} src: {:?} src block state {:?}", _src, edge, old, new, _src.dump_s::<E::VM>(), Block::containing::<E::VM>(_src).get_state());
-            // }
             // Concurrent Marking
             if crate::plan::immix::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
                 self.edges.push(edge);
@@ -334,7 +328,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             }
             // Reference counting
             if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
-                // println!("[B] {:?}.{:?} -> old={:?} new={:?}", _src, edge, old, new);
                 if !old.is_null() {
                     self.decs.push(old);
                 }
@@ -356,8 +349,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             }
         }
     }
-
-    const CAPACITY: usize = 512;
 }
 
 impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
@@ -413,7 +404,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             }
         }
         // Flush dec buffer
-        if !self.mature_evac_remset.is_empty() {
+        if crate::flags::RC_MATURE_EVACUATION && !self.mature_evac_remset.is_empty() {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
