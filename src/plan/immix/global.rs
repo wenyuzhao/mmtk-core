@@ -8,6 +8,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -559,5 +560,10 @@ impl<VM: VMBinding> Immix<VM> {
         } else {
             self.common.los.attempt_mark(o)
         }
+    }
+
+    #[inline(always)]
+    pub const fn los(&self) -> &LargeObjectSpace<VM> {
+        &self.common.los
     }
 }
