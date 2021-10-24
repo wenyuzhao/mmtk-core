@@ -74,13 +74,14 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
         if object.is_null() {
             return object;
         }
+        let no_trace = crate::flags::REF_COUNT
+            && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+            && crate::util::rc::count(object) == 0;
+        if no_trace {
+            return object;
+        }
         if self.plan.immix_space.in_space(object) {
-            let no_trace = crate::flags::REF_COUNT
-                && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-                && crate::util::rc::count(object) == 0;
-            if !no_trace {
-                self.plan.immix_space.fast_trace_object(self, object);
-            }
+            self.plan.immix_space.fast_trace_object(self, object);
             object
         } else {
             self.plan

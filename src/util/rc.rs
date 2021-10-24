@@ -313,7 +313,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if crate::concurrent_marking_in_progress()
                 || immix.current_pause() == Some(Pause::FinalMark)
             {
-                immix.immix_space.attempt_mark(o);
+                immix.mark(o);
             }
             self.scan_nursery_object(o);
             debug_assert!(
@@ -789,11 +789,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             || self.immix().current_pause() == Some(Pause::FinalMark)
             || self.immix().current_pause() == Some(Pause::FullTraceFast)
         {
-            if self.immix().immix_space.in_space(new) {
-                self.immix().immix_space.attempt_mark(new)
-            } else {
-                self.immix().common.los.attempt_mark(new)
-            };
+            self.immix().mark(new);
         }
         if self.immix().immix_space.in_space(new) {
             ProcessIncs::<VM>::promote(new);

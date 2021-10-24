@@ -550,4 +550,14 @@ impl<VM: VMBinding> Immix<VM> {
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
         self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
     }
+
+    #[inline(always)]
+    pub fn mark(&self, o: ObjectReference) -> bool {
+        debug_assert!(!o.is_null());
+        if self.immix_space.in_space(o) {
+            self.immix_space.attempt_mark(o)
+        } else {
+            self.common.los.attempt_mark(o)
+        }
+    }
 }

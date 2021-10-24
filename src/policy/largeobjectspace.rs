@@ -53,11 +53,13 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
+        if crate::flags::REF_COUNT {
+            return crate::util::rc::count(object) > 0;
+        }
         if self.trace_in_progress {
             return true;
         }
         self.test_mark_bit(object, self.mark_state)
-            && self.rc_mature_objects.lock().contains(&object)
     }
     fn is_movable(&self) -> bool {
         false
@@ -120,23 +122,19 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         // if !alloc && self.common.needs_log_bit {
         //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         // }
-        if !alloc {
-            if crate::flags::BARRIER_MEASUREMENT
-                || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
-            {
+
+        if crate::flags::BARRIER_MEASUREMENT
+            || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
+        {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+        }
+        if crate::flags::BARRIER_MEASUREMENT
+            || (self.common.needs_log_bit && self.common.needs_field_log_bit)
+        {
+            for i in (0..bytes).step_by(8) {
+                let a = object.to_address() + i;
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-            }
-            if crate::flags::BARRIER_MEASUREMENT
-                || (self.common.needs_log_bit && self.common.needs_field_log_bit)
-            {
-                for i in (0..bytes).step_by(8) {
-                    let a = object.to_address() + i;
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
-                        unsafe { a.to_object_reference() },
-                        Ordering::SeqCst,
-                    );
-                }
+                    .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
             }
         }
         // Concurrent marking: allocate as marked
@@ -322,10 +320,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.acquire(tls, pages)
     }
 
+    #[inline]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         self.test_and_mark(object, self.mark_state)
     }
 
+    #[inline]
     pub fn rc_free(&self, o: ObjectReference) {
         let mut mature_objects = self.rc_mature_objects.lock();
         debug_assert!(mature_objects.contains(&o));
@@ -333,6 +333,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.pr.release_pages(o.to_address());
     }
 
+    #[inline(always)]
     fn is_marked(&self, object: ObjectReference) -> bool {
         self.test_mark_bit(object, self.mark_state)
     }
