@@ -309,7 +309,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             Self::promote(o);
             if crate::concurrent_marking_in_progress()
                 || immix.current_pause() == Some(Pause::FinalMark)
-                || immix.current_pause() == Some(Pause::FullTraceFast)
             {
                 immix.immix_space.attempt_mark(o);
             }
