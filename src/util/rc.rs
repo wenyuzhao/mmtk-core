@@ -316,7 +316,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 immix.immix_space.attempt_mark(o);
             }
             self.scan_nursery_object(o);
-            debug_assert!(!(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY));
+            debug_assert!(
+                !(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY)
+                    || immix.common.los.in_space(o)
+            );
         }
         o
     }
@@ -779,21 +782,46 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     }
 
     #[inline(always)]
+    fn promote(&mut self, new: ObjectReference) {
+        let _ = self::inc(new);
+        // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
+        if crate::concurrent_marking_in_progress()
+            || self.immix().current_pause() == Some(Pause::FinalMark)
+            || self.immix().current_pause() == Some(Pause::FullTraceFast)
+        {
+            if self.immix().immix_space.in_space(new) {
+                self.immix().immix_space.attempt_mark(new)
+            } else {
+                self.immix().common.los.attempt_mark(new)
+            };
+        }
+        if self.immix().immix_space.in_space(new) {
+            ProcessIncs::<VM>::promote(new);
+        }
+        self.scan_nursery_object(new);
+    }
+
+    #[inline(always)]
     fn forward(
         &mut self,
         e: Address,
         o: ObjectReference,
-        immix: &Immix<VM>,
         copy_context: &mut impl CopyContext<VM = VM>,
     ) -> ObjectReference {
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
-        if !immix.immix_space.in_space(o) {
+        if o.is_null() {
             return o;
         }
         if self::count(o) != 0 {
             // Points to a mature object. Remain in place and increment the object's refcount.
             let r = self::inc(o);
             debug_assert_ne!(r, Ok(0));
+            return o;
+        }
+        if self.immix().common.los.in_space(o) {
+            if let Ok(0) = self::inc(o) {
+                self.promote(o)
+            }
             return o;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
@@ -819,16 +847,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             }
             // Update RC counts
             debug_assert_eq!(self::count(o), 0);
-            let _ = self::inc(new);
-            // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
-            if crate::concurrent_marking_in_progress()
-                || immix.current_pause() == Some(Pause::FinalMark)
-                || immix.current_pause() == Some(Pause::FullTraceFast)
-            {
-                immix.immix_space.attempt_mark(new);
-            }
-            ProcessIncs::<VM>::promote(new);
-            self.scan_nursery_object(new);
+            self.promote(new);
             new
         }
     }
@@ -848,7 +867,7 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
         std::mem::swap(&mut slots, &mut self.slots);
         for e in slots {
             let o: ObjectReference = unsafe { e.load() };
-            let o = self.forward(e, o, immix, copy_context);
+            let o = self.forward(e, o, copy_context);
             if !self.roots {
                 // debug_assert!(!e.is_locked::<VM>());
                 ProcessIncs::<VM>::unlog_edge(e);

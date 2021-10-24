@@ -246,7 +246,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             while let Some(o) = self.rc_nursery_objects.pop() {
                 if rc::count(o) == 0 {
                     self.pr.release_pages(o.to_address());
-                    println!(" - release los {:?}", o);
                 } else {
                     mature_blocks.insert(o);
                 }
