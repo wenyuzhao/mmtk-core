@@ -258,13 +258,19 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
         if crate::flags::LOG_PER_GC_STATE {
-            let released =
+            let released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
-            println!("Eager released {} nursery blocks", released);
             let released = crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
-            println!("Released {} blocks", released);
+            println!("Released {} blocks ({} nursery)", released, released_n);
             crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
+            println!(
+                "Memory after GC: {} {} / {} blocks ({} los blocks)",
+                mmtk.plan.get_pages_used() / Block::PAGES,
+                mmtk.plan.get_pages_reserved() / Block::PAGES,
+                mmtk.plan.get_total_pages() / Block::PAGES,
+                mmtk.plan.common().los.reserved_pages() / Block::PAGES,
+            );
 
             println!(
                 "> {}ms {}ms",

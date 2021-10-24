@@ -87,6 +87,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         // Spaces or heap full
         if self.base().collection_required(self, space_full, space) {
+            self.next_gc_may_perform_cycle_collection
+                .store(true, Ordering::SeqCst);
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("! base heap/space full");
+            }
             return true;
         }
         // Concurrent tracing finished
@@ -102,6 +107,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && self.immix_space.block_allocation.nursery_blocks()
                 >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
         {
+            if crate::flags::LOG_PER_GC_STATE {
+                println!("! rc collection_required");
+            }
             return true;
         }
         false
@@ -407,6 +415,13 @@ impl<VM: VMBinding> Immix<VM> {
                 "[STW] {:?} emergency={}",
                 pause,
                 self.is_emergency_collection()
+            );
+            println!(
+                "Memory before GC: {} {} / {} blocks ({} los blocks)",
+                self.get_pages_used() / Block::PAGES,
+                self.get_pages_reserved() / Block::PAGES,
+                self.get_total_pages() / Block::PAGES,
+                self.common.los.reserved_pages() / Block::PAGES,
             );
         }
         pause
