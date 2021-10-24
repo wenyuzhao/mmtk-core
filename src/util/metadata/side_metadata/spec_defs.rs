@@ -57,6 +57,8 @@ define_side_metadata_specs!(
     ALLOC_BIT       = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Track chunks used by (malloc) marksweep
     MS_ACTIVE_CHUNK = (global: true, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_CHUNK as usize),
+    // Reference counts
+    RC_TABLE = (global: false, log_num_of_bits: crate::util::rc::LOG_REF_COUNT_BITS, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
     // Field barrier lock bits
     RC_LOCK_BITS = (global: true, log_num_of_bits: 0, log_bytes_in_region: crate::flags::LOG_BYTES_PER_RC_LOCK_BIT),
 );
@@ -74,8 +76,6 @@ define_side_metadata_specs!(
     IX_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Mark chunks by immix
     IX_CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::chunk::Chunk::LOG_BYTES),
-    // Reference counts
-    RC_TABLE = (global: false, log_num_of_bits: crate::util::rc::LOG_REF_COUNT_BITS, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
     // Striddle line marks
     RC_STRADDLE_LINES = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
 );
