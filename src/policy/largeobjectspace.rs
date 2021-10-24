@@ -15,6 +15,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::opaque_pointer::*;
+use crate::util::rc;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
@@ -77,19 +78,31 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         // if !alloc && self.common.needs_log_bit {
         //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         // }
-
-        if crate::flags::BARRIER_MEASUREMENT
-            || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
-        {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-        }
-        if crate::flags::BARRIER_MEASUREMENT
-            || (self.common.needs_log_bit && self.common.needs_field_log_bit)
-        {
+        if crate::flags::REF_COUNT {
+            debug_assert!(alloc);
+            // Alloc as unlogged
             for i in (0..bytes).step_by(8) {
-                let a = object.to_address() + i;
+                (object.to_address() + i).log::<VM>();
+            }
+            // Alloc as zero refcount
+            rc::set(object, 0);
+        } else if !alloc {
+            if crate::flags::BARRIER_MEASUREMENT
+                || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
+            {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
+                    .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+            }
+            if crate::flags::BARRIER_MEASUREMENT
+                || (self.common.needs_log_bit && self.common.needs_field_log_bit)
+            {
+                for i in (0..bytes).step_by(8) {
+                    let a = object.to_address() + i;
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
+                        unsafe { a.to_object_reference() },
+                        Ordering::SeqCst,
+                    );
+                }
             }
         }
         // Concurrent marking: allocate as marked

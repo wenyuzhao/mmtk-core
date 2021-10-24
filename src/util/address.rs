@@ -404,6 +404,18 @@ impl Address {
     }
 
     #[inline(always)]
+    pub fn log<VM: VMBinding>(self) {
+        debug_assert!(!self.is_zero());
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { self.to_object_reference() },
+            LOGGED_VALUE,
+            None,
+            Some(Ordering::SeqCst),
+        )
+    }
+
+    #[inline(always)]
     pub fn unlog<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
         store_metadata::<VM>(
