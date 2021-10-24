@@ -271,10 +271,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 immix.mark(o);
             }
             self.scan_nursery_object(o);
-            debug_assert!(
-                !(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY)
-                    || immix.los().in_space(o)
-            );
+            // debug_assert!(
+            //     !(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY)
+            //         || immix.los().in_space(o)
+            // );
         }
         o
     }
@@ -367,34 +367,23 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         immix: &Immix<VM>,
         no_evacuation: bool,
     ) -> Option<ObjectReference> {
+        debug_assert!(!crate::flags::EAGER_INCREMENTS);
+        let o = unsafe { e.load() };
+        let in_immix_space = immix.immix_space.in_space(o);
+        // no_evacuation |=
+        //     in_immix_space && Block::containing::<VM>(o).get_state() == BlockState::Reusing;
         // Delay the increment if this object points to a young object
         if !no_evacuation && Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY {
-            let o = unsafe { e.load() };
-            if immix.immix_space.in_space(o) && self::count(o) == 0 {
+            if in_immix_space && self::count(o) == 0 {
                 self.add_remset(e);
                 return None;
             }
         }
-        // Load mature object and unlog edge
-        let o = if crate::flags::EAGER_INCREMENTS {
-            if !self.roots {
-                debug_assert!(e.is_logged::<VM>(), "{:?}", e);
-                e.lock::<VM>();
-                debug_assert!(e.is_logged::<VM>(), "{:?}", e);
-                e.unlog::<VM>();
-            }
-            let o: ObjectReference = unsafe { e.load() };
-            if !self.roots {
-                e.unlock::<VM>();
-            }
-            o
-        } else {
-            if !self.roots {
-                debug_assert!(e.is_logged::<VM>(), "{:?}", e);
-                e.unlog::<VM>();
-            }
-            unsafe { e.load() }
-        };
+        // unlog edge
+        if !self.roots {
+            debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+            e.unlog::<VM>();
+        }
         Some(o)
     }
 }
@@ -756,13 +745,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
         if o.is_null() {
             return o;
         }
-        if self::count(o) != 0 {
-            // Points to a mature object. Remain in place and increment the object's refcount.
-            let r = self::inc(o);
-            debug_assert_ne!(r, Ok(0));
-            return o;
-        }
-        if self.immix().los().in_space(o) {
+        if self::count(o) != 0 || self.immix().los().in_space(o) {
             if let Ok(0) = self::inc(o) {
                 self.promote::<false>(o)
             }
@@ -777,14 +760,9 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             return new;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
-        if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
+        let new = if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Young object is moved to a new location.
-            let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-            unsafe {
-                e.store(new);
-            }
-            let _ = self::inc(new);
-            new
+            object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status)
         } else {
             // Evacuate the young object
             let new = object_forwarding::forward_object::<VM, _>(
@@ -792,15 +770,14 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
                 AllocationSemantics::Default,
                 copy_context,
             );
-            unsafe {
-                e.store(new);
-            }
-            // Update RC counts
-            debug_assert_eq!(self::count(o), 0);
-            let _ = self::inc(new);
             self.promote::<true>(new);
             new
+        };
+        let _ = self::inc(new);
+        unsafe {
+            e.store(new);
         }
+        new
     }
 }
 
@@ -813,7 +790,11 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
         self.immix = immix;
         self.current_pause = immix.current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        let mut roots = Vec::with_capacity(self.slots.len());
+        let mut roots = if self.roots {
+            Vec::with_capacity(self.slots.len())
+        } else {
+            vec![]
+        };
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         let mut slots = vec![];

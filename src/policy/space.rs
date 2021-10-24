@@ -395,14 +395,13 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
+    #[inline(always)]
     fn address_in_space(&self, start: Address) -> bool {
-        if !self.common().descriptor.is_contiguous() {
-            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
-        } else {
-            start >= self.common().start && start < self.common().start + self.common().extent
-        }
+        debug_assert!(self.common().descriptor.is_contiguous());
+        start >= self.common().start && start < self.common().start + self.common().extent
     }
 
+    #[inline(always)]
     fn in_space(&self, object: ObjectReference) -> bool {
         let start = VM::VMObjectModel::ref_to_address(object);
         self.address_in_space(start)

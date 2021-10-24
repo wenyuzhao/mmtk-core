@@ -105,9 +105,11 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn as_sft(&self) -> &(dyn SFT + Sync + 'static) {
         self
     }
+    #[inline(always)]
     fn get_page_resource(&self) -> &dyn PageResource<VM> {
         &self.pr
     }
+    #[inline(always)]
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }

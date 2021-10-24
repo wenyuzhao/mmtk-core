@@ -272,10 +272,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.immix_space.reserved_pages() + self.common.get_pages_used()
     }
 
+    #[inline(always)]
     fn base(&self) -> &BasePlan<VM> {
         &self.common.base
     }
 
+    #[inline(always)]
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }

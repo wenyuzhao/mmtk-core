@@ -155,6 +155,7 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     fn as_sft(&self) -> &(dyn SFT + Sync + 'static) {
         self
     }
+    #[inline(always)]
     fn get_page_resource(&self) -> &dyn PageResource<VM> {
         &self.pr
     }
@@ -162,6 +163,7 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
         self.common().init(self.as_space());
     }
 
+    #[inline(always)]
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
