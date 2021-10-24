@@ -102,7 +102,6 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     // downcast for each traced object.
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
-    root_slots: Vec<Address>,
     mature_evac_remset_roots: Vec<Address>,
 }
 
@@ -128,11 +127,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
                 }
             }
             self.immix().immix_space.fast_trace_object(self, object);
-            if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT {
-                if self.roots {
-                    self.root_slots.push(slot);
-                }
-            }
             object
         } else {
             self.immix()
@@ -164,7 +158,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         Self {
             plan,
             base,
-            root_slots: vec![],
             mature_evac_remset_roots: vec![],
         }
     }
@@ -221,11 +214,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 ProcessEdgesWork::process_edge(self, self.edges[i])
             }
         }
-        if self.roots && !self.root_slots.is_empty() {
-            debug_assert!(crate::flags::REF_COUNT);
-            let bucket = WorkBucketStage::rc_process_incs_stage();
+        if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
             let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.root_slots);
+            std::mem::swap(&mut roots, &mut self.edges);
+            let bucket = WorkBucketStage::rc_process_incs_stage();
             self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
         }
         self.flush();

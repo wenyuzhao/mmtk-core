@@ -1,9 +1,10 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, Pause};
+use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
+use crate::policy::largeobjectspace::RCSweepMatureLOS;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::scheduler::gc_work::EvacuateMatureObjects;
@@ -134,7 +135,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
-                MetadataSpec::OnSide(crate::util::rc::RC_TABLE),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -330,11 +330,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
+            let sweep_los =
+                RCSweepMatureLOS::new(unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
             if crate::flags::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
+                self.scheduler().postpone(sweep_los);
             } else {
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
                     .bulk_add(work_packets);
+                self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
             }
             while let Some(x) = self.pending_release.pop() {
                 self.release_block(x, false);

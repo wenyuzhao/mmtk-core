@@ -3,6 +3,7 @@ use super::{
     metadata::{compare_exchange_metadata, side_metadata::address_to_meta_address, store_metadata},
     Address,
 };
+use crate::policy::largeobjectspace::RCReleaseMatureLOS;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
@@ -306,7 +307,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
-            Self::promote(o);
+            if immix.immix_space.in_space(o) {
+                Self::promote(o);
+            }
             if crate::concurrent_marking_in_progress()
                 || immix.current_pause() == Some(Pause::FinalMark)
             {
@@ -457,10 +460,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 Some(o) => o,
                 _ => continue,
             };
-            if !immix.immix_space.in_space(o) {
-                if self.roots && !o.is_null() {
-                    roots.push(o);
-                }
+            if o.is_null() {
                 continue;
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
@@ -547,42 +547,41 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[inline]
-    fn process_dead_object(
-        &mut self,
-        o: ObjectReference,
-        immix: &Immix<VM>,
-        objects_to_trace: &mut Vec<ObjectReference>,
-    ) {
-        let trace = immix.immix_space.attempt_mark(o);
+    fn process_dead_object(&mut self, o: ObjectReference, immix: &Immix<VM>) {
+        if immix.immix_space.in_space(o) {
+            immix.immix_space.attempt_mark(o)
+        } else {
+            immix.common.los.attempt_mark(o)
+        };
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {
             let x = unsafe { edge.load::<ObjectReference>() };
             if !x.is_null() {
-                if immix.immix_space.in_space(x) {
-                    // println!(" - rec dec {:?}.{:?} -> {:?} {} edge-logged={}", o, edge, x, count(x), edge.is_logged::<VM>());
-                    self.recursive_dec(x);
-                } else {
-                    if trace {
-                        objects_to_trace.push(x);
-                    }
-                }
+                self.recursive_dec(x);
             }
         });
-        if !crate::flags::BLOCK_ONLY {
+        let in_ix_space = immix.immix_space.in_space(o);
+        if !crate::flags::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
         }
-        o.clear_start_address_log::<VM>();
+        if in_ix_space {
+            o.clear_start_address_log::<VM>();
+        }
         #[cfg(feature = "sanity")]
         unsafe {
             o.to_address().store(0xdeadusize);
         }
-        immix
-            .immix_space
-            .possibly_dead_mature_blocks
-            .lock()
-            .insert(Block::containing::<VM>(o));
+        if in_ix_space {
+            immix
+                .immix_space
+                .possibly_dead_mature_blocks
+                .lock()
+                .insert(Block::containing::<VM>(o));
+        } else {
+            immix.common.los.rc_free(o);
+        }
     }
 }
 
@@ -594,9 +593,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut decs = vec![];
         std::mem::swap(&mut decs, &mut self.decs);
-        let mut objects_to_trace = vec![];
         for o in decs {
-            if !immix.immix_space.in_space(o) {
+            if o.is_null() {
                 continue;
             }
             let o = if crate::flags::REF_COUNT
@@ -609,7 +607,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             };
             let _ = self::fetch_update(o, |c| {
                 if c == 1 {
-                    self.process_dead_object(o, immix, &mut objects_to_trace);
+                    self.process_dead_object(o, immix);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if c == 0 || c == MAX_REF_COUNT {
@@ -625,15 +623,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
             SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix.immix_space);
         }
-
-        // if crate::concurrent_marking_in_progress() {
-        //     let edges: Vec<Address> = objects_to_trace
-        //         .iter()
-        //         .map(|e| Address::from_ptr(e))
-        //         .collect();
-        //     let w = ImmixProcessEdges::<VM, { TraceKind::Fast }>::new(edges, false, mmtk);
-        //     self.worker().add_work(WorkBucketStage::Closure, w)
-        // }
     }
 }
 
@@ -666,6 +655,7 @@ impl SweepBlocksAfterDecs {
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs { blocks })
             .collect();
         scheduler.work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(RCReleaseMatureLOS);
     }
 }
 

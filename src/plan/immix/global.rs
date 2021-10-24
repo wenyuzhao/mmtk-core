@@ -20,9 +20,10 @@ use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
+use crate::util::metadata::MetadataSpec;
 use crate::util::options::UnsafeOptionsWrapper;
-use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
+use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, object_forwarding, ObjectReference};
@@ -212,9 +213,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.immix_space.prepare(true, true);
             }
         } else {
-            if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
-                self.common.prepare(tls, true);
-            }
+            self.common.prepare(
+                tls,
+                pause == Pause::FullTraceFast || pause == Pause::InitialMark,
+            );
             if crate::flags::REF_COUNT
                 && crate::flags::RC_MATURE_EVACUATION
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
@@ -233,9 +235,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.immix_space.release(true);
             }
         } else {
-            if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-                self.common.release(tls, true);
-            }
+            self.common.release(
+                tls,
+                pause == Pause::FullTraceFast || pause == Pause::FinalMark,
+            );
             self.immix_space.release_rc(pause);
         }
         if super::REF_COUNT {
@@ -316,6 +319,7 @@ impl<VM: VMBinding> Immix<VM> {
             if crate::flags::BARRIER_MEASUREMENT || *ACTIVE_BARRIER != BarrierSelector::NoBarrier {
                 metadata::extract_side_metadata(&[
                     RC_LOCK_BIT_SPEC,
+                    MetadataSpec::OnSide(RC_TABLE),
                     *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
                 ])
             } else {

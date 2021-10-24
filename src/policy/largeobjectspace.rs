@@ -1,9 +1,9 @@
-use atomic::Ordering;
-
+use crate::plan::immix::Immix;
 use crate::plan::PlanConstraints;
 use crate::plan::TransitiveClosure;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
+use crate::scheduler::GCWork;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
@@ -16,10 +16,17 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::opaque_pointer::*;
 use crate::util::rc;
+use crate::util::rc::SweepBlocksAfterDecs;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
+use atomic::Ordering;
+use crossbeam_queue::SegQueue;
+use spin::Mutex;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -36,6 +43,9 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     in_nursery_gc: bool,
     treadmill: TreadMill,
     trace_in_progress: bool,
+    rc_nursery_objects: SegQueue<ObjectReference>,
+    rc_mature_objects: Mutex<HashSet<ObjectReference>>,
+    rc_dead_objects: SegQueue<ObjectReference>,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -47,6 +57,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             return true;
         }
         self.test_mark_bit(object, self.mark_state)
+            && self.rc_mature_objects.lock().contains(&object)
     }
     fn is_movable(&self) -> bool {
         false
@@ -56,6 +67,37 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
+        if crate::flags::REF_COUNT {
+            debug_assert!(alloc);
+            // Alloc as logged
+            for i in (0..bytes).step_by(8) {
+                (object.to_address() + i).log::<VM>();
+            }
+            // Alloc as zero refcount
+            rc::set(object, 0);
+            // Add to object set
+            self.rc_nursery_objects.push(object);
+            // Initialize mark bit
+            let old_value = load_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
+                object,
+                None,
+                Some(Ordering::SeqCst),
+            );
+            let new_value = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
+            store_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
+                object,
+                new_value,
+                None,
+                Some(Ordering::SeqCst),
+            );
+            // CM: Alloc as marked
+            if crate::flags::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
+                self.test_and_mark(object, self.mark_state);
+            }
+            return;
+        }
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
             object,
@@ -78,15 +120,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         // if !alloc && self.common.needs_log_bit {
         //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         // }
-        if crate::flags::REF_COUNT {
-            debug_assert!(alloc);
-            // Alloc as unlogged
-            for i in (0..bytes).step_by(8) {
-                (object.to_address() + i).log::<VM>();
-            }
-            // Alloc as zero refcount
-            rc::set(object, 0);
-        } else if !alloc {
+        if !alloc {
             if crate::flags::BARRIER_MEASUREMENT
                 || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
             {
@@ -185,6 +219,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             in_nursery_gc: false,
             treadmill: TreadMill::new(),
             trace_in_progress: false,
+            rc_nursery_objects: Default::default(),
+            rc_mature_objects: Default::default(),
+            rc_dead_objects: Default::default(),
         }
     }
 
@@ -194,12 +231,28 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             debug_assert!(self.treadmill.from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
+        if crate::flags::REF_COUNT {
+            return;
+        }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
     }
 
     pub fn release(&mut self, full_heap: bool) {
         self.trace_in_progress = false;
+        if crate::flags::REF_COUNT {
+            // release nursery objects
+            let mut mature_blocks = self.rc_mature_objects.lock();
+            while let Some(o) = self.rc_nursery_objects.pop() {
+                if rc::count(o) == 0 {
+                    self.pr.release_pages(o.to_address());
+                    println!(" - release los {:?}", o);
+                } else {
+                    mature_blocks.insert(o);
+                }
+            }
+            return;
+        }
         self.sweep_large_pages(true);
         debug_assert!(self.treadmill.nursery_empty());
         if full_heap {
@@ -220,6 +273,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "{:x}: alloc bit not set",
             object
         );
+        if crate::flags::REF_COUNT {
+            if self.test_and_mark(object, self.mark_state) {
+                trace.process_node(object);
+            }
+            return object;
+        }
         let nursery_object = self.is_in_nursery(object);
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
@@ -262,6 +321,21 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
+    }
+
+    pub fn attempt_mark(&self, object: ObjectReference) -> bool {
+        self.test_and_mark(object, self.mark_state)
+    }
+
+    pub fn rc_free(&self, o: ObjectReference) {
+        let mut mature_objects = self.rc_mature_objects.lock();
+        debug_assert!(mature_objects.contains(&o));
+        mature_objects.remove(&o);
+        self.pr.release_pages(o.to_address());
+    }
+
+    fn is_marked(&self, object: ObjectReference) -> bool {
+        self.test_mark_bit(object, self.mark_state)
     }
 
     fn test_and_mark(&self, object: ObjectReference, value: usize) -> bool {
@@ -344,4 +418,55 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
 fn get_super_page(cell: Address) -> Address {
     cell.align_down(BYTES_IN_PAGE)
+}
+
+pub struct RCSweepMatureLOS {
+    count_down: Arc<AtomicUsize>,
+}
+
+impl RCSweepMatureLOS {
+    pub fn new(count_down: Arc<AtomicUsize>) -> Self {
+        count_down.fetch_add(1, Ordering::SeqCst);
+        Self { count_down }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
+    fn do_work(
+        &mut self,
+        _worker: &mut crate::scheduler::GCWorker<VM>,
+        mmtk: &'static crate::MMTK<VM>,
+    ) {
+        let los = mmtk.plan.common().get_los();
+        let mature_objects = los.rc_mature_objects.lock();
+        for o in mature_objects.iter() {
+            if !los.is_marked(*o) && rc::count(*o) != 0 {
+                los.rc_dead_objects.push(*o)
+            }
+        }
+        if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
+            let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+            let immix_space = &immix.immix_space;
+            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix_space);
+        }
+    }
+}
+
+pub struct RCReleaseMatureLOS;
+
+impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
+    fn do_work(
+        &mut self,
+        _worker: &mut crate::scheduler::GCWorker<VM>,
+        mmtk: &'static crate::MMTK<VM>,
+    ) {
+        let los = mmtk.plan.common().get_los();
+        let mut mature_objects = los.rc_mature_objects.lock();
+        while let Some(o) = los.rc_dead_objects.pop() {
+            mature_objects.remove(&o);
+            if !los.is_marked(o) {
+                los.pr.release_pages(o.to_address());
+            }
+        }
+    }
 }
