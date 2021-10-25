@@ -429,10 +429,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
-        if self.common().needs_log_bit {
-            if crate::flags::BARRIER_MEASUREMENT || self.common().needs_log_bit {
-                block.clear_log_table::<VM>();
-            }
+        if !crate::flags::BARRIER_MEASUREMENT && self.common().needs_log_bit {
+            block.clear_log_table::<VM>();
         }
         block.deinit();
         self.pr.release_pages(block.start());
