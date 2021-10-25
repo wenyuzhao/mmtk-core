@@ -3,13 +3,14 @@ use crate::{
     flags::LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE,
     policy::space::Space,
     scheduler::{GCWork, GCWorker},
-    util::{rc::RC_LOCK_BITS, VMMutatorThread, VMThread},
+    util::{VMMutatorThread, VMThread},
     vm::*,
     MMTK,
 };
 use atomic::{Atomic, Ordering};
-use spin::{Lazy, Mutex};
+use spin::Lazy;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 
 static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> = Lazy::new(|| {
     if crate::flags::REF_COUNT {
@@ -54,7 +55,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     /// Reset allocated_block_buffer and free everything in clean_block_buffer.
     pub fn reset(&mut self) {
-        let _guard = self.refill_lock.lock();
+        let _guard = self.refill_lock.lock().unwrap();
         let cursor = self.cursor.load(Ordering::SeqCst);
         let high_water = self.high_water.load(Ordering::SeqCst);
         for i in cursor..high_water {
@@ -71,7 +72,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         &mut self,
         num_workers: usize,
     ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
-        let _guard = self.refill_lock.lock();
+        let _guard = self.refill_lock.lock().unwrap();
         let blocks = self.cursor.load(Ordering::SeqCst);
         let high_water = self.high_water.load(Ordering::SeqCst);
         let num_bins = num_workers << 1;
@@ -121,16 +122,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         // println!("Alloc {:?} {}", block, copy);
         block.init(copy, false, self.space());
-        if cfg!(debug_assertions) {
-            if crate::flags::BARRIER_MEASUREMENT || self.space().common().needs_log_bit {
-                block.assert_log_table_cleared::<VM>(&RC_LOCK_BITS);
-                block.assert_log_table_cleared::<VM>(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .as_spec()
-                        .extract_side_spec(),
-                );
-            }
-        }
         self.space()
             .chunk_map
             .set(block.chunk(), ChunkState::Allocated);
@@ -154,7 +145,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     #[cold]
     fn alloc_clean_block_slow(&mut self, tls: VMThread) -> Option<Block> {
-        let _guard = self.refill_lock.lock();
+        let _guard = self.refill_lock.lock().unwrap();
         // Retry allocation
         if let Some(block) = self.alloc_clean_block_fast() {
             return Some(block);
