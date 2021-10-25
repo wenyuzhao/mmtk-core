@@ -1,7 +1,7 @@
 use atomic::Ordering;
 
 use super::block::Block;
-use crate::plan::barriers::LOGGED_VALUE;
+use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
 use crate::util::rc;
@@ -102,54 +102,6 @@ impl Line {
         unsafe { side_metadata::load(&Self::MARK_TABLE, self.start()) as u8 == state }
     }
 
-    #[inline(always)]
-    const fn load_rc_table_entry<T: Copy>(line_index: usize, table_block_start: Address) -> T {
-        let ptr = table_block_start + (line_index * std::mem::size_of::<T>());
-        unsafe { ptr.load() }
-    }
-
-    #[inline(always)]
-    #[allow(unreachable_code)]
-    pub const fn rc_dead(line_index: usize, table_block_start: Address) -> bool {
-        debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(super::REF_COUNT);
-        const LOG_BITS_PER_LINE: usize =
-            Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
-        const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
-        match BITS_PER_LINE {
-            8 => Self::load_rc_table_entry::<u8>(line_index, table_block_start) == 0,
-            16 => Self::load_rc_table_entry::<u16>(line_index, table_block_start) == 0,
-            32 => Self::load_rc_table_entry::<u32>(line_index, table_block_start) == 0,
-            64 => Self::load_rc_table_entry::<u64>(line_index, table_block_start) == 0,
-            128 => Self::load_rc_table_entry::<u128>(line_index, table_block_start) == 0,
-            _ => {
-                unreachable!();
-                // debug_assert!(BITS_PER_LINE > 128);
-                // type UInt = u128;
-                // const LOG_BITS_IN_UINT: usize =
-                //     (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
-                // debug_assert!(
-                //     Self::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
-                //         + crate::util::rc::LOG_REF_COUNT_BITS
-                //         >= LOG_BITS_IN_UINT
-                // );
-                // let start =
-                //     address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()).as_usize();
-                // #[allow(arithmetic_overflow)]
-                // let entries: usize = 1usize << (LOG_BITS_PER_LINE - LOG_BITS_IN_UINT);
-                // let limit = start + entries;
-                // let mut cursor = start;
-                // while cursor != limit {
-                //     if unsafe { *(cursor as *const UInt) } != 0 {
-                //         return false;
-                //     }
-                //     cursor = cursor + std::mem::size_of::<UInt>();
-                // }
-                // true
-            }
-        }
-    }
-
     /// Mark all lines the object is spanned to.
     #[inline]
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
@@ -173,19 +125,19 @@ impl Line {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
+        const LOG_META_BITS_PER_LINE: usize = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize;
+        debug_assert!((1 << LOG_META_BITS_PER_LINE) >= 8);
+        const LOG_META_BYTES_PER_LINE: usize = LOG_META_BITS_PER_LINE - LOG_BITS_IN_BYTE as usize;
         // FIXME: Performance
         let start = lines.start.start();
-        let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
-        for i in (0..size).step_by(8) {
-            let a = start + i;
-            store_metadata::<VM>(
-                &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-                unsafe { a.to_object_reference() },
-                LOGGED_VALUE,
-                None,
-                Some(Ordering::SeqCst),
-            );
-        }
+        let meta_start = address_to_meta_address(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+            start,
+        );
+        let meta_bytes =
+            Line::steps_between(&lines.start, &lines.end).unwrap() << LOG_META_BYTES_PER_LINE;
+        // unsafe { std::ptr::write_bytes::<u8>(meta_start.to_mut_ptr(), 0, meta_bytes) }
+        crate::util::memory::zero(meta_start, meta_bytes)
     }
 
     #[inline(always)]

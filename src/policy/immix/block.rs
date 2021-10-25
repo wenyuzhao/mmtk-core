@@ -491,7 +491,7 @@ impl Block {
 
     #[inline(always)]
     pub const fn rc_table_start(&self) -> Address {
-        unsafe { address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()) }
+        address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 }
 
