@@ -144,6 +144,10 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
     fn adjust_for_metadata(&self, pages: usize) -> usize {
         pages
     }
+
+    fn flpr(&self) -> Option<&FreeListPageResource<VM>> {
+        Some(self)
+    }
 }
 
 impl<VM: VMBinding> FreeListPageResource<VM> {
@@ -254,6 +258,114 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         space_descriptor: SpaceDescriptor,
         pages: usize,
         sync: &mut MutexGuard<FreeListPageResourceSync>,
+    ) -> i32 {
+        debug_assert!(
+            self.meta_data_pages_per_region == 0
+                || pages <= PAGES_IN_CHUNK - self.meta_data_pages_per_region
+        );
+        let mut rtn = generic_freelist::FAILURE;
+        let required_chunks = crate::policy::space::required_chunks(pages);
+        let region = self
+            .common
+            .grow_discontiguous_space(space_descriptor, required_chunks);
+
+        if !region.is_zero() {
+            let region_start = conversions::bytes_to_pages(region - self.start);
+            let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
+            self.free_list.set_uncoalescable(region_start as _);
+            self.free_list.set_uncoalescable(region_end as i32 + 1);
+            for p in (region_start..region_end).step_by(PAGES_IN_CHUNK) {
+                let liberated;
+                if p != region_start {
+                    self.free_list.clear_uncoalescable(p as _);
+                }
+                liberated = self.free_list.free(p as _, true); // add chunk to our free list
+                debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
+                if self.meta_data_pages_per_region > 1 {
+                    let meta_data_pages_per_region = self.meta_data_pages_per_region;
+                    self.free_list
+                        .alloc_from_unit(meta_data_pages_per_region as _, p as _);
+                    // carve out space for metadata
+                }
+                {
+                    sync.pages_currently_on_freelist +=
+                        PAGES_IN_CHUNK - self.meta_data_pages_per_region;
+                }
+            }
+            rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
+        }
+        rtn
+    }
+
+    /// The caller needs to ensure this is called by only one thread.
+    pub unsafe fn alloc_pages_no_lock(
+        &self,
+        space_descriptor: SpaceDescriptor,
+        reserved_pages: usize,
+        required_pages: usize,
+        tls: VMThread,
+    ) -> Result<PRAllocResult, PRAllocFail> {
+        debug_assert!(
+            self.meta_data_pages_per_region == 0
+                || required_pages <= PAGES_IN_CHUNK - self.meta_data_pages_per_region
+        );
+        // FIXME: We need a safe implementation
+        #[allow(clippy::cast_ref_to_mut)]
+        let self_mut: &mut Self = &mut *(self as *const _ as *mut _);
+        let mut sync = (&mut *(self as *const _ as *mut Self))
+            .sync
+            .get_mut()
+            .unwrap();
+        let mut new_chunk = false;
+        let mut page_offset = self_mut.free_list.alloc(required_pages as _);
+        if page_offset == generic_freelist::FAILURE && self.common.growable {
+            page_offset = self_mut.allocate_contiguous_chunks_no_lock(
+                space_descriptor,
+                required_pages,
+                &mut sync,
+            );
+            new_chunk = true;
+        }
+
+        if page_offset == generic_freelist::FAILURE {
+            return Result::Err(PRAllocFail);
+        } else {
+            sync.pages_currently_on_freelist -= required_pages;
+            if page_offset > sync.highwater_mark {
+                if sync.highwater_mark == UNINITIALIZED_WATER_MARK
+                    || (page_offset ^ sync.highwater_mark) > PAGES_IN_REGION as i32
+                {
+                    let regions = 1 + ((page_offset - sync.highwater_mark) >> LOG_PAGES_IN_REGION);
+                    let metapages = regions as usize * self.meta_data_pages_per_region;
+                    self.common.accounting.reserve_and_commit(metapages);
+                    new_chunk = true;
+                }
+                sync.highwater_mark = page_offset;
+            }
+        }
+
+        let rtn = self.start + conversions::pages_to_bytes(page_offset as _);
+        // The meta-data portion of reserved Pages was committed above.
+        self.commit_pages(reserved_pages, required_pages, tls);
+        if self.protect_memory_on_release && !new_chunk {
+            use crate::util::heap::layout::Mmapper;
+            use crate::MMAPPER;
+            while !MMAPPER.is_mapped_address(rtn) {}
+            self.munprotect(rtn, self.free_list.size(page_offset as _) as _)
+        };
+        Result::Ok(PRAllocResult {
+            start: rtn,
+            pages: required_pages,
+            new_chunk,
+        })
+    }
+
+    /// The caller needs to ensure this is called by only one thread.
+    unsafe fn allocate_contiguous_chunks_no_lock(
+        &mut self,
+        space_descriptor: SpaceDescriptor,
+        pages: usize,
+        sync: &mut FreeListPageResourceSync,
     ) -> i32 {
         debug_assert!(
             self.meta_data_pages_per_region == 0

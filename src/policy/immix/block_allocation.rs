@@ -173,11 +173,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             return None;
         }
         // Alloc first block
-        let result = Block::from(self.space().bulk_acquire_uninterruptible(
-            tls,
-            Block::PAGES,
-            true,
-        )?);
+        let result = Block::from(unsafe {
+            self.space()
+                .bulk_acquire_uninterruptible(tls, Block::PAGES, true)?
+        });
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
         self.buffer[i].store(result, Ordering::Relaxed);
         self.high_water.store(
@@ -191,10 +190,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             self.high_water.store(i + 1, Ordering::SeqCst);
         };
         for _ in 1..self.refill_count {
-            if let Some(a) = self
-                .space()
-                .bulk_acquire_uninterruptible(tls, Block::PAGES, false)
-            {
+            if let Some(a) = unsafe {
+                self.space()
+                    .bulk_acquire_uninterruptible(tls, Block::PAGES, false)
+            } {
                 push_new_block(Block::from(a));
             } else {
                 break;

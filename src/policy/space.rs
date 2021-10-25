@@ -343,26 +343,28 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    fn bulk_acquire_uninterruptible(
+    /// The caller needs to ensure this is called by only one thread.
+    unsafe fn bulk_acquire_uninterruptible(
         &self,
         tls: VMThread,
         pages: usize,
         poll_on_failure: bool,
     ) -> Option<Address> {
-        let pr = self.get_page_resource();
+        let pr = self.get_page_resource().flpr().unwrap();
         let pages_reserved = pr.reserve_pages(pages);
         let should_poll = VM::VMActivePlan::is_mutator(tls);
         let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();
-        match pr.get_new_pages(self.common().descriptor, pages_reserved, pages, tls) {
+        match pr.alloc_pages_no_lock(self.common().descriptor, pages_reserved, pages, tls) {
             Ok(res) => {
                 // The following code was guarded by a page resource lock in Java MMTk.
                 // I think they are thread safe and we do not need a lock. So they
                 // are no longer guarded by a lock. If we see any issue here, considering
                 // adding a space lock here.
-                let bytes = conversions::pages_to_bytes(res.pages);
+                let bytes = crate::util::conversions::pages_to_bytes(res.pages);
                 self.grow_space(res.start, bytes, res.new_chunk);
                 // Mmap the pages and the side metadata, and handle error. In case of any error,
                 // we will either call back to the VM for OOM, or simply panic.
+                use crate::util::heap::layout::mmapper::Mmapper;
                 if let Err(mmap_error) = self
                     .common()
                     .mmapper
@@ -373,7 +375,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                             .try_map_metadata_space(res.start, bytes),
                     )
                 {
-                    memory::handle_mmap_error::<VM>(mmap_error, tls);
+                    crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
                 }
                 debug!("Space.acquire(), returned = {}", res.start);
                 Some(res.start)
