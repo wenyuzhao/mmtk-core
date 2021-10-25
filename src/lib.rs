@@ -25,6 +25,8 @@
 #![feature(const_mut_refs)]
 #![feature(option_result_unwrap_unchecked)]
 #![feature(hash_drain_filter)]
+#![feature(const_for)]
+#![feature(const_ptr_offset)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 

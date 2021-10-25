@@ -4,6 +4,7 @@ use super::block::Block;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
+use crate::util::rc;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,
@@ -67,20 +68,20 @@ impl Line {
 
     /// Get line start address
     #[inline(always)]
-    pub fn start(&self) -> Address {
+    pub const fn start(&self) -> Address {
         debug_assert!(!super::BLOCK_ONLY);
         self.0
     }
 
     #[inline(always)]
-    pub fn end(&self) -> Address {
+    pub const fn end(&self) -> Address {
         debug_assert!(!super::BLOCK_ONLY);
-        self.0 + Self::BYTES
+        unsafe { Address::from_usize(self.0.as_usize() + Self::BYTES) }
     }
 
     /// Get line index within its containing block.
     #[inline(always)]
-    pub fn get_index_within_block(&self) -> usize {
+    pub const fn get_index_within_block(&self) -> usize {
         let addr = self.start();
         addr.get_extent(Block::align(addr)) >> Line::LOG_BYTES
     }
@@ -102,37 +103,51 @@ impl Line {
     }
 
     #[inline(always)]
-    pub fn rc_dead<VM: VMBinding>(&self, lock: bool) -> bool {
+    const fn load_rc_table_entry<T: Copy>(line_index: usize, table_block_start: Address) -> T {
+        let ptr = table_block_start + (line_index * std::mem::size_of::<T>());
+        unsafe { ptr.load() }
+    }
+
+    #[inline(always)]
+    #[allow(unreachable_code)]
+    pub const fn rc_dead(line_index: usize, table_block_start: Address) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
-        type UInt = u32;
-        const LOG_BITS_IN_UINT: usize =
-            (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
-        debug_assert!(
-            Self::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
-                + crate::util::rc::LOG_REF_COUNT_BITS
-                >= LOG_BITS_IN_UINT
-        );
-        if lock {
-            self.start().lock::<VM>();
-        }
-        let start =
-            address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()).to_ptr::<UInt>();
-        let limit =
-            address_to_meta_address(&crate::util::rc::RC_TABLE, self.end()).to_ptr::<UInt>();
-        let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
-        for x in table {
-            if *x != 0 {
-                if lock {
-                    self.start().unlock::<VM>();
-                }
-                return false;
+        const LOG_BITS_PER_LINE: usize =
+            Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
+        const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
+        match BITS_PER_LINE {
+            8 => Self::load_rc_table_entry::<u8>(line_index, table_block_start) == 0,
+            16 => Self::load_rc_table_entry::<u16>(line_index, table_block_start) == 0,
+            32 => Self::load_rc_table_entry::<u32>(line_index, table_block_start) == 0,
+            64 => Self::load_rc_table_entry::<u64>(line_index, table_block_start) == 0,
+            128 => Self::load_rc_table_entry::<u128>(line_index, table_block_start) == 0,
+            _ => {
+                unreachable!();
+                // debug_assert!(BITS_PER_LINE > 128);
+                // type UInt = u128;
+                // const LOG_BITS_IN_UINT: usize =
+                //     (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
+                // debug_assert!(
+                //     Self::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
+                //         + crate::util::rc::LOG_REF_COUNT_BITS
+                //         >= LOG_BITS_IN_UINT
+                // );
+                // let start =
+                //     address_to_meta_address(&crate::util::rc::RC_TABLE, self.start()).as_usize();
+                // #[allow(arithmetic_overflow)]
+                // let entries: usize = 1usize << (LOG_BITS_PER_LINE - LOG_BITS_IN_UINT);
+                // let limit = start + entries;
+                // let mut cursor = start;
+                // while cursor != limit {
+                //     if unsafe { *(cursor as *const UInt) } != 0 {
+                //         return false;
+                //     }
+                //     cursor = cursor + std::mem::size_of::<UInt>();
+                // }
+                // true
             }
         }
-        if lock {
-            self.start().unlock::<VM>();
-        }
-        true
     }
 
     /// Mark all lines the object is spanned to.
@@ -231,5 +246,77 @@ impl Step for Line {
             return None;
         }
         Some(Self::backward(start, count))
+    }
+}
+
+// type UInt<const BITS: usize> =
+
+pub trait UintType: 'static + Sized {
+    type Type: 'static + Sized + Copy + Eq + PartialEq;
+    fn is_zero(v: Self::Type) -> bool;
+}
+
+pub struct Uint<const BITS: usize> {}
+
+impl const UintType for Uint<8> {
+    type Type = u8;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == 0
+    }
+}
+
+impl const UintType for Uint<16> {
+    type Type = u16;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == 0
+    }
+}
+
+impl const UintType for Uint<32> {
+    type Type = u32;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == 0
+    }
+}
+
+impl const UintType for Uint<64> {
+    type Type = u64;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == 0
+    }
+}
+
+impl const UintType for Uint<128> {
+    type Type = u128;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == 0
+    }
+}
+
+const LOG_BITS_PER_LINE: usize = Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
+const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
+const LOG_BITS_PER_BLOCK: usize =
+    Block::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
+const BITS_PER_BLOCK: usize = 1 << LOG_BITS_PER_BLOCK;
+
+pub struct RCArray {
+    table: &'static [<Uint<{ BITS_PER_LINE }> as UintType>::Type; BITS_PER_BLOCK / BITS_PER_LINE],
+}
+
+impl RCArray {
+    pub const fn of(block: Block) -> Self {
+        Self {
+            table: unsafe { &*block.rc_table_start().to_ptr() },
+        }
+    }
+
+    #[inline(always)]
+    pub const fn is_dead(&self, i: usize) -> bool {
+        <Uint<{ BITS_PER_LINE }> as UintType>::is_zero(self.table[i])
     }
 }

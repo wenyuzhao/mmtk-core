@@ -34,7 +34,7 @@ pub type ByteOffset = isize;
 pub struct Address(usize);
 
 /// Address + ByteSize (positive)
-impl Add<ByteSize> for Address {
+impl const Add<ByteSize> for Address {
     type Output = Address;
     fn add(self, offset: ByteSize) -> Address {
         Address(self.0 + offset)
@@ -236,7 +236,7 @@ impl Address {
     /// # Safety
     /// This could throw a segment fault if the address is invalid
     #[inline(always)]
-    pub unsafe fn load<T: Copy>(self) -> T {
+    pub const unsafe fn load<T: Copy>(self) -> T {
         *(self.0 as *mut T)
     }
 
@@ -316,7 +316,7 @@ impl Address {
 
     /// converts the Address to a pointer
     #[inline(always)]
-    pub fn to_ptr<T>(self) -> *const T {
+    pub const fn to_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 

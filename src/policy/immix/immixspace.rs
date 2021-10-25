@@ -687,35 +687,35 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
         let block = search_start.block();
-        let mut cursor = search_start;
-        let limit = block.lines().end;
+        let rc_array = RCArray::of(block);
+        let mut cursor = search_start.get_index_within_block();
+        let limit = Block::LINES;
         // Find start
         while cursor < limit {
-            if cursor.rc_dead::<VM>(false) {
+            if rc_array.is_dead(cursor) {
                 break;
             }
-            cursor = Line::forward(cursor, 1);
+            cursor += 1;
         }
         // Conservatively skip the next line
-        cursor = Line::forward(cursor, 1);
+        cursor += 1;
         if cursor >= limit {
             return None;
         }
         let start = cursor;
         // Find limit
         while cursor < limit {
-            if !cursor.rc_dead::<VM>(false) {
+            if !rc_array.is_dead(cursor) {
                 break;
             }
-            // if crate::plan::immix::CONCURRENT_MARKING {
-            //     mark_data.set(cursor, current_state);
-            // }
-            cursor = Line::forward(cursor, 1);
+            cursor += 1;
         }
         if cursor == start {
             return None;
         }
         let end = cursor;
+        let start = Line::from(block.start() + (start << Line::LOG_BYTES));
+        let end = Line::from(block.start() + (end << Line::LOG_BYTES));
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
         }

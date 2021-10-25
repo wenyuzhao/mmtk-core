@@ -13,7 +13,7 @@ use std::io::Result;
 
 /// Performs address translation in contiguous metadata spaces (e.g. global and policy-specific in 64-bits, and global in 32-bits)
 #[inline(always)]
-pub(crate) fn address_to_contiguous_meta_address(
+pub(crate) const fn address_to_contiguous_meta_address(
     metadata_spec: &SideMetadataSpec,
     data_addr: Address,
 ) -> Address {
@@ -22,10 +22,14 @@ pub(crate) fn address_to_contiguous_meta_address(
 
     let rshift = (LOG_BITS_IN_BYTE as i32) - log_bits_num;
 
-    if rshift >= 0 {
-        metadata_spec.get_absolute_offset() + ((data_addr >> log_bytes_in_region) >> rshift)
-    } else {
-        metadata_spec.get_absolute_offset() + ((data_addr >> log_bytes_in_region) << (-rshift))
+    unsafe {
+        Address::from_usize(if rshift >= 0 {
+            metadata_spec.get_absolute_offset().as_usize()
+                + ((data_addr.as_usize() >> log_bytes_in_region) >> rshift)
+        } else {
+            metadata_spec.get_absolute_offset().as_usize()
+                + ((data_addr.as_usize() >> log_bytes_in_region) << (-rshift))
+        })
     }
 }
 
@@ -88,7 +92,7 @@ pub(crate) fn try_mmap_contiguous_metadata_space(
 
 /// Performs the translation of data address (`data_addr`) to metadata address for the specified metadata (`metadata_spec`).
 #[inline(always)]
-pub(crate) fn address_to_meta_address(
+pub(crate) const fn address_to_meta_address(
     metadata_spec: &SideMetadataSpec,
     data_addr: Address,
 ) -> Address {
@@ -102,13 +106,6 @@ pub(crate) fn address_to_meta_address(
     };
     #[cfg(target_pointer_width = "64")]
     let res = { address_to_contiguous_meta_address(metadata_spec, data_addr) };
-
-    trace!(
-        "address_to_meta_address({:?}, addr: {}) -> 0x{:x}",
-        metadata_spec,
-        data_addr,
-        res
-    );
 
     res
 }
