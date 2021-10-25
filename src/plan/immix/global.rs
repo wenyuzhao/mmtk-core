@@ -107,7 +107,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if crate::flags::REF_COUNT
             && crate::flags::LOCK_FREE_BLOCK_ALLOCATION
             && self.immix_space.block_allocation.nursery_blocks()
-                >= crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
+                >= *crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
         {
             if crate::flags::LOG_PER_GC_STATE {
                 println!("! rc collection_required");

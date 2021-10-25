@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> = Lazy::new(|| {
     if crate::flags::REF_COUNT {
-        (crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC + *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
+        (*crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC + *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
             << 1
     } else {
         *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE << 1

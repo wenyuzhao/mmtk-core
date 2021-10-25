@@ -132,10 +132,10 @@ pub mod flags {
 
     // ---------- Immix flags ---------- //
     pub const CONCURRENT_MARKING: bool = false;
-    pub const REF_COUNT: bool = true;
+    pub const REF_COUNT: bool = false;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = false;
+    pub const BLOCK_ONLY: bool = true;
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
@@ -145,7 +145,6 @@ pub mod flags {
     pub const EAGER_INCREMENTS: bool = false;
     pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
-    pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 1024;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 2) as _;
@@ -156,6 +155,11 @@ pub mod flags {
         env::var("LOCK_FREE_BLOCKS")
             .map(|x| x.parse().unwrap())
             .unwrap_or(32)
+    });
+    pub static NURSERY_BLOCKS_THRESHOLD_FOR_RC: Lazy<usize> = Lazy::new(|| {
+        env::var("NURSERY_BLOCKS")
+            .map(|x| x.parse().unwrap())
+            .unwrap_or(128 * num_cpus::get())
     });
 
     // ---------- Barrier flags ---------- //
