@@ -204,6 +204,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         unsafe { &*self.immix }
     }
 
+    #[inline]
     pub fn new(incs: Vec<Address>, roots: bool) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
         Self {
@@ -459,6 +460,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         unsafe { &mut *self.worker }
     }
 
+    #[inline]
     pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
         debug_assert!(crate::flags::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);

@@ -127,8 +127,11 @@ static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
 
 /// Immix or barrier related flags
 pub mod flags {
+    use spin::Lazy;
+    use std::env;
+
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = true;
+    pub const CONCURRENT_MARKING: bool = false;
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
@@ -140,14 +143,20 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = true;
+    pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NURSERY_BLOCKS_THRESHOLD_FOR_RC: usize = 4000;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_EVACUATE_NURSERY: bool = true;
-    pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = super::constants::LOG_BYTES_IN_PAGE as _;
-    pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;
+    pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 2) as _;
+    pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = false;
     pub const RC_MATURE_EVACUATION: bool = false;
+    pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool = false;
+    pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
+        env::var("LOCK_FREE_BLOCKS")
+            .map(|x| x.parse().unwrap())
+            .unwrap_or(32)
+    });
 
     // ---------- Barrier flags ---------- //
     pub const BARRIER_MEASUREMENT: bool = false;

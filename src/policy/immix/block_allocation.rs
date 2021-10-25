@@ -1,5 +1,6 @@
 use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
+    flags::LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE,
     policy::space::Space,
     scheduler::{GCWork, GCWorker},
     util::{rc::RC_LOCK_BITS, VMMutatorThread, VMThread},
@@ -21,7 +22,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         Self {
             space: None,
             clean_block_buffer: Default::default(),
-            refill_count: 64, // num_cpus::get(),
+            refill_count: *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE, // num_cpus::get(),
         }
     }
 

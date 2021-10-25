@@ -18,8 +18,6 @@ use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::MMTK;
 
-use super::transitive_closure::EdgeIterator;
-
 pub const BARRIER_MEASUREMENT: bool = crate::flags::BARRIER_MEASUREMENT;
 pub const TAKERATE_MEASUREMENT: bool = crate::flags::TAKERATE_MEASUREMENT;
 pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -257,7 +255,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 LOCKED_VALUE,
                 None,
                 Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::Relaxed,
             ) {
                 let logging_value = self.get_edge_logging_state(edge);
                 if logging_value == LOGGED_VALUE {
@@ -370,7 +368,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 let mut incs = vec![];
                 std::mem::swap(&mut incs, &mut self.incs);
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                    .add(UnlogEdges::new(incs, self.meta));
+                    .add_no_notify(UnlogEdges::new(incs, self.meta));
             }
             return;
         }
@@ -390,7 +388,8 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.incs);
             let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<E::VM>::new(incs, false));
+            self.mmtk.scheduler.work_buckets[bucket]
+                .add_no_notify(ProcessIncs::<E::VM>::new(incs, false));
         }
         // Flush dec buffer
         if !self.decs.is_empty() {
@@ -400,7 +399,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add_no_notify(w);
             }
         }
         // Flush dec buffer
@@ -436,18 +435,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                     self.enqueue_node(dst, dst_base + (i << 3), None);
                 }
             }
-            WriteTarget::Clone { dst, .. } => {
-                // How to deal with this?
-                // println!("Clone {:?} -> {:?}", src, dst);
-                EdgeIterator::<E::VM>::iterate(dst, |edge| {
-                    debug_assert!(
-                        unsafe { edge.load::<ObjectReference>() }.is_null(),
-                        "{:?}",
-                        unsafe { edge.load::<ObjectReference>() }
-                    );
-                    self.enqueue_node(dst, edge, None);
-                })
-            }
+            WriteTarget::Clone { .. } => {}
         }
     }
 }
