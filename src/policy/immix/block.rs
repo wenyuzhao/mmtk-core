@@ -108,6 +108,12 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
+    pub const ZERO: Self = Self(Address::ZERO);
+
+    pub const fn is_zero(&self) -> bool {
+        self.0.is_zero()
+    }
+
     /// Align the address to a block boundary.
     pub const fn align(address: Address) -> Address {
         address.align_down(Self::BYTES)

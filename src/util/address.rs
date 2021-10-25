@@ -280,7 +280,7 @@ impl Address {
 
     /// is this address zero?
     #[inline(always)]
-    pub fn is_zero(self) -> bool {
+    pub const fn is_zero(self) -> bool {
         self.0 == 0
     }
 
