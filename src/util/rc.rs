@@ -32,7 +32,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-pub const LOG_REF_COUNT_BITS: usize = 2;
+pub const LOG_REF_COUNT_BITS: usize = 1;
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
 pub const REF_COUNT_MASK: usize = (1 << REF_COUNT_BITS) - 1;
 const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;

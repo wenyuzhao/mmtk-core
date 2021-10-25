@@ -105,7 +105,7 @@ impl Line {
     pub fn rc_dead<VM: VMBinding>(&self, lock: bool) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
-        type UInt = u64;
+        type UInt = u32;
         const LOG_BITS_IN_UINT: usize =
             (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
         debug_assert!(
