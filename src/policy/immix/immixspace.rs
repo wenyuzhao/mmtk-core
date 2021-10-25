@@ -59,6 +59,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub possibly_dead_mature_blocks: Mutex<HashSet<Block>>,
     initial_mark_pause: bool,
     pub pending_release: SegQueue<Block>,
+    pub last_mutator_recycled_blocks: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     num_defrag_blocks: AtomicUsize,
@@ -202,6 +203,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
             pending_release: Default::default(),
+            last_mutator_recycled_blocks: Default::default(),
             mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
             num_defrag_blocks: AtomicUsize::new(0),
@@ -277,9 +279,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Mutator reused blocks cannot be released until reaching a RC pause.
         // Remaing the block state as "reusing" and reset them here.
-        while let Some(x) = self.mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Nursery);
-        }
+        debug_assert!(self.last_mutator_recycled_blocks.is_empty());
+        std::mem::swap(
+            &mut self.last_mutator_recycled_blocks,
+            &mut self.mutator_recycled_blocks,
+        );
         // Reclaim nursery blocks
         let num_workers = self.scheduler().worker_group().worker_count();
         let (work_packets, nursery_blocks) = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
@@ -715,7 +719,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
         }
-        // if !copy {
+        // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, _copy);
         // }
         Some(start..end)

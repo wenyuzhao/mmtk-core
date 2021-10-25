@@ -1,5 +1,6 @@
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
+use crate::policy::immix::block::BlockState;
 use crate::policy::largeobjectspace::RCReleaseMatureLOS;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
@@ -366,15 +367,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         &mut self,
         e: Address,
         immix: &Immix<VM>,
-        no_evacuation: bool,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::flags::EAGER_INCREMENTS);
         let o = unsafe { e.load() };
         let in_immix_space = immix.immix_space.in_space(o);
-        // no_evacuation |=
-        //     in_immix_space && Block::containing::<VM>(o).get_state() == BlockState::Reusing;
         // Delay the increment if this object points to a young object
-        if !no_evacuation && Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY {
+        if Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY {
             if in_immix_space && self::count(o) == 0 {
                 self.add_remset(e);
                 return None;
@@ -403,10 +401,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
-        let should_skip_evacuation = false; //immix.current_pause() == Some(Pause::InitialMark);// || immix.current_pause() == Some(Pause::FinalMark);
         for e in incs {
             // println!(" - inc e {:?}", e);
-            let o = match self.load_mature_object_and_unlog_edge(e, immix, should_skip_evacuation) {
+            let o = match self.load_mature_object_and_unlog_edge(e, immix) {
                 Some(o) => o,
                 _ => continue,
             };
@@ -574,6 +571,9 @@ pub struct SweepBlocksAfterDecs {
 
 impl SweepBlocksAfterDecs {
     pub fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, immix_space: &ImmixSpace<VM>) {
+        while let Some(x) = immix_space.last_mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Nursery);
+        }
         // This may happen either within a pause, or in concurrent.
         let mut blocks_set = immix_space.possibly_dead_mature_blocks.lock();
         let size = blocks_set.len();
@@ -747,9 +747,18 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
         if o.is_null() {
             return o;
         }
-        if self::count(o) != 0 || self.immix().los().in_space(o) {
+        if self::count(o) != 0
+            || self.immix().los().in_space(o)
+            || (crate::flags::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+                && self.immix().immix_space.in_space(o)
+                && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
+        {
             if let Ok(0) = self::inc(o) {
-                self.promote::<false>(o)
+                if self.immix().immix_space.in_space(o) {
+                    self.promote::<true>(o)
+                } else {
+                    self.promote::<false>(o)
+                }
             }
             return o;
         }
