@@ -32,3 +32,4 @@ Cargo.lock
 /src/plan/mygc
 
 /*.log
+/_*
