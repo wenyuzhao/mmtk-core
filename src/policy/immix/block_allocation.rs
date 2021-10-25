@@ -62,8 +62,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 .pr
                 .release_pages(self.buffer[i].load(Ordering::SeqCst).start())
         }
-        self.cursor.store(0, Ordering::SeqCst);
         self.high_water.store(0, Ordering::SeqCst);
+        self.cursor.store(0, Ordering::SeqCst);
     }
 
     /// Drain allocated_block_buffer and free everything in clean_block_buffer.
@@ -94,8 +94,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 .pr
                 .release_pages(self.buffer[i].load(Ordering::SeqCst).start())
         }
-        self.cursor.store(0, Ordering::SeqCst);
         self.high_water.store(0, Ordering::SeqCst);
+        self.cursor.store(0, Ordering::SeqCst);
         let space = self.space();
         let packets = bins
             .into_iter()
@@ -138,10 +138,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     #[inline(always)]
     fn alloc_clean_block_fast(&self) -> Option<Block> {
-        let high_water = self.high_water.load(Ordering::SeqCst);
         let i = self
             .cursor
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |i| {
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |i| {
+                let high_water = self.high_water.load(Ordering::SeqCst);
                 if i >= high_water {
                     None
                 } else {
@@ -152,14 +152,18 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         Some(self.buffer[i].load(Ordering::SeqCst))
     }
 
-    #[inline]
-    fn alloc_clean_block_slow_rc(&mut self, tls: VMThread) -> Option<Block> {
+    #[cold]
+    fn alloc_clean_block_slow(&mut self, tls: VMThread) -> Option<Block> {
         let _guard = self.refill_lock.lock();
         // Retry allocation
         if let Some(block) = self.alloc_clean_block_fast() {
             return Some(block);
         }
         // Fill buffer with N blocks
+        if !crate::flags::REF_COUNT {
+            self.high_water.store(0, Ordering::SeqCst);
+            self.cursor.store(0, Ordering::SeqCst);
+        }
         // Check for GC
         if self
             .space()
@@ -197,43 +201,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         }
         Some(result)
-    }
-
-    #[inline]
-    fn alloc_clean_block_slow_ix(&mut self, tls: VMThread) -> Option<Block> {
-        unreachable!()
-        // let _guard = self.refill_lock.lock();
-        // // Retry allocation
-        // if let Some(block) = self.alloc_clean_block_fast() {
-        //     return Some(block);
-        // }
-        // // Fill buffer with N blocks
-        // let r = Block::from(self.space().acquire_no_poll(tls, Block::PAGES)?);
-        // self.high_water.store(0, Ordering::SeqCst);
-        // self.high_water.store(0, Ordering::SeqCst);
-
-        // let i = self.cursor.fetch_add(1, Ordering::SeqCst);
-        // self.buffer[i].store(r, Ordering::Relaxed);
-        // self.high_water.store(1, Ordering::SeqCst);
-        // let push_new_block = |block: Block| {
-        //     let i = self.high_water.load(Ordering::Relaxed);
-        //     self.buffer[i].store(block, Ordering::Relaxed);
-        //     self.high_water.store(i + 1, Ordering::SeqCst);
-        // };
-        // for _ in 0..self.refill_count {
-        //     let a = self.space().acquire_no_poll(tls, Block::PAGES)?;
-        //     push_new_block(Block::from(a));
-        // }
-        // Some(r)
-    }
-
-    #[cold]
-    fn alloc_clean_block_slow(&mut self, tls: VMThread) -> Option<Block> {
-        if crate::flags::REF_COUNT {
-            self.alloc_clean_block_slow_rc(tls)
-        } else {
-            self.alloc_clean_block_slow_ix(tls)
-        }
     }
 
     /// Allocate a clean block.
