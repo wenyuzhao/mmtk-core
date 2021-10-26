@@ -98,7 +98,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             if crate::flags::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
                 self.test_and_mark(object, self.mark_state);
             }
-            println!("alloc los {:?}", object);
             return;
         }
         let old_value = load_metadata::<VM>(
