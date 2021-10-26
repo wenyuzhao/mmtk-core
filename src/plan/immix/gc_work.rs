@@ -17,6 +17,7 @@ use crate::{
 };
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use thread_priority::{self, ThreadPriority};
 
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
@@ -33,10 +34,16 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         self.immix.tls = tls.0;
     }
     fn prepare(&mut self) {
+        if *crate::flags::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
+            let _ = thread_priority::set_current_thread_priority(ThreadPriority::Max);
+        }
         self.immix.reset()
     }
     fn release(&mut self) {
-        self.immix.reset()
+        self.immix.reset();
+        if *crate::flags::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
+            let _ = thread_priority::set_current_thread_priority(ThreadPriority::Min);
+        }
     }
     #[inline(always)]
     fn alloc_copy(

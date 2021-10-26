@@ -133,7 +133,7 @@ pub mod flags {
     use std::env;
 
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = false;
+    pub const CONCURRENT_MARKING: bool = true;
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
@@ -145,7 +145,7 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
+    pub const LAZY_DECREMENTS: bool = true;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_EVACUATE_NURSERY: bool = true;
@@ -162,6 +162,13 @@ pub mod flags {
         env::var("NURSERY_BLOCKS")
             .map(|x| x.parse().unwrap())
             .unwrap_or(128 * num_cpus::get())
+    });
+    pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> =
+        Lazy::new(|| env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").is_ok());
+    pub static CONCURRENT_GC_THREADS_RATIO: Lazy<f32> = Lazy::new(|| {
+        env::var("CONCURRENT_GC_THREADS_RATIO")
+            .map(|x| x.parse().unwrap())
+            .unwrap_or(1f32)
     });
 
     // ---------- Barrier flags ---------- //
