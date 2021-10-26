@@ -45,6 +45,8 @@ rand = "0.7.3"
 default = ["perf_counter"]
 # default = []
 
+ix_delayed_nursery_evacuation = []
+
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
 perf_counter = ["pfm"]

@@ -1,6 +1,8 @@
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
+use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::policy::largeobjectspace::RCReleaseMatureLOS;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
@@ -172,6 +174,16 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
     }
 }
 
+#[inline(always)]
+fn promote<VM: VMBinding>(o: ObjectReference) {
+    o.log_start_address::<VM>();
+    if !crate::flags::BLOCK_ONLY {
+        if o.get_size::<VM>() > Line::BYTES {
+            self::mark_straddle_object::<VM>(o);
+        }
+    }
+}
+
 pub struct ProcessIncs<VM: VMBinding> {
     /// Increments to process
     incs: Vec<Address>,
@@ -180,6 +192,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     /// Delayed nursery increments
     remset: Vec<Address>,
     mature_evac_remset: Vec<ObjectReference>,
+    scan_objects: Vec<ObjectReference>,
     /// Root edges?
     roots: bool,
     /// Execution worker
@@ -193,7 +206,7 @@ unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
 
 impl<VM: VMBinding> ProcessIncs<VM> {
     const CAPACITY: usize = 1024;
-    pub const DELAYED_EVACUATION: bool = true;
+    pub const DELAYED_EVACUATION: bool = cfg!(feature = "ix_delayed_nursery_evacuation");
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -201,7 +214,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    const fn immix(&self) -> &Immix<VM> {
+    const fn immix(&self) -> &'static Immix<VM> {
         unsafe { &*self.immix }
     }
 
@@ -215,6 +228,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             remset: vec![],
             worker: std::ptr::null_mut(),
             mature_evac_remset: vec![],
+            scan_objects: vec![],
             immix: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
@@ -222,13 +236,22 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn promote(o: ObjectReference) {
-        o.log_start_address::<VM>();
-        if !crate::flags::BLOCK_ONLY {
-            if o.get_size::<VM>() > Line::BYTES {
-                self::mark_straddle_object::<VM>(o);
+    fn promote(&mut self, o: ObjectReference, copy: bool) {
+        if self.immix().immix_space.in_space(o) {
+            self::promote::<VM>(o);
+        }
+        // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
+        if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
+            self.immix().mark(o);
+        } else if self.current_pause == Pause::FullTraceFast {
+            // Create object scanning packets]
+            if copy {
+                if self.immix().mark(o) {
+                    self.scan_objects.push(o)
+                }
             }
         }
+        self.scan_nursery_object(o);
     }
 
     #[inline(always)]
@@ -257,26 +280,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn process_inc(
-        &mut self,
-        _e: Address,
-        o: ObjectReference,
-        immix: &Immix<VM>,
-    ) -> ObjectReference {
+    fn process_inc(&mut self, _e: Address, o: ObjectReference) -> ObjectReference {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
-            if immix.immix_space.in_space(o) {
-                Self::promote(o);
-            }
-            if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-                immix.mark(o);
-            }
-            self.scan_nursery_object(o);
-            // debug_assert!(
-            //     !(Self::DELAYED_EVACUATION && crate::flags::RC_EVACUATE_NURSERY)
-            //         || immix.los().in_space(o)
-            // );
+            self.promote(o, false);
         }
         o
     }
@@ -290,6 +298,25 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     ) -> ObjectReference {
         debug_assert!(crate::flags::RC_EVACUATE_NURSERY);
         debug_assert!(!Self::DELAYED_EVACUATION);
+        if self::count(o) != 0
+            || self.immix().los().in_space(o)
+            || (crate::flags::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+                && self.immix().immix_space.in_space(o)
+                && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
+        {
+            if let Ok(0) = self::inc(o) {
+                self.promote(o, false);
+            }
+            return o;
+        }
+        if object_forwarding::is_forwarded::<VM>(o) {
+            let new = object_forwarding::read_forwarding_pointer::<VM>(o);
+            unsafe {
+                e.store(new);
+            }
+            let _ = self::inc(new);
+            return new;
+        }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
@@ -312,10 +339,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 unsafe {
                     e.store(new);
                 }
-                self::set(o, 0);
                 let _ = self::inc(new);
-                Self::promote(new);
-                self.scan_nursery_object(new);
+                self.promote(new, true);
                 new
             } else {
                 let _ = self::inc(o);
@@ -336,6 +361,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 ProcessIncs::<VM>::new(new_incs, false),
             );
         }
+        #[cfg(feature = "ix_delayed_nursery_evacuation")]
         if !self.remset.is_empty() {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.remset);
@@ -358,6 +384,17 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
             }
             unreachable!();
+        }
+        if !self.scan_objects.is_empty() {
+            let mut scan_objects = vec![];
+            mem::swap(&mut scan_objects, &mut self.scan_objects);
+            let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
+                scan_objects,
+                false,
+                Some(self.immix()),
+                &self.immix().immix_space,
+            );
+            self.worker().add_work(WorkBucketStage::Closure, w);
         }
     }
 
@@ -412,7 +449,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if !crate::flags::RC_EVACUATE_NURSERY || Self::DELAYED_EVACUATION {
-                self.process_inc(e, o, immix)
+                self.process_inc(e, o)
             } else {
                 self.process_inc_and_evacuate(e, o, copy_context)
             };
@@ -614,6 +651,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     }
 }
 
+#[cfg(feature = "ix_delayed_nursery_evacuation")]
 pub struct RCEvacuateNursery<VM: VMBinding> {
     /// Edges to forward
     slots: Vec<Address>,
@@ -629,8 +667,10 @@ pub struct RCEvacuateNursery<VM: VMBinding> {
     concurrent_marking_in_progress: bool,
 }
 
+#[cfg(feature = "ix_delayed_nursery_evacuation")]
 unsafe impl<VM: VMBinding> Send for RCEvacuateNursery<VM> {}
 
+#[cfg(feature = "ix_delayed_nursery_evacuation")]
 impl<VM: VMBinding> RCEvacuateNursery<VM> {
     const CAPACITY: usize = 1024;
 
@@ -735,7 +775,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
             self.immix().mark(new);
         }
         if IMMIX_OBJECT {
-            ProcessIncs::<VM>::promote(new);
+            self::promote::<VM>(new);
         }
         self.scan_nursery_object(new);
     }
@@ -796,6 +836,7 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     }
 }
 
+#[cfg(feature = "ix_delayed_nursery_evacuation")]
 impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {

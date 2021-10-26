@@ -143,7 +143,6 @@ pub enum WorkBucketStage {
     ProcessRoots,
     Closure,
     RefClosure,
-    EvacuateMature,
     RefForwarding,
     Release,
     Final,
@@ -152,9 +151,11 @@ pub enum WorkBucketStage {
 // Alias
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
-    pub const RCProcessIncs: Self = Self::ScanGlobalRoots;
+    pub const RCProcessIncs: Self = Self::ProcessRoots;
+    #[cfg(feature = "ix_delayed_nursery_evacuation")]
     pub const RCEvacuateNursery: Self = Self::RefClosure;
-    pub const RCEvacuateMature: Self = Self::EvacuateMature;
+    #[cfg(not(feature = "ix_delayed_nursery_evacuation"))]
+    pub const RCEvacuateMature: Self = Self::RefClosure;
     pub const RCReleaseNursery: Self = Self::RefForwarding;
     pub const RCFullHeapRelease: Self = Self::RefForwarding;
     pub const RCProcessDecs: Self = Self::Release;
