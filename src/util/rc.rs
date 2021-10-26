@@ -544,9 +544,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             } else {
                 o
             };
+            let mut dead = false;
             let _ = self::fetch_update(o, |c| {
                 if c == 1 {
-                    self.process_dead_object(o, immix);
+                    if !dead {
+                        dead = true;
+                        self.process_dead_object(o, immix);
+                    }
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if c == 0 || c == MAX_REF_COUNT {

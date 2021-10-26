@@ -98,6 +98,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             if crate::flags::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
                 self.test_and_mark(object, self.mark_state);
             }
+            println!("alloc los {:?}", object);
             return;
         }
         let old_value = load_metadata::<VM>(
@@ -330,9 +331,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[inline]
     pub fn rc_free(&self, o: ObjectReference) {
         let mut mature_objects = self.rc_mature_objects.lock();
-        debug_assert!(mature_objects.contains(&o));
-        mature_objects.remove(&o);
-        self.pr.release_pages(o.to_address());
+        // Ignore nursery objects. They are released by `fn release`.
+        if mature_objects.remove(&o) {
+            self.pr.release_pages(o.to_address());
+        }
     }
 
     #[inline(always)]
