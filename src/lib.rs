@@ -133,7 +133,7 @@ pub mod flags {
     use std::env;
 
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = true;
+    pub const CONCURRENT_MARKING: bool = false;
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
@@ -145,14 +145,15 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = true;
+    pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_EVACUATE_NURSERY: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
-    pub const ALLOC_NURSERY_TO_RECYCLABLE_LINES: bool = true;
     pub const RC_MATURE_EVACUATION: bool = false;
     pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool = true;
+    pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
+        Lazy::new(|| env::var("DISABLE_MUTATOR_LINE_REUSING").is_ok());
     pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
         env::var("LOCK_FREE_BLOCKS")
             .map(|x| x.parse().unwrap())
@@ -184,8 +185,8 @@ pub mod flags {
     pub const SLOW_CONCURRENT_MARKING: bool = false;
 
     // ---------- Derived flags ---------- //
-    pub const IGNORE_REUSING_BLOCKS: bool =
-        REF_COUNT && LAZY_DECREMENTS && ALLOC_NURSERY_TO_RECYCLABLE_LINES;
+    pub static IGNORE_REUSING_BLOCKS: Lazy<bool> =
+        Lazy::new(|| REF_COUNT && LAZY_DECREMENTS && !*DISABLE_MUTATOR_LINE_REUSING);
 
     pub fn validate_features() {
         validate!(DEFRAG => !BLOCK_ONLY);

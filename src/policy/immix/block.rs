@@ -445,7 +445,7 @@ impl Block {
             return;
         }
         if self.rc_dead() {
-            if !crate::flags::IGNORE_REUSING_BLOCKS
+            if !*crate::flags::IGNORE_REUSING_BLOCKS
                 || self
                     .fetch_update_state(|s| {
                         if s == BlockState::Reusing {
@@ -461,7 +461,7 @@ impl Block {
         } else if !crate::flags::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.
-            let add_as_reusable = if !crate::flags::IGNORE_REUSING_BLOCKS {
+            let add_as_reusable = if !*crate::flags::IGNORE_REUSING_BLOCKS {
                 if !self.get_state().is_reusable() {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: 1 as _,
