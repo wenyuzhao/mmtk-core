@@ -11,6 +11,7 @@ use crate::util::heap::{FreeListPageResource, PageResource, VMRequest};
 use crate::util::metadata;
 use crate::util::metadata::compare_exchange_metadata;
 use crate::util::metadata::load_metadata;
+use crate::util::metadata::side_metadata::bzero_metadata;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
@@ -72,9 +73,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         if crate::flags::REF_COUNT {
             debug_assert!(alloc);
             // Alloc as logged
-            for i in (0..bytes).step_by(8) {
-                (object.to_address() + i).log::<VM>();
-            }
+            bzero_metadata(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                object.to_address(),
+                bytes,
+            );
             // Alloc as zero refcount
             rc::set(object, 0);
             // Add to object set
@@ -84,7 +87,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
                 object,
                 None,
-                Some(Ordering::SeqCst),
+                None,
             );
             let new_value = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
             store_metadata::<VM>(
