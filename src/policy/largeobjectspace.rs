@@ -206,9 +206,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[inline]
-    fn release_multiple_pages(&self, start: Address) {
+    fn release_object(&self, start: Address) {
         if crate::flags::BARRIER_MEASUREMENT
-            || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
+            || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
             if crate::flags::REF_COUNT {
                 rc::set(unsafe { start.to_object_reference() }, 0);
@@ -239,7 +239,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
                 if rc::count(o) == 0 {
-                    self.release_multiple_pages(o.to_address());
+                    self.release_object(o.to_address());
                 } else {
                     mature_blocks.insert(o);
                 }
@@ -299,14 +299,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- cn {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                self.release_multiple_pages(get_super_page(cell));
+                self.release_object(get_super_page(cell));
             }
         } else {
             for cell in self.treadmill.collect() {
                 // println!("- ts {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                self.release_multiple_pages(get_super_page(cell));
+                self.release_object(get_super_page(cell));
             }
         }
     }
@@ -326,7 +326,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let mut mature_objects = self.rc_mature_objects.lock();
         // Ignore nursery objects. They are released by `fn release`.
         if mature_objects.remove(&o) {
-            self.release_multiple_pages(o.to_address());
+            self.release_object(o.to_address());
         }
     }
 
@@ -462,7 +462,7 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         while let Some(o) = los.rc_dead_objects.pop() {
             mature_objects.remove(&o);
             if !los.is_marked(o) {
-                los.release_multiple_pages(o.to_address());
+                los.release_object(o.to_address());
             }
         }
     }
