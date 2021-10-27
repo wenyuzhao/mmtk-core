@@ -6,7 +6,6 @@ use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
 use crate::util::address::Address;
 use crate::util::alloc::embedded_meta_data::*;
-use crate::util::constants::*;
 use crate::util::conversions;
 use crate::util::generic_freelist;
 use crate::util::generic_freelist::GenericFreeList;
@@ -15,7 +14,9 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::memory;
+use crate::util::metadata::side_metadata::bzero_metadata;
 use crate::util::opaque_pointer::*;
+use crate::util::{constants::*, rc};
 use crate::vm::*;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -451,6 +452,40 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 }
                 debug_assert!(tmp == unit);
             }
+        }
+    }
+
+    pub fn release_pages_and_reset_unlog_bits(&self, first: Address) {
+        debug_assert!(conversions::is_page_aligned(first));
+        let page_offset = conversions::bytes_to_pages(first - self.start);
+        let pages = self.free_list.size(page_offset as _);
+        bzero_metadata(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+            first,
+            (pages as usize) << LOG_BYTES_IN_PAGE,
+        );
+
+        // if (VM.config.ZERO_PAGES_ON_RELEASE)
+        //     VM.memory.zero(false, first, Conversions.pagesToBytes(pages));
+        debug_assert!(pages as usize <= self.common.accounting.get_committed_pages());
+
+        if self.protect_memory_on_release {
+            self.mprotect(first, pages as _);
+        }
+
+        // FIXME
+        #[allow(clippy::cast_ref_to_mut)]
+        let me = unsafe { &mut *(self as *const _ as *mut Self) };
+        let freed = {
+            let mut sync = self.sync.lock().unwrap();
+            self.common.accounting.release(pages as _);
+            let freed = me.free_list.free(page_offset as _, true);
+            sync.pages_currently_on_freelist += pages as usize;
+            freed
+        };
+        if !self.common.contiguous {
+            // only discontiguous spaces use chunks
+            me.release_free_chunks(first, freed as _);
         }
     }
 

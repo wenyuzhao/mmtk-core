@@ -11,7 +11,6 @@ use crate::util::heap::{FreeListPageResource, PageResource, VMRequest};
 use crate::util::metadata;
 use crate::util::metadata::compare_exchange_metadata;
 use crate::util::metadata::load_metadata;
-use crate::util::metadata::side_metadata::bzero_metadata;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
@@ -72,14 +71,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
         if crate::flags::REF_COUNT {
             debug_assert!(alloc);
-            // Alloc as logged
-            bzero_metadata(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                object.to_address(),
-                bytes,
-            );
-            // Alloc as zero refcount
-            rc::set(object, 0);
             // Add to object set
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
@@ -126,20 +117,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         // }
 
-        if crate::flags::BARRIER_MEASUREMENT
-            || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
-        {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-        }
-        if crate::flags::BARRIER_MEASUREMENT
-            || (self.common.needs_log_bit && self.common.needs_field_log_bit)
-        {
-            for i in (0..bytes).step_by(8) {
-                let a = object.to_address() + i;
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
-            }
-        }
         // Concurrent marking: allocate as marked
         if crate::flags::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
             self.test_and_mark(object, self.mark_state);
@@ -172,7 +149,7 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     }
 
     fn release_multiple_pages(&mut self, start: Address) {
-        self.pr.release_pages(start);
+        unreachable!()
     }
 }
 
@@ -228,6 +205,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    #[inline]
+    fn release_multiple_pages(&self, start: Address) {
+        if crate::flags::BARRIER_MEASUREMENT
+            || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
+        {
+            if crate::flags::REF_COUNT {
+                rc::set(unsafe { start.to_object_reference() }, 0);
+            }
+            self.pr.release_pages_and_reset_unlog_bits(start);
+        } else {
+            self.pr.release_pages(start);
+        }
+    }
+
     pub fn prepare(&mut self, full_heap: bool) {
         self.trace_in_progress = true;
         if full_heap {
@@ -248,7 +239,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
                 if rc::count(o) == 0 {
-                    self.pr.release_pages(o.to_address());
+                    self.release_multiple_pages(o.to_address());
                 } else {
                     mature_blocks.insert(o);
                 }
@@ -308,14 +299,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- cn {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                self.pr.release_pages(get_super_page(cell));
+                self.release_multiple_pages(get_super_page(cell));
             }
         } else {
             for cell in self.treadmill.collect() {
                 // println!("- ts {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                self.pr.release_pages(get_super_page(cell));
+                self.release_multiple_pages(get_super_page(cell));
             }
         }
     }
@@ -335,7 +326,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let mut mature_objects = self.rc_mature_objects.lock();
         // Ignore nursery objects. They are released by `fn release`.
         if mature_objects.remove(&o) {
-            self.pr.release_pages(o.to_address());
+            self.release_multiple_pages(o.to_address());
         }
     }
 
@@ -471,7 +462,7 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         while let Some(o) = los.rc_dead_objects.pop() {
             mature_objects.remove(&o);
             if !los.is_marked(o) {
-                los.pr.release_pages(o.to_address());
+                los.release_multiple_pages(o.to_address());
             }
         }
     }
