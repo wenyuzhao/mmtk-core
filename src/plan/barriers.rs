@@ -205,8 +205,8 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             edges: vec![],
             nodes: vec![],
             meta,
-            incs: vec![],
-            decs: vec![],
+            incs: Vec::with_capacity(Self::CAPACITY),
+            decs: Vec::with_capacity(Self::CAPACITY),
             mature_evac_remset: vec![],
         }
     }
@@ -383,17 +383,16 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                     .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
             }
         }
-        // Flush inc buffer
+        // Flush inc and dec buffer
         if !self.incs.is_empty() {
-            let mut incs = vec![];
+            // Inc buffer
+            let mut incs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut incs, &mut self.incs);
             let bucket = WorkBucketStage::rc_process_incs_stage();
             self.mmtk.scheduler.work_buckets[bucket]
                 .add_no_notify(ProcessIncs::<E::VM>::new(incs, false));
-        }
-        // Flush dec buffer
-        if !self.decs.is_empty() {
-            let mut decs = vec![];
+            // Dec buffer
+            let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
             let w = ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
             if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
