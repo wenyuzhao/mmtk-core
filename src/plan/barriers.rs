@@ -232,6 +232,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             None,
         )
     }
+
     #[inline(always)]
     fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
         loop {
@@ -292,6 +293,17 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
             let old: ObjectReference = unsafe { edge.load() };
             self.log_and_unlock_edge(edge);
+            Ok(old)
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline(always)]
+    fn log_edge_and_get_old_target2(&self, edge: Address) -> Result<ObjectReference, ()> {
+        if !edge.is_logged::<E::VM>() {
+            let old: ObjectReference = unsafe { edge.load() };
+            edge.log::<E::VM>();
             Ok(old)
         } else {
             Err(())

@@ -12,7 +12,6 @@ use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
-use crate::util::metadata::compare_exchange_metadata;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
@@ -348,28 +347,6 @@ impl Address {
     }
 
     #[inline(always)]
-    pub fn lock<VM: VMBinding>(self) {
-        debug_assert!(!self.is_zero());
-        loop {
-            std::hint::spin_loop();
-            if self.is_locked::<VM>() {
-                continue;
-            }
-            if compare_exchange_metadata::<VM>(
-                &RC_LOCK_BIT_SPEC,
-                unsafe { self.to_object_reference() },
-                UNLOCKED_VALUE,
-                LOCKED_VALUE,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                return;
-            }
-        }
-    }
-
-    #[inline(always)]
     pub fn unlock<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
         store_metadata::<VM>(
@@ -377,7 +354,7 @@ impl Address {
             unsafe { self.to_object_reference() },
             UNLOCKED_VALUE,
             None,
-            Some(Ordering::SeqCst),
+            Some(Ordering::Relaxed),
         )
     }
 
@@ -388,7 +365,7 @@ impl Address {
             &RC_LOCK_BIT_SPEC,
             unsafe { self.to_object_reference() },
             None,
-            Some(Ordering::SeqCst),
+            None,
         ) == LOCKED_VALUE
     }
 
@@ -399,7 +376,7 @@ impl Address {
             &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
             unsafe { self.to_object_reference() },
             None,
-            Some(Ordering::SeqCst),
+            None,
         ) == LOGGED_VALUE
     }
 
@@ -411,7 +388,7 @@ impl Address {
             unsafe { self.to_object_reference() },
             LOGGED_VALUE,
             None,
-            Some(Ordering::SeqCst),
+            Some(Ordering::Relaxed),
         )
     }
 
@@ -423,7 +400,7 @@ impl Address {
             unsafe { self.to_object_reference() },
             UNLOGGED_VALUE,
             None,
-            Some(Ordering::SeqCst),
+            Some(Ordering::Relaxed),
         )
     }
 }

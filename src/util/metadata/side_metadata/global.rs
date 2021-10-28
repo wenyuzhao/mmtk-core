@@ -572,15 +572,14 @@ pub fn compare_exchange_atomic2(
         let mask = meta_byte_mask(metadata_spec) << lshift;
 
         let real_old_byte = unsafe { meta_addr.atomic_load::<AtomicU8>(success_order) };
-        let expected_old_byte = (real_old_byte & !mask) | ((old_metadata as u8) << lshift);
-        let expected_new_byte = (expected_old_byte & !mask) | ((new_metadata as u8) << lshift);
-        if expected_old_byte == expected_new_byte {
+        if (real_old_byte & mask) >> lshift == new_metadata as u8 {
             return false;
         }
+        let expected_new_byte = (real_old_byte & !mask) | ((new_metadata as u8) << lshift);
         unsafe {
             meta_addr
                 .compare_exchange::<AtomicU8>(
-                    expected_old_byte,
+                    real_old_byte,
                     expected_new_byte,
                     success_order,
                     failure_order,
