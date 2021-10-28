@@ -543,6 +543,62 @@ pub fn compare_exchange_atomic(
     res
 }
 
+#[inline(always)]
+pub fn compare_exchange_atomic2(
+    metadata_spec: &SideMetadataSpec,
+    data_addr: Address,
+    old_metadata: usize,
+    new_metadata: usize,
+    success_order: Ordering,
+    failure_order: Ordering,
+) -> bool {
+    #[cfg(feature = "extreme_assertions")]
+    let _lock = sanity::SANITY_LOCK.lock().unwrap();
+
+    debug!(
+        "compare_exchange_atomic({:?}, {}, {}, {})",
+        metadata_spec, data_addr, old_metadata, new_metadata
+    );
+    let meta_addr = address_to_meta_address(metadata_spec, data_addr);
+    if cfg!(debug_assertions) {
+        ensure_metadata_is_mapped(metadata_spec, data_addr);
+    }
+
+    let bits_num_log = metadata_spec.log_num_of_bits;
+
+    #[allow(clippy::let_and_return)]
+    let res = if bits_num_log < 3 {
+        let lshift = meta_byte_lshift(metadata_spec, data_addr);
+        let mask = meta_byte_mask(metadata_spec) << lshift;
+
+        let real_old_byte = unsafe { meta_addr.atomic_load::<AtomicU8>(success_order) };
+        let expected_old_byte = (real_old_byte & !mask) | ((old_metadata as u8) << lshift);
+        let expected_new_byte = (expected_old_byte & !mask) | ((new_metadata as u8) << lshift);
+        if expected_old_byte == expected_new_byte {
+            return false;
+        }
+        unsafe {
+            meta_addr
+                .compare_exchange::<AtomicU8>(
+                    expected_old_byte,
+                    expected_new_byte,
+                    success_order,
+                    failure_order,
+                )
+                .is_ok()
+        }
+    } else {
+        unreachable!("side metadata > 3-bits is not supported!");
+    };
+
+    #[cfg(feature = "extreme_assertions")]
+    if res {
+        sanity::verify_store(metadata_spec, data_addr, new_metadata);
+    }
+
+    res
+}
+
 // same as Rust atomics, this wraps around on overflow
 #[inline(always)]
 pub fn fetch_add_atomic(

@@ -10,12 +10,15 @@ use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::cm::ProcessModBufSATB;
 use crate::util::metadata::load_metadata;
+use crate::util::metadata::side_metadata::compare_exchange_atomic2;
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::rc::ProcessDecs;
 use crate::util::rc::ProcessIncs;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
+use crate::vm::*;
 use crate::MMTK;
 
 pub const BARRIER_MEASUREMENT: bool = crate::flags::BARRIER_MEASUREMENT;
@@ -187,9 +190,6 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
     edges: Vec<Address>,
     nodes: Vec<ObjectReference>,
-    /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
-    /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
-    meta: MetadataSpec,
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
     mature_evac_remset: Vec<ObjectReference>,
@@ -197,6 +197,9 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     const CAPACITY: usize = 1024;
+    const UNLOG_BITS: MetadataSpec =
+        *<E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec();
+    const LOCK_BITS: SideMetadataSpec = *RC_LOCK_BIT_SPEC.extract_side_spec();
 
     #[allow(unused)]
     pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
@@ -204,7 +207,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             mmtk,
             edges: vec![],
             nodes: vec![],
-            meta,
             incs: Vec::with_capacity(Self::CAPACITY),
             decs: Vec::with_capacity(Self::CAPACITY),
             mature_evac_remset: vec![],
@@ -224,41 +226,29 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     #[inline(always)]
     fn get_edge_logging_state(&self, edge: Address) -> usize {
         load_metadata::<E::VM>(
-            &self.meta,
+            &Self::UNLOG_BITS,
             unsafe { edge.to_object_reference() },
             None,
             None,
         )
     }
-
     #[inline(always)]
     fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
         loop {
-            std::hint::spin_loop();
-            let logging_value = self.get_edge_logging_state(edge);
             // Bailout if logged
-            if logging_value == LOGGED_VALUE {
+            if self.get_edge_logging_state(edge) == LOGGED_VALUE {
                 return false;
             }
-            debug_assert_eq!(logging_value, UNLOGGED_VALUE);
-            let lock_value = self.get_edge_lock_state(edge);
-            // Spin if locked
-            if lock_value == LOCKED_VALUE {
-                continue;
-            }
-            debug_assert_eq!(lock_value, UNLOCKED_VALUE);
             // Attempt to lock the edges
-            if compare_exchange_metadata::<E::VM>(
-                &RC_LOCK_BIT_SPEC,
-                unsafe { edge.to_object_reference() },
+            if compare_exchange_atomic2(
+                &Self::LOCK_BITS,
+                edge,
                 UNLOCKED_VALUE,
                 LOCKED_VALUE,
-                None,
-                Ordering::SeqCst,
+                Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                let logging_value = self.get_edge_logging_state(edge);
-                if logging_value == LOGGED_VALUE {
+                if self.get_edge_logging_state(edge) == LOGGED_VALUE {
                     self.unlock_edge(edge);
                     return false;
                 }
@@ -275,25 +265,25 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             unsafe { edge.to_object_reference() },
             UNLOCKED_VALUE,
             None,
-            Some(Ordering::SeqCst),
+            Some(Ordering::Relaxed),
         );
     }
 
     #[inline(always)]
     fn log_and_unlock_edge(&self, edge: Address) {
         store_metadata::<E::VM>(
-            &self.meta,
+            &Self::UNLOG_BITS,
             unsafe { edge.to_object_reference() },
             LOGGED_VALUE,
             None,
-            Some(Ordering::SeqCst),
+            Some(Ordering::Relaxed),
         );
         store_metadata::<E::VM>(
             &RC_LOCK_BIT_SPEC,
             unsafe { edge.to_object_reference() },
             UNLOCKED_VALUE,
             None,
-            Some(Ordering::SeqCst),
+            Some(Ordering::Relaxed),
         );
     }
 
@@ -368,7 +358,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 let mut incs = vec![];
                 std::mem::swap(&mut incs, &mut self.incs);
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                    .add_no_notify(UnlogEdges::new(incs, self.meta));
+                    .add_no_notify(UnlogEdges::new(incs));
             }
             return;
         }
@@ -380,7 +370,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 let mut nodes = vec![];
                 std::mem::swap(&mut nodes, &mut self.nodes);
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                    .add(ProcessModBufSATB::<E>::new(edges, nodes, self.meta));
+                    .add(ProcessModBufSATB::<E>::new(edges, nodes));
             }
         }
         // Flush inc and dec buffer

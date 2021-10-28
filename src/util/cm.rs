@@ -1,4 +1,4 @@
-use super::{metadata::MetadataSpec, Address, ObjectReference};
+use super::{Address, ObjectReference};
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     },
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     util::metadata::side_metadata::address_to_meta_address,
-    vm::VMBinding,
+    vm::*,
     TransitiveClosure, MMTK,
 };
 use atomic::Ordering;
@@ -207,15 +207,13 @@ pub struct ProcessModBufSATB<E: ProcessEdgesWork> {
     edges: Vec<Address>,
     nodes: Vec<ObjectReference>,
     phantom: PhantomData<E>,
-    meta: MetadataSpec,
 }
 
 impl<E: ProcessEdgesWork> ProcessModBufSATB<E> {
-    pub fn new(edges: Vec<Address>, nodes: Vec<ObjectReference>, meta: MetadataSpec) -> Self {
+    pub fn new(edges: Vec<Address>, nodes: Vec<ObjectReference>) -> Self {
         Self {
             edges,
             nodes,
-            meta,
             phantom: PhantomData,
         }
     }
@@ -228,7 +226,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
         if !self.edges.is_empty() {
             if !crate::flags::REF_COUNT {
                 for edge in &self.edges {
-                    let ptr = address_to_meta_address(self.meta.extract_side_spec(), *edge);
+                    let ptr = address_to_meta_address(
+                        <E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                            .extract_side_spec(),
+                        *edge,
+                    );
                     unsafe {
                         ptr.store(0b11111111u8);
                     }
