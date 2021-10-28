@@ -361,10 +361,10 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     fn flush(&mut self) {
         // Barrier measurement: simply unlog remembered edges
         if crate::flags::BARRIER_MEASUREMENT {
-            // Drop decs buffer
-            self.decs.clear();
             // Unlog inc edges
             if !self.incs.is_empty() {
+                let mut decs = Vec::with_capacity(Self::CAPACITY);
+                std::mem::swap(&mut decs, &mut self.decs);
                 let mut incs = vec![];
                 std::mem::swap(&mut incs, &mut self.incs);
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
