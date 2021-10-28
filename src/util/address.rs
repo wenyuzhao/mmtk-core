@@ -16,6 +16,7 @@ use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
 use super::constants::BYTES_IN_WORD;
+use super::metadata::side_metadata::compare_exchange_atomic2;
 use super::metadata::{load_metadata, store_metadata};
 
 /// size in bytes
@@ -359,6 +360,24 @@ impl Address {
     }
 
     #[inline(always)]
+    pub fn lock(&self) {
+        loop {
+            // Attempt to lock the edges
+            if compare_exchange_atomic2(
+                RC_LOCK_BIT_SPEC.extract_side_spec(),
+                *self,
+                UNLOCKED_VALUE,
+                LOCKED_VALUE,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                return;
+            }
+            // Failed to lock the edge. Spin.
+        }
+    }
+
+    #[inline(always)]
     pub fn is_locked<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
         load_metadata::<VM>(
@@ -540,6 +559,8 @@ mod tests {
 pub struct ObjectReference(usize);
 
 impl ObjectReference {
+    pub const NULL: Self = Self(0);
+
     /// converts the ObjectReference to an Address
     #[inline(always)]
     pub fn to_address(self) -> Address {

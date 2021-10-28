@@ -1,5 +1,6 @@
 //! Read/Write barrier implementations.
 
+use std::mem;
 use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
@@ -12,6 +13,7 @@ use crate::util::cm::ProcessModBufSATB;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
+use crate::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::rc::ProcessDecs;
@@ -311,6 +313,38 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
+    fn slow(&mut self, src: ObjectReference, edge: Address, old: ObjectReference) {
+        // Concurrent Marking
+        if crate::plan::immix::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
+            self.edges.push(edge);
+            if !old.is_null() {
+                self.nodes.push(old);
+            }
+        }
+        // Reference counting
+        if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
+            if !old.is_null() {
+                self.decs.push(old);
+            }
+            self.incs.push(edge);
+        }
+        if crate::flags::REF_COUNT
+            && crate::flags::RC_MATURE_EVACUATION
+            && crate::concurrent_marking_in_progress()
+        {
+            self.mature_evac_remset.push(src);
+        }
+        // Flush
+        if self.edges.len() >= Self::CAPACITY
+            || self.incs.len() >= Self::CAPACITY
+            || self.decs.len() >= Self::CAPACITY
+            || self.mature_evac_remset.len() >= Self::CAPACITY
+        {
+            self.flush();
+        }
+    }
+
+    #[inline(always)]
     fn enqueue_node(&mut self, src: ObjectReference, edge: Address, _new: Option<ObjectReference>) {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -319,34 +353,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            // Concurrent Marking
-            if crate::plan::immix::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
-                self.edges.push(edge);
-                if !old.is_null() {
-                    self.nodes.push(old);
-                }
-            }
-            // Reference counting
-            if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
-                if !old.is_null() {
-                    self.decs.push(old);
-                }
-                self.incs.push(edge);
-            }
-            if crate::flags::REF_COUNT
-                && crate::flags::RC_MATURE_EVACUATION
-                && crate::concurrent_marking_in_progress()
-            {
-                self.mature_evac_remset.push(src);
-            }
-            // Flush
-            if self.edges.len() >= Self::CAPACITY
-                || self.incs.len() >= Self::CAPACITY
-                || self.decs.len() >= Self::CAPACITY
-                || self.mature_evac_remset.len() >= Self::CAPACITY
-            {
-                self.flush();
-            }
+            self.slow(src, edge, old)
         }
     }
 }
@@ -431,10 +438,84 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 len,
                 ..
             } => {
-                let dst_base = dst.to_address() + dst_offset;
-                for i in 0..len {
-                    self.enqueue_node(dst, dst_base + (i << 3), None);
+                if len == 1 {
+                    self.enqueue_node(ObjectReference::NULL, dst.to_address() + dst_offset, None);
+                    return;
                 }
+
+                type UInt = u8;
+                const BYTES_IN_UINT: usize = mem::size_of::<UInt>();
+                const LOG_BYTES_IN_UINT: usize = BYTES_IN_UINT.trailing_zeros() as _;
+                const BITS_IN_UINT: usize = BYTES_IN_UINT * 8;
+                const LOG_BITS_IN_UINT: usize = BITS_IN_UINT.trailing_zeros() as _;
+                let origin_dst = dst.to_address() + dst_offset;
+                let mut dst = origin_dst;
+                let limit = dst + (len << 3);
+                let mut meta_addr: *const UInt = (GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS
+                    + (dst.as_usize() >> 6))
+                    .align_down(mem::size_of::<UInt>())
+                    .to_ptr();
+                let mut val = unsafe { *meta_addr };
+                while dst < limit {
+                    if dst.is_aligned_to(1 << (LOG_BITS_IN_UINT + 3)) {
+                        let val = unsafe { *meta_addr };
+                        for j in 0usize..BITS_IN_UINT {
+                            if ((val >> j) & 1) != 0 {
+                                let e = dst + (j << 3);
+                                if e < limit {
+                                    self.enqueue_node(ObjectReference::NULL, e, None);
+                                }
+                            }
+                        }
+                        dst += 1usize << (LOG_BITS_IN_UINT + 3);
+                        meta_addr = unsafe { meta_addr.add(1) };
+                    } else {
+                        let shift = (dst.as_usize() >> 3) & (BITS_IN_UINT - 1);
+                        if (val >> shift) & 1 != 0 {
+                            self.enqueue_node(ObjectReference::NULL, dst, None);
+                        }
+                        dst += BYTES_IN_UINT;
+                    }
+                }
+
+                // let dst_base = dst.to_address() + dst_offset;
+                // for i in 0..len {
+                //     self.enqueue_node(dst, dst_base + (i << 3), None);
+                // }
+
+                // const BYTES_PER_LOCK_BIT: usize = 1 << crate::flags::LOG_BYTES_PER_RC_LOCK_BIT;
+                // let dst_base = dst.to_address() + dst_offset;
+                // let dst_limit = dst_base + (len << 3);
+                // for a in (dst_base..dst_limit).step_by(BYTES_PER_LOCK_BIT) {
+                //     // let lock_top = (a + BYTES_PER_LOCK_BIT).align_down(BYTES_PER_LOCK_BIT);
+                //     // let mut locked = false;
+                //     for e in a..Address::min(
+                //         (a + BYTES_PER_LOCK_BIT).align_down(BYTES_PER_LOCK_BIT),
+                //         dst_limit,
+                //     ) {
+                //         if !e.is_logged::<E::VM>() {
+                //             // if !locked {
+                //             //     a.lock();
+                //             //     locked = true;
+                //             // }
+                //             let old = unsafe { e.load() };
+                //             e.log::<E::VM>();
+                //             self.slow(ObjectReference::NULL, e, old);
+                //         }
+                //     }
+                //     // if locked {
+                //     //     a.unlock::<E::VM>();
+                //     // }
+                // }
+                // a.unlock::<E::VM>();
+                // for e in (dst_base..dst_limit).step_by(BYTES_IN_WORD) {
+                //     let old = unsafe { e.load() };
+                //     e.log::<E::VM>();
+                //     self.slow(ObjectReference::NULL, e, old);
+                // }
+                // for a in (dst_base..dst_limit).step_by(1 << crate::flags::LOG_BYTES_PER_RC_LOCK_BIT)
+                // {
+                // }
             }
             WriteTarget::Clone { .. } => {}
         }
