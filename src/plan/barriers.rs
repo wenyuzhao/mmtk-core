@@ -300,7 +300,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn log_edge_and_get_old_target2(&self, edge: Address) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
         if !edge.is_logged::<E::VM>() {
             let old: ObjectReference = unsafe { edge.load() };
             edge.log::<E::VM>();
