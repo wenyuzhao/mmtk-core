@@ -194,7 +194,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     nodes: Vec<ObjectReference>,
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
-    mature_evac_remset: Vec<Address>,
+    mature_evac_remset: Vec<ObjectReference>,
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
@@ -332,7 +332,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             && crate::flags::RC_MATURE_EVACUATION
             && crate::concurrent_marking_in_progress()
         {
-            self.mature_evac_remset.push(edge);
+            self.mature_evac_remset.push(src);
         }
         // Flush
         if self.edges.len() >= Self::CAPACITY
@@ -415,7 +415,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         if crate::flags::RC_MATURE_EVACUATION && !self.mature_evac_remset.is_empty() {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new_roots(remset);
+            let w = EvacuateMatureObjects::new(remset);
             self.mmtk
                 .plan
                 .downcast_ref::<Immix<E::VM>>()
