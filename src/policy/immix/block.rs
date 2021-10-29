@@ -424,7 +424,7 @@ impl Block {
     #[inline(always)]
     pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::flags::REF_COUNT);
-        if crate::flags::RC_EVACUATE_NURSERY {
+        if crate::flags::RC_NURSERY_EVACUATION {
             debug_assert!(self.rc_dead(), "{:?} has live rc counts", self);
             space.release_block(*self, true);
             true

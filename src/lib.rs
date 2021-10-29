@@ -133,7 +133,7 @@ pub mod flags {
     use std::env;
 
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = false;
+    pub const CONCURRENT_MARKING: bool = true;
     pub const REF_COUNT: bool = true;
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
@@ -148,9 +148,9 @@ pub mod flags {
     pub const LAZY_DECREMENTS: bool = false;
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
-    pub const RC_EVACUATE_NURSERY: bool = true;
+    pub const RC_NURSERY_EVACUATION: bool = true;
+    pub const RC_MATURE_EVACUATION: bool = true;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
-    pub const RC_MATURE_EVACUATION: bool = false;
     pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool = true;
     pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
         Lazy::new(|| env::var("DISABLE_MUTATOR_LINE_REUSING").is_ok());
@@ -196,8 +196,8 @@ pub mod flags {
         // validate!(CONCURRENT_MARKING => !REF_COUNT);
         // validate!(REF_COUNT => !CONCURRENT_MARKING);
         validate!(REF_COUNT => !DEFRAG);
-        validate!(EAGER_INCREMENTS => !RC_EVACUATE_NURSERY);
-        validate!(RC_EVACUATE_NURSERY => !EAGER_INCREMENTS);
+        validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
+        validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);
         if BARRIER_MEASUREMENT {
             assert!(!EAGER_INCREMENTS);
             assert!(!LAZY_DECREMENTS);
