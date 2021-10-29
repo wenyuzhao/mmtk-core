@@ -256,11 +256,28 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
+        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION
+            && (self.concurrent_marking_in_progress
+                || self.current_pause == Pause::FinalMark
+                || self.current_pause == Pause::FullTraceFast);
+        let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            debug_assert!(edge.is_logged::<VM>(), "{:?}.{:?} is unlogged", o, edge);
-            // println!(" - rec inc {:?}.{:?} -> {:?}", o, edge, unsafe { edge.load::<ObjectReference>() });
+            if crate::flags::RC_MATURE_EVACUATION
+                && check_mature_evac_remset
+                && !should_add_to_mature_evac_remset
+            {
+                if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {
+                    should_add_to_mature_evac_remset = true;
+                }
+            }
             self.recursive_inc(edge);
         });
+        if should_add_to_mature_evac_remset {
+            self.mature_evac_remset.push(o);
+            if self.mature_evac_remset.len() >= Self::CAPACITY {
+                self.flush();
+            }
+        }
     }
 
     #[inline(always)]
@@ -381,9 +398,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     .lock()
                     .push(box w)
             } else {
-                self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+                if self.current_pause == Pause::FinalMark
+                    || self.current_pause == Pause::FullTraceFast
+                {
+                    self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+                }
             }
-            unreachable!();
         }
         if !self.scan_objects.is_empty() {
             let mut scan_objects = vec![];
@@ -417,7 +437,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         // unlog edge
         if !self.roots {
-            debug_assert!(e.is_logged::<VM>(), "{:?}", e);
+            // debug_assert!(e.is_logged::<VM>(), "{:?}", e);
             e.unlog::<VM>();
         }
         Some(o)

@@ -427,6 +427,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
         // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
+        if crate::flags::REF_COUNT && crate::flags::RC_MATURE_EVACUATION && block.is_defrag_source()
+        {
+            self.pending_release.push(block);
+            return;
+        }
         if crate::flags::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
