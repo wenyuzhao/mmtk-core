@@ -149,7 +149,7 @@ pub mod flags {
     pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
     pub const RC_NURSERY_EVACUATION: bool = true;
-    pub const RC_MATURE_EVACUATION: bool = true;
+    pub const RC_MATURE_EVACUATION: bool = false;
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
     pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool = true;
     pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
