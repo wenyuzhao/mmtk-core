@@ -68,7 +68,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn is_sane(&self) -> bool {
         true
     }
-    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, _bytes: usize, alloc: bool) {
         if crate::flags::REF_COUNT {
             debug_assert!(alloc);
             // Add to object set
@@ -148,7 +148,7 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
         &self.common
     }
 
-    fn release_multiple_pages(&mut self, start: Address) {
+    fn release_multiple_pages(&mut self, _start: Address) {
         unreachable!()
     }
 }

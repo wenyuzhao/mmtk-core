@@ -216,16 +216,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn get_edge_lock_state(&self, edge: Address) -> usize {
-        load_metadata::<E::VM>(
-            &RC_LOCK_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            None,
-            None,
-        )
-    }
-
-    #[inline(always)]
     fn get_edge_logging_state(&self, edge: Address) -> usize {
         load_metadata::<E::VM>(
             &Self::UNLOG_BITS,
@@ -302,6 +292,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
+    #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
         if !edge.is_logged::<E::VM>() {
             let old: ObjectReference = unsafe { edge.load() };
