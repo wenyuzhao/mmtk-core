@@ -830,18 +830,23 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
         for mut o in remset {
+            // Skip NULLs
             if o.is_null() {
                 continue;
             }
             debug_assert!(o.is_mapped());
-            if immix_space.in_space(o)
-                && (rc::count(o) == 0 || Block::containing::<VM>(o).is_defrag_source())
-            {
+            // Skip dead object
+            if rc::count(o) == 0 {
                 continue;
             }
+            // Skip object in defrag source
+            if immix_space.in_space(o) && Block::containing::<VM>(o).is_defrag_source() {
+                continue;
+            }
+            // Skip objects sits in striddle lines
             if !crate::flags::BLOCK_ONLY && immix_space.in_space(o) {
                 let line = Line::containing::<VM>(o);
-                if rc::count(unsafe { line.start().to_object_reference() }) == 1
+                if rc::count(unsafe { line.start().to_object_reference() }) != 0
                     && rc::is_straddle_line(line)
                 {
                     continue;
@@ -849,14 +854,6 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             }
             if immix_space.in_space(o) {
                 o = o.fix_start_address::<VM>();
-            }
-            if !crate::flags::BLOCK_ONLY
-                && immix_space.in_space(o)
-                && Line::is_aligned(o.to_address())
-            {
-                if rc::count(o) == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
-                    continue;
-                }
             }
             EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix_space));
         }
