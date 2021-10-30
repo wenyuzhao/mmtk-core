@@ -5,7 +5,6 @@ use super::*;
 use crate::mmtk::MMTK;
 use crate::util::cm::ImmixConcurrentTraceObjects;
 use crate::util::opaque_pointer::*;
-use crate::util::rc::ProcessDecs;
 use crate::vm::VMBinding;
 use crossbeam_queue::SegQueue;
 use enum_map::{enum_map, EnumMap};
@@ -116,7 +115,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
         while let Some(w) = postponed_concurrent_work.pop() {
-            if w.type_id() == TypeId::of::<ProcessDecs<VM>>() {
+            if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
                 no_postpone.push(w)
             } else {
                 cm_packets.push(w)

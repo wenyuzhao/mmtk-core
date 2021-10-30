@@ -1,7 +1,7 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
+use crate::plan::immix::{CURRENT_CONC_DECS_COUNTER, Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::largeobjectspace::RCSweepMatureLOS;
@@ -299,7 +299,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             0
         };
-        if (nursery_blocks + mature_blocks) < crate::args::NO_LAZY_DEC_THRESHOLD {
+        if crate::args::LAZY_DECREMENTS
+            && (nursery_blocks + mature_blocks) < crate::args::NO_LAZY_DEC_THRESHOLD
+        {
             if crate::args::LOG_PER_GC_STATE {
                 println!(
                     "disable lazy dec: nursery_blocks={} mature_blocks={} threshold={}",
@@ -426,6 +428,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
+        let _guard = if crate::args::LAZY_DECREMENTS && !nursery {
+            Some(self.block_allocation.refill_lock.lock().unwrap())
+        } else {
+            None
+        };
         // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
         if crate::args::LOG_PER_GC_STATE {
             if nursery {

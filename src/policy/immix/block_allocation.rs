@@ -26,7 +26,7 @@ pub struct BlockAllocation<VM: VMBinding> {
     cursor: AtomicUsize,
     high_water: AtomicUsize,
     buffer: Vec<Atomic<Block>>,
-    refill_lock: Mutex<()>,
+    pub refill_lock: Mutex<()>,
     refill_count: usize,
 }
 

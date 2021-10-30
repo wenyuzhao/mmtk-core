@@ -414,6 +414,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline]
     pub fn flush(&mut self) {
         if !self.decs.is_empty() {
+            unreachable!();
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
             self.worker().add_work(
@@ -479,6 +480,10 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             if block.is_defrag_source() {
                 self.process_defrag_block(block, immix_space)
             } else {
+                let state = block.get_state();
+                if state == BlockState::Nursery || state == BlockState::Reusing {
+                    continue;
+                }
                 self.process_block(block, immix_space)
             }
         }

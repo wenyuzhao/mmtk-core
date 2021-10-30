@@ -235,7 +235,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn release(&mut self, full_heap: bool) {
         self.trace_in_progress = false;
         if crate::args::REF_COUNT {
-            // release nursery objects
+            // promote nursery objects or release dead nursery
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
                 if rc::count(o) == 0 {
@@ -470,8 +470,8 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         let los = mmtk.plan.common().get_los();
         let mut mature_objects = los.rc_mature_objects.lock();
         while let Some(o) = los.rc_dead_objects.pop() {
-            mature_objects.remove(&o);
-            if !los.is_marked(o) {
+            let removed = mature_objects.remove(&o);
+            if removed && !los.is_marked(o) {
                 los.release_object(o.to_address());
             }
         }

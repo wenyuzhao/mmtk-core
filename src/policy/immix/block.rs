@@ -500,7 +500,6 @@ impl Step for Block {
     #[inline(always)]
     #[allow(clippy::assertions_on_constants)]
     fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        debug_assert!(!super::BLOCK_ONLY);
         if start > end {
             return None;
         }

@@ -244,7 +244,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
             self.immix().mark(o);
         } else if self.current_pause == Pause::FullTraceFast {
-            // Create object scanning packets]
+            // Create object scanning packets
             if copy {
                 if self.immix().mark(o) {
                     self.scan_objects.push(o)
@@ -633,7 +633,7 @@ pub struct SweepBlocksAfterDecs {
 impl SweepBlocksAfterDecs {
     pub fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, immix_space: &ImmixSpace<VM>) {
         while let Some(x) = immix_space.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Nursery);
+            x.set_state(BlockState::Marked);
         }
         // This may happen either within a pause, or in concurrent.
         let mut blocks_set = immix_space.possibly_dead_mature_blocks.lock();
