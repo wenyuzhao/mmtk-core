@@ -101,6 +101,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
         {
+            if crate::args::LOG_PER_GC_STATE {
+                println!("! cm finished");
+            }
             return true;
         }
         // RC nursery full

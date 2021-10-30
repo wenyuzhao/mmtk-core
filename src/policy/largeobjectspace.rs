@@ -333,11 +333,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     #[inline]
     pub fn rc_free(&self, o: ObjectReference) {
-        let mut mature_objects = self.rc_mature_objects.lock();
-        // Ignore nursery objects. They are released by `fn release`.
-        if mature_objects.remove(&o) {
-            self.release_object(o.to_address());
-        }
+        self.rc_dead_objects.push(o)
     }
 
     #[inline(always)]
@@ -471,7 +467,7 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         let mut mature_objects = los.rc_mature_objects.lock();
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
-            if removed && !los.is_marked(o) {
+            if removed {
                 los.release_object(o.to_address());
             }
         }
