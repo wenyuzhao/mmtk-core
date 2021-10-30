@@ -163,6 +163,17 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         {
             return None;
         }
+        debug_assert_eq!(
+            self.cursor.load(Ordering::SeqCst),
+            self.high_water.load(Ordering::SeqCst)
+        );
+        let len = self.buffer.len();
+        if len < self.high_water.load(Ordering::SeqCst) + self.refill_count {
+            unsafe {
+                let self_mut = &mut *(self as *const Self as *mut Self);
+                self_mut.buffer.reserve(len)
+            }
+        }
         // Alloc first block
         let result = Block::from(unsafe {
             self.space()
