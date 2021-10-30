@@ -64,7 +64,17 @@ lxr_delayed_nursery_evacuation = []
 
 # Non-moving, Non-concurrent LXR
 lxr_basic = ["ix_ref_count"]
-# LXR
+# LXR (Concurrent marking)
+lxr_cm = ["lxr_basic", "lxr_concurrent_marking"]
+# LXR (Lazy RC processing)
+lxr_lazy = ["lxr_basic", "lxr_lazy_decrements"]
+# LXR (Concurrent)
+lxr_conc = ["lxr_basic", "lxr_concurrent_marking", "lxr_lazy_decrements"]
+# LXR (Evacuation)
+lxr_evac = ["lxr_basic", "lxr_nursery_evacuation"]
+# LXR (Block only)
+lxr_block = ["lxr_basic", "lxr_block_only"]
+# LXR (Default config with full features)
 lxr = ["lxr_basic", "ix_concurrent_marking", "lxr_nursery_evacuation"]
 
 # This feature is only supported on x86-64 for now
