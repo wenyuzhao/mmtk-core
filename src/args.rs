@@ -1,6 +1,8 @@
 use spin::Lazy;
 use std::env;
 
+use crate::BarrierSelector;
+
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
 pub const REF_COUNT: bool = cfg!(feature = "ix_ref_count");
@@ -48,9 +50,9 @@ pub const TAKERATE_MEASUREMENT: bool = false;
 
 // ---------- Debugging flags ---------- //
 pub const HARNESS_PRETTY_PRINT: bool = false;
-pub const LOG_PER_GC_STATE: bool = false;
-pub const LOG_STAGES: bool = false;
-pub const LOG_WORK_PACKETS: bool = false;
+pub const LOG_PER_GC_STATE: bool = cfg!(feature = "log_gc");
+pub const LOG_STAGES: bool = cfg!(feature = "log_stages");
+pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = false;
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 
@@ -58,13 +60,53 @@ pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> =
     Lazy::new(|| REF_COUNT && LAZY_DECREMENTS && !*DISABLE_MUTATOR_LINE_REUSING);
 
-pub fn validate_features() {
+macro_rules! dump_feature {
+    ($name: literal, $value: expr) => {
+        println!(" * {}: {}", $name, $value)
+    };
+    ($name: literal) => {
+        dump_feature!($name, cfg!(feature = $name))
+    };
+}
+
+fn dump_features(active_barrier: BarrierSelector) {
+    println!("-------------------- Immix Args --------------------");
+
+    dump_feature!("barrier", format!("{:?}", active_barrier));
+
+    dump_feature!("barrier_measurement");
+    dump_feature!("ix_block_only");
+    dump_feature!("ix_lock_free_block_allocation");
+    dump_feature!("ix_concurrent_marking");
+    dump_feature!("ix_ref_count");
+    dump_feature!("lxr_lazy_decrements");
+    dump_feature!("lxr_nursery_evacuation");
+    dump_feature!("lxr_mature_evacuation");
+    dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
+    dump_feature!("lxr_delayed_nursery_evacuation");
+
+    dump_feature!(
+        "disable_mutator_line_reusing",
+        *DISABLE_MUTATOR_LINE_REUSING
+    );
+    dump_feature!("lock_free_blocks", *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE);
+    dump_feature!("nursery_blocks", *NURSERY_BLOCKS_THRESHOLD_FOR_RC);
+    dump_feature!(
+        "low_concurrent_worker_priority",
+        *LOWER_CONCURRENT_GC_THREAD_PRIORITY
+    );
+    dump_feature!("concurrent_worker_ratio", *CONCURRENT_GC_THREADS_RATIO);
+    dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
+
+    println!("----------------------------------------------------");
+}
+
+pub fn validate_features(active_barrier: BarrierSelector) {
+    dump_features(active_barrier);
     validate!(DEFRAG => !BLOCK_ONLY);
     validate!(DEFRAG => !CONCURRENT_MARKING);
     validate!(DEFRAG => !REF_COUNT);
     validate!(CONCURRENT_MARKING => !DEFRAG);
-    // validate!(CONCURRENT_MARKING => !REF_COUNT);
-    // validate!(REF_COUNT => !CONCURRENT_MARKING);
     validate!(REF_COUNT => !DEFRAG);
     validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
     validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);

@@ -150,17 +150,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         vm_map: &'static VMMap,
         scheduler: &Arc<GCWorkScheduler<VM>>,
     ) {
-        println!(
-            "BARRIER_MEASUREMENT: {}",
-            crate::plan::barriers::BARRIER_MEASUREMENT
-        );
-        println!(
-            "TAKERATE_MEASUREMENT: {}",
-            crate::plan::barriers::TAKERATE_MEASUREMENT
-        );
-        println!("CONCURRENT_MARKING: {}", super::CONCURRENT_MARKING);
-        println!("REF_COUNT: {}", super::REF_COUNT);
-        println!("BARRIER: {:?}", *ACTIVE_BARRIER);
+        crate::args::validate_features(*ACTIVE_BARRIER);
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
         unsafe {
@@ -461,8 +451,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if crate::args::CONCURRENT_MARKING && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-        {
+        if crate::args::CONCURRENT_MARKING && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             if crate::concurrent_marking_in_progress() {
                 scheduler.pause_concurrent_work_packets_during_gc();
             }

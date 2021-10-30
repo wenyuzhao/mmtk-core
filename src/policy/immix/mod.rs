@@ -29,7 +29,6 @@ macro_rules! validate {
 }
 
 fn validate_features() {
-    crate::args::validate_features();
     // Number of lines in a block should not exceed BlockState::MARK_MARKED
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }

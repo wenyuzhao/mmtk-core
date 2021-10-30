@@ -47,6 +47,9 @@ default = ["perf_counter"]
 # default = []
 
 barrier_measurement = []
+log_gc = []
+log_stages = []
+log_work_packets = []
 # IX Features
 ix_concurrent_marking = []
 ix_lock_free_block_allocation = []
