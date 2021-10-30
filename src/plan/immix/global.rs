@@ -76,10 +76,10 @@ pub static IMMIX_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstrain
     /// Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     barrier: *ACTIVE_BARRIER,
-    needs_log_bit: crate::flags::BARRIER_MEASUREMENT
+    needs_log_bit: crate::args::BARRIER_MEASUREMENT
         || *ACTIVE_BARRIER != BarrierSelector::NoBarrier,
     needs_field_log_bit: *ACTIVE_BARRIER == BarrierSelector::FieldLoggingBarrier
-        || (crate::flags::BARRIER_MEASUREMENT && *ACTIVE_BARRIER == BarrierSelector::NoBarrier),
+        || (crate::args::BARRIER_MEASUREMENT && *ACTIVE_BARRIER == BarrierSelector::NoBarrier),
     ..PlanConstraints::default()
 });
 
@@ -91,25 +91,25 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.base().collection_required(self, space_full, space) {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-            if crate::flags::LOG_PER_GC_STATE {
+            if crate::args::LOG_PER_GC_STATE {
                 println!("! base heap/space full");
             }
             return true;
         }
         // Concurrent tracing finished
-        if crate::flags::CONCURRENT_MARKING
+        if crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
         {
             return true;
         }
         // RC nursery full
-        if crate::flags::REF_COUNT
-            && crate::flags::LOCK_FREE_BLOCK_ALLOCATION
+        if crate::args::REF_COUNT
+            && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && self.immix_space.block_allocation.nursery_blocks()
-                >= *crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC
+                >= *crate::args::NURSERY_BLOCKS_THRESHOLD_FOR_RC
         {
-            if crate::flags::LOG_PER_GC_STATE {
+            if crate::args::LOG_PER_GC_STATE {
                 println!("! rc collection_required");
             }
             return true;
@@ -218,8 +218,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 tls,
                 pause == Pause::FullTraceFast || pause == Pause::InitialMark,
             );
-            if crate::flags::REF_COUNT
-                && crate::flags::RC_MATURE_EVACUATION
+            if crate::args::REF_COUNT
+                && crate::args::RC_MATURE_EVACUATION
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
             {
                 self.immix_space.process_mature_evacuation_remset()
@@ -247,7 +247,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let mut old_roots = super::PREV_ROOTS.lock();
             std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
             debug_assert!(curr_roots.is_empty());
-            if crate::flags::RC_MATURE_EVACUATION {
+            if crate::args::RC_MATURE_EVACUATION {
                 for x in old_roots.iter_mut() {
                     for o in x.iter_mut() {
                         if object_forwarding::is_forwarded::<VM>(*o) {
@@ -319,7 +319,7 @@ impl<VM: VMBinding> Immix<VM> {
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
         let immix_specs =
-            if crate::flags::BARRIER_MEASUREMENT || *ACTIVE_BARRIER != BarrierSelector::NoBarrier {
+            if crate::args::BARRIER_MEASUREMENT || *ACTIVE_BARRIER != BarrierSelector::NoBarrier {
                 metadata::extract_side_metadata(&[
                     RC_LOCK_BIT_SPEC,
                     MetadataSpec::OnSide(RC_TABLE),
@@ -404,7 +404,7 @@ impl<VM: VMBinding> Immix<VM> {
         } else if concurrent {
             Pause::InitialMark
         } else {
-            if (!super::REF_COUNT || crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
+            if (!super::REF_COUNT || crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
                 && concurrent_marking_in_progress
             {
                 Pause::FinalMark
@@ -417,7 +417,7 @@ impl<VM: VMBinding> Immix<VM> {
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
             .store(pause != Pause::RefCount, Ordering::SeqCst);
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             println!(
                 "[STW] {:?} emergency={}",
                 pause,
@@ -441,7 +441,7 @@ impl<VM: VMBinding> Immix<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-            if crate::flags::RC_MATURE_EVACUATION {
+            if crate::args::RC_MATURE_EVACUATION {
                 self.immix_space.select_mature_evacuation_candidates();
             }
         }
@@ -461,7 +461,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if crate::flags::CONCURRENT_MARKING && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+        if crate::args::CONCURRENT_MARKING && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
         {
             if crate::concurrent_marking_in_progress() {
                 scheduler.pause_concurrent_work_packets_during_gc();
@@ -484,11 +484,11 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-            if crate::flags::RC_MATURE_EVACUATION {
+            if crate::args::RC_MATURE_EVACUATION {
                 self.immix_space.select_mature_evacuation_candidates();
             }
         }
-        if crate::flags::REF_COUNT {
+        if crate::args::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new())
         } else {
@@ -526,8 +526,8 @@ impl<VM: VMBinding> Immix<VM> {
             let w = ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
             work_packets.push(box w);
         }
-        if crate::flags::LAZY_DECREMENTS {
-            debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
+        if crate::args::LAZY_DECREMENTS {
+            debug_assert!(!crate::args::BARRIER_MEASUREMENT);
             scheduler.postpone_all(work_packets);
         } else {
             scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);

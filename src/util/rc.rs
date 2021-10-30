@@ -135,8 +135,8 @@ pub fn is_straddle_line(line: Line) -> bool {
 
 #[inline(always)]
 pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
-    debug_assert!(!crate::flags::BLOCK_ONLY);
-    // debug_assert!(crate::flags::RC_NURSERY_EVACUATION);
+    debug_assert!(!crate::args::BLOCK_ONLY);
+    // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
     let size = VM::VMObjectModel::get_current_size(o);
     debug_assert!(size > Line::BYTES);
     let start_line = Line::forward(Line::containing::<VM>(o), 1);
@@ -149,8 +149,8 @@ pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
 
 #[inline(always)]
 pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
-    debug_assert!(!crate::flags::BLOCK_ONLY);
-    // debug_assert!(crate::flags::RC_NURSERY_EVACUATION);
+    debug_assert!(!crate::args::BLOCK_ONLY);
+    // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
     let size = VM::VMObjectModel::get_current_size(o);
     if size > Line::BYTES {
         let start_line = Line::forward(Line::containing::<VM>(o), 1);
@@ -166,7 +166,7 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
 
 #[inline(always)]
 pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
-    debug_assert!(crate::flags::REF_COUNT);
+    debug_assert!(crate::args::REF_COUNT);
     let size = VM::VMObjectModel::get_current_size(o);
     for i in (0..size).step_by(MIN_OBJECT_SIZE) {
         let a = o.to_address() + i;
@@ -177,7 +177,7 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
 #[inline(always)]
 fn promote<VM: VMBinding>(o: ObjectReference) {
     o.log_start_address::<VM>();
-    if !crate::flags::BLOCK_ONLY {
+    if !crate::args::BLOCK_ONLY {
         if o.get_size::<VM>() > Line::BYTES {
             self::mark_straddle_object::<VM>(o);
         }
@@ -220,7 +220,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline]
     pub fn new(incs: Vec<Address>, roots: bool) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         Self {
             incs,
             roots,
@@ -256,13 +256,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION
+        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress
                 || self.current_pause == Pause::FinalMark
                 || self.current_pause == Pause::FullTraceFast);
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            if crate::flags::RC_MATURE_EVACUATION
+            if crate::args::RC_MATURE_EVACUATION
                 && check_mature_evac_remset
                 && !should_add_to_mature_evac_remset
             {
@@ -313,11 +313,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         o: ObjectReference,
         copy_context: &mut impl CopyContext<VM = VM>,
     ) -> ObjectReference {
-        debug_assert!(crate::flags::RC_NURSERY_EVACUATION);
+        debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(!Self::DELAYED_EVACUATION);
         if self::count(o) != 0
             || self.immix().los().in_space(o)
-            || (crate::flags::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+            || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
                 && self.immix().immix_space.in_space(o)
                 && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
         {
@@ -425,11 +425,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         e: Address,
         immix: &Immix<VM>,
     ) -> Option<ObjectReference> {
-        debug_assert!(!crate::flags::EAGER_INCREMENTS);
+        debug_assert!(!crate::args::EAGER_INCREMENTS);
         let o = unsafe { e.load() };
         let in_immix_space = immix.immix_space.in_space(o);
         // Delay the increment if this object points to a young object
-        if Self::DELAYED_EVACUATION && crate::flags::RC_NURSERY_EVACUATION {
+        if Self::DELAYED_EVACUATION && crate::args::RC_NURSERY_EVACUATION {
             if in_immix_space && self::count(o) == 0 {
                 self.add_remset(e);
                 return None;
@@ -468,7 +468,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 continue;
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
-            let o = if !crate::flags::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
+            let o = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
                 self.process_inc(e, o)
             } else {
                 self.process_inc_and_evacuate(e, o, copy_context)
@@ -479,7 +479,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         }
         if self.roots {
             if !roots.is_empty() {
-                if crate::flags::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
+                if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
                     worker
                         .scheduler()
                         .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
@@ -516,7 +516,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     #[inline]
     pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
         Self {
             decs,
@@ -559,7 +559,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         let in_ix_space = immix.immix_space.in_space(o);
-        if !crate::flags::BLOCK_ONLY && in_ix_space {
+        if !crate::args::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
         }
         if in_ix_space {
@@ -593,8 +593,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if o.is_null() {
                 continue;
             }
-            let o = if crate::flags::REF_COUNT
-                && crate::flags::RC_MATURE_EVACUATION
+            let o = if crate::args::REF_COUNT
+                && crate::args::RC_MATURE_EVACUATION
                 && object_forwarding::is_forwarded::<VM>(o)
             {
                 object_forwarding::read_forwarding_pointer::<VM>(o)
@@ -705,8 +705,8 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
     }
 
     pub fn new(slots: Vec<Address>, roots: bool) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
-        debug_assert!(crate::flags::RC_NURSERY_EVACUATION);
+        debug_assert!(crate::args::REF_COUNT);
+        debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(ProcessIncs::<VM>::DELAYED_EVACUATION);
         Self {
             slots,
@@ -722,13 +722,13 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::flags::RC_MATURE_EVACUATION
+        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress
                 || self.current_pause == Pause::FinalMark
                 || self.current_pause == Pause::FullTraceFast);
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            if crate::flags::RC_MATURE_EVACUATION
+            if crate::args::RC_MATURE_EVACUATION
                 && check_mature_evac_remset
                 && !should_add_to_mature_evac_remset
             {
@@ -807,13 +807,13 @@ impl<VM: VMBinding> RCEvacuateNursery<VM> {
         o: ObjectReference,
         copy_context: &mut impl CopyContext<VM = VM>,
     ) -> ObjectReference {
-        debug_assert!(crate::flags::RC_NURSERY_EVACUATION);
+        debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         if o.is_null() {
             return o;
         }
         if self::count(o) != 0
             || self.immix().los().in_space(o)
-            || (crate::flags::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+            || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
                 && self.immix().immix_space.in_space(o)
                 && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
         {
@@ -861,7 +861,7 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        debug_assert!(crate::flags::RC_NURSERY_EVACUATION);
+        debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         self.immix = immix;
         self.current_pause = immix.current_pause().unwrap();
@@ -888,7 +888,7 @@ impl<VM: VMBinding> GCWork<VM> for RCEvacuateNursery<VM> {
         }
         if self.roots {
             if !roots.is_empty() {
-                if crate::flags::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
+                if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
                     worker
                         .scheduler()
                         .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));

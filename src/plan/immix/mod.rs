@@ -13,11 +13,11 @@ use crate::util::ObjectReference;
 
 pub use self::gc_work::ImmixCopyContext;
 
-pub const CONCURRENT_MARKING: bool = crate::flags::CONCURRENT_MARKING;
+pub const CONCURRENT_MARKING: bool = crate::args::CONCURRENT_MARKING;
 
-pub const REF_COUNT: bool = crate::flags::REF_COUNT;
+pub const REF_COUNT: bool = crate::args::REF_COUNT;
 
-const CYCLE_TRIGGER_THRESHOLD: usize = crate::flags::CYCLE_TRIGGER_THRESHOLD;
+const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
 pub static mut CURRENT_CONC_DECS_COUNTER: Option<Arc<AtomicUsize>> = None;
 

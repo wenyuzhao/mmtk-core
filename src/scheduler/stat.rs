@@ -88,13 +88,13 @@ impl SchedulerStat {
                     format!("work.{}.{}.max", self.work_name(n), name),
                     format!("{:.2}", fold.max),
                 );
-                if crate::flags::HARNESS_PRETTY_PRINT && name == "time" {
+                if crate::args::HARNESS_PRETTY_PRINT && name == "time" {
                     println!(" - {:<35} total={:15}    min={:10}    max={:15}    avg={:15.2}    count={:10}", self.work_name(n), fold.total, fold.min, fold.max, fold.total / self.work_counts[t] as f64, self.work_counts[t]);
                     total += fold.total as u128;
                 }
             }
         }
-        if crate::flags::HARNESS_PRETTY_PRINT {
+        if crate::args::HARNESS_PRETTY_PRINT {
             println!("SUM: {} ns", total);
         }
         // Print out overall execution time

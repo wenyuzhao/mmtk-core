@@ -44,7 +44,7 @@ pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
 });
 
 /// Full heap collection as nursery GC.
-pub const FULL_NURSERY_GC: bool = crate::flags::BARRIER_MEASUREMENT;
+pub const FULL_NURSERY_GC: bool = crate::args::BARRIER_MEASUREMENT;
 /// Force object barrier never enters the slow-path.
 /// If enabled,
 ///  - `FULL_NURSERY_GC` must be `true`.

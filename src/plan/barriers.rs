@@ -23,8 +23,8 @@ use crate::util::*;
 use crate::vm::*;
 use crate::MMTK;
 
-pub const BARRIER_MEASUREMENT: bool = crate::flags::BARRIER_MEASUREMENT;
-pub const TAKERATE_MEASUREMENT: bool = crate::flags::TAKERATE_MEASUREMENT;
+pub const BARRIER_MEASUREMENT: bool = crate::args::BARRIER_MEASUREMENT;
+pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
 pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -313,14 +313,14 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             }
         }
         // Reference counting
-        if crate::flags::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
+        if crate::args::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
             if !old.is_null() {
                 self.decs.push(old);
             }
             self.incs.push(edge);
         }
-        if crate::flags::REF_COUNT
-            && crate::flags::RC_MATURE_EVACUATION
+        if crate::args::REF_COUNT
+            && crate::args::RC_MATURE_EVACUATION
             && crate::concurrent_marking_in_progress()
         {
             self.mature_evac_remset.push(src);
@@ -361,7 +361,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     #[cold]
     fn flush(&mut self) {
         // Barrier measurement: simply unlog remembered edges
-        if crate::flags::BARRIER_MEASUREMENT {
+        if crate::args::BARRIER_MEASUREMENT {
             // Unlog inc edges
             if !self.incs.is_empty() {
                 let mut decs = Vec::with_capacity(Self::CAPACITY);
@@ -396,14 +396,14 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
             let w = ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
-            if crate::flags::LAZY_DECREMENTS && !crate::flags::BARRIER_MEASUREMENT {
+            if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);
             } else {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add_no_notify(w);
             }
         }
         // Flush dec buffer
-        if crate::flags::RC_MATURE_EVACUATION && !self.mature_evac_remset.is_empty() {
+        if crate::args::RC_MATURE_EVACUATION && !self.mature_evac_remset.is_empty() {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
@@ -482,7 +482,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 //     self.enqueue_node(dst, dst_base + (i << 3), None);
                 // }
 
-                // const BYTES_PER_LOCK_BIT: usize = 1 << crate::flags::LOG_BYTES_PER_RC_LOCK_BIT;
+                // const BYTES_PER_LOCK_BIT: usize = 1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT;
                 // let dst_base = dst.to_address() + dst_offset;
                 // let dst_limit = dst_base + (len << 3);
                 // for a in (dst_base..dst_limit).step_by(BYTES_PER_LOCK_BIT) {
@@ -512,7 +512,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 //     e.log::<E::VM>();
                 //     self.slow(ObjectReference::NULL, e, old);
                 // }
-                // for a in (dst_base..dst_limit).step_by(1 << crate::flags::LOG_BYTES_PER_RC_LOCK_BIT)
+                // for a in (dst_base..dst_limit).step_by(1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT)
                 // {
                 // }
             }

@@ -34,14 +34,14 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         self.immix.tls = tls.0;
     }
     fn prepare(&mut self) {
-        if *crate::flags::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
+        if *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
             let _ = thread_priority::set_current_thread_priority(ThreadPriority::Max);
         }
         self.immix.reset()
     }
     fn release(&mut self) {
         self.immix.reset();
-        if *crate::flags::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
+        if *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
             let _ = thread_priority::set_current_thread_priority(ThreadPriority::Min);
         }
     }
@@ -66,14 +66,14 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
     ) {
         object_forwarding::clear_forwarding_bits::<VM>(obj);
         if cfg!(debug_assertions) {
-            if crate::flags::REF_COUNT {
+            if crate::args::REF_COUNT {
                 crate::util::rc::assert_zero_ref_count::<VM>(obj);
                 for i in (0..bytes).step_by(8) {
                     debug_assert!((obj.to_address() + i).is_logged::<VM>());
                 }
             }
         }
-        if crate::flags::REF_COUNT {
+        if crate::args::REF_COUNT {
             debug_assert_eq!(crate::util::rc::count(obj), 0);
         }
     }

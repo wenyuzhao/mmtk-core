@@ -240,7 +240,7 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                 Block::containing::<VM>(object),
                 Block::containing::<VM>(object).get_state(),
                 object.to_address() + object.get_size::<VM>(),
-                if crate::flags::REF_COUNT {
+                if crate::args::REF_COUNT {
                     crate::util::rc::count(object)
                 } else {
                     0

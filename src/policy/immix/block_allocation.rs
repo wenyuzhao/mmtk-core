@@ -1,6 +1,6 @@
 use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
-    flags::LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE,
+    args::LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE,
     policy::space::Space,
     scheduler::{GCWork, GCWorker},
     util::{VMMutatorThread, VMThread},
@@ -13,8 +13,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
 static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> = Lazy::new(|| {
-    if crate::flags::REF_COUNT {
-        (*crate::flags::NURSERY_BLOCKS_THRESHOLD_FOR_RC + *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
+    if crate::args::REF_COUNT {
+        (*crate::args::NURSERY_BLOCKS_THRESHOLD_FOR_RC + *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
             << 2
     } else {
         *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE << 2
@@ -151,7 +151,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             return Some(block);
         }
         // Fill buffer with N blocks
-        if !crate::flags::REF_COUNT {
+        if !crate::args::REF_COUNT {
             self.high_water.store(0, Ordering::SeqCst);
             self.cursor.store(0, Ordering::SeqCst);
         }
@@ -212,7 +212,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Allocate a clean block.
     #[inline(never)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+        let block = if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
             self.alloc_clean_block(tls)?
         } else {
             let block_address = self.space().acquire(tls, Block::PAGES);
@@ -236,10 +236,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 if copy && block.is_defrag_source() {
                     continue;
                 }
-                if crate::flags::RC_MATURE_EVACUATION && block.is_defrag_source() {
+                if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
                     continue;
                 }
-                if crate::flags::REF_COUNT {
+                if crate::args::REF_COUNT {
                     // Blocks in the `reusable_blocks` queue can be released after some RC collections.
                     // These blocks can either have `Unallocated` state, or be reallocated again.
                     // Skip these cases and only return the truly reusable blocks.

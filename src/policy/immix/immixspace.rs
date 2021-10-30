@@ -78,7 +78,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.initial_mark_pause {
             return true;
         }
-        if crate::flags::CONCURRENT_MARKING {
+        if crate::args::CONCURRENT_MARKING {
             let block_state = Block::containing::<VM>(object).get_state();
             if block_state == BlockState::Nursery {
                 return true;
@@ -247,7 +247,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn select_mature_evacuation_candidates(&self) {
-        debug_assert!(crate::flags::RC_MATURE_EVACUATION);
+        debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         let mut total_mature_blocks = 0;
         for c in self.chunk_map.committed_chunks() {
@@ -260,7 +260,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         }
         let n = total_mature_blocks / 2;
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             println!("Defrag {:?} / {} mature blocks", n, total_mature_blocks);
         }
         for c in self.chunk_map.committed_chunks() {
@@ -286,7 +286,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         // Reclaim nursery blocks
         let num_workers = self.scheduler().worker_group().worker_count();
-        let (work_packets, nursery_blocks) = if crate::flags::LOCK_FREE_BLOCK_ALLOCATION {
+        let (work_packets, nursery_blocks) = if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
             self.block_allocation
                 .reset_and_generate_nursery_sweep_tasks(num_workers)
         } else {
@@ -299,13 +299,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             0
         };
-        if (nursery_blocks + mature_blocks) < crate::flags::NO_LAZY_DEC_THRESHOLD {
-            if crate::flags::LOG_PER_GC_STATE {
+        if (nursery_blocks + mature_blocks) < crate::args::NO_LAZY_DEC_THRESHOLD {
+            if crate::args::LOG_PER_GC_STATE {
                 println!(
                     "disable lazy dec: nursery_blocks={} mature_blocks={} threshold={}",
                     nursery_blocks,
                     mature_blocks,
-                    crate::flags::NO_LAZY_DEC_THRESHOLD
+                    crate::args::NO_LAZY_DEC_THRESHOLD
                 );
             }
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
@@ -338,7 +338,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los =
                 RCSweepMatureLOS::new(unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
-            if crate::flags::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
+            if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
                 self.scheduler().postpone(sweep_los);
             } else {
@@ -354,7 +354,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
         self.initial_mark_pause = initial_mark_pause;
-        debug_assert!(!crate::flags::REF_COUNT);
+        debug_assert!(!crate::args::REF_COUNT);
         self.block_allocation.reset();
         if major_gc {
             // Update mark_state
@@ -396,7 +396,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release for the immix space. This is called when a GC finished.
     /// Return whether this GC was a defrag GC, as a plan may want to know this.
     pub fn release(&mut self, major_gc: bool) -> bool {
-        debug_assert!(!crate::flags::REF_COUNT);
+        debug_assert!(!crate::args::REF_COUNT);
         self.block_allocation.reset();
         let did_defrag = self.defrag.in_defrag();
         if major_gc {
@@ -427,13 +427,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
         // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
             }
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
-        if crate::flags::BARRIER_MEASUREMENT || self.common().needs_log_bit {
+        if crate::args::BARRIER_MEASUREMENT || self.common().needs_log_bit {
             block.clear_log_table::<VM>();
         }
         block.deinit();
@@ -501,7 +501,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ObjectReference {
         if self.attempt_mark(object) {
             // println!("Mark {:?}", object.range::<VM>());
-            if !crate::flags::REF_COUNT {
+            if !crate::args::REF_COUNT {
                 // Mark block and lines
                 if !super::BLOCK_ONLY {
                     if !super::MARK_LINE_AT_SCAN_TIME {
@@ -566,7 +566,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
-        if crate::flags::REF_COUNT {
+        if crate::args::REF_COUNT {
             return;
         }
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
@@ -810,8 +810,8 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
 
     #[inline(always)]
     fn process_node(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::flags::REF_COUNT
-            && crate::flags::RC_MATURE_EVACUATION
+        let check_mature_evac_remset = crate::args::REF_COUNT
+            && crate::args::RC_MATURE_EVACUATION
             && self
                 .immix
                 .map(|ix| {

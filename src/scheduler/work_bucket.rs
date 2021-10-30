@@ -161,7 +161,7 @@ impl WorkBucketStage {
     pub const RCProcessDecs: Self = Self::Release;
 
     pub const fn rc_process_incs_stage() -> Self {
-        if crate::flags::EAGER_INCREMENTS && !crate::flags::BARRIER_MEASUREMENT {
+        if crate::args::EAGER_INCREMENTS && !crate::args::BARRIER_MEASUREMENT {
             WorkBucketStage::Unconstrained
         } else {
             WorkBucketStage::RCProcessIncs

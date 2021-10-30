@@ -423,8 +423,8 @@ impl Block {
 
     #[inline(always)]
     pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
-        debug_assert!(crate::flags::REF_COUNT);
-        if crate::flags::RC_NURSERY_EVACUATION {
+        debug_assert!(crate::args::REF_COUNT);
+        if crate::args::RC_NURSERY_EVACUATION {
             debug_assert!(self.rc_dead(), "{:?} has live rc counts", self);
             space.release_block(*self, true);
             true
@@ -439,13 +439,13 @@ impl Block {
 
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        debug_assert!(crate::flags::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
         if self.is_defrag_source() {
             return;
         }
         if self.rc_dead() {
-            if !*crate::flags::IGNORE_REUSING_BLOCKS
+            if !*crate::args::IGNORE_REUSING_BLOCKS
                 || self
                     .fetch_update_state(|s| {
                         if s == BlockState::Reusing {
@@ -458,10 +458,10 @@ impl Block {
             {
                 space.release_block(*self, false);
             }
-        } else if !crate::flags::BLOCK_ONLY {
+        } else if !crate::args::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.
-            let add_as_reusable = if !*crate::flags::IGNORE_REUSING_BLOCKS {
+            let add_as_reusable = if !*crate::args::IGNORE_REUSING_BLOCKS {
                 if !self.get_state().is_reusable() {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: 1 as _,

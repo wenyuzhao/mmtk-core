@@ -102,7 +102,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         self.work_buckets[WorkBucketStage::Unconstrained].bulk_add(no_postpone);
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             println!("Pause {} concurrent packets", postponed);
         }
         self.pause_concurrent_work_packets_during_gc
@@ -130,7 +130,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
-        debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
+        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(box w)
     }
 
@@ -254,7 +254,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let x = bucket.update();
-            if crate::flags::LOG_STAGES && x {
+            if crate::args::LOG_STAGES && x {
                 println!("Activate {:?}", id);
             }
             buckets_updated |= x;
@@ -312,7 +312,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 &mut self.postponed_concurrent_work.write(),
                 &mut queue,
             );
-            if crate::flags::LOG_PER_GC_STATE {
+            if crate::args::LOG_PER_GC_STATE {
                 println!("Postponed {} packets", queue.len());
             }
             let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
@@ -455,7 +455,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 "barrier.takerate".to_owned(),
                 format!("{}", slow as f64 / fast as f64),
             );
-            if crate::flags::HARNESS_PRETTY_PRINT {
+            if crate::args::HARNESS_PRETTY_PRINT {
                 println!(
                     "barrier: fast={} slow={} takerate={}",
                     fast,

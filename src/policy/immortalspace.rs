@@ -70,12 +70,12 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
             Some(Ordering::SeqCst),
         );
 
-        if crate::flags::BARRIER_MEASUREMENT
+        if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && !self.common.needs_field_log_bit)
         {
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         }
-        if crate::flags::BARRIER_MEASUREMENT
+        if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
             for i in (0..bytes).step_by(8) {

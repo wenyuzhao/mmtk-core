@@ -24,7 +24,7 @@ pub struct ScheduleCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             *crate::GC_TRIGGER_TIME.lock() = Some(SystemTime::now());
         }
         mmtk.plan.schedule_collection(worker.scheduler());
@@ -215,7 +215,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         trace!("stop_all_mutators start");
         debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             *crate::GC_START_TIME.lock() = Some(SystemTime::now());
         }
         mmtk.plan.gc_pause_start();
@@ -257,7 +257,7 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
-        if crate::flags::LOG_PER_GC_STATE {
+        if crate::args::LOG_PER_GC_STATE {
             let released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
             let released = crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
@@ -725,8 +725,8 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     const CAPACITY: usize = 1024;
 
     pub fn new(remset: Vec<ObjectReference>) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
-        debug_assert!(crate::flags::RC_MATURE_EVACUATION);
+        debug_assert!(crate::args::REF_COUNT);
+        debug_assert!(crate::args::RC_MATURE_EVACUATION);
         Self {
             remset,
             next_remset: vec![],
@@ -764,7 +764,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             );
             // Transfer RC countsf
             new.log_start_address::<VM>();
-            if !crate::flags::BLOCK_ONLY {
+            if !crate::args::BLOCK_ONLY {
                 if new.get_size::<VM>() > Line::BYTES {
                     rc::mark_straddle_object::<VM>(new);
                 }
@@ -844,7 +844,7 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                 continue;
             }
             // Skip objects sits in striddle lines
-            if !crate::flags::BLOCK_ONLY && immix_space.in_space(o) {
+            if !crate::args::BLOCK_ONLY && immix_space.in_space(o) {
                 let line = Line::containing::<VM>(o);
                 if rc::count(unsafe { line.start().to_object_reference() }) != 0
                     && rc::is_straddle_line(line)

@@ -57,7 +57,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             let mut new_nodes = vec![];
             mem::swap(&mut new_nodes, &mut self.next_objects);
             // This packet is executed in concurrent.
-            debug_assert!(crate::flags::CONCURRENT_MARKING);
+            debug_assert!(crate::args::CONCURRENT_MARKING);
             let w = ImmixConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -74,8 +74,8 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
         if object.is_null() {
             return object;
         }
-        let no_trace = crate::flags::REF_COUNT
-            && !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+        let no_trace = crate::args::REF_COUNT
+            && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
             && crate::util::rc::count(object) == 0;
         if no_trace {
             return object;
@@ -99,8 +99,8 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
 
     #[inline]
     fn process_node(&mut self, object: ObjectReference) {
-        if crate::flags::MARK_LINE_AT_SCAN_TIME
-            && !crate::flags::BLOCK_ONLY
+        if crate::args::MARK_LINE_AT_SCAN_TIME
+            && !crate::args::BLOCK_ONLY
             && self.plan.immix_space.in_space(object)
         {
             self.plan.immix_space.mark_lines(object);
@@ -108,8 +108,8 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            if crate::flags::REF_COUNT
-                && crate::flags::RC_MATURE_EVACUATION
+            if crate::args::REF_COUNT
+                && crate::args::RC_MATURE_EVACUATION
                 && !should_add_to_mature_evac_remset
             {
                 if !self.plan.in_defrag(object) && self.plan.in_defrag(t) {
@@ -131,8 +131,8 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        if !crate::flags::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-            && crate::flags::SLOW_CONCURRENT_MARKING
+        if !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+            && crate::args::SLOW_CONCURRENT_MARKING
         {
             if mmtk
                 .plan
@@ -176,7 +176,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
 
     #[inline]
     fn process_edges(&mut self) {
-        debug_assert!(crate::flags::CONCURRENT_MARKING);
+        debug_assert!(crate::args::CONCURRENT_MARKING);
         if !self.edges.is_empty() {
             let mut roots = vec![];
             for e in &self.edges {
@@ -222,9 +222,9 @@ impl<E: ProcessEdgesWork> ProcessModBufSATB<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        debug_assert!(!crate::flags::BARRIER_MEASUREMENT);
+        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         if !self.edges.is_empty() {
-            if !crate::flags::REF_COUNT {
+            if !crate::args::REF_COUNT {
                 for edge in &self.edges {
                     let ptr = address_to_meta_address(
                         <E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC

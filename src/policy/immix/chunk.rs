@@ -103,7 +103,7 @@ impl Chunk {
     }
 
     pub fn sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        debug_assert!(crate::flags::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         // number of allocated blocks.
         let mut allocated_blocks = 0;
         // Iterate over all allocated blocks in this chunk.
@@ -323,15 +323,15 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             //     side_metadata::bzero_metadata(&side, block.start(), Block::BYTES);
             // }
             // FIXME: Don't need this when doing RC
-            if crate::flags::BARRIER_MEASUREMENT
-                || (crate::flags::CONCURRENT_MARKING && !crate::flags::REF_COUNT)
+            if crate::args::BARRIER_MEASUREMENT
+                || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)
             {
                 block.initialize_log_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
                 block.set_as_defrag_source(true);
-            } else if !crate::flags::REF_COUNT {
+            } else if !crate::args::REF_COUNT {
                 block.set_as_defrag_source(false);
             }
             // Clear block mark data.
@@ -390,7 +390,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 
     pub fn new(chunk: Chunk, count_down: Arc<AtomicUsize>) -> Self {
-        debug_assert!(crate::flags::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
         Self {
             chunk,
@@ -427,7 +427,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
         rc::set(o, 0);
-        if !crate::flags::BLOCK_ONLY {
+        if !crate::args::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
         }
     }
@@ -449,7 +449,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         {
             let c = rc::count(o);
             if c != 0 && !immix_space.is_marked(o) {
-                if !crate::flags::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
+                if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
                     if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
                         continue;
                     } else {
