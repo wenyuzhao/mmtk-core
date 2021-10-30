@@ -46,7 +46,26 @@ rand = "0.7.3"
 default = ["perf_counter"]
 # default = []
 
-ix_delayed_nursery_evacuation = []
+barrier_measurement = []
+# IX Features
+ix_concurrent_marking = []
+ix_lock_free_block_allocation = []
+ix_block_only = []
+# LXR Features
+ix_ref_count = ["ix_lock_free_block_allocation"]
+lxr_lazy_decrements = ["ix_ref_count"]
+lxr_nursery_evacuation = ["ix_ref_count"]
+lxr_mature_evacuation = ["ix_ref_count"]
+lxr_concurrent_marking = ["ix_ref_count", "ix_concurrent_marking"]
+lxr_block_only = ["ix_ref_count", "ix_block_only"]
+# LXR Features (unused)
+lxr_evacuate_nursery_in_recycled_lines = []
+lxr_delayed_nursery_evacuation = []
+
+# Non-moving, Non-concurrent LXR
+lxr_basic = ["ix_ref_count"]
+# LXR
+lxr = ["lxr_basic", "ix_concurrent_marking", "lxr_nursery_evacuation"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

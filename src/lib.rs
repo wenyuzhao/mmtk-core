@@ -109,7 +109,7 @@ static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 #[inline(always)]
 fn concurrent_marking_in_progress() -> bool {
-    crate::flags::CONCURRENT_MARKING && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+    cfg!(feature="ix_concurrent_marking") && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
 }
 
 #[inline(always)]
@@ -133,11 +133,11 @@ pub mod flags {
     use std::env;
 
     // ---------- Immix flags ---------- //
-    pub const CONCURRENT_MARKING: bool = true;
-    pub const REF_COUNT: bool = true;
+    pub const CONCURRENT_MARKING: bool = cfg!(feature="ix_concurrent_marking");
+    pub const REF_COUNT: bool = cfg!(feature="ix_ref_count");
     pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
     /// Mark/sweep memory for block-level only
-    pub const BLOCK_ONLY: bool = false;
+    pub const BLOCK_ONLY: bool = cfg!(feature="ix_block_only");
     /// Opportunistic copying
     pub const DEFRAG: bool = false;
     /// Mark lines when scanning objects. Otherwise, do it at mark time.
@@ -145,13 +145,13 @@ pub mod flags {
 
     // ---------- CM/RC Immix flags ---------- //
     pub const EAGER_INCREMENTS: bool = false;
-    pub const LAZY_DECREMENTS: bool = false;
-    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = true;
+    pub const LAZY_DECREMENTS: bool = cfg!(feature="lxr_lazy_decrements");
+    pub const LOCK_FREE_BLOCK_ALLOCATION: bool = cfg!(feature="ix_lock_free_block_allocation");
     pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
-    pub const RC_NURSERY_EVACUATION: bool = true;
-    pub const RC_MATURE_EVACUATION: bool = false;
+    pub const RC_NURSERY_EVACUATION: bool = cfg!(feature="lxr_nursery_evacuation");
+    pub const RC_MATURE_EVACUATION: bool = cfg!(feature="lxr_mature_evacuation");
     pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
-    pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool = true;
+    pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool = !cfg!(feature="lxr_evacuate_nursery_in_recycled_lines");
     pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
         Lazy::new(|| env::var("DISABLE_MUTATOR_LINE_REUSING").is_ok());
     pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
@@ -173,7 +173,7 @@ pub mod flags {
     });
 
     // ---------- Barrier flags ---------- //
-    pub const BARRIER_MEASUREMENT: bool = false;
+    pub const BARRIER_MEASUREMENT: bool = cfg!(feature="barrier_measurement");
     pub const TAKERATE_MEASUREMENT: bool = false;
 
     // ---------- Debugging flags ---------- //
