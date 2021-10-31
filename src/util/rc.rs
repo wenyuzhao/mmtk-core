@@ -455,16 +455,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
-        let mut roots = if self.roots {
-            Vec::with_capacity(self.incs.len())
-        } else {
-            vec![]
-        };
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
-        for e in incs {
+        let roots = incs.as_mut_ptr() as *mut ObjectReference;
+        let mut num_roots = 0usize;
+        for e in &mut incs {
             // println!(" - inc e {:?}", e);
-            let o = match self.load_mature_object_and_unlog_edge(e, immix) {
+            let o = match self.load_mature_object_and_unlog_edge(*e, immix) {
                 Some(o) => o,
                 _ => continue,
             };
@@ -473,15 +470,21 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             }
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
-                self.process_inc(e, o)
+                self.process_inc(*e, o)
             } else {
-                self.process_inc_and_evacuate(e, o, copy_context)
+                self.process_inc_and_evacuate(*e, o, copy_context)
             };
             if self.roots {
-                roots.push(o);
+                unsafe {
+                    roots.add(num_roots).write(o);
+                }
+                num_roots += 1;
             }
         }
-        if self.roots && !roots.is_empty() {
+        if self.roots && num_roots != 0 {
+            let cap = incs.capacity();
+            std::mem::forget(incs);
+            let roots = unsafe { Vec::<ObjectReference>::from_raw_parts(roots, num_roots, cap) };
             if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
