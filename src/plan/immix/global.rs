@@ -27,7 +27,7 @@ use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
-use crate::util::{metadata, object_forwarding, ObjectReference};
+use crate::util::{metadata, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector};
@@ -236,18 +236,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.immix_space.release_rc(pause);
         }
         if super::REF_COUNT {
-            let mut curr_roots = super::CURR_ROOTS.lock();
-            let mut old_roots = super::PREV_ROOTS.lock();
-            std::mem::swap::<Vec<Vec<ObjectReference>>>(&mut curr_roots, &mut old_roots);
-            debug_assert!(curr_roots.is_empty());
+            unsafe {
+                std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
+                debug_assert!(super::CURR_ROOTS.is_empty());
+            }
             if crate::args::RC_MATURE_EVACUATION {
-                for x in old_roots.iter_mut() {
-                    for o in x.iter_mut() {
-                        if object_forwarding::is_forwarded::<VM>(*o) {
-                            *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
-                        };
-                    }
-                }
+                unreachable!("Forward mature roots during inc processing.");
+                // for x in old_roots.iter_mut() {
+                //     for o in x.iter_mut() {
+                //         if object_forwarding::is_forwarded::<VM>(*o) {
+                //             *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
+                //         };
+                //     }
+                // }
             }
         }
         // release the collected region
@@ -512,9 +513,9 @@ impl<VM: VMBinding> Immix<VM> {
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
         debug_assert!(super::REF_COUNT);
-        let mut roots = super::PREV_ROOTS.lock();
-        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(roots.len());
-        for decs in roots.drain(..) {
+        let prev_roots = unsafe { &super::PREV_ROOTS };
+        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
+        while let Some(decs) = prev_roots.pop() {
             let w = ProcessDecs::new(decs, unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
             work_packets.push(box w);
         }

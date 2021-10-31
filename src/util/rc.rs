@@ -487,7 +487,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .scheduler()
                     .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
-            crate::plan::immix::CURR_ROOTS.lock().push(roots);
+            unsafe {
+                crate::plan::immix::CURR_ROOTS.push(roots);
+            }
         }
         self.flush();
     }

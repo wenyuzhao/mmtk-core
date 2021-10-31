@@ -7,7 +7,7 @@ pub use self::global::IMMIX_CONSTRAINTS;
 
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use spin::Mutex;
+use crossbeam_queue::SegQueue;
 
 use crate::util::ObjectReference;
 
@@ -21,8 +21,8 @@ const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
 pub static mut CURRENT_CONC_DECS_COUNTER: Option<Arc<AtomicUsize>> = None;
 
-pub static PREV_ROOTS: Mutex<Vec<Vec<ObjectReference>>> = Mutex::new(Vec::new());
-pub static CURR_ROOTS: Mutex<Vec<Vec<ObjectReference>>> = Mutex::new(Vec::new());
+pub static mut PREV_ROOTS: SegQueue<Vec<ObjectReference>> = SegQueue::new();
+pub static mut CURR_ROOTS: SegQueue<Vec<ObjectReference>> = SegQueue::new();
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
