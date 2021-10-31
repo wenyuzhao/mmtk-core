@@ -360,9 +360,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 self.promote(new, true);
                 new
             } else {
-                let _ = self::inc(o);
                 // Object is not moved.
                 object_forwarding::clear_forwarding_bits::<VM>(o);
+                let _ = self::inc(o);
                 o
             }
         }
@@ -426,9 +426,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         immix: &Immix<VM>,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
-        let o = unsafe { e.load() };
-        let in_immix_space = immix.immix_space.in_space(o);
+        let o = unsafe { e.load::<ObjectReference>() };
         // Delay the increment if this object points to a young object
+        let in_immix_space = immix.immix_space.in_space(o);
         if Self::DELAYED_EVACUATION && crate::args::RC_NURSERY_EVACUATION {
             if in_immix_space && self::count(o) == 0 {
                 self.add_remset(e);
@@ -453,9 +453,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         self.immix = immix;
         self.current_pause = immix.current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        let mut roots = vec![];
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
+        let mut roots = if self.roots {
+            Vec::with_capacity(self.incs.len())
+        } else {
+            vec![]
+        };
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
         for e in incs {
@@ -477,17 +481,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 roots.push(o);
             }
         }
-        if self.roots {
-            if !roots.is_empty() {
-                if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
-                    worker
-                        .scheduler()
-                        .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
-                }
-                crate::plan::immix::CURR_ROOTS.lock().push(roots);
+        if self.roots && !roots.is_empty() {
+            if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
+                worker
+                    .scheduler()
+                    .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
-        } else {
-            debug_assert!(roots.is_empty());
+            crate::plan::immix::CURR_ROOTS.lock().push(roots);
         }
         self.flush();
     }
