@@ -123,14 +123,18 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            if self.plan.current_pause() == Some(Pause::FinalMark)
-                || self.plan.current_pause() == Some(Pause::FullTraceFast)
+            debug_assert!(
+                self.plan.current_pause() == Some(Pause::FinalMark)
+                    || self.plan.current_pause() == Some(Pause::FullTraceFast)
+            );
+            if crate::args::REF_COUNT
+                && crate::args::RC_MATURE_EVACUATION
+                && self.roots
+                && Block::in_defrag_block::<VM>(object)
             {
-                if self.roots && Block::in_defrag_block::<VM>(object) {
-                    self.mature_evac_remset_roots.push(slot);
-                    if self.mature_evac_remset_roots.len() >= Self::CAPACITY {
-                        self.flush();
-                    }
+                self.mature_evac_remset_roots.push(slot);
+                if self.mature_evac_remset_roots.len() >= Self::CAPACITY {
+                    self.flush();
                 }
             }
             self.immix().immix_space.fast_trace_object(self, object);

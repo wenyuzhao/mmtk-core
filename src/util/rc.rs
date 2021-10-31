@@ -60,7 +60,7 @@ pub fn fetch_update(
         &RC_TABLE,
         o.to_address(),
         Ordering::SeqCst,
-        Ordering::SeqCst,
+        Ordering::Relaxed,
         f,
     );
     // println!("fetch_update {:?} {:?} -> {:?}", o, r, count(o));
@@ -104,7 +104,7 @@ pub fn set(o: ObjectReference, count: usize) {
 
 #[inline(always)]
 pub fn count(o: ObjectReference) -> usize {
-    side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst)
+    side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::Relaxed)
 }
 
 pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
