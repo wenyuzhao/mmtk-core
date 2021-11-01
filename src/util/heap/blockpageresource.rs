@@ -4,6 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use atomic::Ordering;
 use atomic_traits::fetch::Add;
+use crossbeam_queue::SegQueue;
 
 use super::freelistpageresource::CommonFreeListPageResource;
 use super::layout::map::Map;
@@ -34,6 +35,7 @@ pub struct BlockPageResource<VM: VMBinding> {
     pages_currently_on_freelist: AtomicUsize,
     highwater_mark: AtomicI32,
     sync: Mutex<()>,
+    released_blocks: SegQueue<Address>,
     _p: PhantomData<VM>,
 }
 
@@ -147,6 +149,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             pages_currently_on_freelist: AtomicUsize::new(if growable { 0 } else { pages }),
             highwater_mark: AtomicI32::new(UNINITIALIZED_WATER_MARK),
             sync: Mutex::new(()),
+            released_blocks: SegQueue::new(),
             _p: PhantomData,
         };
         if !flpr.common.growable {
@@ -181,6 +184,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             pages_currently_on_freelist: AtomicUsize::new(0),
             highwater_mark: AtomicI32::new(UNINITIALIZED_WATER_MARK),
             sync: Mutex::new(()),
+            released_blocks: SegQueue::new(),
             _p: PhantomData,
         }
     }
@@ -227,6 +231,16 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
+        debug_assert_eq!(reserved_pages, required_pages);
+        debug_assert_eq!(reserved_pages, 1 << self.log_pages);
+        if let Some(block) = self.released_blocks.pop() {
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Result::Ok(PRAllocResult {
+                start: block,
+                pages: required_pages,
+                new_chunk: false,
+            });
+        }
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = &mut *(self as *const _ as *mut _);
@@ -362,28 +376,12 @@ impl<VM: VMBinding> BlockPageResource<VM> {
     }
 
     pub fn release_pages(&self, first: Address) {
-        debug_assert!(conversions::is_page_aligned(first));
-        let page_offset = conversions::bytes_to_pages(first - self.start);
-        let pages = self.free_list.size(page_offset as _);
-        // if (VM.config.ZERO_PAGES_ON_RELEASE)
-        //     VM.memory.zero(false, first, Conversions.pagesToBytes(pages));
+        debug_assert!(self.common.contiguous);
+        debug_assert!(first.is_aligned_to(1usize << (self.log_pages + LOG_BYTES_IN_PAGE as usize)));
+        let pages = 1 << self.log_pages;
         debug_assert!(pages as usize <= self.common.accounting.get_committed_pages());
-
-        // FIXME
-        #[allow(clippy::cast_ref_to_mut)]
-        let me = unsafe { &mut *(self as *const _ as *mut Self) };
-        let freed = {
-            let mut sync = self.sync.lock().unwrap();
-            self.common.accounting.release(pages as _);
-            let freed = me.free_list.free(page_offset as _, true);
-            self.pages_currently_on_freelist
-                .fetch_add(pages as usize, Ordering::SeqCst);
-            freed
-        };
-        if !self.common.contiguous {
-            // only discontiguous spaces use chunks
-            me.release_free_chunks(first, freed as _);
-        }
+        self.common.accounting.release(pages as _);
+        self.released_blocks.push(first);
     }
 
     fn release_free_chunks(&mut self, freed_page: Address, pages_freed: usize) {
