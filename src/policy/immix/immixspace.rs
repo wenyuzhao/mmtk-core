@@ -187,7 +187,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
-                BlockPageResource::new_discontiguous(Block::LOG_PAGES, vm_map)
+                unreachable!()
+                // BlockPageResource::new_discontiguous(Block::LOG_PAGES, vm_map)
             } else {
                 BlockPageResource::new_contiguous(
                     Block::LOG_PAGES,

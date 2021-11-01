@@ -19,7 +19,7 @@ use crossbeam_queue::SegQueue;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicI32, AtomicUsize};
+use std::sync::atomic::AtomicI32;
 use std::sync::{Mutex, MutexGuard};
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
@@ -28,7 +28,6 @@ pub struct BlockPageResource<VM: VMBinding> {
     common: CommonPageResource,
     common_flpr: Box<CommonFreeListPageResource>,
     log_pages: usize,
-    pages_currently_on_freelist: AtomicUsize,
     highwater_mark: AtomicI32,
     sync: Mutex<()>,
     released_blocks: SegQueue<Address>,
@@ -64,6 +63,16 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
+        debug_assert_eq!(reserved_pages, required_pages);
+        debug_assert_eq!(reserved_pages, 1 << self.log_pages);
+        if let Some(block) = self.released_blocks.pop() {
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Result::Ok(PRAllocResult {
+                start: block,
+                pages: required_pages,
+                new_chunk: false,
+            });
+        }
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const _ as *mut _) };
@@ -79,8 +88,6 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
         if page_offset == generic_freelist::FAILURE {
             return Result::Err(PRAllocFail);
         } else {
-            self.pages_currently_on_freelist
-                .fetch_sub(required_pages, Ordering::SeqCst);
             if page_offset > self.highwater_mark.load(Ordering::SeqCst) {
                 if self.highwater_mark.load(Ordering::SeqCst) == UNINITIALIZED_WATER_MARK
                     || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
@@ -139,35 +146,6 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             log_pages,
             common: CommonPageResource::new(true, growable, vm_map),
             common_flpr,
-            pages_currently_on_freelist: AtomicUsize::new(if growable { 0 } else { pages }),
-            highwater_mark: AtomicI32::new(UNINITIALIZED_WATER_MARK),
-            sync: Mutex::new(()),
-            released_blocks: SegQueue::new(),
-            _p: PhantomData,
-        }
-    }
-
-    pub fn new_discontiguous(log_pages: usize, vm_map: &'static VMMap) -> Self {
-        // We use MaybeUninit::uninit().assume_init(), which is nul, for a Box value, which cannot be null.
-        // FIXME: We should try either remove this kind of circular dependency or use MaybeUninit<T> instead of Box<T>
-        #[allow(invalid_value)]
-        #[allow(clippy::uninit_assumed_init)]
-        let common_flpr = unsafe {
-            let mut common_flpr = Box::new(CommonFreeListPageResource {
-                free_list: MaybeUninit::uninit().assume_init(),
-                start: AVAILABLE_START,
-            });
-            ::std::ptr::write(
-                &mut common_flpr.free_list,
-                vm_map.create_freelist(&common_flpr),
-            );
-            common_flpr
-        };
-        Self {
-            log_pages,
-            common: CommonPageResource::new(false, true, vm_map),
-            common_flpr,
-            pages_currently_on_freelist: AtomicUsize::new(0),
             highwater_mark: AtomicI32::new(UNINITIALIZED_WATER_MARK),
             sync: Mutex::new(()),
             released_blocks: SegQueue::new(),
@@ -199,10 +177,6 @@ impl<VM: VMBinding> BlockPageResource<VM> {
                 }
                 liberated = self.free_list.free(p as _, true); // add chunk to our free list
                 debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
-                {
-                    self.pages_currently_on_freelist
-                        .fetch_add(PAGES_IN_CHUNK, Ordering::SeqCst);
-                }
             }
             rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
         }
@@ -241,8 +215,6 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         if page_offset == generic_freelist::FAILURE {
             return Result::Err(PRAllocFail);
         } else {
-            self.pages_currently_on_freelist
-                .fetch_sub(required_pages, Ordering::SeqCst);
             if page_offset > self.highwater_mark.load(Ordering::SeqCst) {
                 if self.highwater_mark.load(Ordering::SeqCst) == UNINITIALIZED_WATER_MARK
                     || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
@@ -288,36 +260,10 @@ impl<VM: VMBinding> BlockPageResource<VM> {
                 }
                 liberated = self.free_list.free(p as _, true); // add chunk to our free list
                 debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
-                {
-                    self.pages_currently_on_freelist
-                        .fetch_add(PAGES_IN_CHUNK, Ordering::SeqCst);
-                }
             }
             rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
         }
         rtn
-    }
-
-    fn free_contiguous_chunk(&mut self, chunk: Address) {
-        let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
-        /* nail down all pages associated with the chunk, so it is no longer on our free list */
-        let mut chunk_start = conversions::bytes_to_pages(chunk - self.start);
-        let chunk_end = chunk_start + (num_chunks * PAGES_IN_CHUNK);
-        while chunk_start < chunk_end {
-            self.free_list.set_uncoalescable(chunk_start as _);
-            let tmp = self
-                .free_list
-                .alloc_from_unit(PAGES_IN_CHUNK as _, chunk_start as _)
-                as usize; // then alloc the entire chunk
-            debug_assert!(tmp == chunk_start);
-            chunk_start += PAGES_IN_CHUNK;
-            {
-                self.pages_currently_on_freelist
-                    .fetch_add(PAGES_IN_CHUNK, Ordering::SeqCst);
-            }
-        }
-        /* now return the address space associated with the chunk for global reuse */
-        self.common.release_discontiguous_chunks(chunk);
     }
 
     pub fn release_pages(&self, first: Address) {
@@ -327,31 +273,5 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         debug_assert!(pages as usize <= self.common.accounting.get_committed_pages());
         self.common.accounting.release(pages as _);
         self.released_blocks.push(first);
-    }
-
-    fn release_free_chunks(&mut self, freed_page: Address, pages_freed: usize) {
-        let page_offset = conversions::bytes_to_pages(freed_page - self.start);
-        // may be multiple chunks
-        if pages_freed % PAGES_IN_CHUNK == 0 {
-            // necessary, but not sufficient condition
-            /* grow a region of chunks, starting with the chunk containing the freed page */
-            let mut region_start = page_offset & !(PAGES_IN_CHUNK - 1);
-            let mut next_region_start = region_start + PAGES_IN_CHUNK;
-            /* now try to grow (end point pages are marked as non-coalescing) */
-            while self.free_list.is_coalescable(region_start as _) {
-                // region_start is guaranteed to be positive. Otherwise this line will fail due to subtraction overflow.
-                region_start -= PAGES_IN_CHUNK;
-            }
-            while next_region_start < generic_freelist::MAX_UNITS as usize
-                && self.free_list.is_coalescable(next_region_start as _)
-            {
-                next_region_start += PAGES_IN_CHUNK;
-            }
-            debug_assert!(next_region_start < generic_freelist::MAX_UNITS as usize);
-            if pages_freed == next_region_start - region_start {
-                let start = self.start;
-                self.free_contiguous_chunk(start + conversions::pages_to_bytes(region_start));
-            }
-        }
     }
 }
