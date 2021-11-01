@@ -1,11 +1,3 @@
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicI32, AtomicUsize};
-use std::sync::{Mutex, MutexGuard};
-
-use atomic::Ordering;
-use atomic_traits::fetch::Add;
-use crossbeam_queue::SegQueue;
-
 use super::freelistpageresource::CommonFreeListPageResource;
 use super::layout::map::Map;
 use super::pageresource::{PRAllocFail, PRAllocResult};
@@ -20,11 +12,15 @@ use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
-use crate::util::metadata::side_metadata::bzero_metadata;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
+use atomic::Ordering;
+use crossbeam_queue::SegQueue;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicI32, AtomicUsize};
+use std::sync::{Mutex, MutexGuard};
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 
@@ -90,9 +86,6 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
                     || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
                         > PAGES_IN_REGION as i32
                 {
-                    let regions = 1
-                        + ((page_offset - self.highwater_mark.load(Ordering::SeqCst))
-                            >> LOG_PAGES_IN_REGION);
                     new_chunk = true;
                 }
                 self.highwater_mark.store(page_offset, Ordering::SeqCst);
@@ -142,7 +135,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             common_flpr
         };
         let growable = cfg!(target_pointer_width = "64");
-        let mut flpr = Self {
+        Self {
             log_pages,
             common: CommonPageResource::new(true, growable, vm_map),
             common_flpr,
@@ -151,14 +144,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             sync: Mutex::new(()),
             released_blocks: SegQueue::new(),
             _p: PhantomData,
-        };
-        if !flpr.common.growable {
-            // For non-growable space, we just need to reserve metadata according to the requested size.
-            flpr.reserve_metadata(bytes);
-            // reserveMetaData(space.getExtent());
-            // unimplemented!()
         }
-        flpr
     }
 
     pub fn new_discontiguous(log_pages: usize, vm_map: &'static VMMap) -> Self {
@@ -193,7 +179,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         &mut self,
         space_descriptor: SpaceDescriptor,
         pages: usize,
-        sync: &mut MutexGuard<()>,
+        _sync: &mut MutexGuard<()>,
     ) -> i32 {
         let mut rtn = generic_freelist::FAILURE;
         let required_chunks = crate::policy::space::required_chunks(pages);
@@ -244,10 +230,6 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = &mut *(self as *const _ as *mut _);
-        let mut sync = (&mut *(self as *const _ as *mut Self))
-            .sync
-            .get_mut()
-            .unwrap();
         let mut new_chunk = false;
         let mut page_offset = self_mut.free_list.alloc(required_pages as _);
         if page_offset == generic_freelist::FAILURE && self.common.growable {
@@ -266,9 +248,6 @@ impl<VM: VMBinding> BlockPageResource<VM> {
                     || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
                         > PAGES_IN_REGION as i32
                 {
-                    let regions = 1
-                        + ((page_offset - self.highwater_mark.load(Ordering::SeqCst))
-                            >> LOG_PAGES_IN_REGION);
                     new_chunk = true;
                 }
                 self.highwater_mark.store(page_offset, Ordering::SeqCst);
@@ -333,46 +312,12 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             debug_assert!(tmp == chunk_start);
             chunk_start += PAGES_IN_CHUNK;
             {
-                let mut sync = self.sync.lock().unwrap();
                 self.pages_currently_on_freelist
                     .fetch_add(PAGES_IN_CHUNK, Ordering::SeqCst);
             }
         }
         /* now return the address space associated with the chunk for global reuse */
         self.common.release_discontiguous_chunks(chunk);
-    }
-
-    fn reserve_metadata(&mut self, extent: usize) {}
-
-    pub fn release_pages_and_reset_unlog_bits(&self, first: Address) {
-        debug_assert!(conversions::is_page_aligned(first));
-        let page_offset = conversions::bytes_to_pages(first - self.start);
-        let pages = self.free_list.size(page_offset as _);
-        bzero_metadata(
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-            first,
-            (pages as usize) << LOG_BYTES_IN_PAGE,
-        );
-
-        // if (VM.config.ZERO_PAGES_ON_RELEASE)
-        //     VM.memory.zero(false, first, Conversions.pagesToBytes(pages));
-        debug_assert!(pages as usize <= self.common.accounting.get_committed_pages());
-
-        // FIXME
-        #[allow(clippy::cast_ref_to_mut)]
-        let me = unsafe { &mut *(self as *const _ as *mut Self) };
-        let freed = {
-            let mut sync = self.sync.lock().unwrap();
-            self.common.accounting.release(pages as _);
-            let freed = me.free_list.free(page_offset as _, true);
-            self.pages_currently_on_freelist
-                .fetch_add(pages as usize, Ordering::SeqCst);
-            freed
-        };
-        if !self.common.contiguous {
-            // only discontiguous spaces use chunks
-            me.release_free_chunks(first, freed as _);
-        }
     }
 
     pub fn release_pages(&self, first: Address) {
