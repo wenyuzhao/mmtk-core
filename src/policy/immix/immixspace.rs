@@ -4,7 +4,7 @@ use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
-use crate::policy::largeobjectspace::RCSweepMatureLOS;
+use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::scheduler::gc_work::EvacuateMatureObjects;
@@ -15,6 +15,7 @@ use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
+use crate::util::rc::SweepBlocksAfterDecs;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::{
@@ -26,7 +27,6 @@ use crate::{
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
-use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
@@ -56,7 +56,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
     pub block_allocation: BlockAllocation<VM>,
-    pub possibly_dead_mature_blocks: Mutex<HashSet<Block>>,
+    possibly_dead_mature_blocks: SegQueue<Block>,
     initial_mark_pause: bool,
     pub pending_release: SegQueue<Block>,
     pub last_mutator_recycled_blocks: SegQueue<Block>,
@@ -138,6 +138,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
+                MetadataSpec::OnSide(Block::LOG_TABLE),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -777,6 +778,41 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::clear_log_table::<VM>(start..end);
         }
         Some(start..end)
+    }
+
+    #[inline(always)]
+    pub fn add_to_possibly_dead_mature_blocks(&self, block: Block) {
+        if block.log() {
+            self.possibly_dead_mature_blocks.push(block);
+        }
+    }
+
+    pub fn schedule_rc_block_sweeping_tasks(&self) {
+        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Marked);
+        }
+        // This may happen either within a pause, or in concurrent.
+        let size = self.possibly_dead_mature_blocks.len();
+        let num_bins = self.scheduler().num_workers() << 1;
+        let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
+        let mut bins = (0..num_bins)
+            .map(|_| Vec::with_capacity(bin_cap))
+            .collect::<Vec<Vec<Block>>>();
+        'out: for i in 0..num_bins {
+            for _ in 0..bin_cap {
+                if let Some(block) = self.possibly_dead_mature_blocks.pop() {
+                    bins[i].push(block);
+                } else {
+                    break 'out;
+                }
+            }
+        }
+        let packets = bins
+            .into_iter()
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs { blocks })
+            .collect();
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(RCReleaseMatureLOS);
     }
 }
 

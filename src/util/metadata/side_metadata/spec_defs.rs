@@ -78,6 +78,8 @@ define_side_metadata_specs!(
     IX_CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::chunk::Chunk::LOG_BYTES),
     // Striddle line marks
     RC_STRADDLE_LINES = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
+    // LXR Block logging bits
+    IX_BLOCK_LOG   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
 );
 
 #[cfg(test)]

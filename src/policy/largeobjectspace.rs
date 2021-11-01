@@ -16,7 +16,6 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::opaque_pointer::*;
 use crate::util::rc;
-use crate::util::rc::SweepBlocksAfterDecs;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
@@ -449,8 +448,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         }
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
             let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-            let immix_space = &immix.immix_space;
-            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix_space);
+            immix.immix_space.schedule_rc_block_sweeping_tasks();
         }
     }
 }

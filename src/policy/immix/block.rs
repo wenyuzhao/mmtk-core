@@ -104,6 +104,8 @@ impl Block {
     /// Block mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+    pub const LOG_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOG;
 
     pub const ZERO: Self = Self(Address::ZERO);
 
@@ -290,6 +292,39 @@ impl Block {
             self.start(),
             Block::BYTES,
         );
+    }
+
+    #[inline(always)]
+    pub fn log(&self) -> bool {
+        loop {
+            let old_value =
+                side_metadata::load_atomic(&Self::LOG_TABLE, self.start(), Ordering::Relaxed);
+            if old_value == 1 {
+                return false;
+            }
+            if side_metadata::compare_exchange_atomic(
+                &Self::LOG_TABLE,
+                self.start(),
+                0,
+                1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                return true;
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn unlog(&self) {
+        side_metadata::store_atomic(&Self::LOG_TABLE, self.start(), 0, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    pub fn unlog_non_atomic(&self) {
+        unsafe {
+            side_metadata::store(&Self::LOG_TABLE, self.start(), 0);
+        }
     }
 
     #[inline(always)]

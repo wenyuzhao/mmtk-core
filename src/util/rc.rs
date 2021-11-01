@@ -3,7 +3,6 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
-use crate::policy::largeobjectspace::RCReleaseMatureLOS;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
@@ -11,13 +10,10 @@ use crate::{
         EdgeIterator,
     },
     policy::{
-        immix::{block::Block, line::Line, ImmixSpace},
+        immix::{block::Block, line::Line},
         space::Space,
     },
-    scheduler::{
-        gc_work::ProcessEdgesBase, GCWork, GCWorkScheduler, GCWorker, ProcessEdgesWork,
-        WorkBucketStage,
-    },
+    scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     util::{
         cm::ImmixConcurrentTraceObjects,
         metadata::side_metadata::{self, SideMetadataSpec},
@@ -571,11 +567,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             o.to_address().store(0xdeadusize);
         }
         if in_ix_space {
-            immix
-                .immix_space
-                .possibly_dead_mature_blocks
-                .lock()
-                .insert(Block::containing::<VM>(o));
+            let block = Block::containing::<VM>(o);
+            immix.immix_space.add_to_possibly_dead_mature_blocks(block);
         } else {
             immix.los().rc_free(o);
         }
@@ -622,51 +615,20 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix.immix_space);
+            immix.immix_space.schedule_rc_block_sweeping_tasks();
         }
     }
 }
 
 pub struct SweepBlocksAfterDecs {
-    blocks: Vec<Block>,
-}
-
-impl SweepBlocksAfterDecs {
-    pub fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>, immix_space: &ImmixSpace<VM>) {
-        while let Some(x) = immix_space.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Marked);
-        }
-        // This may happen either within a pause, or in concurrent.
-        let mut blocks_set = immix_space.possibly_dead_mature_blocks.lock();
-        let size = blocks_set.len();
-        let num_bins = scheduler.num_workers() << 1;
-        let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
-        let mut bins = (0..num_bins)
-            .map(|_| Vec::with_capacity(bin_cap))
-            .collect::<Vec<Vec<Block>>>();
-        let mut blocks = blocks_set.iter().cloned().collect::<Vec<Block>>();
-        blocks_set.clear();
-        for i in 0..num_bins {
-            for _ in 0..bin_cap {
-                if let Some(block) = blocks.pop() {
-                    bins[i].push(block);
-                }
-            }
-        }
-        debug_assert!(blocks.is_empty());
-        let packets = bins
-            .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs { blocks })
-            .collect();
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(RCReleaseMatureLOS);
-    }
+    pub blocks: Vec<Block>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         for b in &self.blocks {
+            b.unlog_non_atomic();
             b.rc_sweep_mature::<VM>(&immix.immix_space);
         }
     }

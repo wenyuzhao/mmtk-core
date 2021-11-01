@@ -5,7 +5,7 @@ use super::line::Line;
 use crate::plan::immix::{Immix, CURRENT_CONC_DECS_COUNTER};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
-use crate::util::rc::{self, ProcessDecs, SweepBlocksAfterDecs};
+use crate::util::rc::{self, ProcessDecs};
 use crate::util::ObjectReference;
 use crate::{
     scheduler::*,
@@ -438,7 +438,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         block.set_as_defrag_source(false);
         block.clear_rc_table::<VM>();
         block.clear_striddle_table::<VM>();
-        immix_space.possibly_dead_mature_blocks.lock().insert(block);
+        immix_space.add_to_possibly_dead_mature_blocks(block);
     }
 
     #[inline]
@@ -465,7 +465,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             }
         }
         if has_dead_object {
-            immix_space.possibly_dead_mature_blocks.lock().insert(block);
+            immix_space.add_to_possibly_dead_mature_blocks(block);
         }
     }
 }
@@ -490,7 +490,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         // self.flush();
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            SweepBlocksAfterDecs::schedule(&mmtk.scheduler, &immix_space);
+            immix_space.schedule_rc_block_sweeping_tasks();
         }
     }
 }
