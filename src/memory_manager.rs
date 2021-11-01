@@ -25,6 +25,7 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
+use std::time::SystemTime;
 
 /// Run the main loop for the GC controller thread. This method does not return.
 ///
@@ -72,6 +73,7 @@ pub fn gc_init<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, heap_size: usize) {
     info!("Initialized MMTk with {:?}", mmtk.options.plan);
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
+    *crate::BOOT_TIME.lock() = SystemTime::now();
 }
 
 /// Request MMTk to create a mutator for the given thread. For performance reasons, A VM should

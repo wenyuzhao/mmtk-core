@@ -93,12 +93,12 @@ use spin::Mutex;
 #[macro_use]
 mod policy;
 
+pub mod args;
 pub mod memory_manager;
 pub mod plan;
 pub mod scheduler;
 pub mod util;
 pub mod vm;
-pub mod args;
 
 pub use crate::plan::{
     AllocationSemantics, BarrierSelector, CopyContext, Mutator, MutatorContext, Plan, TraceLocal,
@@ -110,7 +110,7 @@ static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 #[inline(always)]
 fn concurrent_marking_in_progress() -> bool {
-    cfg!(feature="ix_concurrent_marking") && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+    cfg!(feature = "ix_concurrent_marking") && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
 }
 
 #[inline(always)]
@@ -125,10 +125,8 @@ fn disable_lasy_dec_for_current_gc() -> bool {
     crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.load(Ordering::SeqCst)
 }
 
-static GC_TRIGGER_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
-static GC_START_TIME: Mutex<Option<SystemTime>> = Mutex::new(None);
-
-/// Immix or barrier related flags
-pub mod flags {
-
-}
+static GC_TRIGGER_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
+static GC_START_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
+static BOOT_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
+static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
+static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);

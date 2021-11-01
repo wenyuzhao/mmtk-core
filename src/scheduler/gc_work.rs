@@ -25,7 +25,8 @@ pub struct ScheduleCollection;
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if crate::args::LOG_PER_GC_STATE {
-            *crate::GC_TRIGGER_TIME.lock() = Some(SystemTime::now());
+            *crate::GC_TRIGGER_TIME.lock() = SystemTime::now();
+            crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         }
         mmtk.plan.schedule_collection(worker.scheduler());
     }
@@ -216,7 +217,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
         if crate::args::LOG_PER_GC_STATE {
-            *crate::GC_START_TIME.lock() = Some(SystemTime::now());
+            *crate::GC_START_TIME.lock() = SystemTime::now();
+            crate::RESERVED_PAGES_AT_GC_START
+                .store(mmtk.plan.get_pages_reserved(), Ordering::SeqCst);
         }
         mmtk.plan.gc_pause_start();
         trace!("stop_all_mutators end");
@@ -258,36 +261,36 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
         if crate::args::LOG_PER_GC_STATE {
-            let released_n =
+            let _released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
-            let released = crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
-            println!("Released {} blocks ({} nursery)", released, released_n);
+            let _released =
+                crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
+            // println!("Released {} blocks ({} nursery)", released, released_n);
             crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
-            println!(
-                "Memory after GC: {} {} / {} blocks ({} los blocks)",
-                mmtk.plan.get_pages_used() / Block::PAGES,
-                mmtk.plan.get_pages_reserved() / Block::PAGES,
-                mmtk.plan.get_total_pages() / Block::PAGES,
-                mmtk.plan.common().los.reserved_pages() / Block::PAGES,
-            );
 
+            let pause_time =
+                crate::GC_START_TIME.lock().elapsed().unwrap().as_micros() as f64 / 1000f64;
+            let boot_time = crate::BOOT_TIME.lock().elapsed().unwrap().as_millis() as f64 / 1000f64;
+            let pause = if let Some(immix) = mmtk.plan.downcast_ref::<Immix<VM>>() {
+                match immix.current_pause().unwrap() {
+                    Pause::RefCount => "RefCount",
+                    Pause::InitialMark => "InitialMark",
+                    Pause::FinalMark => "FinalMark",
+                    _ => "Full",
+                }
+            } else {
+                "Full"
+            };
             println!(
-                "> {}ms {}ms",
-                crate::GC_TRIGGER_TIME
-                    .lock()
-                    .as_ref()
-                    .unwrap()
-                    .elapsed()
-                    .unwrap()
-                    .as_millis(),
-                crate::GC_START_TIME
-                    .lock()
-                    .as_ref()
-                    .unwrap()
-                    .elapsed()
-                    .unwrap()
-                    .as_millis()
+                "[{:.3}s][info][gc] GC({}) Pause {} {}M->{}M({}M) {:.3}ms",
+                boot_time,
+                crate::GC_EPOCH.load(Ordering::SeqCst),
+                pause,
+                crate::RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,
+                mmtk.plan.get_pages_reserved() / 256,
+                mmtk.plan.get_total_pages() / 256,
+                pause_time
             );
         }
 

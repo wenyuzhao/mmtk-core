@@ -91,9 +91,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.base().collection_required(self, space_full, space) {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-            if crate::args::LOG_PER_GC_STATE {
-                println!("! base heap/space full");
-            }
             return true;
         }
         // Concurrent tracing finished
@@ -101,9 +98,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
         {
-            if crate::args::LOG_PER_GC_STATE {
-                println!("! cm finished");
-            }
             return true;
         }
         // RC nursery full
@@ -112,9 +106,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && self.immix_space.block_allocation.nursery_blocks()
                 >= *crate::args::NURSERY_BLOCKS_THRESHOLD_FOR_RC
         {
-            if crate::args::LOG_PER_GC_STATE {
-                println!("! rc collection_required");
-            }
             return true;
         }
         false
@@ -411,20 +402,6 @@ impl<VM: VMBinding> Immix<VM> {
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
             .store(pause != Pause::RefCount, Ordering::SeqCst);
-        if crate::args::LOG_PER_GC_STATE {
-            println!(
-                "[STW] {:?} emergency={}",
-                pause,
-                self.is_emergency_collection()
-            );
-            println!(
-                "Memory before GC: {} {} / {} blocks ({} los blocks)",
-                self.get_pages_used() / Block::PAGES,
-                self.get_pages_reserved() / Block::PAGES,
-                self.get_total_pages() / Block::PAGES,
-                self.common.los.reserved_pages() / Block::PAGES,
-            );
-        }
         pause
     }
 
