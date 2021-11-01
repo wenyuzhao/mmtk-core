@@ -76,6 +76,7 @@ fn dump_features(active_barrier: BarrierSelector) {
 
     dump_feature!("barrier_measurement");
     dump_feature!("ix_block_only");
+    dump_feature!("ix_defrag");
     dump_feature!("ix_lock_free_block_allocation");
     dump_feature!("ix_concurrent_marking");
     dump_feature!("ix_ref_count");
