@@ -213,7 +213,7 @@ impl Stats {
     }
 
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
-        print!("GC\t");
+        print!("pauses\t");
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
