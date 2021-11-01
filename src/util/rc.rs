@@ -291,9 +291,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn add_remset(&mut self, e: Address) {
         self.remset.push(e);
-        if self.remset.len() > Self::CAPACITY {
-            self.flush()
-        }
     }
 
     #[inline(always)]
@@ -437,7 +434,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         // unlog edge
         if !self.roots {
-            // debug_assert!(e.is_logged::<VM>(), "{:?}", e);
             e.unlog::<VM>();
         }
         Some(o)
