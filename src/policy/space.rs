@@ -350,7 +350,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         pages: usize,
         poll_on_failure: bool,
     ) -> Option<Address> {
-        let pr = self.get_page_resource().flpr().unwrap();
+        let pr = self.get_page_resource().bpr().unwrap();
         let pages_reserved = pr.reserve_pages(pages);
         let should_poll = VM::VMActivePlan::is_mutator(tls);
         let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();

@@ -1,7 +1,7 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{CURRENT_CONC_DECS_COUNTER, Immix, Pause};
+use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::largeobjectspace::RCSweepMatureLOS;
@@ -20,7 +20,7 @@ use crate::vm::*;
 use crate::{
     plan::TransitiveClosure,
     scheduler::{gc_work::ProcessEdgesWork, GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
-    util::{heap::FreeListPageResource, opaque_pointer::VMThread},
+    util::{heap::blockpageresource::BlockPageResource, opaque_pointer::VMThread},
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
@@ -40,7 +40,7 @@ pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pub(super) pr: FreeListPageResource<VM>,
+    pub(super) pr: BlockPageResource<VM>,
     /// Allocation status for all chunks in immix space
     pub chunk_map: ChunkMap,
     /// Current line mark state
@@ -187,9 +187,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
-                FreeListPageResource::new_discontiguous(0, vm_map)
+                BlockPageResource::new_discontiguous(Block::LOG_PAGES, vm_map)
             } else {
-                FreeListPageResource::new_contiguous(common.start, common.extent, 0, vm_map)
+                BlockPageResource::new_contiguous(
+                    Block::LOG_PAGES,
+                    common.start,
+                    common.extent,
+                    vm_map,
+                )
             },
             common,
             chunk_map: ChunkMap::new(),

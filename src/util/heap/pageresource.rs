@@ -4,6 +4,7 @@ use crate::util::opaque_pointer::*;
 use crate::vm::ActivePlan;
 use std::sync::Mutex;
 
+use super::blockpageresource::BlockPageResource;
 use super::layout::map::Map;
 use super::FreeListPageResource;
 use crate::util::heap::layout::heap_layout::VMMap;
@@ -99,6 +100,10 @@ pub trait PageResource<VM: VMBinding>: 'static {
     }
 
     fn flpr(&self) -> Option<&FreeListPageResource<VM>> {
+        None
+    }
+
+    fn bpr(&self) -> Option<&BlockPageResource<VM>> {
         None
     }
 }
