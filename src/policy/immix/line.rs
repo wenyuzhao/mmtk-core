@@ -136,7 +136,6 @@ impl Line {
         );
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << LOG_META_BYTES_PER_LINE;
-        // unsafe { std::ptr::write_bytes::<u8>(meta_start.to_mut_ptr(), 0, meta_bytes) }
         crate::util::memory::zero(meta_start, meta_bytes)
     }
 

@@ -11,9 +11,9 @@ pub fn result_is_mapped(result: Result<()>) -> bool {
     }
 }
 
+#[inline(always)]
 pub fn zero(start: Address, len: usize) {
-    let ptr = start.to_mut_ptr();
-    wrap_libc_call(&|| unsafe { libc::memset(ptr, 0, len) }, ptr).unwrap()
+    unsafe { std::ptr::write_bytes::<u8>(start.to_mut_ptr(), 0, len) }
 }
 
 /// Demand-zero mmap:
