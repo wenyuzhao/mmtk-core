@@ -364,18 +364,13 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 self.grow_space(res.start, bytes, res.new_chunk);
                 // Mmap the pages and the side metadata, and handle error. In case of any error,
                 // we will either call back to the VM for OOM, or simply panic.
-                use crate::util::heap::layout::mmapper::Mmapper;
-                if let Err(mmap_error) = self
-                    .common()
-                    .mmapper
-                    .ensure_mapped(res.start, res.pages)
-                    .and(
-                        self.common()
-                            .metadata
-                            .try_map_metadata_space(res.start, bytes),
-                    )
-                {
-                    crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
+                if res.new_chunk {
+                    use crate::util::heap::layout::mmapper::Mmapper;
+                    if let Err(mmap_error) =
+                        self.common().mmapper.ensure_mapped(res.start, res.pages)
+                    {
+                        crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
+                    }
                 }
                 debug!("Space.acquire(), returned = {}", res.start);
                 Some(res.start)

@@ -248,7 +248,7 @@ impl SideMetadataContext {
         // Chunk aligned
         debug_assert!(start.is_aligned_to(BYTES_IN_CHUNK));
         debug_assert!(size % BYTES_IN_CHUNK == 0);
-        self.map_metadata_internal(start, size, true)
+        self.map_metadata_internal(start, size, false)
     }
 
     /// The internal function to mmap metadata
