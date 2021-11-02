@@ -1,4 +1,3 @@
-use super::freelistpageresource::CommonFreeListPageResource;
 use super::layout::map::Map;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
