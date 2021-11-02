@@ -249,6 +249,42 @@ impl const UintType for Uint<128> {
     }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct UInt512([u8; 512 / 8]);
+
+impl UintType for Uint<512> {
+    type Type = UInt512;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == UInt512([0; 512 / 8])
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct UInt1024([u8; 1024 / 8]);
+
+impl UintType for Uint<1024> {
+    type Type = UInt1024;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == UInt1024([0; 1024 / 8])
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct UInt2048([u8; 2048 / 8]);
+
+impl UintType for Uint<2048> {
+    type Type = UInt2048;
+    #[inline(always)]
+    fn is_zero(v: Self::Type) -> bool {
+        v == UInt2048([0; 2048 / 8])
+    }
+}
+
 const LOG_BITS_PER_LINE: usize = Line::LOG_BYTES - rc::LOG_MIN_OBJECT_SIZE + rc::LOG_REF_COUNT_BITS;
 const BITS_PER_LINE: usize = 1 << LOG_BITS_PER_LINE;
 const LOG_BITS_PER_BLOCK: usize =
@@ -267,7 +303,7 @@ impl RCArray {
     }
 
     #[inline(always)]
-    pub const fn is_dead(&self, i: usize) -> bool {
+    pub fn is_dead(&self, i: usize) -> bool {
         <Uint<{ BITS_PER_LINE }> as UintType>::is_zero(self.table[i])
     }
 }
