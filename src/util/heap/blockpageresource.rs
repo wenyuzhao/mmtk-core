@@ -14,7 +14,7 @@ use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 use crossbeam_queue::SegQueue;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -31,27 +31,18 @@ pub struct BlockPageResource<VM: VMBinding> {
     highwater_mark: AtomicI32,
     sync: Mutex<()>,
     released_blocks: SegQueue<Address>,
+    highwater: Atomic<Address>,
+    limit: Address,
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> Deref for BlockPageResource<VM> {
-    type Target = CommonFreeListPageResource;
-
-    fn deref(&self) -> &CommonFreeListPageResource {
-        &self.common_flpr
-    }
-}
-
-impl<VM: VMBinding> DerefMut for BlockPageResource<VM> {
-    fn deref_mut(&mut self) -> &mut CommonFreeListPageResource {
-        &mut self.common_flpr
-    }
-}
-
 impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
+    #[inline(always)]
     fn common(&self) -> &CommonPageResource {
         &self.common
     }
+
+    #[inline(always)]
     fn common_mut(&mut self) -> &mut CommonPageResource {
         &mut self.common
     }
@@ -63,50 +54,8 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        debug_assert_eq!(reserved_pages, required_pages);
-        debug_assert_eq!(reserved_pages, 1 << self.log_pages);
-        if let Some(block) = self.released_blocks.pop() {
-            self.commit_pages(reserved_pages, required_pages, tls);
-            return Result::Ok(PRAllocResult {
-                start: block,
-                pages: required_pages,
-                new_chunk: false,
-            });
-        }
-        // FIXME: We need a safe implementation
-        #[allow(clippy::cast_ref_to_mut)]
-        let self_mut: &mut Self = unsafe { &mut *(self as *const _ as *mut _) };
-        let mut sync = self.sync.lock().unwrap();
-        let mut new_chunk = false;
-        let mut page_offset = self_mut.free_list.alloc(required_pages as _);
-        if page_offset == generic_freelist::FAILURE && self.common.growable {
-            page_offset =
-                self_mut.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
-            new_chunk = true;
-        }
-
-        if page_offset == generic_freelist::FAILURE {
-            return Result::Err(PRAllocFail);
-        } else {
-            if page_offset > self.highwater_mark.load(Ordering::SeqCst) {
-                if self.highwater_mark.load(Ordering::SeqCst) == UNINITIALIZED_WATER_MARK
-                    || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
-                        > PAGES_IN_REGION as i32
-                {
-                    new_chunk = true;
-                }
-                self.highwater_mark.store(page_offset, Ordering::SeqCst);
-            }
-        }
-
-        let rtn = self.start + conversions::pages_to_bytes(page_offset as _);
-        // The meta-data portion of reserved Pages was committed above.
-        self.commit_pages(reserved_pages, required_pages, tls);
-        Result::Ok(PRAllocResult {
-            start: rtn,
-            pages: required_pages,
-            new_chunk,
-        })
+        let sync = self.sync.lock().unwrap();
+        unsafe { self.alloc_pages_no_lock(space_descriptor, reserved_pages, required_pages, tls) }
     }
 
     fn adjust_for_metadata(&self, pages: usize) -> usize {
@@ -135,10 +84,10 @@ impl<VM: VMBinding> BlockPageResource<VM> {
                 free_list: MaybeUninit::uninit().assume_init(),
                 start,
             });
-            ::std::ptr::write(
-                &mut common_flpr.free_list,
-                vm_map.create_parent_freelist(&common_flpr, pages, PAGES_IN_REGION as _),
-            );
+            // ::std::ptr::write(
+            //     &mut common_flpr.free_list,
+            //     vm_map.create_parent_freelist(&common_flpr, pages, PAGES_IN_REGION as _),
+            // );
             common_flpr
         };
         let growable = cfg!(target_pointer_width = "64");
@@ -149,6 +98,8 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             highwater_mark: AtomicI32::new(UNINITIALIZED_WATER_MARK),
             sync: Mutex::new(()),
             released_blocks: SegQueue::new(),
+            highwater: Atomic::new(start),
+            limit: (start + bytes).align_up(BYTES_IN_CHUNK),
             _p: PhantomData,
         }
     }
@@ -159,28 +110,29 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         pages: usize,
         _sync: &mut MutexGuard<()>,
     ) -> i32 {
-        let mut rtn = generic_freelist::FAILURE;
-        let required_chunks = crate::policy::space::required_chunks(pages);
-        let region = self
-            .common
-            .grow_discontiguous_space(space_descriptor, required_chunks);
+        unreachable!()
+        // let mut rtn = generic_freelist::FAILURE;
+        // let required_chunks = crate::policy::space::required_chunks(pages);
+        // let region = self
+        //     .common
+        //     .grow_discontiguous_space(space_descriptor, required_chunks);
 
-        if !region.is_zero() {
-            let region_start = conversions::bytes_to_pages(region - self.start);
-            let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
-            self.free_list.set_uncoalescable(region_start as _);
-            self.free_list.set_uncoalescable(region_end as i32 + 1);
-            for p in (region_start..region_end).step_by(PAGES_IN_CHUNK) {
-                let liberated;
-                if p != region_start {
-                    self.free_list.clear_uncoalescable(p as _);
-                }
-                liberated = self.free_list.free(p as _, true); // add chunk to our free list
-                debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
-            }
-            rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
-        }
-        rtn
+        // if !region.is_zero() {
+        //     let region_start = conversions::bytes_to_pages(region - self.start);
+        //     let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
+        //     self.free_list.set_uncoalescable(region_start as _);
+        //     self.free_list.set_uncoalescable(region_end as i32 + 1);
+        //     for p in (region_start..region_end).step_by(PAGES_IN_CHUNK) {
+        //         let liberated;
+        //         if p != region_start {
+        //             self.free_list.clear_uncoalescable(p as _);
+        //         }
+        //         liberated = self.free_list.free(p as _, true); // add chunk to our free list
+        //         debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
+        //     }
+        //     rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
+        // }
+        // rtn
     }
 
     /// The caller needs to ensure this is called by only one thread.
@@ -193,6 +145,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
     ) -> Result<PRAllocResult, PRAllocFail> {
         debug_assert_eq!(reserved_pages, required_pages);
         debug_assert_eq!(reserved_pages, 1 << self.log_pages);
+        // Fast allocate from the released-blocks list
         if let Some(block) = self.released_blocks.pop() {
             self.commit_pages(reserved_pages, required_pages, tls);
             return Result::Ok(PRAllocResult {
@@ -201,39 +154,62 @@ impl<VM: VMBinding> BlockPageResource<VM> {
                 new_chunk: false,
             });
         }
-        // FIXME: We need a safe implementation
-        #[allow(clippy::cast_ref_to_mut)]
-        let self_mut: &mut Self = &mut *(self as *const _ as *mut _);
-        let mut new_chunk = false;
-        let mut page_offset = self_mut.free_list.alloc(required_pages as _);
-        if page_offset == generic_freelist::FAILURE && self.common.growable {
-            page_offset =
-                self_mut.allocate_contiguous_chunks_no_lock(space_descriptor, required_pages);
-            new_chunk = true;
-        }
+        // Grow space
+        let start: Address =
+            match self
+                .highwater
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                    if x >= self.limit {
+                        None
+                    } else {
+                        Some(x + (1usize << (self.log_pages + LOG_BYTES_IN_PAGE as usize)))
+                    }
+                }) {
+                Ok(a) => a,
+                _ => return Result::Err(PRAllocFail),
+            };
+        let new_chunk = start.is_aligned_to(BYTES_IN_CHUNK);
 
-        if page_offset == generic_freelist::FAILURE {
-            return Result::Err(PRAllocFail);
-        } else {
-            if page_offset > self.highwater_mark.load(Ordering::SeqCst) {
-                if self.highwater_mark.load(Ordering::SeqCst) == UNINITIALIZED_WATER_MARK
-                    || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
-                        > PAGES_IN_REGION as i32
-                {
-                    new_chunk = true;
-                }
-                self.highwater_mark.store(page_offset, Ordering::SeqCst);
-            }
-        }
-
-        let rtn = self.start + conversions::pages_to_bytes(page_offset as _);
-        // The meta-data portion of reserved Pages was committed above.
         self.commit_pages(reserved_pages, required_pages, tls);
         Result::Ok(PRAllocResult {
-            start: rtn,
+            start: start,
             pages: required_pages,
-            new_chunk,
+            new_chunk: new_chunk,
         })
+
+        //     // FIXME: We need a safe implementation
+        //     #[allow(clippy::cast_ref_to_mut)]
+        //     let self_mut: &mut Self = &mut *(self as *const _ as *mut _);
+        //     let mut new_chunk = false;
+        //     let mut page_offset = self_mut.free_list.alloc(required_pages as _);
+        //     if page_offset == generic_freelist::FAILURE && self.common.growable {
+        //         page_offset =
+        //             self_mut.allocate_contiguous_chunks_no_lock(space_descriptor, required_pages);
+        //         new_chunk = true;
+        //     }
+
+        //     if page_offset == generic_freelist::FAILURE {
+        //         return Result::Err(PRAllocFail);
+        //     } else {
+        //         if page_offset > self.highwater_mark.load(Ordering::SeqCst) {
+        //             if self.highwater_mark.load(Ordering::SeqCst) == UNINITIALIZED_WATER_MARK
+        //                 || (page_offset ^ self.highwater_mark.load(Ordering::SeqCst))
+        //                     > PAGES_IN_REGION as i32
+        //             {
+        //                 new_chunk = true;
+        //             }
+        //             self.highwater_mark.store(page_offset, Ordering::SeqCst);
+        //         }
+        //     }
+
+        //     let rtn = self.start + conversions::pages_to_bytes(page_offset as _);
+        //     // The meta-data portion of reserved Pages was committed above.
+        //     self.commit_pages(reserved_pages, required_pages, tls);
+        //     Result::Ok(PRAllocResult {
+        //         start: rtn,
+        //         pages: required_pages,
+        //         new_chunk,
+        //     })
     }
 
     /// The caller needs to ensure this is called by only one thread.
@@ -242,28 +218,29 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         space_descriptor: SpaceDescriptor,
         pages: usize,
     ) -> i32 {
-        let mut rtn = generic_freelist::FAILURE;
-        let required_chunks = crate::policy::space::required_chunks(pages);
-        let region = self
-            .common
-            .grow_discontiguous_space(space_descriptor, required_chunks);
+        unreachable!();
+        // let mut rtn = generic_freelist::FAILURE;
+        // let required_chunks = crate::policy::space::required_chunks(pages);
+        // let region = self
+        //     .common
+        //     .grow_discontiguous_space(space_descriptor, required_chunks);
 
-        if !region.is_zero() {
-            let region_start = conversions::bytes_to_pages(region - self.start);
-            let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
-            self.free_list.set_uncoalescable(region_start as _);
-            self.free_list.set_uncoalescable(region_end as i32 + 1);
-            for p in (region_start..region_end).step_by(PAGES_IN_CHUNK) {
-                let liberated;
-                if p != region_start {
-                    self.free_list.clear_uncoalescable(p as _);
-                }
-                liberated = self.free_list.free(p as _, true); // add chunk to our free list
-                debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
-            }
-            rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
-        }
-        rtn
+        // if !region.is_zero() {
+        //     let region_start = conversions::bytes_to_pages(region - self.start);
+        //     let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
+        //     self.free_list.set_uncoalescable(region_start as _);
+        //     self.free_list.set_uncoalescable(region_end as i32 + 1);
+        //     for p in (region_start..region_end).step_by(PAGES_IN_CHUNK) {
+        //         let liberated;
+        //         if p != region_start {
+        //             self.free_list.clear_uncoalescable(p as _);
+        //         }
+        //         liberated = self.free_list.free(p as _, true); // add chunk to our free list
+        //         debug_assert!(liberated as usize == PAGES_IN_CHUNK + (p - region_start));
+        //     }
+        //     rtn = self.free_list.alloc(pages as _); // re-do the request which triggered this call
+        // }
+        // rtn
     }
 
     pub fn release_pages(&self, first: Address) {
