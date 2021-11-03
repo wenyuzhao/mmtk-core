@@ -11,7 +11,15 @@ pub use immixspace::*;
 use crate::policy::immix::block::Block;
 
 /// The max object size for immix: half of a block
-pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES >> 1;
+pub const MAX_IMMIX_OBJECT_SIZE: usize = {
+    if cfg!(feature = "lxr_los_16k") {
+        16 * 1024
+    } else if cfg!(feature = "lxr_los_32k") {
+        32 * 1024
+    } else {
+        Block::BYTES >> 1
+    }
+};
 
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = crate::args::BLOCK_ONLY;
@@ -30,7 +38,7 @@ macro_rules! validate {
 
 fn validate_features() {
     // Number of lines in a block should not exceed BlockState::MARK_MARKED
-    if !crate::args::BLOCK_ONLY {
+    if !crate::args::REF_COUNT && !crate::args::BLOCK_ONLY {
         assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
     }
 }
