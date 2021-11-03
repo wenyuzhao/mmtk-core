@@ -85,7 +85,21 @@ pub struct Block(Address);
 
 impl Block {
     /// Log bytes in block
-    pub const LOG_BYTES: usize = 15;
+    pub const LOG_BYTES: usize = {
+        if cfg!(feature = "lxr_block_16k") {
+            14
+        } else if cfg!(feature = "lxr_block_32k") {
+            15
+        } else if cfg!(feature = "lxr_block_64k") {
+            16
+        } else if cfg!(feature = "lxr_block_128k") {
+            17
+        } else if cfg!(feature = "lxr_block_236k") {
+            18
+        } else {
+            15
+        }
+    };
     /// Bytes in block
     pub const BYTES: usize = 1 << Self::LOG_BYTES;
     /// Log pages in block
