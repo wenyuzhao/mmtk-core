@@ -569,7 +569,7 @@ impl<VM: VMBinding> Immix<VM> {
         };
         PREV_AVG_PAUSE.store(avg_pause, Ordering::Relaxed);
         let scale = avg_pause / 5f64;
-        crate::args::ADAPTIVE_NURSERY_BLOCKS.fetch_update(
+        let _ = crate::args::ADAPTIVE_NURSERY_BLOCKS.fetch_update(
             Ordering::SeqCst,
             Ordering::SeqCst,
             |x| Some((x as f64 * (1f64 / scale)) as _),

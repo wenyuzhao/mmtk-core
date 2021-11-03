@@ -169,11 +169,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let len = self.buffer.len();
         let self_mut = unsafe { &mut *(self as *const Self as *mut Self) };
         if len < self.high_water.load(Ordering::SeqCst) + self.refill_count {
-            unsafe {
-                self_mut
-                    .buffer
-                    .resize_with(len << 1, || Atomic::new(Block::ZERO))
-            }
+            self_mut
+                .buffer
+                .resize_with(len << 1, || Atomic::new(Block::ZERO))
         }
         // Alloc first block
         let result = Block::from(unsafe {
