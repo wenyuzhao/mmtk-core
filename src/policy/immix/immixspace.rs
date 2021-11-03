@@ -751,19 +751,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start_cursor = search_start.get_index_within_block();
         let mut cursor = start_cursor;
         // Find start
-        while cursor < mark_data.len() {
+        while cursor < Block::LINES {
             let mark = mark_data.get(cursor);
             if mark != unavail_state && mark != current_state {
                 break;
             }
             cursor += 1;
         }
-        if cursor == mark_data.len() {
+        if cursor == Block::LINES {
             return None;
         }
         let start = Line::forward(search_start, cursor - start_cursor);
         // Find limit
-        while cursor < mark_data.len() {
+        while cursor < Block::LINES {
             let mark = mark_data.get(cursor);
             if mark == unavail_state || mark == current_state {
                 break;

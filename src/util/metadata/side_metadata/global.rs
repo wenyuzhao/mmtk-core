@@ -932,15 +932,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     #[inline(always)]
     #[allow(clippy::let_and_return)]
     pub fn get(&self, index: usize) -> u8 {
-        #[cfg(feature = "extreme_assertions")]
-        let _lock = sanity::SANITY_LOCK.lock().unwrap();
-        let value = self.data[index];
-        #[cfg(feature = "extreme_assertions")]
-        {
-            let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
-            sanity::verify_load(&self.spec, data_addr, value as _);
-        }
-        value
+        unsafe { *self.data.get_unchecked(index) }
     }
 
     /// Get a byte from the metadata byte array at the given index.
