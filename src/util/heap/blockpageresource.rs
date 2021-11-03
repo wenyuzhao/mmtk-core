@@ -1,9 +1,7 @@
-use super::layout::map::Map;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
 use crate::util::address::Address;
 use crate::util::constants::*;
-use crate::util::conversions;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
@@ -45,7 +43,7 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        let sync = self.sync.lock().unwrap();
+        let _sync = self.sync.lock().unwrap();
         unsafe { self.alloc_pages_no_lock(space_descriptor, reserved_pages, required_pages, tls) }
     }
 
@@ -65,7 +63,6 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         bytes: usize,
         vm_map: &'static VMMap,
     ) -> Self {
-        let pages = conversions::bytes_to_pages(bytes);
         let growable = cfg!(target_pointer_width = "64");
         Self {
             log_pages,
@@ -81,7 +78,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
     /// The caller needs to ensure this is called by only one thread.
     pub unsafe fn alloc_pages_no_lock(
         &self,
-        space_descriptor: SpaceDescriptor,
+        _space_descriptor: SpaceDescriptor,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,

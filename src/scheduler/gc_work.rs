@@ -24,10 +24,8 @@ pub struct ScheduleCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if crate::args::LOG_PER_GC_STATE {
-            *crate::GC_TRIGGER_TIME.lock() = SystemTime::now();
-            crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
-        }
+        crate::GC_TRIGGER_TIME.store(SystemTime::now(), Ordering::SeqCst);
+        crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         mmtk.plan.schedule_collection(worker.scheduler());
     }
 }
@@ -219,8 +217,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         trace!("stop_all_mutators start");
         debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
+        crate::GC_START_TIME.store(SystemTime::now(), Ordering::SeqCst);
         if crate::args::LOG_PER_GC_STATE {
-            *crate::GC_START_TIME.lock() = SystemTime::now();
             crate::RESERVED_PAGES_AT_GC_START
                 .store(mmtk.plan.get_pages_reserved(), Ordering::SeqCst);
         }
@@ -272,9 +270,18 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
 
-            let pause_time =
-                crate::GC_START_TIME.lock().elapsed().unwrap().as_micros() as f64 / 1000f64;
-            let boot_time = crate::BOOT_TIME.lock().elapsed().unwrap().as_millis() as f64 / 1000f64;
+            let pause_time = crate::GC_START_TIME
+                .load(Ordering::SeqCst)
+                .elapsed()
+                .unwrap()
+                .as_micros() as f64
+                / 1000f64;
+            let boot_time = crate::BOOT_TIME
+                .load(Ordering::SeqCst)
+                .elapsed()
+                .unwrap()
+                .as_millis() as f64
+                / 1000f64;
             let pause = if let Some(immix) = mmtk.plan.downcast_ref::<Immix<VM>>() {
                 match immix.current_pause().unwrap() {
                     Pause::RefCount => "RefCount",

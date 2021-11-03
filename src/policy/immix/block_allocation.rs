@@ -14,8 +14,7 @@ use std::sync::Mutex;
 
 static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> = Lazy::new(|| {
     if crate::args::REF_COUNT {
-        (*crate::args::NURSERY_BLOCKS_THRESHOLD_FOR_RC + *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
-            << 2
+        (*crate::args::INITIAL_NURSERY_BLOCKS + *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE) << 2
     } else {
         *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE << 2
     }
@@ -168,11 +167,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             self.high_water.load(Ordering::SeqCst)
         );
         let len = self.buffer.len();
+        let self_mut = unsafe { &mut *(self as *const Self as *mut Self) };
         if len < self.high_water.load(Ordering::SeqCst) + self.refill_count {
-            unsafe {
-                let self_mut = &mut *(self as *const Self as *mut Self);
-                self_mut.buffer.reserve(len)
-            }
+            self_mut
+                .buffer
+                .resize_with(len << 1, || Atomic::new(Block::ZERO))
         }
         // Alloc first block
         let result = Block::from(unsafe {
@@ -180,7 +179,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 .bulk_acquire_uninterruptible(tls, Block::PAGES, true)?
         });
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
-        self.buffer[i].store(result, Ordering::Relaxed);
+        self_mut.buffer[i].store(result, Ordering::Relaxed);
         self.high_water.store(
             self.high_water.load(Ordering::Relaxed) + 1,
             Ordering::SeqCst,
@@ -188,7 +187,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         // Alloc other blocks
         let push_new_block = |block: Block| {
             let i = self.high_water.load(Ordering::Relaxed);
-            self.buffer[i].store(block, Ordering::Relaxed);
+            self_mut.buffer[i].store(block, Ordering::Relaxed);
             self.high_water.store(i + 1, Ordering::SeqCst);
         };
         for _ in 1..self.refill_count {
