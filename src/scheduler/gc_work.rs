@@ -70,6 +70,9 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for Prepare<P, W> {
         for w in &mmtk.scheduler.worker_group().workers {
             w.local_work_bucket.add(PrepareCollector::<W>::new());
         }
+        let mut stat = PerGCStat::default();
+        // stat.alloc_los_objects = crate::ALLOC_LOS_OBJECTS.load(Ordering::SeqCst);
+        crate::PER_GC_STAT.lock().push(stat);
     }
 }
 

@@ -47,6 +47,7 @@ pub static CONCURRENT_GC_THREADS_RATIO: Lazy<f32> = Lazy::new(|| {
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
 pub const TAKERATE_MEASUREMENT: bool = false;
+pub const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 
 // ---------- Debugging flags ---------- //
 pub const HARNESS_PRETTY_PRINT: bool = false;
@@ -75,6 +76,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("barrier", format!("{:?}", active_barrier));
 
     dump_feature!("barrier_measurement");
+    dump_feature!("instrumentation");
     dump_feature!("ix_block_only");
     dump_feature!("ix_defrag");
     dump_feature!("ix_lock_free_block_allocation");

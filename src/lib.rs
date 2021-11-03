@@ -88,6 +88,7 @@ use atomic::Ordering;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
+use plan::immix::Pause;
 use spin::Mutex;
 
 #[macro_use]
@@ -130,3 +131,41 @@ static GC_START_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
 static BOOT_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
+
+struct PerGCStat {
+    pub gc_kind: Pause,
+    pub alloc_objects: usize,
+    pub alloc_volume: usize,
+    pub alloc_los_objects: usize,
+    pub alloc_los_volume: usize,
+    pub promoted_objects: usize,
+    pub promoted_volume: usize,
+    pub promoted_los_objects: usize,
+    pub promoted_los_volume: usize,
+    pub dead_mature_objects: usize,
+    pub dead_mature_volume: usize,
+    pub dead_mature_los_objects: usize,
+    pub dead_mature_los_volume: usize,
+}
+
+impl Default for PerGCStat {
+    fn default() -> Self {
+        Self {
+            gc_kind: Pause::RefCount,
+            alloc_objects: 0,
+            alloc_volume: 0,
+            alloc_los_objects: 0,
+            alloc_los_volume: 0,
+            promoted_objects: 0,
+            promoted_volume: 0,
+            promoted_los_objects: 0,
+            promoted_los_volume: 0,
+            dead_mature_objects: 0,
+            dead_mature_volume: 0,
+            dead_mature_los_objects: 0,
+            dead_mature_los_volume: 0,
+        }
+    }
+}
+
+static PER_GC_STAT: Mutex<Vec<PerGCStat>> = Mutex::new(vec![]);

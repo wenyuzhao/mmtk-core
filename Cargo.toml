@@ -47,6 +47,7 @@ default = ["perf_counter"]
 # default = []
 
 barrier_measurement = []
+instrumentation = []
 log_gc = []
 log_stages = []
 log_work_packets = []
