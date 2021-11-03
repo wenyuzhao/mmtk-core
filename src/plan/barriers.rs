@@ -306,7 +306,10 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     #[inline(always)]
     fn slow(&mut self, src: ObjectReference, edge: Address, old: ObjectReference) {
         // Concurrent Marking
-        if crate::plan::immix::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
+        if !crate::args::REF_COUNT
+            && crate::args::CONCURRENT_MARKING
+            && crate::concurrent_marking_in_progress()
+        {
             self.edges.push(edge);
             if !old.is_null() {
                 self.nodes.push(old);
@@ -375,13 +378,17 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         }
         // Concurrent Marking: Flush satb buffer
         if crate::plan::immix::CONCURRENT_MARKING {
-            if !self.edges.is_empty() || !self.nodes.is_empty() {
+            if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
                 let mut edges = vec![];
-                std::mem::swap(&mut edges, &mut self.edges);
                 let mut nodes = vec![];
-                std::mem::swap(&mut nodes, &mut self.nodes);
+                if !crate::args::REF_COUNT {
+                    std::mem::swap(&mut edges, &mut self.edges);
+                    std::mem::swap(&mut nodes, &mut self.nodes);
+                } else {
+                    nodes = self.decs.clone();
+                }
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                    .add(ProcessModBufSATB::<E>::new(edges, nodes));
+                    .add_no_notify(ProcessModBufSATB::<E>::new(edges, nodes));
             }
         }
         // Flush inc and dec buffer
