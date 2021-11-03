@@ -117,7 +117,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !crate::plan::barriers::BARRIER_MEASUREMENT
             && !crate::concurrent_marking_in_progress()
             && self.base().gc_status() == GcStatus::NotInGC
-            && self.get_pages_reserved() * 100 / 45 > self.get_total_pages()
+            && self.get_pages_reserved()
+                >= self.get_total_pages() * *crate::args::CONCURRENT_MARKING_THRESHOLD / 100
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {

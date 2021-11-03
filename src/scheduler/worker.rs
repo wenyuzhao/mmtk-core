@@ -158,6 +158,16 @@ impl<VM: VMBinding> GCWorker<VM> {
             work.do_work_with_stat(self, mmtk);
         }
     }
+
+    #[inline]
+    pub fn is_concurrent_worker(&self) -> bool {
+        self.ordinal
+            < usize::max(
+                1,
+                (self.scheduler().num_workers() * *crate::args::CONCURRENT_GC_THREADS_RATIO / 100)
+                    as usize,
+            )
+    }
 }
 
 pub struct WorkerGroup<VM: VMBinding> {

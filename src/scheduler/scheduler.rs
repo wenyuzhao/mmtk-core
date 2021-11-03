@@ -47,6 +47,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
     postponed_concurrent_work: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
     pub pause_concurrent_work_packets_during_gc: AtomicBool,
+    in_gc_pause: AtomicBool,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -81,6 +82,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             closure_end: Mutex::new(None),
             postponed_concurrent_work: Default::default(),
             pause_concurrent_work_packets_during_gc: Default::default(),
+            in_gc_pause: AtomicBool::new(false),
         })
     }
 
@@ -274,6 +276,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Drain the message queue and execute coordinator work. Only the coordinator should call this.
     pub fn wait_for_completion(&self) {
+        self.in_gc_pause.store(true, Ordering::SeqCst);
         // At the start of a GC, we probably already have received a `ScheduleCollection` work. Run it now.
         if let Some(initializer) = self.startup.lock().unwrap().take() {
             self.process_coordinator_work(initializer);
@@ -304,6 +307,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
+        if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
+            self.process_coordinator_work(finalizer);
+        }
+        self.in_gc_pause.store(false, Ordering::SeqCst);
+        self.schedule_concurrent_packets();
+        self.assert_all_deactivated();
+    }
+
+    fn schedule_concurrent_packets(&self) {
         let mut unconstrained_bucket_refilled = false;
         if !self.postponed_concurrent_work.read().is_empty() {
             let mut queue = Default::default();
@@ -320,13 +332,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         self.pause_concurrent_work_packets_during_gc
             .store(false, Ordering::SeqCst);
-        if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
-            self.process_coordinator_work(finalizer);
-        }
         if unconstrained_bucket_refilled {
             self.work_buckets[WorkBucketStage::Unconstrained].notify_all_workers();
         }
-        self.assert_all_deactivated();
     }
 
     pub fn assert_all_deactivated(&self) {
@@ -370,9 +378,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     #[inline]
+    fn in_concurrent(&self) -> bool {
+        !self.in_gc_pause.load(Ordering::SeqCst)
+    }
+
+    #[inline]
     fn pop_scheduable_work(&self, worker: &GCWorker<VM>) -> Option<(Box<dyn GCWork<VM>>, bool)> {
         if let Some(work) = worker.local_work_bucket.poll() {
             return Some((work, worker.local_work_bucket.is_empty()));
+        }
+        if self.in_concurrent() && !worker.is_concurrent_worker() {
+            return None;
         }
         for work_bucket in self.work_buckets.values() {
             if let Some(work) = work_bucket.poll() {
@@ -405,14 +421,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut guard = self.worker_monitor.0.lock().unwrap();
         loop {
             debug_assert!(!worker.is_parked());
-            if let Some((work, bucket_is_empty)) = self.pop_scheduable_work(worker) {
-                if bucket_is_empty {
-                    worker
-                        .sender
-                        .send(CoordinatorMessage::BucketDrained)
-                        .unwrap();
+            if !self.in_concurrent() || worker.is_concurrent_worker() {
+                if let Some((work, bucket_is_empty)) = self.pop_scheduable_work(worker) {
+                    if bucket_is_empty {
+                        worker
+                            .sender
+                            .send(CoordinatorMessage::BucketDrained)
+                            .unwrap();
+                    }
+                    return work;
                 }
-                return work;
             }
             // Park this worker
             worker.parked.store(true, Ordering::SeqCst);

@@ -53,12 +53,18 @@ pub static INITIAL_NURSERY_BLOCKS: Lazy<usize> =
     Lazy::new(|| NURSERY_BLOCKS.unwrap_or(128 * num_cpus::get()));
 pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
     Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
-pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> =
-    Lazy::new(|| env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").is_ok());
-pub static CONCURRENT_GC_THREADS_RATIO: Lazy<f32> = Lazy::new(|| {
+pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> = Lazy::new(|| {
+    env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").unwrap_or_else(|_| "1".to_string()) != "0"
+});
+pub static CONCURRENT_GC_THREADS_RATIO: Lazy<usize> = Lazy::new(|| {
     env::var("CONCURRENT_GC_THREADS_RATIO")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(1f32)
+        .unwrap_or(50)
+});
+pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
+    env::var("CONCURRENT_MARKING_THRESHOLD")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(90)
 });
 
 // ---------- Barrier flags ---------- //
@@ -114,6 +120,10 @@ fn dump_features(active_barrier: BarrierSelector) {
         *LOWER_CONCURRENT_GC_THREAD_PRIORITY
     );
     dump_feature!("concurrent_worker_ratio", *CONCURRENT_GC_THREADS_RATIO);
+    dump_feature!(
+        "concurrent_marking_threshold",
+        *CONCURRENT_MARKING_THRESHOLD
+    );
     dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
 
     println!("----------------------------------------------------");
