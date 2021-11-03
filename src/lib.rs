@@ -84,11 +84,10 @@ use std::{
 };
 
 use crate::util::constants;
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
-use spin::Mutex;
 
 #[macro_use]
 mod policy;
@@ -125,8 +124,8 @@ fn disable_lasy_dec_for_current_gc() -> bool {
     crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.load(Ordering::SeqCst)
 }
 
-static GC_TRIGGER_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
-static GC_START_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
-static BOOT_TIME: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
+static GC_TRIGGER_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
+static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
+static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);

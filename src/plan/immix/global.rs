@@ -104,7 +104,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && self.immix_space.block_allocation.nursery_blocks()
-                >= *crate::args::NURSERY_BLOCKS_THRESHOLD_FOR_RC
+                >= crate::args::NURSERY_BLOCKS
+                    .unwrap_or_else(|| crate::args::ADAPTIVE_NURSERY_BLOCKS.load(Ordering::Relaxed))
         {
             return true;
         }
@@ -277,10 +278,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if self.current_pause().unwrap() == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
         }
-        self.previous_pause.store(
-            Some(self.current_pause.load(Ordering::SeqCst).unwrap()),
-            Ordering::SeqCst,
-        );
+        let pause = self.current_pause.load(Ordering::SeqCst).unwrap();
+        if pause == Pause::RefCount || pause == Pause::InitialMark {
+            self.resize_nursery();
+        }
+        self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
         unsafe { CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0))) };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
@@ -537,5 +539,48 @@ impl<VM: VMBinding> Immix<VM> {
     #[inline(always)]
     pub const fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
+    }
+
+    fn resize_nursery(&self) {
+        // Don't resize if nursery is fixed.
+        if crate::args::NURSERY_BLOCKS.is_some() {
+            return;
+        }
+        // Resize based on throughput goal
+        let min_nursery = *crate::args::MIN_NURSERY_BLOCKS;
+        let max_nursery = crate::args::MAX_NURSERY_BLOCKS.unwrap_or_else(|| {
+            usize::max(
+                min_nursery,
+                (self.get_total_pages() >> Block::LOG_PAGES) / 3,
+            )
+        });
+        let pause_time = crate::GC_START_TIME
+            .load(Ordering::SeqCst)
+            .elapsed()
+            .unwrap()
+            .as_micros() as f64
+            / 1000f64;
+        static PREV_AVG_PAUSE: Atomic<f64> = Atomic::new(0f64);
+        let prev_avg_pause = PREV_AVG_PAUSE.load(Ordering::Relaxed);
+        let avg_pause = if prev_avg_pause == 0f64 {
+            pause_time
+        } else {
+            (prev_avg_pause + pause_time) / 2f64
+        };
+        PREV_AVG_PAUSE.store(avg_pause, Ordering::Relaxed);
+        let scale = avg_pause / 5f64;
+        crate::args::ADAPTIVE_NURSERY_BLOCKS.fetch_update(
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |x| Some((x as f64 * (1f64 / scale)) as _),
+        );
+        let mut n = crate::args::ADAPTIVE_NURSERY_BLOCKS.load(Ordering::SeqCst);
+        if n < min_nursery {
+            n = min_nursery;
+        }
+        if n > max_nursery {
+            n = max_nursery;
+        }
+        crate::args::ADAPTIVE_NURSERY_BLOCKS.store(n, Ordering::SeqCst);
     }
 }

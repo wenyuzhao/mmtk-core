@@ -1,5 +1,5 @@
 use spin::Lazy;
-use std::env;
+use std::{env, sync::atomic::AtomicUsize};
 
 use crate::BarrierSelector;
 
@@ -31,11 +31,28 @@ pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(32)
 });
-pub static NURSERY_BLOCKS_THRESHOLD_FOR_RC: Lazy<usize> = Lazy::new(|| {
-    env::var("NURSERY_BLOCKS")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(128 * num_cpus::get())
+pub static NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
+    Some(
+        env::var("NURSERY_BLOCKS")
+            .map(|x| x.parse().unwrap())
+            .ok()
+            .unwrap_or(128 * num_cpus::get()),
+    )
 });
+pub static MIN_NURSERY_BLOCKS: Lazy<usize> = Lazy::new(|| {
+    env::var("MIN_NURSERY_BLOCKS")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(*LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
+});
+pub static MAX_NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("MAX_NURSERY_BLOCKS")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
+pub static INITIAL_NURSERY_BLOCKS: Lazy<usize> =
+    Lazy::new(|| NURSERY_BLOCKS.unwrap_or(128 * num_cpus::get()));
+pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
+    Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
 pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> =
     Lazy::new(|| env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").is_ok());
 pub static CONCURRENT_GC_THREADS_RATIO: Lazy<f32> = Lazy::new(|| {
@@ -62,7 +79,7 @@ pub static IGNORE_REUSING_BLOCKS: Lazy<bool> =
 
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {
-        println!(" * {}: {}", $name, $value)
+        println!(" * {}: {:?}", $name, $value)
     };
     ($name: literal) => {
         dump_feature!($name, cfg!(feature = $name))
@@ -91,7 +108,7 @@ fn dump_features(active_barrier: BarrierSelector) {
         *DISABLE_MUTATOR_LINE_REUSING
     );
     dump_feature!("lock_free_blocks", *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE);
-    dump_feature!("nursery_blocks", *NURSERY_BLOCKS_THRESHOLD_FOR_RC);
+    dump_feature!("nursery_blocks", *NURSERY_BLOCKS);
     dump_feature!(
         "low_concurrent_worker_priority",
         *LOWER_CONCURRENT_GC_THREAD_PRIORITY
