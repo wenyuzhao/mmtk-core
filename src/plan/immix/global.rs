@@ -387,6 +387,12 @@ impl<VM: VMBinding> Immix<VM> {
             .next_gc_may_perform_cycle_collection
             .load(Ordering::SeqCst);
         let pause = if emergency_collection {
+            if crate::INSIDE_HARNESS.load(Ordering::Relaxed) {
+                crate::NUM_EMERGENCY_GC.store(
+                    crate::NUM_EMERGENCY_GC.load(Ordering::Relaxed) + 1,
+                    Ordering::Relaxed,
+                );
+            }
             if concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {

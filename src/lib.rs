@@ -130,6 +130,7 @@ static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
+static NUM_EMERGENCY_GC: AtomicUsize = AtomicUsize::new(0);
 
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
 
