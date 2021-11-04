@@ -1,6 +1,6 @@
 use super::chunk::Chunk;
 use super::defrag::Histogram;
-use super::line::Line;
+use super::line::{Line, RCArray};
 use super::ImmixSpace;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, *};
@@ -94,8 +94,12 @@ impl Block {
             16
         } else if cfg!(feature = "lxr_block_128k") {
             17
-        } else if cfg!(feature = "lxr_block_236k") {
+        } else if cfg!(feature = "lxr_block_256k") {
             18
+        } else if cfg!(feature = "lxr_block_512k") {
+            19
+        } else if cfg!(feature = "lxr_block_1m") {
+            20
         } else {
             15
         }
@@ -511,7 +515,7 @@ impl Block {
             // See the caller of this function.
             // At least one object is dead in the block.
             let add_as_reusable = if !*crate::args::IGNORE_REUSING_BLOCKS {
-                if !self.get_state().is_reusable() {
+                if !self.get_state().is_reusable() && self.has_holes() {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: 1 as _,
                     });
@@ -520,8 +524,9 @@ impl Block {
                     false
                 }
             } else {
+                let has_holes = self.has_holes();
                 self.fetch_update_state(|s| {
-                    if s == BlockState::Reusing || s.is_reusable() {
+                    if s == BlockState::Reusing || s.is_reusable() || !has_holes {
                         None
                     } else {
                         Some(BlockState::Reusable {
@@ -541,6 +546,17 @@ impl Block {
     #[inline(always)]
     pub const fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
+    }
+
+    #[inline(always)]
+    pub fn has_holes(&self) -> bool {
+        let rc_array = RCArray::of(*self);
+        for i in 0..Self::LINES {
+            if rc_array.is_dead(i) {
+                return true;
+            }
+        }
+        false
     }
 }
 

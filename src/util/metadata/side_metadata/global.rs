@@ -410,9 +410,13 @@ pub fn store_atomic(
 
     if bits_num_log < 3 {
         let lshift = meta_byte_lshift(metadata_spec, data_addr);
-        let mask = meta_byte_mask(metadata_spec) << lshift;
+        let m = meta_byte_mask(metadata_spec);
+        let mask = m << lshift;
 
-        let mut old_val = unsafe { meta_addr.load::<u8>() };
+        let mut old_val = unsafe { meta_addr.atomic_load::<AtomicU8>(order) };
+        if (old_val >> lshift) & m == metadata as u8 {
+            return;
+        }
         let mut new_val = (old_val & !mask) | ((metadata as u8) << lshift);
 
         while unsafe {
@@ -420,7 +424,10 @@ pub fn store_atomic(
                 .compare_exchange::<AtomicU8>(old_val, new_val, order, order)
                 .is_err()
         } {
-            old_val = unsafe { meta_addr.load::<u8>() };
+            old_val = unsafe { meta_addr.atomic_load::<AtomicU8>(order) };
+            if (old_val >> lshift) & m == metadata as u8 {
+                return;
+            }
             new_val = (old_val & !mask) | ((metadata as u8) << lshift);
         }
     } else if bits_num_log == 3 {
