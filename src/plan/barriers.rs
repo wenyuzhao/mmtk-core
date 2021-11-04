@@ -269,7 +269,11 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             unsafe { edge.to_object_reference() },
             LOGGED_VALUE,
             None,
-            Some(Ordering::Relaxed),
+            if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
+                None
+            } else {
+                Some(Ordering::Relaxed)
+            },
         );
         store_metadata::<E::VM>(
             &RC_LOCK_BIT_SPEC,

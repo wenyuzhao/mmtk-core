@@ -1,7 +1,7 @@
 use spin::Lazy;
 use std::{env, sync::atomic::AtomicUsize};
 
-use crate::BarrierSelector;
+use crate::{policy::immix::block::Block, BarrierSelector};
 
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
@@ -21,6 +21,7 @@ pub const LOCK_FREE_BLOCK_ALLOCATION: bool = cfg!(feature = "ix_lock_free_block_
 pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
 pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
 pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
+/// One more atomic-store per barrier slow-path if this value is smaller than 6.
 pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
 pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
     !cfg!(feature = "lxr_evacuate_nursery_in_recycled_lines");
@@ -36,7 +37,7 @@ pub static NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
         env::var("NURSERY_BLOCKS")
             .map(|x| x.parse().unwrap())
             .ok()
-            .unwrap_or(128 * num_cpus::get()),
+            .unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()),
     )
 });
 pub static MIN_NURSERY_BLOCKS: Lazy<usize> = Lazy::new(|| {
@@ -50,7 +51,7 @@ pub static MAX_NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
         .ok()
 });
 pub static INITIAL_NURSERY_BLOCKS: Lazy<usize> =
-    Lazy::new(|| NURSERY_BLOCKS.unwrap_or(128 * num_cpus::get()));
+    Lazy::new(|| NURSERY_BLOCKS.unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()));
 pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
     Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
 pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> = Lazy::new(|| {
