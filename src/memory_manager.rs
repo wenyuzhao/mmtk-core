@@ -121,6 +121,14 @@ pub fn alloc<VM: VMBinding>(
     offset: isize,
     semantics: AllocationSemantics,
 ) -> Address {
+    crate::stat(|s| {
+        s.alloc_objects += 1;
+        s.alloc_volume += size;
+        if semantics == AllocationSemantics::Los {
+            s.alloc_los_objects += 1;
+            s.alloc_los_volume += size;
+        }
+    });
     // MMTk has assumptions about minimal object size.
     // We need to make sure that all allocations comply with the min object size.
     // Ideally, we check the allocation size, and if it is smaller, we transparently allocate the min

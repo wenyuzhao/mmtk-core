@@ -427,6 +427,12 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline(always)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
+        crate::stat(|s| {
+            s.dead_objects += 1;
+            s.dead_volume += o.get_size::<VM>();
+            s.dead_mature_objects += 1;
+            s.dead_mature_volume += o.get_size::<VM>();
+        });
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)

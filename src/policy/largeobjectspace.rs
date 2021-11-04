@@ -443,6 +443,17 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {
             if !los.is_marked(*o) && rc::count(*o) != 0 {
+                crate::stat(|s| {
+                    s.dead_objects += 1;
+                    s.dead_volume += o.get_size::<VM>();
+                    s.dead_los_objects += 1;
+                    s.dead_los_volume += o.get_size::<VM>();
+                    s.dead_mature_objects += 1;
+                    s.dead_mature_volume += o.get_size::<VM>();
+                    s.dead_mature_los_objects += 1;
+                    s.dead_mature_los_volume += o.get_size::<VM>();
+                });
+                rc::set(*o, 0);
                 los.rc_dead_objects.push(*o)
             }
         }

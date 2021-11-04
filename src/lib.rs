@@ -88,7 +88,6 @@ use atomic::{Atomic, Ordering};
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
-use plan::immix::Pause;
 use spin::Mutex;
 
 #[macro_use]
@@ -132,8 +131,9 @@ static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 
-struct PerGCStat {
-    pub gc_kind: Pause,
+#[derive(Default)]
+struct GCStat {
+    pub rc_pauses: usize,
     pub alloc_objects: usize,
     pub alloc_volume: usize,
     pub alloc_los_objects: usize,
@@ -142,30 +142,79 @@ struct PerGCStat {
     pub promoted_volume: usize,
     pub promoted_los_objects: usize,
     pub promoted_los_volume: usize,
+    pub dead_objects: usize,
+    pub dead_volume: usize,
+    pub dead_los_objects: usize,
+    pub dead_los_volume: usize,
     pub dead_mature_objects: usize,
     pub dead_mature_volume: usize,
     pub dead_mature_los_objects: usize,
     pub dead_mature_los_volume: usize,
 }
 
-impl Default for PerGCStat {
-    fn default() -> Self {
-        Self {
-            gc_kind: Pause::RefCount,
-            alloc_objects: 0,
-            alloc_volume: 0,
-            alloc_los_objects: 0,
-            alloc_los_volume: 0,
-            promoted_objects: 0,
-            promoted_volume: 0,
-            promoted_los_objects: 0,
-            promoted_los_volume: 0,
-            dead_mature_objects: 0,
-            dead_mature_volume: 0,
-            dead_mature_los_objects: 0,
-            dead_mature_los_volume: 0,
+macro_rules! print_keys_and_values {
+    ($($n: ident,)*) => {
+        pub fn print_keys(&self) {
+            $(
+                print!("{}\t", stringify!($n));
+            )*
         }
-    }
+        pub fn print_values(&self) {
+            $(
+                print!("{}\t", self.$n);
+            )*
+        }
+    };
 }
 
-static PER_GC_STAT: Mutex<Vec<PerGCStat>> = Mutex::new(vec![]);
+impl GCStat {
+    print_keys_and_values![
+        rc_pauses,
+        alloc_objects,
+        alloc_volume,
+        alloc_los_objects,
+        alloc_los_volume,
+        promoted_objects,
+        promoted_volume,
+        promoted_los_objects,
+        promoted_los_volume,
+        dead_objects,
+        dead_volume,
+        dead_los_objects,
+        dead_los_volume,
+        dead_mature_objects,
+        dead_mature_volume,
+        dead_mature_los_objects,
+        dead_mature_los_volume,
+    ];
+}
+
+#[allow(unused)]
+static STAT: Mutex<GCStat> = Mutex::new(GCStat {
+    rc_pauses: 0,
+    alloc_objects: 0,
+    alloc_volume: 0,
+    alloc_los_objects: 0,
+    alloc_los_volume: 0,
+    promoted_objects: 0,
+    promoted_volume: 0,
+    promoted_los_objects: 0,
+    promoted_los_volume: 0,
+    dead_objects: 0,
+    dead_volume: 0,
+    dead_los_objects: 0,
+    dead_los_volume: 0,
+    dead_mature_objects: 0,
+    dead_mature_volume: 0,
+    dead_mature_los_objects: 0,
+    dead_mature_los_volume: 0,
+});
+
+#[cfg(not(feature = "instrumentation"))]
+#[inline(always)]
+fn stat(_: impl Fn(&mut GCStat)) {}
+
+#[cfg(feature = "instrumentation")]
+fn stat(f: impl Fn(&mut GCStat)) {
+    f(&mut STAT.lock())
+}

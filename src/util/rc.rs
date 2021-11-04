@@ -233,6 +233,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn promote(&mut self, o: ObjectReference, copy: bool) {
+        crate::stat(|s| {
+            s.promoted_objects += 1;
+            s.promoted_volume += o.get_size::<VM>();
+            if self.immix().los().in_space(o) {
+                s.promoted_los_objects += 1;
+                s.promoted_los_volume += o.get_size::<VM>();
+            }
+        });
         if self.immix().immix_space.in_space(o) {
             self::promote::<VM>(o);
         }
@@ -545,6 +553,14 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     #[inline]
     fn process_dead_object(&mut self, o: ObjectReference, immix: &Immix<VM>) {
+        crate::stat(|s| {
+            s.dead_objects += 1;
+            s.dead_volume += o.get_size::<VM>();
+            if !immix.immix_space.in_space(o) {
+                s.dead_los_objects += 1;
+                s.dead_los_volume += o.get_size::<VM>();
+            }
+        });
         immix.mark(o);
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);

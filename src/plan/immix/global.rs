@@ -194,6 +194,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn prepare(&mut self, tls: VMWorkerThread) {
         let pause = self.current_pause().unwrap();
+        crate::stat(|s| {
+            if pause == Pause::RefCount {
+                s.rc_pauses += 1
+            }
+        });
         if !super::REF_COUNT {
             if pause != Pause::FinalMark {
                 self.common.prepare(tls, true);

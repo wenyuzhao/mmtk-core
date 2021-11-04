@@ -205,6 +205,7 @@ impl Stats {
         for value in scheduler_stat.values() {
             print!("{}\t", value);
         }
+        crate::STAT.lock().print_values();
         println!();
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
@@ -226,6 +227,7 @@ impl Stats {
         for name in scheduler_stat.keys() {
             print!("{}\t", name);
         }
+        crate::STAT.lock().print_keys();
         println!();
     }
 
