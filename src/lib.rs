@@ -154,15 +154,13 @@ struct GCStat {
 
 macro_rules! print_keys_and_values {
     ($($n: ident,)*) => {
+        #[allow(unused)]
         pub fn print_keys(&self) {
-            $(
-                print!("{}\t", stringify!($n));
-            )*
+            $(print!("{}\t", stringify!($n));)*
         }
+        #[allow(unused)]
         pub fn print_values(&self) {
-            $(
-                print!("{}\t", self.$n);
-            )*
+            $(print!("{}\t", self.$n);)*
         }
     };
 }
