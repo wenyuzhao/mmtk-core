@@ -94,8 +94,12 @@ impl Block {
             16
         } else if cfg!(feature = "lxr_block_128k") {
             17
-        } else if cfg!(feature = "lxr_block_236k") {
+        } else if cfg!(feature = "lxr_block_256k") {
             18
+        } else if cfg!(feature = "lxr_block_512k") {
+            19
+        } else if cfg!(feature = "lxr_block_1m") {
+            20
         } else {
             15
         }
