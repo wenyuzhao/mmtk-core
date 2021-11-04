@@ -131,6 +131,8 @@ static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 
+static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
+
 #[derive(Default)]
 struct GCStat {
     pub rc_pauses: usize,
@@ -208,11 +210,13 @@ static STAT: Mutex<GCStat> = Mutex::new(GCStat {
     dead_mature_los_volume: 0,
 });
 
-#[cfg(not(feature = "instrumentation"))]
 #[inline(always)]
-fn stat(_: impl Fn(&mut GCStat)) {}
-
-#[cfg(feature = "instrumentation")]
 fn stat(f: impl Fn(&mut GCStat)) {
+    if !cfg!(feature = "instrumentation") {
+        return;
+    }
+    if !INSIDE_HARNESS.load(Ordering::SeqCst) {
+        return;
+    }
     f(&mut STAT.lock())
 }
