@@ -205,7 +205,7 @@ impl Stats {
         for value in scheduler_stat.values() {
             print!("{}\t", value);
         }
-        print!("emergency.gc\t");
+        crate::PAUSES.print_keys();
         #[cfg(feature = "instrumentation")]
         crate::STAT.lock().print_values();
         println!();
@@ -229,7 +229,7 @@ impl Stats {
         for name in scheduler_stat.keys() {
             print!("{}\t", name);
         }
-        print!("{}\t", crate::NUM_EMERGENCY_GC.load(Ordering::SeqCst));
+        crate::PAUSES.print_values();
         #[cfg(feature = "instrumentation")]
         crate::STAT.lock().print_keys();
         println!();

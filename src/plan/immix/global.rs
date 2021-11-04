@@ -387,11 +387,8 @@ impl<VM: VMBinding> Immix<VM> {
             .next_gc_may_perform_cycle_collection
             .load(Ordering::SeqCst);
         let pause = if emergency_collection {
-            if crate::INSIDE_HARNESS.load(Ordering::Relaxed) {
-                crate::NUM_EMERGENCY_GC.store(
-                    crate::NUM_EMERGENCY_GC.load(Ordering::Relaxed) + 1,
-                    Ordering::Relaxed,
-                );
+            if crate::inside_harness() {
+                crate::PAUSES.emergency.fetch_add(1, Ordering::Relaxed);
             }
             if concurrent_marking_in_progress {
                 Pause::FinalMark
@@ -413,6 +410,14 @@ impl<VM: VMBinding> Immix<VM> {
                 full_trace()
             }
         };
+        if crate::inside_harness() {
+            match pause {
+                Pause::RefCount => crate::PAUSES.rc.fetch_add(1, Ordering::Relaxed),
+                Pause::InitialMark => crate::PAUSES.initial_mark.fetch_add(1, Ordering::Relaxed),
+                Pause::FinalMark => crate::PAUSES.final_mark.fetch_add(1, Ordering::Relaxed),
+                _ => crate::PAUSES.full.fetch_add(1, Ordering::Relaxed),
+            };
+        }
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
             .store(pause != Pause::RefCount, Ordering::SeqCst);

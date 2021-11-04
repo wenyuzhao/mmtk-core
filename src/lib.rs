@@ -130,9 +130,45 @@ static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
-static NUM_EMERGENCY_GC: AtomicUsize = AtomicUsize::new(0);
-
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+fn inside_harness() -> bool {
+    crate::INSIDE_HARNESS.load(Ordering::Relaxed)
+}
+
+struct Pauses {
+    pub rc: AtomicUsize,
+    pub initial_mark: AtomicUsize,
+    pub final_mark: AtomicUsize,
+    pub full: AtomicUsize,
+    pub emergency: AtomicUsize,
+}
+
+impl Pauses {
+    pub fn print_keys(&self) {
+        print!("gc.rc\t");
+        print!("gc.initial_satb\t");
+        print!("gc.final_satb\t");
+        print!("gc.full\t");
+        print!("gc.emergency\t");
+    }
+    pub fn print_values(&self) {
+        print!("{}\t", self.rc.load(Ordering::SeqCst));
+        print!("{}\t", self.initial_mark.load(Ordering::SeqCst));
+        print!("{}\t", self.final_mark.load(Ordering::SeqCst));
+        print!("{}\t", self.full.load(Ordering::SeqCst));
+        print!("{}\t", self.emergency.load(Ordering::SeqCst));
+    }
+}
+
+static PAUSES: Pauses = Pauses {
+    rc: AtomicUsize::new(0),
+    initial_mark: AtomicUsize::new(0),
+    final_mark: AtomicUsize::new(0),
+    full: AtomicUsize::new(0),
+    emergency: AtomicUsize::new(0),
+};
 
 #[derive(Default)]
 struct GCStat {
