@@ -4,6 +4,7 @@ pub mod chunk;
 pub mod defrag;
 pub mod immixspace;
 pub mod line;
+pub mod remset;
 
 pub use crate::plan::immix::{CONCURRENT_MARKING, REF_COUNT};
 pub use immixspace::*;
