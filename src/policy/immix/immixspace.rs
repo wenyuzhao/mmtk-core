@@ -435,11 +435,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
-        let _guard = if crate::args::LAZY_DECREMENTS && !nursery {
-            Some(self.block_allocation.refill_lock.lock().unwrap())
-        } else {
-            None
-        };
         // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
         if crate::args::LOG_PER_GC_STATE {
             if nursery {
