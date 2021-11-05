@@ -74,7 +74,7 @@ pub const TAKERATE_MEASUREMENT: bool = false;
 pub const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 
 // ---------- Debugging flags ---------- //
-pub const HARNESS_PRETTY_PRINT: bool = false;
+pub const HARNESS_PRETTY_PRINT: bool = true;
 pub const LOG_PER_GC_STATE: bool = cfg!(feature = "log_gc");
 pub const LOG_STAGES: bool = cfg!(feature = "log_stages");
 pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");

@@ -61,18 +61,10 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         &mut self,
         obj: ObjectReference,
         _tib: Address,
-        bytes: usize,
+        _bytes: usize,
         _semantics: crate::AllocationSemantics,
     ) {
         object_forwarding::clear_forwarding_bits::<VM>(obj);
-        if cfg!(debug_assertions) {
-            if crate::args::REF_COUNT {
-                crate::util::rc::assert_zero_ref_count::<VM>(obj);
-                for i in (0..bytes).step_by(8) {
-                    debug_assert!((obj.to_address() + i).is_logged::<VM>());
-                }
-            }
-        }
         if crate::args::REF_COUNT {
             debug_assert_eq!(crate::util::rc::count(obj), 0);
         }

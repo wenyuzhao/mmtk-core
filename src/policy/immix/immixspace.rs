@@ -731,7 +731,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
         if self.common.needs_log_bit {
-            Line::clear_log_table::<VM>(start..end);
+            if crate::args::REF_COUNT {
+                Line::clear_log_table::<VM>(start..end);
+            } else {
+                Line::initialize_log_table_as_unlogged::<VM>(start..end);
+            }
         }
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, _copy);

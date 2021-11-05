@@ -119,6 +119,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 line.mark(current_state);
             }
         }
+        if crate::args::REF_COUNT && copy {
+            block.initialize_log_table_as_unlogged::<VM>();
+        }
         // println!("Alloc {:?} {}", block, copy);
         block.init(copy, false, self.space());
         self.space()

@@ -554,6 +554,16 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     #[inline(always)]
+    pub fn mark2(&self, o: ObjectReference, los: bool) -> bool {
+        debug_assert!(!o.is_null());
+        if !los {
+            self.immix_space.attempt_mark(o)
+        } else {
+            self.common.los.attempt_mark(o)
+        }
+    }
+
+    #[inline(always)]
     pub const fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
     }

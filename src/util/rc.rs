@@ -55,12 +55,17 @@ pub fn fetch_update(
     let r = side_metadata::fetch_update(
         &RC_TABLE,
         o.to_address(),
-        Ordering::SeqCst,
+        Ordering::Relaxed,
         Ordering::Relaxed,
         f,
     );
     // println!("fetch_update {:?} {:?} -> {:?}", o, r, count(o));
     r
+}
+
+#[inline(always)]
+pub fn rc_stick(o: ObjectReference) -> bool {
+    self::count(o) == MAX_REF_COUNT
 }
 
 #[inline(always)]
@@ -196,6 +201,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     immix: *const Immix<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
+    nursery: bool,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -228,11 +234,19 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             immix: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
+            nursery: false,
         }
     }
 
+    #[inline]
+    pub fn new_nursery(incs: Vec<Address>, roots: bool) -> Self {
+        let mut w = Self::new(incs, roots);
+        w.nursery = true;
+        w
+    }
+
     #[inline(always)]
-    fn promote(&mut self, o: ObjectReference, copy: bool) {
+    fn promote(&mut self, o: ObjectReference, copy: bool, los: bool, in_place: bool) {
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
@@ -241,31 +255,49 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 s.promoted_los_volume += o.get_size::<VM>();
             }
         });
-        if self.immix().immix_space.in_space(o) {
+        if !los {
             self::promote::<VM>(o);
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-            self.immix().mark(o);
+            self.immix().mark2(o, los);
         } else if self.current_pause == Pause::FullTraceFast {
             // Create object scanning packets
             if copy {
-                if self.immix().mark(o) {
+                if self.immix().mark2(o, los) {
                     self.scan_objects.push(o)
                 }
             }
         }
-        self.scan_nursery_object(o);
+        self.scan_nursery_object(o, los, in_place);
     }
 
     #[inline(always)]
-    fn scan_nursery_object(&mut self, o: ObjectReference) {
+    fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
         let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress
                 || self.current_pause == Pause::FinalMark
                 || self.current_pause == Pause::FullTraceFast);
         let mut should_add_to_mature_evac_remset = false;
+        if los {
+            let start = side_metadata::address_to_meta_address(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                o.to_address() + 16usize,
+            )
+            .to_mut_ptr::<u8>();
+            let limit = side_metadata::address_to_meta_address(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                (o.to_address() + o.get_size::<VM>()).align_up(64),
+            )
+            .to_mut_ptr::<u8>();
+            unsafe {
+                let count = limit.offset_from(start) as usize;
+                std::ptr::write_bytes(start, 0xffu8, count);
+            }
+        }
+        let x = in_place_promotion && !los;
         EdgeIterator::<VM>::iterate(o, |edge| {
+            let o = unsafe { edge.load() };
             if crate::args::RC_MATURE_EVACUATION
                 && check_mature_evac_remset
                 && !should_add_to_mature_evac_remset
@@ -274,7 +306,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     should_add_to_mature_evac_remset = true;
                 }
             }
-            self.recursive_inc(edge);
+            if x {
+                edge.unlog::<VM>();
+            }
+            if !o.is_null() && !self::rc_stick(o) {
+                self.recursive_inc(edge);
+            }
         });
         if should_add_to_mature_evac_remset {
             self.mature_evac_remset.push(o);
@@ -302,7 +339,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
-            self.promote(o, false);
+            self.promote(o, false, self.immix().los().in_space(o), true);
         }
         o
     }
@@ -316,14 +353,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     ) -> ObjectReference {
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(!Self::DELAYED_EVACUATION);
+        let los = self.immix().los().in_space(o);
         if self::count(o) != 0
-            || self.immix().los().in_space(o)
+            || los
             || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-                && self.immix().immix_space.in_space(o)
                 && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
         {
             if let Ok(0) = self::inc(o) {
-                self.promote(o, false);
+                self.promote(o, false, los, true);
             }
             return o;
         }
@@ -358,7 +395,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     e.store(new);
                 }
                 let _ = self::inc(new);
-                self.promote(new, true);
+                self.promote(new, true, false, false);
                 new
             } else {
                 // Object is not moved.
@@ -376,7 +413,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             std::mem::swap(&mut new_incs, &mut self.new_incs);
             self.worker().add_work(
                 WorkBucketStage::rc_process_incs_stage(),
-                ProcessIncs::<VM>::new(new_incs, false),
+                ProcessIncs::<VM>::new_nursery(new_incs, false),
             );
         }
         #[cfg(feature = "ix_delayed_nursery_evacuation")]
@@ -429,15 +466,15 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
         let o = unsafe { e.load::<ObjectReference>() };
         // Delay the increment if this object points to a young object
-        let in_immix_space = immix.immix_space.in_space(o);
         if Self::DELAYED_EVACUATION && crate::args::RC_NURSERY_EVACUATION {
+            let in_immix_space = immix.immix_space.in_space(o);
             if in_immix_space && self::count(o) == 0 {
                 self.add_remset(e);
                 return None;
             }
         }
         // unlog edge
-        if !self.roots {
+        if !self.roots && !self.nursery {
             e.unlog::<VM>();
         }
         Some(o)

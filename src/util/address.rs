@@ -422,6 +422,18 @@ impl Address {
             Some(Ordering::Relaxed),
         )
     }
+
+    #[inline(always)]
+    pub fn unlog_non_atomic<VM: VMBinding>(self) {
+        debug_assert!(!self.is_zero());
+        store_metadata::<VM>(
+            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            unsafe { self.to_object_reference() },
+            UNLOGGED_VALUE,
+            None,
+            None,
+        )
+    }
 }
 
 /// allows print Address as upper-case hex value
