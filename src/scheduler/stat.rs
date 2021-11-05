@@ -111,7 +111,7 @@ impl SchedulerStat {
             format!("{:.2}", duration_overall.max),
         );
 
-        Default::default()
+        stat
     }
     /// Merge work counters from different worker threads
     pub fn merge<C>(&mut self, stat: &WorkerLocalStat<C>) {
