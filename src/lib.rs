@@ -189,6 +189,8 @@ struct GCStat {
     pub dead_mature_volume: usize,
     pub dead_mature_los_objects: usize,
     pub dead_mature_los_volume: usize,
+    pub inc_objects: usize,
+    pub inc_volume: usize,
 }
 
 macro_rules! print_keys_and_values {
@@ -200,6 +202,10 @@ macro_rules! print_keys_and_values {
         #[allow(unused)]
         pub fn print_values(&self) {
             $(print!("{}\t", self.$n);)*
+        }
+        #[allow(unused)]
+        pub fn pretty_print(&self) {
+            $(println!(" - {} {}", stringify!($n), self.$n);)*
         }
     };
 }
@@ -223,6 +229,8 @@ impl GCStat {
         dead_mature_volume,
         dead_mature_los_objects,
         dead_mature_los_volume,
+        inc_objects,
+        inc_volume,
     ];
 }
 
@@ -245,6 +253,8 @@ static STAT: Mutex<GCStat> = Mutex::new(GCStat {
     dead_mature_volume: 0,
     dead_mature_los_objects: 0,
     dead_mature_los_volume: 0,
+    inc_objects: 0,
+    inc_volume: 0,
 });
 
 #[inline(always)]

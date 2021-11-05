@@ -96,6 +96,9 @@ impl SchedulerStat {
         }
         if crate::args::HARNESS_PRETTY_PRINT {
             println!("SUM: {} ns", total);
+            if crate::args::INSTRUMENTATION {
+                crate::STAT.lock().pretty_print();
+            }
         }
         // Print out overall execution time
         stat.insert(

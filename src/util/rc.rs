@@ -351,6 +351,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         o: ObjectReference,
         copy_context: &mut impl CopyContext<VM = VM>,
     ) -> ObjectReference {
+        crate::stat(|s| {
+            s.inc_objects += 1;
+            s.inc_volume += o.get_size::<VM>();
+        });
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(!Self::DELAYED_EVACUATION);
         let los = self.immix().los().in_space(o);
