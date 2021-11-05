@@ -690,7 +690,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn rc_get_next_available_lines(
         &self,
-        _copy: bool,
+        copy: bool,
         search_start: Line,
     ) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
@@ -726,7 +726,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
         if self.common.needs_log_bit {
-            if crate::args::REF_COUNT {
+            if !copy {
                 Line::clear_log_table::<VM>(start..end);
             } else {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
