@@ -608,7 +608,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {
             let x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() {
+            if !x.is_null() && !self::rc_stick(x) {
                 self.recursive_dec(x);
             }
         });
