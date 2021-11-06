@@ -293,12 +293,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         // Reclaim nursery blocks
         let num_workers = self.scheduler().worker_group().worker_count();
-        let (work_packets, nursery_blocks) = if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
-            self.block_allocation
-                .reset_and_generate_nursery_sweep_tasks(num_workers)
-        } else {
-            unreachable!();
-        };
+        // let (stw_packets, delayed_packets, nursery_blocks) =
+        //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
+        //         self.block_allocation
+        //             .reset_and_generate_nursery_sweep_tasks(num_workers)
+        //     } else {
+        //         unreachable!();
+        //     };
+        let (stw_packets, nursery_blocks) = self
+            .block_allocation
+            .reset_and_generate_nursery_sweep_tasks2(num_workers);
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
         let mature_blocks = if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
@@ -319,7 +323,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
-        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
+        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
+        // self.scheduler().postpone_all(delayed_packets);
         // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
