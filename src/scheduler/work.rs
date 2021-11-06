@@ -1,7 +1,7 @@
 use super::worker::*;
 use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
-use std::any::{type_name, Any, TypeId};
+use std::any::{type_name, Any};
 
 /// A special kind of work that will execute on the coordinator (i.e. controller) thread
 ///
@@ -15,13 +15,16 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     #[inline]
     fn do_work_with_stat(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug!("{}", std::any::type_name::<Self>());
-        let stat = worker
-            .stat
-            .measure_work(TypeId::of::<Self>(), type_name::<Self>(), mmtk);
+        #[cfg(feature = "work_packet_timer")]
+        let stat =
+            worker
+                .stat
+                .measure_work(std::any::TypeId::of::<Self>(), type_name::<Self>(), mmtk);
         if crate::args::LOG_WORK_PACKETS {
             println!("> {}", type_name::<Self>());
         }
         self.do_work(worker, mmtk);
+        #[cfg(feature = "work_packet_timer")]
         stat.end_of_work(&mut worker.stat);
     }
 }
