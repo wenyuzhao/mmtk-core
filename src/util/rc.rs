@@ -949,7 +949,8 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
-            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
+            self.mmtk().scheduler.work_buckets[bucket]
+                .add_no_notify(ProcessIncs::<VM>::new(roots, true));
         }
     }
 }
