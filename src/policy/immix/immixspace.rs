@@ -1,9 +1,11 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
+use super::remset::REMSETS;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::remset::RemSets;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -117,6 +119,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn init(&mut self, _vm_map: &'static VMMap) {
         super::validate_features();
         self.common().init(self.as_space());
+        REMSETS.init(self.common().start..self.common().start + self.common().extent);
         self.block_allocation
             .init(unsafe { &*(self as *const Self) })
     }
@@ -139,6 +142,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
+                MetadataSpec::OnSide(RemSets::REMSET_TABLE),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -254,7 +258,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn select_mature_evacuation_candidates(&self) {
-        debug_assert!(crate::args::RC_MATURE_EVACUATION);
+        debug_assert!(crate::args::RC_MATURE_EVACUATION2);
         // Select mature defrag blocks
         let mut total_mature_blocks = 0;
         for c in self.chunk_map.committed_chunks() {
@@ -469,9 +473,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Trace and mark objects without evacuation.
     #[inline(always)]
     pub fn process_mature_evacuation_remset(&self) {
-        let mut remsets = vec![];
-        mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
-        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
+        REMSETS.schedule_all(&self.scheduler);
     }
 
     /// Trace and mark objects without evacuation.
@@ -864,31 +866,14 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
 
     #[inline(always)]
     fn process_node(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::args::REF_COUNT
-            && crate::args::RC_MATURE_EVACUATION
-            && self
-                .immix
-                .map(|ix| {
-                    let pause = ix.current_pause();
-                    pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
-                })
-                .unwrap_or(false);
-        let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<E::VM>::iterate(o, |e| {
             self.edges.push(e);
-            if check_mature_evac_remset && !should_add_to_mature_evac_remset {
-                let immix = unsafe { self.immix.unwrap_unchecked() };
-                if !immix.in_defrag(o) && immix.in_defrag(unsafe { e.load() }) {
-                    should_add_to_mature_evac_remset = true;
-                }
-            }
+            // println!("e {:?} -> {:?}", e, unsafe { e.load::<ObjectReference>() });
+            REMSETS.record(e, unsafe { e.load() });
             if self.edges.len() >= E::CAPACITY {
                 self.flush();
             }
         });
-        if should_add_to_mature_evac_remset {
-            self.mature_evac_remset.push(o);
-        }
     }
 
     fn flush(&mut self) {

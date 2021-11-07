@@ -165,6 +165,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .control_collector_context
                 .is_concurrent_collection(),
         );
+        if crate::args::LOG_PER_GC_STATE {
+            println!("[STW] {:?}", pause);
+        }
         match pause {
             Pause::FullTraceFast => self
                 .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler),
@@ -211,7 +214,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 pause == Pause::FullTraceFast || pause == Pause::InitialMark,
             );
             if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
+                && crate::args::RC_MATURE_EVACUATION2
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
             {
                 self.immix_space.process_mature_evacuation_remset()
@@ -238,16 +241,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             unsafe {
                 std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
                 debug_assert!(super::CURR_ROOTS.is_empty());
-            }
-            if crate::args::RC_MATURE_EVACUATION {
-                unreachable!("Forward mature roots during inc processing.");
-                // for x in old_roots.iter_mut() {
-                //     for o in x.iter_mut() {
-                //         if object_forwarding::is_forwarded::<VM>(*o) {
-                //             *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
-                //         };
-                //     }
-                // }
             }
         }
         // release the collected region
@@ -443,7 +436,7 @@ impl<VM: VMBinding> Immix<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-            if crate::args::RC_MATURE_EVACUATION {
+            if crate::args::RC_MATURE_EVACUATION2 {
                 self.immix_space.select_mature_evacuation_candidates();
             }
         }
@@ -485,7 +478,7 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-            if crate::args::RC_MATURE_EVACUATION {
+            if crate::args::RC_MATURE_EVACUATION2 {
                 self.immix_space.select_mature_evacuation_candidates();
             }
         }

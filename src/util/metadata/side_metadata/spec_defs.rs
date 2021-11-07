@@ -80,6 +80,8 @@ define_side_metadata_specs!(
     RC_STRADDLE_LINES = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     // LXR Block logging bits
     IX_BLOCK_LOG   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
+    // LXR Block logging bits
+    LXR_REMSETS   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS as _, log_bytes_in_region: crate::policy::immix::remset::LOG_BYTES_IN_REGION),
 );
 
 #[cfg(test)]

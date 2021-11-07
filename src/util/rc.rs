@@ -2,6 +2,7 @@ use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::remset::REMSETS;
 use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
@@ -274,11 +275,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
-            && (self.concurrent_marking_in_progress
-                || self.current_pause == Pause::FinalMark
-                || self.current_pause == Pause::FullTraceFast);
-        let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -297,28 +293,15 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         let x = in_place_promotion && !los;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            let o = unsafe { edge.load() };
-            if crate::args::RC_MATURE_EVACUATION
-                && check_mature_evac_remset
-                && !should_add_to_mature_evac_remset
-            {
-                if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {
-                    should_add_to_mature_evac_remset = true;
-                }
-            }
+            let o = unsafe { edge.load::<ObjectReference>() };
             if x {
                 edge.unlog::<VM>();
             }
-            if !o.is_null() && !self::rc_stick(o) {
+            // REMSETS.record(edge, o);
+            if !o.is_null() && (!self::rc_stick(o) || self.should_evacuate(o)) {
                 self.recursive_inc(edge);
             }
         });
-        if should_add_to_mature_evac_remset {
-            self.mature_evac_remset.push(o);
-            if self.mature_evac_remset.len() >= Self::CAPACITY {
-                self.flush();
-            }
-        }
     }
 
     #[inline(always)]
@@ -332,6 +315,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn add_remset(&mut self, e: Address) {
         self.remset.push(e);
+    }
+
+    #[inline(always)]
+    fn should_evacuate(&self, o: ObjectReference) -> bool {
+        REMSETS.in_collection_set(o) && self.current_pause == Pause::FullTraceFast
     }
 
     #[inline(always)]
@@ -358,11 +346,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(!Self::DELAYED_EVACUATION);
         let los = self.immix().los().in_space(o);
-        if self::count(o) != 0
-            || los
-            || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-                && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
-        {
+        // if (!self.should_evacuate(o) || self.current_pause != Pause::FullTraceFast)
+        //     && (self::count(o) != 0
+        //         || los
+        //         || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+        //             && Block::containing::<VM>(o).get_state() == BlockState::Reusing))
+        if los {
+            debug_assert!(!self.should_evacuate(o));
             if let Ok(0) = self::inc(o) {
                 self.promote(o, false, los, true);
             }
@@ -388,7 +378,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             let _ = self::inc(new);
             new
         } else {
-            if self::count(o) == 0 {
+            if self::count(o) == 0 || self.should_evacuate(o) {
                 // Evacuate the object
                 let new = object_forwarding::forward_object::<VM, _>(
                     o,
@@ -509,6 +499,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             if o.is_null() {
                 continue;
             }
+            // println!("inc {:?} -> {:?}", e, o);
             debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
             let o = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
                 self.process_inc(*e, o)

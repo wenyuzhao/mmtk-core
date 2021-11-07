@@ -21,6 +21,7 @@ pub const LOCK_FREE_BLOCK_ALLOCATION: bool = cfg!(feature = "ix_lock_free_block_
 pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
 pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
 pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
+pub const RC_MATURE_EVACUATION2: bool = true;
 /// One more atomic-store per barrier slow-path if this value is smaller than 6.
 pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
 pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =

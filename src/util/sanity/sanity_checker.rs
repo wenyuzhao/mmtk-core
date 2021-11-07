@@ -211,12 +211,13 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                 if let Some(immix) = self.mmtk().plan.downcast_ref::<Immix<VM>>() {
                     if immix.immix_space.in_space(object) {
                         println!(
-                            "[object] ix {:?} {:?} rc={:?} defrag={} mark={}",
+                            "[object] ix {:?} {:?} rc={:?} defrag={} mark={} forwarded={}",
                             object,
                             Block::containing::<VM>(object).get_state(),
                             crate::util::rc::count(object),
                             Block::containing::<VM>(object).is_defrag_source(),
-                            immix.immix_space.mark_bit(object)
+                            immix.immix_space.mark_bit(object),
+                            object_forwarding::is_forwarded::<VM>(object)
                         );
                     }
                     if immix.immix_space.address_in_space(slot) {
