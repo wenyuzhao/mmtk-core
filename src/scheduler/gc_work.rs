@@ -215,7 +215,15 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
         // mmtk.plan.base().stats.start_gc();
-        crate::GC_START_TIME.store(SystemTime::now(), Ordering::SeqCst);
+        let t = SystemTime::now();
+        if cfg!(feature = "yield_and_roots_timer") && crate::inside_harness() {
+            let t = t
+                .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::SeqCst))
+                .unwrap()
+                .as_nanos();
+            crate::PAUSES.yield_nanos.fetch_add(t, Ordering::SeqCst);
+        }
+        crate::GC_START_TIME.store(t, Ordering::SeqCst);
         if crate::args::LOG_PER_GC_STATE {
             crate::RESERVED_PAGES_AT_GC_START
                 .store(mmtk.plan.get_pages_reserved(), Ordering::SeqCst);

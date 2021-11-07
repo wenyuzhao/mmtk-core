@@ -143,6 +143,8 @@ struct Pauses {
     pub final_mark: AtomicUsize,
     pub full: AtomicUsize,
     pub emergency: AtomicUsize,
+    pub yield_nanos: Atomic<u128>,
+    pub roots_nanos: Atomic<u128>,
 }
 
 impl Pauses {
@@ -152,6 +154,10 @@ impl Pauses {
         print!("gc.final_satb\t");
         print!("gc.full\t");
         print!("gc.emergency\t");
+        if cfg!(feature = "yield_and_roots_timer") {
+            print!("time.yield\t");
+            print!("time.roots\t");
+        }
     }
     pub fn print_values(&self) {
         print!("{}\t", self.rc.load(Ordering::SeqCst));
@@ -159,6 +165,16 @@ impl Pauses {
         print!("{}\t", self.final_mark.load(Ordering::SeqCst));
         print!("{}\t", self.full.load(Ordering::SeqCst));
         print!("{}\t", self.emergency.load(Ordering::SeqCst));
+        if cfg!(feature = "yield_and_roots_timer") {
+            print!(
+                "{}\t",
+                self.yield_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
+            );
+            print!(
+                "{}\t",
+                self.roots_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
+            );
+        }
     }
 }
 
@@ -168,6 +184,8 @@ static PAUSES: Pauses = Pauses {
     final_mark: AtomicUsize::new(0),
     full: AtomicUsize::new(0),
     emergency: AtomicUsize::new(0),
+    yield_nanos: Atomic::new(0),
+    roots_nanos: Atomic::new(0),
 };
 
 #[derive(Default)]
