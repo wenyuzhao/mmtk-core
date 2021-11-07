@@ -46,6 +46,7 @@ rand = "0.7.3"
 default = ["perf_counter"]
 # default = []
 
+yield_and_roots_timer = []
 work_packet_timer = []
 barrier_measurement = []
 instrumentation = []
