@@ -201,7 +201,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
-    const CAPACITY: usize = 512;
+    const CAPACITY: usize = 4096;
     const UNLOG_BITS: MetadataSpec =
         *<E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec();
     const LOCK_BITS: SideMetadataSpec = *RC_LOCK_BIT_SPEC.extract_side_spec();
@@ -380,7 +380,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 let mut incs = vec![];
                 std::mem::swap(&mut incs, &mut self.incs);
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
-                    .add_no_notify(UnlogEdges::new(incs));
+                    .add(UnlogEdges::new(incs));
             }
             return;
         }
@@ -399,7 +399,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                     nodes = self.decs.clone();
                 }
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                    .add_no_notify(ProcessModBufSATB::<E>::new(edges, nodes));
+                    .add(ProcessModBufSATB::<E>::new(edges, nodes));
             }
         }
         // Flush inc and dec buffer
@@ -408,8 +408,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut incs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut incs, &mut self.incs);
             let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk.scheduler.work_buckets[bucket]
-                .add_no_notify(ProcessIncs::<E::VM>::new(incs, false));
+            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::<E::VM>::new(incs, false));
             // Dec buffer
             let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
@@ -417,7 +416,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add_no_notify(w);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
             }
         }
         // Flush dec buffer

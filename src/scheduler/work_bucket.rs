@@ -89,27 +89,28 @@ impl<VM: VMBinding> WorkBucket<VM> {
         );
         self.active.store(false, Ordering::SeqCst);
     }
-    #[inline(always)]
     /// Add a work packet to this bucket, with a given priority
+    #[inline(always)]
     pub fn add_with_priority(&self, _priority: usize, work: Box<dyn GCWork<VM>>) {
         self.queue.read().push(work);
-        self.notify_one_worker(); // FIXME: Performance
+        if self.is_activated() {
+            self.notify_one_worker();
+        }
     }
     /// Add a work packet to this bucket, with a default priority (1000)
     #[inline(always)]
     pub fn add<W: GCWork<VM>>(&self, work: W) {
         self.add_with_priority(Self::DEFAULT_PRIORITY, box work);
     }
-    #[inline(always)]
-    pub fn add_no_notify<W: GCWork<VM>>(&self, work: W) {
-        self.queue.read().push(box work);
-    }
+
     #[inline(always)]
     pub fn bulk_add_with_priority(&self, _priority: usize, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         for w in work_vec {
             self.queue.read().push(w)
         }
-        self.notify_all_workers(); // FIXME: Performance
+        if self.is_activated() {
+            self.notify_all_workers();
+        }
     }
     #[inline(always)]
     pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {

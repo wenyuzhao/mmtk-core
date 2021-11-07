@@ -95,7 +95,7 @@ impl<VM: VMBinding> GCWorker<VM> {
     #[inline]
     pub fn add_work(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
         if !self.scheduler().work_buckets[bucket].is_activated() {
-            self.scheduler.work_buckets[bucket].add_no_notify(work);
+            self.scheduler.work_buckets[bucket].add(work);
             return;
         }
         self.local_work_buffer.push(box work);
