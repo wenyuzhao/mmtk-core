@@ -554,7 +554,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 self.worker().add_work(WorkBucketStage::Closure, w);
             }
         }
-        while !self.new_incs.is_empty() && self.new_incs.len() <= Self::CAPACITY {
+        while !self.new_incs.is_empty() && self.new_incs.len() <= 32 {
             let mut incs = vec![];
             std::mem::swap(&mut incs, &mut self.new_incs);
             self.process_incs(false, true, incs, copy_context);
