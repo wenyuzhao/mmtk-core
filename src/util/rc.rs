@@ -3,7 +3,6 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
-use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext, Pause},
@@ -222,6 +221,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline]
     pub fn new(incs: Vec<Address>, roots: bool) -> Self {
+        assert!(incs.len() <= 1024, "{}", incs.len());
         debug_assert!(crate::args::REF_COUNT);
         Self {
             incs,
@@ -242,6 +242,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     pub fn new_nursery(incs: Vec<Address>, roots: bool) -> Self {
         let mut w = Self::new(incs, roots);
         w.nursery = true;
+        w
+    }
+
+    #[inline]
+    pub fn new_x(incs: Vec<Address>, roots: bool, nursery: bool) -> Self {
+        let mut w = Self::new(incs, roots);
+        w.nursery = nursery;
         w
     }
 
@@ -324,7 +331,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn recursive_inc(&mut self, e: Address) {
         self.new_incs.push(e);
-        if self.new_incs.len() > Self::CAPACITY {
+        if self.new_incs.len() >= Self::CAPACITY {
             self.flush()
         }
     }
@@ -415,8 +422,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if !self.new_incs.is_empty() {
             let mut new_incs = vec![];
             std::mem::swap(&mut new_incs, &mut self.new_incs);
-            self.worker().add_work(
-                WorkBucketStage::rc_process_incs_stage(),
+            self.worker().add_work_no_cache(
+                WorkBucketStage::Unconstrained,
                 ProcessIncs::<VM>::new_nursery(new_incs, false),
             );
         }
@@ -428,24 +435,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 WorkBucketStage::RCEvacuateNursery,
                 RCEvacuateNursery::new(remset, self.roots),
             );
-        }
-        if !self.mature_evac_remset.is_empty() {
-            let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            if self.concurrent_marking_in_progress {
-                self.immix()
-                    .immix_space
-                    .mature_evac_remsets
-                    .lock()
-                    .push(box w)
-            } else {
-                if self.current_pause == Pause::FinalMark
-                    || self.current_pause == Pause::FullTraceFast
-                {
-                    self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
-                }
-            }
         }
         if !self.scan_objects.is_empty() {
             let mut scan_objects = vec![];
@@ -464,45 +453,39 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     #[inline(always)]
     fn load_mature_object_and_unlog_edge(
         &mut self,
+        root: bool,
+        nursery: bool,
         e: Address,
-        immix: &Immix<VM>,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
         let o = unsafe { e.load::<ObjectReference>() };
         // Delay the increment if this object points to a young object
         if Self::DELAYED_EVACUATION && crate::args::RC_NURSERY_EVACUATION {
-            let in_immix_space = immix.immix_space.in_space(o);
+            let in_immix_space = self.immix().immix_space.in_space(o);
             if in_immix_space && self::count(o) == 0 {
                 self.add_remset(e);
                 return None;
             }
         }
         // unlog edge
-        if !self.roots && !self.nursery {
+        if !root && !nursery {
             e.unlog::<VM>();
         }
         Some(o)
     }
-}
 
-impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
-    #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.worker = worker;
-        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        self.immix = immix;
-        self.current_pause = immix.current_pause().unwrap();
-        self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        let copy_context =
-            unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
-        let mut incs = vec![];
-        std::mem::swap(&mut incs, &mut self.incs);
+    fn process_incs(
+        &mut self,
+        root_slots: bool,
+        nursery: bool,
+        mut incs: Vec<Address>,
+        copy_context: &mut impl CopyContext<VM = VM>,
+    ) -> Option<Vec<ObjectReference>> {
         let roots = incs.as_mut_ptr() as *mut ObjectReference;
         let mut num_roots = 0usize;
         for e in &mut incs {
             // println!(" - inc e {:?}", e);
-            let o = match self.load_mature_object_and_unlog_edge(*e, immix) {
+            let o = match self.load_mature_object_and_unlog_edge(root_slots, nursery, *e) {
                 Some(o) => o,
                 _ => continue,
             };
@@ -522,10 +505,33 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 num_roots += 1;
             }
         }
-        if self.roots && num_roots != 0 {
+        if root_slots && num_roots != 0 {
             let cap = incs.capacity();
             std::mem::forget(incs);
             let roots = unsafe { Vec::<ObjectReference>::from_raw_parts(roots, num_roots, cap) };
+            Some(roots)
+        } else {
+            None
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        // println!("[{}] ProcessIncs {}", worker.ordinal, self.incs.len());
+        self.worker = worker;
+        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
+        self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        self.current_pause = self.immix().current_pause().unwrap();
+        self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        let copy_context =
+            unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
+        // Process main buffer
+        let mut incs = vec![];
+        std::mem::swap(&mut incs, &mut self.incs);
+        let roots = self.process_incs(self.roots, self.nursery, incs, copy_context);
+        if let Some(roots) = roots {
             if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
@@ -535,7 +541,27 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 crate::plan::immix::CURR_ROOTS.push(roots);
             }
         }
+        // Process recursively generated buffer
+        if !self.new_incs.is_empty() {
+            if !self.scan_objects.is_empty() {
+                let mut scan_objects = vec![];
+                mem::swap(&mut scan_objects, &mut self.scan_objects);
+                let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
+                    scan_objects,
+                    false,
+                    Some(self.immix()),
+                    &self.immix().immix_space,
+                );
+                self.worker().add_work(WorkBucketStage::Closure, w);
+            }
+        }
+        while !self.new_incs.is_empty() && self.new_incs.len() <= Self::CAPACITY {
+            let mut incs = vec![];
+            std::mem::swap(&mut incs, &mut self.new_incs);
+            self.process_incs(false, true, incs, copy_context);
+        }
         self.flush();
+        // println!("[{}] ProcessIncs END", worker.ordinal);
     }
 }
 
@@ -930,10 +956,11 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
-    const CAPACITY: usize = 4096;
+    const CAPACITY: usize = 1024;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        debug_assert!(edges.len() <= 1024);
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }

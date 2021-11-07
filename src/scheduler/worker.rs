@@ -96,13 +96,18 @@ impl<VM: VMBinding> GCWorker<VM> {
     #[inline]
     pub fn add_work(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
         if !self.scheduler().work_buckets[bucket].is_activated() {
-            self.scheduler.work_buckets[bucket].add_with_priority(1000, box work);
+            self.scheduler.work_buckets[bucket].add_no_notify(work);
             return;
         }
         self.local_work_buffer.push((bucket, box work));
         if self.local_work_buffer.len() > LOCALLY_CACHED_WORKS {
             self.flush();
         }
+    }
+
+    #[inline]
+    pub fn add_work_no_cache(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
+        self.scheduler.work_buckets[bucket].add_with_priority(1000, box work);
     }
 
     #[cold]

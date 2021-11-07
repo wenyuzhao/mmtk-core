@@ -42,6 +42,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     #[inline(always)]
     fn notify_one_worker(&self) {
+        if !self.is_activated() {
+            return;
+        }
         if let Some(parked) = self.parked_workers() {
             if parked > 0 {
                 let _guard = self.monitor.0.lock().unwrap();
@@ -51,6 +54,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     #[inline(always)]
     pub fn notify_all_workers(&self) {
+        if !self.is_activated() {
+            return;
+        }
         if let Some(parked) = self.parked_workers() {
             if parked > 0 {
                 let _guard = self.monitor.0.lock().unwrap();

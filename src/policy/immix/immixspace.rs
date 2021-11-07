@@ -7,7 +7,6 @@ use crate::plan::PlanConstraints;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
-use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
@@ -901,10 +900,7 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             );
         }
         if !self.mature_evac_remset.is_empty() {
-            let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+            unreachable!();
         }
     }
 }
