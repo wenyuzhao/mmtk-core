@@ -34,6 +34,7 @@ use crate::{scheduler::*, BarrierSelector};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
 use enum_map::EnumMap;
@@ -277,12 +278,23 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn gc_pause_start(&self) {
         if self.current_pause().unwrap() == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
+            if cfg!(feature = "satb_timer") {
+                let t = crate::SATB_START
+                    .load(Ordering::SeqCst)
+                    .elapsed()
+                    .unwrap()
+                    .as_nanos();
+                crate::PAUSES.satb_nanos.fetch_add(t, Ordering::SeqCst);
+            }
         }
     }
 
     fn gc_pause_end(&self) {
         if self.current_pause().unwrap() == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
+            if cfg!(feature = "satb_timer") {
+                crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
+            }
         }
         let pause = self.current_pause.load(Ordering::SeqCst).unwrap();
         if pause == Pause::RefCount || pause == Pause::InitialMark {

@@ -131,6 +131,7 @@ static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
+static SATB_START: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 
 #[inline(always)]
 fn inside_harness() -> bool {
@@ -145,6 +146,7 @@ struct Pauses {
     pub emergency: AtomicUsize,
     pub yield_nanos: Atomic<u128>,
     pub roots_nanos: Atomic<u128>,
+    pub satb_nanos: Atomic<u128>,
 }
 
 impl Pauses {
@@ -157,6 +159,9 @@ impl Pauses {
         if cfg!(feature = "yield_and_roots_timer") {
             print!("time.yield\t");
             print!("time.roots\t");
+        }
+        if cfg!(feature = "satb_timer") {
+            print!("time.satb\t");
         }
     }
     pub fn print_values(&self) {
@@ -175,6 +180,12 @@ impl Pauses {
                 self.roots_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
             );
         }
+        if cfg!(feature = "satb_timer") {
+            print!(
+                "{}\t",
+                self.satb_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
+            );
+        }
     }
 }
 
@@ -186,6 +197,7 @@ static PAUSES: Pauses = Pauses {
     emergency: AtomicUsize::new(0),
     yield_nanos: Atomic::new(0),
     roots_nanos: Atomic::new(0),
+    satb_nanos: Atomic::new(0),
 };
 
 #[derive(Default)]
