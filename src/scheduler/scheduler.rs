@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::SystemTime;
 
 pub enum CoordinatorMessage<VM: VMBinding> {
     Work(Box<dyn CoordinatorWork<VM>>),
@@ -256,7 +257,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             let x = bucket.update();
             if crate::args::LOG_STAGES && x {
-                println!("Activate {:?}", id);
+                unsafe {
+                    let since_prev_stage =
+                        LAST_ACTIVATE_TIME.unwrap().elapsed().unwrap().as_nanos();
+                    println!("Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                        id, since_prev_stage,
+                        crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                        crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                    );
+                    LAST_ACTIVATE_TIME = Some(SystemTime::now())
+                }
             }
             if cfg!(feature = "yield_and_roots_timer")
                 && x
@@ -289,6 +299,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Drain the message queue and execute coordinator work. Only the coordinator should call this.
     pub fn wait_for_completion(&self) {
         self.in_gc_pause.store(true, Ordering::SeqCst);
+        if crate::args::LOG_STAGES {
+            unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
+        }
         // At the start of a GC, we probably already have received a `ScheduleCollection` work. Run it now.
         if let Some(initializer) = self.startup.lock().unwrap().take() {
             self.process_coordinator_work(initializer);
@@ -500,8 +513,20 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         mmtk.plan.base().control_collector_context.clear_request();
         let first_stw_bucket = self.work_buckets.values().skip(1).next().unwrap();
         debug_assert!(!first_stw_bucket.is_activated());
+        if crate::args::LOG_STAGES {
+            println!(
+                "notify_mutators_paused since-gc={}ns",
+                crate::GC_START_TIME
+                    .load(Ordering::SeqCst)
+                    .elapsed()
+                    .unwrap()
+                    .as_nanos()
+            );
+        }
         first_stw_bucket.activate();
         let _guard = self.worker_monitor.0.lock().unwrap();
         self.worker_monitor.1.notify_all();
     }
 }
+
+static mut LAST_ACTIVATE_TIME: Option<SystemTime> = None;

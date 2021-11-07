@@ -229,7 +229,16 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 .store(mmtk.plan.get_pages_reserved(), Ordering::SeqCst);
         }
         mmtk.plan.gc_pause_start();
-        trace!("stop_all_mutators end");
+        if crate::args::LOG_STAGES {
+            println!(
+                "stop_all_mutators end  since-trigger={:?}ns",
+                crate::GC_TRIGGER_TIME
+                    .load(Ordering::SeqCst)
+                    .elapsed()
+                    .unwrap()
+                    .as_nanos()
+            );
+        }
         mmtk.scheduler.notify_mutators_paused(mmtk);
         if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
             // Prepare mutators if necessary
@@ -505,7 +514,7 @@ pub trait ProcessEdgesWork:
     Send + 'static + Sized + DerefMut + Deref<Target = ProcessEdgesBase<Self>>
 {
     type VM: VMBinding;
-    const CAPACITY: usize = 4096;
+    const CAPACITY: usize = 1024;
     const OVERWRITE_REFERENCE: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
     const RC_ROOTS: bool = false;
