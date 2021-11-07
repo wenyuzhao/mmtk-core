@@ -1,7 +1,7 @@
 use super::worker::WorkerGroup;
 use super::*;
 use crate::vm::VMBinding;
-use crossbeam_queue::SegQueue;
+use crossbeam_deque::{Injector, Steal, Worker};
 use enum_map::Enum;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     /// A priority queue
-    pub queue: spin::RwLock<SegQueue<Box<dyn GCWork<VM>>>>,
+    pub queue: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,
@@ -20,7 +20,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn new(active: bool, monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
         Self {
             active: AtomicBool::new(active),
-            queue: Default::default(),
+            queue: spin::RwLock::new(Injector::new()),
             monitor,
             can_open: None,
             group: None,
@@ -28,9 +28,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     pub fn swap_queue(
         &self,
-        mut queue: SegQueue<Box<dyn GCWork<VM>>>,
-    ) -> SegQueue<Box<dyn GCWork<VM>>> {
-        std::mem::swap::<SegQueue<Box<dyn GCWork<VM>>>>(&mut self.queue.write(), &mut queue);
+        mut queue: Injector<Box<dyn GCWork<VM>>>,
+    ) -> Injector<Box<dyn GCWork<VM>>> {
+        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut self.queue.write(), &mut queue);
         queue
     }
     pub fn set_group(&mut self, group: Arc<WorkerGroup<VM>>) {
@@ -120,11 +120,12 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     /// Get a work packet (with the greatest priority) from this bucket
     #[inline(always)]
-    pub fn poll(&self) -> Option<Box<dyn GCWork<VM>>> {
+    pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> (Steal<Box<dyn GCWork<VM>>>, bool) {
         if !self.active.load(Ordering::SeqCst) {
-            return None;
+            return (Steal::Empty, false);
         }
-        self.queue.read().pop()
+        let queue = self.queue.read();
+        (queue.steal_batch_and_pop(worker), queue.is_empty())
     }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(box pred);

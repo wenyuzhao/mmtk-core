@@ -31,7 +31,7 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
 
 impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
-    const CAPACITY: usize = 4096;
+    const CAPACITY: usize = 512;
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         let plan = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
@@ -161,7 +161,6 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
-    const CAPACITY: usize = 4096;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {

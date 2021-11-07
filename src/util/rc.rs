@@ -206,7 +206,7 @@ pub struct ProcessIncs<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
 
 impl<VM: VMBinding> ProcessIncs<VM> {
-    const CAPACITY: usize = 1024;
+    const CAPACITY: usize = 512;
     pub const DELAYED_EVACUATION: bool = cfg!(feature = "ix_delayed_nursery_evacuation");
 
     #[inline(always)]
@@ -221,7 +221,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline]
     pub fn new(incs: Vec<Address>, roots: bool) -> Self {
-        assert!(incs.len() <= 1024, "{}", incs.len());
         debug_assert!(crate::args::REF_COUNT);
         Self {
             incs,
@@ -422,7 +421,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if !self.new_incs.is_empty() {
             let mut new_incs = vec![];
             std::mem::swap(&mut new_incs, &mut self.new_incs);
-            self.worker().add_work_no_cache(
+            self.worker().add_work(
                 WorkBucketStage::Unconstrained,
                 ProcessIncs::<VM>::new_nursery(new_incs, false),
             );
@@ -579,7 +578,7 @@ pub struct ProcessDecs<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
 
 impl<VM: VMBinding> ProcessDecs<VM> {
-    const CAPACITY: usize = 1024;
+    const CAPACITY: usize = 512;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -956,11 +955,9 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
-    const CAPACITY: usize = 1024;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        debug_assert!(edges.len() <= 1024);
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }

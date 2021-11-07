@@ -201,7 +201,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
-    const CAPACITY: usize = 1024;
+    const CAPACITY: usize = 512;
     const UNLOG_BITS: MetadataSpec =
         *<E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec();
     const LOCK_BITS: SideMetadataSpec = *RC_LOCK_BIT_SPEC.extract_side_spec();
