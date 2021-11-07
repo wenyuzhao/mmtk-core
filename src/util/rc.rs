@@ -298,7 +298,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 edge.unlog::<VM>();
             }
             // REMSETS.record(edge, o);
-            if !o.is_null() && (!self::rc_stick(o) || self.should_evacuate(o)) {
+            if !o.is_null() && (!self::rc_stick(o) || REMSETS.in_collection_set(o)) {
                 self.recursive_inc(edge);
             }
         });
@@ -318,8 +318,28 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn should_evacuate(&self, o: ObjectReference) -> bool {
-        REMSETS.in_collection_set(o) && self.current_pause == Pause::FullTraceFast
+    fn no_need_to_evacuate(&self, o: ObjectReference, los: bool) -> bool {
+        if los {
+            return true;
+        }
+        let b = Block::containing::<VM>(o);
+        // Mature object
+        if self::count(o) != 0 {
+            if crate::args::RC_MATURE_EVACUATION2 && b.is_defrag_source() {
+                return false;
+            }
+            return true;
+        }
+        // In recycled lines
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+            && b.get_state() == BlockState::Reusing
+        {
+            if crate::args::RC_MATURE_EVACUATION2 && b.is_defrag_source() {
+                return false;
+            }
+            return true;
+        }
+        false
     }
 
     #[inline(always)]
@@ -346,13 +366,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(!Self::DELAYED_EVACUATION);
         let los = self.immix().los().in_space(o);
-        // if (!self.should_evacuate(o) || self.current_pause != Pause::FullTraceFast)
-        //     && (self::count(o) != 0
-        //         || los
-        //         || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-        //             && Block::containing::<VM>(o).get_state() == BlockState::Reusing))
-        if los {
-            debug_assert!(!self.should_evacuate(o));
+        if self.no_need_to_evacuate(o, los) {
             if let Ok(0) = self::inc(o) {
                 self.promote(o, false, los, true);
             }
@@ -378,7 +392,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             let _ = self::inc(new);
             new
         } else {
-            if self::count(o) == 0 || self.should_evacuate(o) {
+            if self::count(o) == 0 || REMSETS.in_collection_set(o) {
                 // Evacuate the object
                 let new = object_forwarding::forward_object::<VM, _>(
                     o,
