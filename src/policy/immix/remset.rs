@@ -13,8 +13,7 @@ use crate::{
     AllocationSemantics, MMTK,
 };
 use atomic::{Atomic, Ordering};
-use crossbeam_queue::{ArrayQueue, SegQueue};
-use spin::RwLock;
+use crossbeam_queue::SegQueue;
 use std::{marker::PhantomData, ops::Range, sync::atomic::AtomicPtr};
 
 use super::{block::Block, line::Line, ImmixSpace};
@@ -24,30 +23,8 @@ const BLOCKS_IN_REGION: usize = 1 << LOG_BLOCKS_IN_REGION;
 pub const LOG_BYTES_IN_REGION: usize = LOG_BLOCKS_IN_REGION + Block::LOG_BYTES;
 const BYTES_IN_REGION: usize = 1 << LOG_BYTES_IN_REGION;
 
-// #[derive(Clone)]
-pub struct RemSet {
-    buffer: ArrayQueue<Address>,
-}
-
-impl RemSet {
-    pub const CAPACITY: usize = 4096;
-
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self {
-            buffer: ArrayQueue::new(Self::CAPACITY),
-        }
-    }
-
-    #[inline(always)]
-    fn add(&self, a: Address) -> bool {
-        self.buffer.push(a).is_ok()
-    }
-}
-
 pub struct ProcessRemSet<VM: VMBinding> {
-    remset: Option<RemSet>,
-    remset_v: Vec<Address>,
+    remset: Vec<Address>,
     new_remset: Vec<Address>,
     immix: *const Immix<VM>,
     worker: *mut GCWorker<VM>,
@@ -57,24 +34,11 @@ pub struct ProcessRemSet<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Send for ProcessRemSet<VM> {}
 
 impl<VM: VMBinding> ProcessRemSet<VM> {
-    pub fn new(remset: RemSet) -> Self {
+    pub fn new(remset: Vec<Address>) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         debug_assert!(crate::args::RC_MATURE_EVACUATION2);
         Self {
-            remset: Some(remset),
-            remset_v: vec![],
-            new_remset: vec![],
-            worker: std::ptr::null_mut(),
-            immix: std::ptr::null_mut(),
-            _p: PhantomData,
-        }
-    }
-    pub fn new_rec(remset: Vec<Address>) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
-        debug_assert!(crate::args::RC_MATURE_EVACUATION2);
-        Self {
-            remset_v: remset,
-            remset: None,
+            remset,
             new_remset: vec![],
             worker: std::ptr::null_mut(),
             immix: std::ptr::null_mut(),
@@ -96,7 +60,7 @@ impl<VM: VMBinding> ProcessRemSet<VM> {
             let x = unsafe { e.load::<ObjectReference>() };
             if REMSETS.in_collection_set(x) {
                 self.new_remset.push(e);
-                if self.new_remset.len() >= RemSet::CAPACITY {
+                if self.new_remset.len() >= LocalPerRegionRemSet::CAPACITY {
                     self.flush()
                 }
             }
@@ -108,7 +72,7 @@ impl<VM: VMBinding> ProcessRemSet<VM> {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.new_remset);
             self.worker()
-                .add_work(WorkBucketStage::RCEvacuateMature, Self::new_rec(remset));
+                .add_work(WorkBucketStage::RCEvacuateMature, Self::new(remset));
         }
     }
 
@@ -157,14 +121,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessRemSet<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        if let Some(rs) = self.remset.take() {
-            while let Some(e) = rs.buffer.pop() {
-                self.forward_edge(e);
-            }
-        }
-        if !self.remset_v.is_empty() {
+        if !self.remset.is_empty() {
             let mut remset = vec![];
-            std::mem::swap(&mut remset, &mut self.remset_v);
+            std::mem::swap(&mut remset, &mut self.remset);
             for e in remset {
                 self.forward_edge(e);
             }
@@ -175,43 +134,14 @@ impl<VM: VMBinding> GCWork<VM> for ProcessRemSet<VM> {
 
 pub struct PerRegionRemset {
     region: Address,
-    last: RwLock<RemSet>,
-    remsets: SegQueue<RemSet>,
+    remsets: SegQueue<Vec<Address>>,
 }
 
 impl PerRegionRemset {
     pub fn new(region: Address) -> Self {
         Self {
             region,
-            last: RwLock::new(RemSet::new()),
             remsets: SegQueue::new(),
-        }
-    }
-    pub fn flush(&self) {
-        let remset = self.last.upgradeable_read();
-        if remset.buffer.len() != 0 {
-            let mut remset = remset.upgrade();
-            let mut old_remset = RemSet::new();
-            std::mem::swap::<RemSet>(&mut remset, &mut old_remset);
-            self.remsets.push(old_remset);
-        }
-    }
-
-    pub fn add(&self, a: Address) {
-        let remset = self.last.upgradeable_read();
-        if !remset.add(a) {
-            let old_remset = {
-                let mut remset = remset.upgrade();
-                if remset.add(a) {
-                    return;
-                }
-                let mut old_remset = RemSet::new();
-                std::mem::swap::<RemSet>(&mut remset, &mut old_remset);
-                let ok = remset.add(a);
-                debug_assert!(ok);
-                old_remset
-            };
-            self.remsets.push(old_remset);
         }
     }
 }
@@ -240,15 +170,8 @@ impl RemSets {
         self.range.store((range.start, range.end), Ordering::SeqCst)
     }
 
-    #[cold]
-    fn record_slow(&self, e: Address, o: ObjectReference) {
-        let remset = self.get(o.to_address());
-        // println!("record_slow {:?} -> {:?}", e, o);
-        remset.add(e)
-    }
-
     #[inline]
-    pub fn address_in_collection_set(&self, a: Address) -> bool {
+    fn address_in_collection_set(&self, a: Address) -> bool {
         let (start, end) = self.range.load(Ordering::Relaxed);
         if a < start || a >= end {
             return false;
@@ -259,24 +182,6 @@ impl RemSets {
     #[inline]
     pub fn in_collection_set(&self, o: ObjectReference) -> bool {
         self.address_in_collection_set(o.to_address())
-    }
-
-    #[inline]
-    pub fn should_record(e: Address, o: ObjectReference) -> bool {
-        if (e.as_usize() ^ o.to_address().as_usize()) >> LOG_BYTES_IN_REGION == 0 {
-            return false;
-        }
-        !Block::from(e).is_defrag_source() && Block::from(o.to_address()).is_defrag_source()
-    }
-
-    #[inline]
-    pub fn record(&self, e: Address, o: ObjectReference) {
-        if (e.as_usize() ^ o.to_address().as_usize()) >> LOG_BYTES_IN_REGION == 0 {
-            return;
-        }
-        if !self.address_in_collection_set(e) && self.in_collection_set(o) {
-            self.record_slow(e, o);
-        }
     }
 
     #[inline]
@@ -306,32 +211,12 @@ impl RemSets {
     }
 
     #[inline]
-    fn get_opt(&self, a: Address) -> Option<&PerRegionRemset> {
-        let slot = side_metadata::address_to_meta_address(&Self::REMSET_TABLE, a);
-        let slot = unsafe { &*slot.to_ptr::<AtomicPtr<PerRegionRemset>>() };
-        let ptr = slot.load(Ordering::Relaxed);
-        if (ptr as usize) != 0 && (ptr as usize) != 1 {
-            return Some(unsafe { &*ptr });
-        }
-        None
-    }
-
-    #[inline]
     fn clear(&self, a: Address) {
         let slot = side_metadata::address_to_meta_address(&Self::REMSET_TABLE, a);
         unsafe { slot.store(0usize) }
     }
 
     pub fn schedule_all<VM: VMBinding>(&self, scheduler: &GCWorkScheduler<VM>) {
-        // let mut remsets: Vec<Box<dyn GCWork<VM>>> = vec![];
-        // while let Some(rs) = self.all_remsets.pop() {
-        //     let prrs = unsafe { &*rs };
-        //     prrs.flush();
-        //     while let Some(remset) = prrs.remsets.pop() {
-        //         remsets.push(box ProcessRemSet::new(remset))
-        //     }
-        // }
-        // scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
         scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(SchduleEvacuation);
     }
 }
@@ -339,11 +224,11 @@ impl RemSets {
 struct SchduleEvacuation;
 
 impl<VM: VMBinding> GCWork<VM> for SchduleEvacuation {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        FlushWorkerRemSet::schedule(&mmtk.scheduler);
         let mut remsets: Vec<Box<dyn GCWork<VM>>> = vec![];
         while let Some(rs) = REMSETS.all_remsets.pop() {
             let prrs = unsafe { &*rs };
-            prrs.flush();
             REMSETS.clear(prrs.region);
             while let Some(remset) = prrs.remsets.pop() {
                 remsets.push(box ProcessRemSet::new(remset))
@@ -351,5 +236,127 @@ impl<VM: VMBinding> GCWork<VM> for SchduleEvacuation {
             let _ = unsafe { Box::from_raw(rs) };
         }
         mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
+    }
+}
+
+pub struct LocalPerRegionRemSet {
+    region: Address,
+    remset: Vec<Address>,
+}
+
+impl LocalPerRegionRemSet {
+    const CAPACITY: usize = 4096;
+
+    pub fn new(region: Address) -> Self {
+        Self {
+            region,
+            remset: vec![],
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.remset.is_empty()
+    }
+
+    fn add(&mut self, a: Address) {
+        self.remset.push(a);
+        if self.remset.len() >= Self::CAPACITY {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if !self.remset.is_empty() {
+            let mut remset = vec![];
+            std::mem::swap(&mut remset, &mut self.remset);
+            REMSETS.get(self.region).remsets.push(remset)
+        }
+    }
+
+    fn flush_to_scheduler<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+        if !self.remset.is_empty() {
+            let mut remset = vec![];
+            std::mem::swap(&mut remset, &mut self.remset);
+            worker.add_work(
+                WorkBucketStage::RCEvacuateMature,
+                ProcessRemSet::new(remset),
+            );
+        }
+    }
+}
+
+pub struct LocalRemSet {
+    base: Address,
+    table: Vec<Option<LocalPerRegionRemSet>>,
+    remset_list: Vec<usize>,
+}
+
+impl LocalRemSet {
+    pub fn new(base: Address) -> Self {
+        Self {
+            base,
+            table: vec![],
+            remset_list: vec![],
+        }
+    }
+
+    #[cold]
+    fn record_slow(&mut self, e: Address, o: ObjectReference) {
+        let region = o.to_address().align_down(BYTES_IN_REGION);
+        let index = (o.to_address() - self.base) >> LOG_BYTES_IN_REGION;
+        if index >= self.table.len() {
+            self.table.resize_with(1 + index << 1, || None);
+        }
+        if self.table[index].is_none() {
+            self.table[index] = Some(LocalPerRegionRemSet::new(region));
+        }
+        let remset = self.table[index].as_mut().unwrap();
+        if remset.is_empty() {
+            self.remset_list.push(index);
+        }
+        remset.add(e)
+    }
+
+    #[inline]
+    pub fn record(&mut self, e: Address, o: ObjectReference) {
+        if (e.as_usize() ^ o.to_address().as_usize()) >> LOG_BYTES_IN_REGION == 0 {
+            return;
+        }
+        if !REMSETS.address_in_collection_set(e) && REMSETS.in_collection_set(o) {
+            self.record_slow(e, o);
+        }
+    }
+
+    pub fn flush(&mut self) {
+        while let Some(i) = self.remset_list.pop() {
+            let entry = self.table[i].as_mut().unwrap();
+            entry.flush();
+        }
+    }
+
+    fn flush_to_scheduler<VM: VMBinding>(&mut self, worker: &mut GCWorker<VM>) {
+        while let Some(i) = self.remset_list.pop() {
+            let entry = self.table[i].as_mut().unwrap();
+            entry.flush_to_scheduler(worker);
+        }
+    }
+}
+
+pub struct FlushWorkerRemSet;
+
+impl FlushWorkerRemSet {
+    pub fn schedule<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>) {
+        for w in &scheduler.worker_group().workers {
+            w.local_work_bucket.add(FlushWorkerRemSet);
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for FlushWorkerRemSet {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let w = unsafe { &mut *(worker as *mut _) };
+        unsafe { worker.local::<ImmixCopyContext<VM>>() }
+            .remset
+            .flush_to_scheduler(w);
     }
 }

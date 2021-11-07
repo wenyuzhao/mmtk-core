@@ -457,7 +457,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
                 scan_objects,
                 false,
-                Some(self.immix()),
                 &self.immix().immix_space,
             );
             self.worker().add_work(WorkBucketStage::Closure, w);

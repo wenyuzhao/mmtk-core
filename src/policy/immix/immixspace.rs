@@ -2,7 +2,7 @@ use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::remset::REMSETS;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
+use crate::plan::immix::{ImmixCopyContext, Pause, CURRENT_CONC_DECS_COUNTER};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::remset::RemSets;
@@ -827,7 +827,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     buffer: Vec<ObjectReference>,
     concurrent: bool,
-    immix: Option<&'static Immix<Edges::VM>>,
     immix_space: &'static ImmixSpace<Edges::VM>,
     edges: Vec<Address>,
     worker: *mut GCWorker<Edges::VM>,
@@ -841,7 +840,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     pub fn new(
         buffer: Vec<ObjectReference>,
         concurrent: bool,
-        immix: Option<&'static Immix<E::VM>>,
         immix_space: &'static ImmixSpace<E::VM>,
     ) -> Self {
         debug_assert!(!concurrent);
@@ -851,7 +849,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         Self {
             buffer,
             concurrent,
-            immix,
             immix_space,
             edges: vec![],
             worker: ptr::null_mut(),
@@ -865,11 +862,16 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     }
 
     #[inline(always)]
+    fn local(&self) -> &mut ImmixCopyContext<E::VM> {
+        unsafe { self.worker().local::<ImmixCopyContext<E::VM>>() }
+    }
+
+    #[inline(always)]
     fn process_node(&mut self, o: ObjectReference) {
         EdgeIterator::<E::VM>::iterate(o, |e| {
             self.edges.push(e);
             // println!("e {:?} -> {:?}", e, unsafe { e.load::<ObjectReference>() });
-            REMSETS.record(e, unsafe { e.load() });
+            self.local().remset.record(e, unsafe { e.load() });
             if self.edges.len() >= E::CAPACITY {
                 self.flush();
             }

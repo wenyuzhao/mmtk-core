@@ -2,6 +2,7 @@ use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::remset::LocalRemSet;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -21,6 +22,7 @@ use thread_priority::{self, ThreadPriority};
 
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
+    pub remset: LocalRemSet,
     immix: ImmixAllocator<VM>,
 }
 
@@ -74,6 +76,14 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
 impl<VM: VMBinding> ImmixCopyContext<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         Self {
+            remset: LocalRemSet::new(
+                mmtk.plan
+                    .downcast_ref::<Immix<VM>>()
+                    .unwrap()
+                    .immix_space
+                    .common()
+                    .start,
+            ),
             immix: ImmixAllocator::new(
                 VMThread::UNINITIALIZED,
                 Some(&mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space),
@@ -172,7 +182,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
                 self.pop_nodes(),
                 false,
-                Some(self.immix()),
                 &self.immix().immix_space,
             );
             self.new_scan_work(scan_objects_work);
