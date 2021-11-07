@@ -311,6 +311,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
+        Self::reset_object_mark::<VM>(self.chunk);
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
@@ -318,12 +319,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             if state == BlockState::Unallocated {
                 continue;
             }
-            // Clear object mark table for this block
-            side_metadata::bzero_metadata(
-                VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
-                block.start(),
-                Block::BYTES,
-            );
             // FIXME: Don't need this when doing RC
             if crate::args::BARRIER_MEASUREMENT
                 || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)
