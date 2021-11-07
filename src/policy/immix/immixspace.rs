@@ -293,12 +293,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         // Reclaim nursery blocks
         let num_workers = self.scheduler().worker_group().worker_count();
-        let (work_packets, nursery_blocks) = if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
-            self.block_allocation
-                .reset_and_generate_nursery_sweep_tasks(num_workers)
-        } else {
-            unreachable!();
-        };
+        // let (stw_packets, delayed_packets, nursery_blocks) =
+        //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
+        //         self.block_allocation
+        //             .reset_and_generate_nursery_sweep_tasks(num_workers)
+        //     } else {
+        //         unreachable!();
+        //     };
+        let (stw_packets, nursery_blocks) = self
+            .block_allocation
+            .reset_and_generate_nursery_sweep_tasks2(num_workers);
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
         let mature_blocks = if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
@@ -319,7 +323,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
-        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(work_packets);
+        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
+        // self.scheduler().postpone_all(delayed_packets);
         // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
@@ -690,7 +695,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn rc_get_next_available_lines(
         &self,
-        _copy: bool,
+        copy: bool,
         search_start: Line,
     ) -> Option<Range<Line>> {
         debug_assert!(!super::BLOCK_ONLY);
@@ -726,7 +731,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
         if self.common.needs_log_bit {
-            if crate::args::REF_COUNT {
+            if !copy {
                 Line::clear_log_table::<VM>(start..end);
             } else {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);

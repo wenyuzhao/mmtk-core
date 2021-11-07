@@ -608,7 +608,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {
             let x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() {
+            if !x.is_null() && !self::rc_stick(x) {
                 self.recursive_dec(x);
             }
         });
@@ -949,7 +949,8 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
-            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::<VM>::new(roots, true));
+            self.mmtk().scheduler.work_buckets[bucket]
+                .add_no_notify(ProcessIncs::<VM>::new(roots, true));
         }
     }
 }

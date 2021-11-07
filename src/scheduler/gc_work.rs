@@ -214,6 +214,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         trace!("stop_all_mutators start");
         debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
+        mmtk.plan.base().stats.start_gc();
         crate::GC_START_TIME.store(SystemTime::now(), Ordering::SeqCst);
         if crate::args::LOG_PER_GC_STATE {
             crate::RESERVED_PAGES_AT_GC_START
