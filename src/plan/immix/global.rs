@@ -276,6 +276,18 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
+        if crate::args::REF_COUNT {
+            let me = unsafe { &mut *(self as *const _ as *mut Self) };
+            me.immix_space
+                .rc_eager_prepare(self.current_pause().unwrap());
+        }
+        if self.current_pause().unwrap() == Pause::RefCount {
+            self.base()
+                .control_collector_context
+                .scheduler()
+                .work_buckets[WorkBucketStage::Closure]
+                .activate();
+        }
         if self.current_pause().unwrap() == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {

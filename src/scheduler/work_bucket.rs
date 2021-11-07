@@ -127,6 +127,14 @@ impl<VM: VMBinding> WorkBucket<VM> {
         let queue = self.queue.read();
         (queue.steal_batch_and_pop(worker), queue.is_empty())
     }
+    #[inline(always)]
+    pub fn poll_no_batch(&self) -> (Steal<Box<dyn GCWork<VM>>>, bool) {
+        if !self.active.load(Ordering::SeqCst) {
+            return (Steal::Empty, false);
+        }
+        let queue = self.queue.read();
+        (queue.steal(), queue.is_empty())
+    }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(box pred);
     }

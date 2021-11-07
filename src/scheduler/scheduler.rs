@@ -408,7 +408,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         worker: &GCWorker<VM>,
     ) -> (Steal<Box<dyn GCWork<VM>>>, bool) {
         let mut retry = false;
-        match worker.local_work_bucket.poll(&worker.local_work_buffer) {
+        match worker.local_work_bucket.poll_no_batch() {
             (Steal::Success(w), empty) => return (Steal::Success(w), empty),
             (Steal::Retry, _) => retry = true,
             _ => {}

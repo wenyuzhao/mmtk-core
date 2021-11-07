@@ -281,8 +281,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_defrag_blocks.store(n, Ordering::SeqCst);
     }
 
-    pub fn prepare_rc(&mut self, pause: Pause) {
-        debug_assert_ne!(pause, Pause::FullTraceDefrag);
+    pub fn rc_eager_prepare(&mut self, pause: Pause) {
         // Mutator reused blocks cannot be released until reaching a RC pause.
         // Remaing the block state as "reusing" and reset them here.
         debug_assert!(self.last_mutator_recycled_blocks.is_empty());
@@ -290,7 +289,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             &mut self.last_mutator_recycled_blocks,
             &mut self.mutator_recycled_blocks,
         );
-        // Reclaim nursery blocks
         let num_workers = self.scheduler().worker_group().worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
@@ -323,7 +321,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
-        // self.scheduler().postpone_all(delayed_packets);
+    }
+
+    pub fn prepare_rc(&mut self, pause: Pause) {
+        debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
