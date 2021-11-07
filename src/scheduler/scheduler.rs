@@ -64,9 +64,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         Arc::new(Self {
             work_buckets: enum_map! {
                 WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone()),
-                WorkBucketStage::ScanGlobalRoots => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::ProcessRoots => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone()),

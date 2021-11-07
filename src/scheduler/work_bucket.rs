@@ -145,9 +145,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
 pub enum WorkBucketStage {
     Unconstrained,
-    ScanGlobalRoots,
     Prepare,
-    ProcessRoots,
     Closure,
     RefClosure,
     RefForwarding,
@@ -158,12 +156,12 @@ pub enum WorkBucketStage {
 // Alias
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
-    pub const RCProcessIncs: Self = Self::ProcessRoots;
+    pub const RCProcessIncs: Self = Self::Closure;
     #[cfg(feature = "ix_delayed_nursery_evacuation")]
     pub const RCEvacuateNursery: Self = Self::RefClosure;
     #[cfg(not(feature = "ix_delayed_nursery_evacuation"))]
     pub const RCEvacuateMature: Self = Self::RefClosure;
-    pub const RCReleaseNursery: Self = Self::RefForwarding;
+    pub const RCReleaseNursery: Self = Self::Release;
     pub const RCFullHeapRelease: Self = Self::RefForwarding;
     pub const RCProcessDecs: Self = Self::Release;
 
