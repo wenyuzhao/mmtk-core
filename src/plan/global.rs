@@ -709,7 +709,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         if *gc_status == GcStatus::NotInGC {
             self.stacks_prepared.store(false, Ordering::SeqCst);
             // FIXME stats
-            // self.stats.start_gc();
+            self.stats.start_gc();
         }
         *gc_status = s;
         if *gc_status == GcStatus::NotInGC {
