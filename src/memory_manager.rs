@@ -27,6 +27,18 @@ use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
+pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
+    if cfg!(feature = "yield_and_roots_timer") && crate::inside_harness() {
+        let t = crate::GC_TRIGGER_TIME
+            .load(Ordering::SeqCst)
+            .elapsed()
+            .unwrap()
+            .as_nanos();
+        crate::PAUSES.yield_nanos.fetch_add(t, Ordering::Relaxed);
+    }
+    mmtk.plan.base().stats.start_gc();
+}
+
 /// Run the main loop for the GC controller thread. This method does not return.
 ///
 /// Arguments:
