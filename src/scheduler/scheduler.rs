@@ -258,17 +258,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if crate::args::LOG_STAGES && x {
                 println!("Activate {:?}", id);
             }
-            if x && id == WorkBucketStage::Prepare {
-                println!(
-                    "roots: {}",
-                    crate::GC_START_TIME
-                        .load(Ordering::SeqCst)
-                        .elapsed()
-                        .unwrap()
-                        .as_nanos() as f64
-                        / 1000000.0
-                );
-            }
             buckets_updated |= x;
         }
         if buckets_updated {
