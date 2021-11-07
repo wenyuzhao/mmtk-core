@@ -737,6 +737,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
         }
+        // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, _copy);
         // }

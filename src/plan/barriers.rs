@@ -23,6 +23,8 @@ use crate::util::*;
 use crate::vm::*;
 use crate::MMTK;
 
+use super::immix::Pause;
+
 pub const BARRIER_MEASUREMENT: bool = crate::args::BARRIER_MEASUREMENT;
 pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
 pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -195,6 +197,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
     mature_evac_remset: Vec<ObjectReference>,
+    immix: &'static Immix<E::VM>,
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
@@ -212,6 +215,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             incs: Vec::with_capacity(Self::CAPACITY),
             decs: Vec::with_capacity(Self::CAPACITY),
             mature_evac_remset: vec![],
+            immix: mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap(),
         }
     }
 
@@ -381,7 +385,10 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             return;
         }
         // Concurrent Marking: Flush satb buffer
-        if crate::plan::immix::CONCURRENT_MARKING {
+        if crate::plan::immix::CONCURRENT_MARKING
+            && (crate::concurrent_marking_in_progress()
+                || self.immix.current_pause() == Some(Pause::FinalMark))
+        {
             if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
                 let mut edges = vec![];
                 let mut nodes = vec![];
