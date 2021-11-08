@@ -874,9 +874,9 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                     continue;
                 }
             }
-            if !immix.is_marked(o) {
-                return;
-            }
+            // if !immix.is_marked(o) {
+            //     return;
+            // }
             if immix_space.in_space(o) {
                 o = o.fix_start_address::<VM>();
             }

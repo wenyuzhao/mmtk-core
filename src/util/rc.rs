@@ -273,8 +273,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        let check_mature_evac_remset =
-            crate::args::RC_MATURE_EVACUATION && self.concurrent_marking_in_progress;
+        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
+            && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark);
         let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(
