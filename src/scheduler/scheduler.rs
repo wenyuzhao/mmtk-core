@@ -90,15 +90,24 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let concurrent_queue = self.work_buckets[WorkBucketStage::Unconstrained]
             .queue
             .read();
-        let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        let postponed_concurrent_work = self.postponed_concurrent_work.write();
         let mut postponed = 0usize;
         let mut no_postpone = vec![];
-        while let Steal::Success(w) = concurrent_queue.steal() {
-            if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
-                postponed_concurrent_work.push(w);
-                postponed += 1;
-            } else {
-                no_postpone.push(w)
+        loop {
+            if postponed_concurrent_work.is_empty() {
+                break;
+            }
+            match concurrent_queue.steal() {
+                Steal::Success(w) => {
+                    if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
+                        postponed_concurrent_work.push(w);
+                        postponed += 1;
+                    } else {
+                        no_postpone.push(w)
+                    }
+                }
+                Steal::Empty => break,
+                Steal::Retry => {}
             }
         }
         self.work_buckets[WorkBucketStage::Unconstrained].bulk_add(no_postpone);
@@ -112,14 +121,24 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn process_lazy_decrement_packets(&self) {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
-        let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        let postponed_concurrent_work = self.postponed_concurrent_work.write();
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
-        while let Steal::Success(w) = postponed_concurrent_work.steal() {
-            if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
-                no_postpone.push(w)
-            } else {
-                cm_packets.push(w)
+        // Buggy
+        loop {
+            if postponed_concurrent_work.is_empty() {
+                break;
+            }
+            match postponed_concurrent_work.steal() {
+                Steal::Success(w) => {
+                    if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
+                        no_postpone.push(w)
+                    } else {
+                        cm_packets.push(w)
+                    }
+                }
+                Steal::Empty => break,
+                Steal::Retry => {}
             }
         }
         for w in cm_packets {

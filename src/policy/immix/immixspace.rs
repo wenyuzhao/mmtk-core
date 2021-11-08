@@ -345,9 +345,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation.reset();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
-        if disable_lasy_dec_for_current_gc {
-            self.scheduler().process_lazy_decrement_packets();
-        }
+        // if disable_lasy_dec_for_current_gc {
+        //     self.scheduler().process_lazy_decrement_packets();
+        // }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los =
@@ -447,7 +447,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
-        if crate::args::BARRIER_MEASUREMENT || self.common().needs_log_bit {
+        if crate::args::BARRIER_MEASUREMENT
+            || (!(crate::args::RC_NURSERY_EVACUATION && nursery) && self.common().needs_log_bit)
+        {
             block.clear_log_table::<VM>();
         }
         block.deinit();

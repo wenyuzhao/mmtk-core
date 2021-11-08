@@ -137,6 +137,32 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     pub fn reset_and_generate_nursery_sweep_tasks2(
         &mut self,
+        _num_workers: usize,
+    ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
+        let _guard = self.refill_lock.lock().unwrap();
+        let blocks = self.cursor.load(Ordering::SeqCst);
+        let high_water = self.high_water.load(Ordering::SeqCst);
+        let mut packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(blocks + 1);
+        let space = self.space();
+        for i in 0..blocks {
+            let block = self.buffer[i].load(Ordering::Relaxed);
+            packets.push(box RCSweepNurseryBlock { space, block })
+        }
+        let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
+        for i in blocks..high_water {
+            unallocated_nursery_blocks.push(self.buffer[i].load(Ordering::Relaxed));
+        }
+        packets.push(box RCReleaseUnallocatedNurseryBlocks {
+            space,
+            blocks: unallocated_nursery_blocks,
+        });
+        self.high_water.store(0, Ordering::SeqCst);
+        self.cursor.store(0, Ordering::SeqCst);
+        (packets, blocks)
+    }
+
+    pub fn reset_and_generate_nursery_sweep_tasks3(
+        &mut self,
         num_workers: usize,
     ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
         let _guard = self.refill_lock.lock().unwrap();
@@ -347,6 +373,32 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         for b in &self.blocks {
             b.rc_sweep_nursery(self.space);
+        }
+    }
+}
+
+struct RCSweepNurseryBlock<VM: VMBinding> {
+    space: &'static ImmixSpace<VM>,
+    block: Block,
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlock<VM> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.block.rc_sweep_nursery(self.space);
+    }
+}
+
+struct RCReleaseUnallocatedNurseryBlocks<VM: VMBinding> {
+    space: &'static ImmixSpace<VM>,
+    blocks: Vec<Block>,
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCReleaseUnallocatedNurseryBlocks<VM> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        for b in &self.blocks {
+            self.space.pr.release_pages(b.start());
         }
     }
 }
