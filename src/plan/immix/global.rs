@@ -27,7 +27,7 @@ use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
-use crate::util::{metadata, object_forwarding, ObjectReference};
+use crate::util::{metadata, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector, LazySweepingJobsCounter};
@@ -37,7 +37,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
-use crossbeam_queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
 
@@ -247,21 +246,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             unsafe {
                 std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
                 debug_assert!(super::CURR_ROOTS.is_empty());
-            }
-            if crate::args::RC_MATURE_EVACUATION
-                && (pause == Pause::FullTraceFast || pause == Pause::FinalMark)
-            {
-                // unreachable!("Forward mature roots during inc processing.");
-                let prev_roots = SegQueue::new();
-                for mut x in unsafe { super::PREV_ROOTS.pop() } {
-                    for o in x.iter_mut() {
-                        if object_forwarding::is_forwarded::<VM>(*o) {
-                            *o = object_forwarding::read_forwarding_pointer::<VM>(*o)
-                        };
-                    }
-                    prev_roots.push(x);
-                }
-                unsafe { super::PREV_ROOTS = prev_roots };
             }
         }
         // release the collected region

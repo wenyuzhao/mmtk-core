@@ -99,7 +99,6 @@ pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     // downcast for each traced object.
     plan: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
-    mature_evac_remset_roots: Vec<Address>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
@@ -108,7 +107,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
     }
 
     #[inline(always)]
-    fn fast_trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
+    fn fast_trace_object(&mut self, _slot: Address, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -146,11 +145,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self {
-            plan,
-            base,
-            mature_evac_remset_roots: vec![],
-        }
+        Self { plan, base }
     }
 
     #[cold]

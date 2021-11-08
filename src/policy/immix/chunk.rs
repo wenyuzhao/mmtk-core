@@ -100,6 +100,17 @@ impl Chunk {
             space.chunk_map.set(*self, ChunkState::Free)
         }
     }
+
+    #[inline(always)]
+    pub fn is_committed(&self) -> bool {
+        let byte = unsafe { side_metadata::load(&ChunkMap::ALLOC_TABLE, self.start()) as u8 };
+        let state = match byte {
+            0 => ChunkState::Free,
+            1 => ChunkState::Allocated,
+            _ => unreachable!(),
+        };
+        state == ChunkState::Allocated
+    }
 }
 
 impl Step for Chunk {

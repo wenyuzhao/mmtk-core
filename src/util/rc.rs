@@ -457,6 +457,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     }
                     let _ = self::inc(new);
                     self.promote(new, true, false, false);
+                    if mature_defrag {
+                        self.mature_evac_remset.push(new);
+                        if self.mature_evac_remset.len() >= Self::CAPACITY {
+                            self.flush();
+                        }
+                    }
                     new
                 }
             } else {

@@ -4,6 +4,7 @@ use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::chunk::Chunk;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -63,6 +64,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub mutator_recycled_blocks: SegQueue<Block>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     num_defrag_blocks: AtomicUsize,
+    defrag_chunk_cursor: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -214,6 +216,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
             num_defrag_blocks: AtomicUsize::new(0),
+            defrag_chunk_cursor: AtomicUsize::new(0),
         }
     }
 
@@ -256,35 +259,53 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn select_mature_evacuation_candidates(&self) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let mut total_mature_blocks = 0;
-        for c in self.chunk_map.committed_chunks() {
-            for b in c
-                .committed_blocks()
-                .filter(|c| c.get_state() != BlockState::Nursery)
-            {
-                debug_assert!(!b.is_defrag_source(), "{:?}", b);
-                total_mature_blocks += 1;
-            }
-        }
-        // let n = 1024;
-        let mut i = 0;
-        'out: for c in self.chunk_map.committed_chunks() {
-            for b in c
-                .committed_blocks()
-                .filter(|c| c.get_state() != BlockState::Nursery)
-            {
-                i += 1;
-                // println!(" - defrag {:?} {:?}", b, b.get_state());
-                b.set_as_defrag_source(true);
-                if i >= 32 {
-                    break 'out;
+        let defrag_blocks = 1024;
+        let mut count = 0;
+        let chunks = self.chunk_map.all_chunks();
+        let num_chunks = Chunk::steps_between(&chunks.start, &chunks.end).unwrap();
+        let search_defrag_blocks =
+            |chunks: Range<Chunk>, chunk_cursor: &mut usize, limit: usize, count: &mut usize| {
+                'out: for c in chunks.skip(*chunk_cursor).filter(|c| c.is_committed()) {
+                    for b in c.committed_blocks().filter(|c| {
+                        c.get_state() != BlockState::Nursery && c.get_state() != BlockState::Reusing
+                    }) {
+                        // println!(" - defrag {:?} {:?}", b, b.get_state());
+                        b.set_as_defrag_source(true);
+                        *count += 1;
+                        if *count >= defrag_blocks {
+                            break 'out;
+                        }
+                    }
+                    *chunk_cursor += 1;
+                    if *chunk_cursor >= limit {
+                        break 'out;
+                    }
                 }
-            }
+            };
+        let mut chunk_cursor = self.defrag_chunk_cursor.load(Ordering::SeqCst);
+        let original_cursor = chunk_cursor;
+        search_defrag_blocks(chunks.clone(), &mut chunk_cursor, num_chunks, &mut count);
+        if count < defrag_blocks && chunk_cursor >= num_chunks {
+            chunk_cursor = 0;
+            search_defrag_blocks(
+                chunks.clone(),
+                &mut chunk_cursor,
+                original_cursor,
+                &mut count,
+            );
         }
+        if chunk_cursor >= num_chunks {
+            chunk_cursor = 0;
+        }
+        self.defrag_chunk_cursor
+            .store(chunk_cursor, Ordering::SeqCst);
         if crate::args::LOG_PER_GC_STATE {
-            println!("Defrag {:?} / {} mature blocks", i, total_mature_blocks);
+            println!(
+                " - Defrag {} mature blocks (cursor @ {}/{})",
+                count, chunk_cursor, num_chunks
+            );
         }
-        self.num_defrag_blocks.store(i, Ordering::SeqCst);
+        self.num_defrag_blocks.store(count, Ordering::SeqCst);
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
