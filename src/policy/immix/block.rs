@@ -207,6 +207,17 @@ impl Block {
         .map_err(|x| (x as u8).into())
     }
 
+    pub fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
+        self.fetch_update_state(|s| {
+            if (ignore_reusing_blocks && s == BlockState::Reusing) || s == BlockState::Unallocated {
+                None
+            } else {
+                Some(BlockState::Unallocated)
+            }
+        })
+        .is_ok()
+    }
+
     // Defrag byte
 
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
@@ -482,33 +493,27 @@ impl Block {
             space.deinit_block(*self, true);
             true
         } else {
-            let live = !self.rc_dead();
-            if !live {
-                space.deinit_block(*self, true);
+            if self.rc_dead() {
+                if self.attempt_dealloc(false) {
+                    space.deinit_block(*self, true);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
             }
-            return !live;
         }
     }
 
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::args::REF_COUNT);
-        debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
-        if self.is_defrag_source() {
+        if self.is_defrag_source() || self.get_state() == BlockState::Unallocated {
             return false;
         }
         if self.rc_dead() {
-            if !*crate::args::IGNORE_REUSING_BLOCKS
-                || self
-                    .fetch_update_state(|s| {
-                        if s == BlockState::Reusing {
-                            None
-                        } else {
-                            Some(BlockState::Unallocated)
-                        }
-                    })
-                    .is_ok()
-            {
+            if self.attempt_dealloc(*crate::args::IGNORE_REUSING_BLOCKS) {
                 space.deinit_block(*self, false);
                 return true;
             }
@@ -527,7 +532,11 @@ impl Block {
             } else {
                 let has_holes = self.has_holes();
                 self.fetch_update_state(|s| {
-                    if s == BlockState::Reusing || s.is_reusable() || !has_holes {
+                    if s == BlockState::Reusing
+                        || s == BlockState::Unallocated
+                        || s.is_reusable()
+                        || !has_holes
+                    {
                         None
                     } else {
                         Some(BlockState::Reusable {
