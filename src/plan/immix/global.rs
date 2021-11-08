@@ -151,6 +151,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
         unsafe {
+            crate::LAZY_SWEEPING_JOBS.init();
             crate::LAZY_SWEEPING_JOBS.swap();
             let me = &*(self as *const Self);
             crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {

@@ -81,7 +81,7 @@ mod mmtk;
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize},
-        Arc,
+        Arc, Condvar,
     },
     time::SystemTime,
 };
@@ -180,7 +180,12 @@ impl Drop for LazySweepingJobsCounter {
                 self.end_of_decs();
             }
         }
-        self.counter.fetch_sub(1, Ordering::SeqCst);
+        if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            let (lock, cvar) = unsafe { LAZY_SWEEPING_JOBS.monitor.as_ref().unwrap() };
+            let mut lazy_jobs_finished = lock.lock().unwrap();
+            *lazy_jobs_finished = true;
+            cvar.notify_one();
+        }
     }
 }
 
@@ -190,6 +195,7 @@ pub struct LazySweepingJobs {
     prev_decs_counter: Option<Arc<AtomicUsize>>,
     curr_decs_counter: Option<Arc<AtomicUsize>>,
     pub end_of_decs: Option<Box<dyn Fn(LazySweepingJobsCounter)>>,
+    monitor: Option<(std::sync::Mutex<bool>, Condvar)>,
 }
 
 impl LazySweepingJobs {
@@ -200,7 +206,12 @@ impl LazySweepingJobs {
             prev_decs_counter: None,
             curr_decs_counter: None,
             end_of_decs: None,
+            monitor: None,
         }
+    }
+
+    pub fn init(&mut self) {
+        self.monitor = Some((std::sync::Mutex::new(false), Condvar::new()));
     }
 
     pub fn swap(&mut self) {
@@ -210,16 +221,21 @@ impl LazySweepingJobs {
         self.curr_decs_counter = Some(Arc::new(AtomicUsize::new(0)));
     }
 
+    #[inline]
     fn wait_for_completion_impl(&self) {
         if self.prev_counter.is_none() {
             return;
         }
         let counter = self.prev_counter.as_ref().unwrap();
-        while counter.load(Ordering::SeqCst) != 0 {
-            std::thread::yield_now();
+        let (lock, cvar) = self.monitor.as_ref().unwrap();
+        let mut lazy_jobs_finished = lock.lock().unwrap();
+        while !*lazy_jobs_finished && counter.load(Ordering::SeqCst) != 0 {
+            lazy_jobs_finished = cvar.wait(lazy_jobs_finished).unwrap();
         }
+        *lazy_jobs_finished = false;
     }
 
+    #[inline]
     pub fn wait_for_completion() {
         unsafe { LAZY_SWEEPING_JOBS.wait_for_completion_impl() }
     }
