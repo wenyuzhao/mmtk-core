@@ -7,7 +7,7 @@ use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{self, ProcessDecs};
 use crate::util::ObjectReference;
-use crate::LocalConcurrentSweepingCounter;
+use crate::LazySweepingJobsCounter;
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},
@@ -266,7 +266,7 @@ impl ChunkMap {
             box SweepDeadCyclesChunk::new(
                 chunk,
                 unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LocalConcurrentSweepingCounter::new(),
+                LazySweepingJobsCounter::new(),
             )
         })
     }
@@ -356,7 +356,7 @@ struct SweepDeadCyclesChunk<VM: VMBinding> {
     worker: *mut GCWorker<VM>,
     /// Counter for the number of remaining `ProcessDecs` packages
     count_down: Arc<AtomicUsize>,
-    counter: LocalConcurrentSweepingCounter,
+    counter: LazySweepingJobsCounter,
 }
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
@@ -373,7 +373,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     pub fn new(
         chunk: Chunk,
         count_down: Arc<AtomicUsize>,
-        counter: LocalConcurrentSweepingCounter,
+        counter: LazySweepingJobsCounter,
     ) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
@@ -408,7 +408,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                 ProcessDecs::<VM>::new(
                     decs,
                     self.count_down.clone(),
-                    LocalConcurrentSweepingCounter::new(),
+                    LazySweepingJobsCounter::new(),
                 ),
             );
         }

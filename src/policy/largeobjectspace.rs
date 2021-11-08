@@ -20,7 +20,7 @@ use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use crate::LocalConcurrentSweepingCounter;
+use crate::LazySweepingJobsCounter;
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
@@ -425,11 +425,11 @@ fn get_super_page(cell: Address) -> Address {
 
 pub struct RCSweepMatureLOS {
     count_down: Arc<AtomicUsize>,
-    counter: LocalConcurrentSweepingCounter,
+    counter: LazySweepingJobsCounter,
 }
 
 impl RCSweepMatureLOS {
-    pub fn new(count_down: Arc<AtomicUsize>, counter: LocalConcurrentSweepingCounter) -> Self {
+    pub fn new(count_down: Arc<AtomicUsize>, counter: LazySweepingJobsCounter) -> Self {
         count_down.fetch_add(1, Ordering::SeqCst);
         Self {
             count_down,
@@ -472,11 +472,11 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
 }
 
 pub struct RCReleaseMatureLOS {
-    _counter: LocalConcurrentSweepingCounter,
+    _counter: LazySweepingJobsCounter,
 }
 
 impl RCReleaseMatureLOS {
-    pub fn new(counter: LocalConcurrentSweepingCounter) -> Self {
+    pub fn new(counter: LazySweepingJobsCounter) -> Self {
         Self { _counter: counter }
     }
 }

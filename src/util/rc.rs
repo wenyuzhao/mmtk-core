@@ -3,7 +3,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
-use crate::LocalConcurrentSweepingCounter;
+use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext, Pause},
@@ -575,7 +575,7 @@ pub struct ProcessDecs<VM: VMBinding> {
     new_decs: Vec<ObjectReference>,
     /// Execution worker
     worker: *mut GCWorker<VM>,
-    counter: LocalConcurrentSweepingCounter,
+    counter: LazySweepingJobsCounter,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
@@ -592,7 +592,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     pub fn new(
         decs: Vec<ObjectReference>,
         count_down: Arc<AtomicUsize>,
-        counter: LocalConcurrentSweepingCounter,
+        counter: LazySweepingJobsCounter,
     ) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
@@ -714,11 +714,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 
 pub struct SweepBlocksAfterDecs {
     blocks: Vec<Block>,
-    _counter: LocalConcurrentSweepingCounter,
+    _counter: LazySweepingJobsCounter,
 }
 
 impl SweepBlocksAfterDecs {
-    pub fn new(blocks: Vec<Block>, counter: LocalConcurrentSweepingCounter) -> Self {
+    pub fn new(blocks: Vec<Block>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             blocks,
             _counter: counter,

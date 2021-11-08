@@ -21,7 +21,7 @@ use crate::util::rc::ProcessIncs;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::vm::*;
-use crate::LocalConcurrentSweepingCounter;
+use crate::LazySweepingJobsCounter;
 use crate::MMTK;
 
 use super::immix::Pause;
@@ -416,7 +416,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let w = ProcessDecs::new(
                 decs,
                 unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LocalConcurrentSweepingCounter::new(),
+                LazySweepingJobsCounter::new(),
             );
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);

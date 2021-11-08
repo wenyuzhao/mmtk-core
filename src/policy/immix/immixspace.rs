@@ -22,7 +22,7 @@ use crate::{
     util::{heap::blockpageresource::BlockPageResource, opaque_pointer::VMThread},
     AllocationSemantics, CopyContext, MMTK,
 };
-use crate::{vm::*, LocalConcurrentSweepingCounter};
+use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
@@ -285,7 +285,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Mutator reused blocks cannot be released until reaching a RC pause.
         // Remaing the block state as "reusing" and reset them here.
         // Wait until the concurrent sweep job is done.
-        crate::CONCURRENT_SWEEPING_COUNTER.wait_for_completion();
+        crate::LazySweepingJobs::wait_for_completion();
         debug_assert!(self.last_mutator_recycled_blocks.is_empty());
         std::mem::swap(
             &mut self.last_mutator_recycled_blocks,
@@ -354,7 +354,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(
                 unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LocalConcurrentSweepingCounter::new(),
+                LazySweepingJobsCounter::new(),
             );
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
@@ -802,7 +802,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn schedule_rc_block_sweeping_tasks(&self, counter: LocalConcurrentSweepingCounter) {
+    pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
         while let Some(x) = self.last_mutator_recycled_blocks.pop() {
             x.set_state(BlockState::Marked);
         }

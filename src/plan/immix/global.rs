@@ -30,9 +30,7 @@ use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
-use crate::{
-    scheduler::*, BarrierSelector, ConcurrentSweepingCounter, LocalConcurrentSweepingCounter,
-};
+use crate::{scheduler::*, BarrierSelector, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
@@ -320,11 +318,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let c = CURRENT_CONC_DECS_COUNTER.take();
             PREVIOUS_CONC_DECS_COUNTER = c;
             CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0)));
-            let c = unsafe {
-                &mut *(&*crate::CONCURRENT_SWEEPING_COUNTER as *const ConcurrentSweepingCounter
-                    as *mut ConcurrentSweepingCounter)
-            };
-            c.swap();
+            crate::LAZY_SWEEPING_JOBS.swap();
         };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
         self.next_gc_may_perform_cycle_collection
@@ -550,7 +544,7 @@ impl<VM: VMBinding> Immix<VM> {
             let w = ProcessDecs::new(
                 decs,
                 unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LocalConcurrentSweepingCounter::new(),
+                LazySweepingJobsCounter::new(),
             );
             work_packets.push(box w);
         }

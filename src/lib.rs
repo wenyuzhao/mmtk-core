@@ -91,7 +91,6 @@ use atomic::{Atomic, Ordering};
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
-use plan::immix::PREVIOUS_CONC_DECS_COUNTER;
 use spin::Mutex;
 
 #[macro_use]
@@ -112,13 +111,20 @@ pub use crate::plan::{
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
-pub struct LocalConcurrentSweepingCounter {
+pub struct LazySweepingJobsCounter {
     counter: Arc<AtomicUsize>,
 }
-impl LocalConcurrentSweepingCounter {
+impl LazySweepingJobsCounter {
     pub fn new() -> Self {
-        CONCURRENT_SWEEPING_COUNTER.new_work_packet()
+        unsafe {
+            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            Self {
+                counter: counter.clone(),
+            }
+        }
     }
+
     pub fn clone(&self) -> Self {
         self.counter.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -127,49 +133,46 @@ impl LocalConcurrentSweepingCounter {
     }
 }
 
-impl Drop for LocalConcurrentSweepingCounter {
+impl Drop for LazySweepingJobsCounter {
     fn drop(&mut self) {
         self.counter.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
-pub struct ConcurrentSweepingCounter {
-    prev_counter: Arc<AtomicUsize>,
-    curr_counter: Arc<AtomicUsize>,
+pub struct LazySweepingJobs {
+    prev_counter: Option<Arc<AtomicUsize>>,
+    curr_counter: Option<Arc<AtomicUsize>>,
 }
 
-impl ConcurrentSweepingCounter {
-    pub fn new() -> Self {
+impl LazySweepingJobs {
+    pub const fn new() -> Self {
         Self {
-            prev_counter: Arc::new(AtomicUsize::new(0)),
-            curr_counter: Arc::new(AtomicUsize::new(0)),
+            prev_counter: None,
+            curr_counter: None,
         }
     }
 
     pub fn swap(&mut self) {
-        std::mem::swap(&mut self.prev_counter, &mut self.curr_counter);
-        // self.prev_counter = self.curr_counter;
-        self.curr_counter = Arc::new(AtomicUsize::new(0));
+        self.prev_counter = self.curr_counter.take();
+        self.curr_counter = Some(Arc::new(AtomicUsize::new(0)));
     }
 
-    pub fn new_work_packet(&self) -> LocalConcurrentSweepingCounter {
-        CONCURRENT_SWEEPING_COUNTER
-            .curr_counter
-            .fetch_add(1, Ordering::SeqCst);
-        LocalConcurrentSweepingCounter {
-            counter: self.curr_counter.clone(),
+    fn wait_for_completion_impl(&self) {
+        if self.prev_counter.is_none() {
+            return;
         }
-    }
-
-    pub fn wait_for_completion(&self) {
-        while self.prev_counter.load(Ordering::SeqCst) != 0 {
+        let counter = self.prev_counter.as_ref().unwrap();
+        while counter.load(Ordering::SeqCst) != 0 {
             std::thread::yield_now();
         }
     }
+
+    pub fn wait_for_completion() {
+        unsafe { LAZY_SWEEPING_JOBS.wait_for_completion_impl() }
+    }
 }
 
-static CONCURRENT_SWEEPING_COUNTER: spin::Lazy<ConcurrentSweepingCounter> =
-    spin::Lazy::new(|| ConcurrentSweepingCounter::new());
+static mut LAZY_SWEEPING_JOBS: LazySweepingJobs = LazySweepingJobs::new();
 
 #[inline(always)]
 fn concurrent_marking_in_progress() -> bool {
