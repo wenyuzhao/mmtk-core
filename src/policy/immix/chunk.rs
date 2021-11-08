@@ -7,6 +7,7 @@ use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{self, ProcessDecs};
 use crate::util::ObjectReference;
+use crate::LocalConcurrentSweepingCounter;
 use crate::{
     scheduler::*,
     util::{heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, Address},
@@ -262,9 +263,11 @@ impl ChunkMap {
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
         self.generate_tasks(|chunk| {
-            box SweepDeadCyclesChunk::new(chunk, unsafe {
-                CURRENT_CONC_DECS_COUNTER.clone().unwrap()
-            })
+            box SweepDeadCyclesChunk::new(
+                chunk,
+                unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
+                LocalConcurrentSweepingCounter::new(),
+            )
         })
     }
 }
@@ -353,6 +356,7 @@ struct SweepDeadCyclesChunk<VM: VMBinding> {
     worker: *mut GCWorker<VM>,
     /// Counter for the number of remaining `ProcessDecs` packages
     count_down: Arc<AtomicUsize>,
+    counter: LocalConcurrentSweepingCounter,
 }
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
@@ -366,7 +370,11 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         unsafe { &mut *self.worker }
     }
 
-    pub fn new(chunk: Chunk, count_down: Arc<AtomicUsize>) -> Self {
+    pub fn new(
+        chunk: Chunk,
+        count_down: Arc<AtomicUsize>,
+        counter: LocalConcurrentSweepingCounter,
+    ) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -374,6 +382,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             decs: vec![],
             worker: std::ptr::null_mut(),
             count_down,
+            counter,
         }
     }
 
@@ -396,7 +405,11 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             std::mem::swap(&mut decs, &mut self.decs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::<VM>::new(decs, self.count_down.clone()),
+                ProcessDecs::<VM>::new(
+                    decs,
+                    self.count_down.clone(),
+                    LocalConcurrentSweepingCounter::new(),
+                ),
             );
         }
     }
@@ -473,7 +486,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         // self.flush();
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix_space.schedule_rc_block_sweeping_tasks();
+            immix_space.schedule_rc_block_sweeping_tasks(self.counter.clone());
         }
     }
 }

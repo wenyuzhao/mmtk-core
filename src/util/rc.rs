@@ -3,6 +3,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
+use crate::LocalConcurrentSweepingCounter;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext, Pause},
@@ -574,6 +575,7 @@ pub struct ProcessDecs<VM: VMBinding> {
     new_decs: Vec<ObjectReference>,
     /// Execution worker
     worker: *mut GCWorker<VM>,
+    counter: LocalConcurrentSweepingCounter,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
@@ -587,7 +589,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[inline]
-    pub fn new(decs: Vec<ObjectReference>, count_down: Arc<AtomicUsize>) -> Self {
+    pub fn new(
+        decs: Vec<ObjectReference>,
+        count_down: Arc<AtomicUsize>,
+        counter: LocalConcurrentSweepingCounter,
+    ) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         count_down.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -595,6 +601,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             count_down,
             new_decs: vec![],
             worker: std::ptr::null_mut(),
+            counter,
         }
     }
 
@@ -613,7 +620,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::<VM>::new(new_decs, self.count_down.clone()),
+                ProcessDecs::<VM>::new(new_decs, self.count_down.clone(), self.counter.clone()),
             );
         }
     }
@@ -698,13 +705,25 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 
         // If all decs are finished, start sweeping blocks
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix.immix_space.schedule_rc_block_sweeping_tasks();
+            immix
+                .immix_space
+                .schedule_rc_block_sweeping_tasks(self.counter.clone());
         }
     }
 }
 
 pub struct SweepBlocksAfterDecs {
-    pub blocks: Vec<Block>,
+    blocks: Vec<Block>,
+    _counter: LocalConcurrentSweepingCounter,
+}
+
+impl SweepBlocksAfterDecs {
+    pub fn new(blocks: Vec<Block>, counter: LocalConcurrentSweepingCounter) -> Self {
+        Self {
+            blocks,
+            _counter: counter,
+        }
+    }
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {

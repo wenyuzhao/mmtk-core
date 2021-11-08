@@ -79,7 +79,10 @@ extern crate downcast_rs;
 
 mod mmtk;
 use std::{
-    sync::atomic::{AtomicBool, AtomicUsize},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Arc,
+    },
     time::SystemTime,
 };
 
@@ -88,6 +91,7 @@ use atomic::{Atomic, Ordering};
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
+use plan::immix::PREVIOUS_CONC_DECS_COUNTER;
 use spin::Mutex;
 
 #[macro_use]
@@ -107,6 +111,65 @@ pub use crate::plan::{
 
 static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
+
+pub struct LocalConcurrentSweepingCounter {
+    counter: Arc<AtomicUsize>,
+}
+impl LocalConcurrentSweepingCounter {
+    pub fn new() -> Self {
+        CONCURRENT_SWEEPING_COUNTER.new_work_packet()
+    }
+    pub fn clone(&self) -> Self {
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        Self {
+            counter: self.counter.clone(),
+        }
+    }
+}
+
+impl Drop for LocalConcurrentSweepingCounter {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub struct ConcurrentSweepingCounter {
+    prev_counter: Arc<AtomicUsize>,
+    curr_counter: Arc<AtomicUsize>,
+}
+
+impl ConcurrentSweepingCounter {
+    pub fn new() -> Self {
+        Self {
+            prev_counter: Arc::new(AtomicUsize::new(0)),
+            curr_counter: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn swap(&mut self) {
+        std::mem::swap(&mut self.prev_counter, &mut self.curr_counter);
+        // self.prev_counter = self.curr_counter;
+        self.curr_counter = Arc::new(AtomicUsize::new(0));
+    }
+
+    pub fn new_work_packet(&self) -> LocalConcurrentSweepingCounter {
+        CONCURRENT_SWEEPING_COUNTER
+            .curr_counter
+            .fetch_add(1, Ordering::SeqCst);
+        LocalConcurrentSweepingCounter {
+            counter: self.curr_counter.clone(),
+        }
+    }
+
+    pub fn wait_for_completion(&self) {
+        while self.prev_counter.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+    }
+}
+
+static CONCURRENT_SWEEPING_COUNTER: spin::Lazy<ConcurrentSweepingCounter> =
+    spin::Lazy::new(|| ConcurrentSweepingCounter::new());
 
 #[inline(always)]
 fn concurrent_marking_in_progress() -> bool {

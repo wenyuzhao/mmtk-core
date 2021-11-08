@@ -16,13 +16,13 @@ use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, Meta
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::rc::SweepBlocksAfterDecs;
 use crate::util::{Address, ObjectReference};
-use crate::vm::*;
 use crate::{
     plan::TransitiveClosure,
     scheduler::{gc_work::ProcessEdgesWork, GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::{heap::blockpageresource::BlockPageResource, opaque_pointer::VMThread},
     AllocationSemantics, CopyContext, MMTK,
 };
+use crate::{vm::*, LocalConcurrentSweepingCounter};
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
@@ -284,6 +284,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
         // Mutator reused blocks cannot be released until reaching a RC pause.
         // Remaing the block state as "reusing" and reset them here.
+        // Wait until the concurrent sweep job is done.
+        crate::CONCURRENT_SWEEPING_COUNTER.wait_for_completion();
         debug_assert!(self.last_mutator_recycled_blocks.is_empty());
         std::mem::swap(
             &mut self.last_mutator_recycled_blocks,
@@ -345,13 +347,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation.reset();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
-        // if disable_lasy_dec_for_current_gc {
-        //     self.scheduler().process_lazy_decrement_packets();
-        // }
+        if disable_lasy_dec_for_current_gc {
+            self.scheduler().process_lazy_decrement_packets();
+        }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
-            let sweep_los =
-                RCSweepMatureLOS::new(unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() });
+            let sweep_los = RCSweepMatureLOS::new(
+                unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
+                LocalConcurrentSweepingCounter::new(),
+            );
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
                 self.scheduler().postpone(sweep_los);
@@ -798,7 +802,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn schedule_rc_block_sweeping_tasks(&self) {
+    pub fn schedule_rc_block_sweeping_tasks(&self, counter: LocalConcurrentSweepingCounter) {
         while let Some(x) = self.last_mutator_recycled_blocks.pop() {
             x.set_state(BlockState::Marked);
         }
@@ -820,10 +824,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let packets = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs { blocks })
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
+                box SweepBlocksAfterDecs::new(blocks, counter.clone())
+            })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(RCReleaseMatureLOS);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+            .add(RCReleaseMatureLOS::new(counter.clone()));
     }
 }
 

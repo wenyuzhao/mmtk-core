@@ -20,6 +20,7 @@ use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
+use crate::LocalConcurrentSweepingCounter;
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
@@ -424,12 +425,16 @@ fn get_super_page(cell: Address) -> Address {
 
 pub struct RCSweepMatureLOS {
     count_down: Arc<AtomicUsize>,
+    counter: LocalConcurrentSweepingCounter,
 }
 
 impl RCSweepMatureLOS {
-    pub fn new(count_down: Arc<AtomicUsize>) -> Self {
+    pub fn new(count_down: Arc<AtomicUsize>, counter: LocalConcurrentSweepingCounter) -> Self {
         count_down.fetch_add(1, Ordering::SeqCst);
-        Self { count_down }
+        Self {
+            count_down,
+            counter,
+        }
     }
 }
 
@@ -459,12 +464,22 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         }
         if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
             let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-            immix.immix_space.schedule_rc_block_sweeping_tasks();
+            immix
+                .immix_space
+                .schedule_rc_block_sweeping_tasks(self.counter.clone());
         }
     }
 }
 
-pub struct RCReleaseMatureLOS;
+pub struct RCReleaseMatureLOS {
+    _counter: LocalConcurrentSweepingCounter,
+}
+
+impl RCReleaseMatureLOS {
+    pub fn new(counter: LocalConcurrentSweepingCounter) -> Self {
+        Self { _counter: counter }
+    }
+}
 
 impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
     fn do_work(

@@ -19,6 +19,7 @@ pub const REF_COUNT: bool = crate::args::REF_COUNT;
 
 const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
+pub static mut PREVIOUS_CONC_DECS_COUNTER: Option<Arc<AtomicUsize>> = None;
 pub static mut CURRENT_CONC_DECS_COUNTER: Option<Arc<AtomicUsize>> = None;
 
 pub static mut PREV_ROOTS: SegQueue<Vec<ObjectReference>> = SegQueue::new();
