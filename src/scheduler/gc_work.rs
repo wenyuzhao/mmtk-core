@@ -814,13 +814,14 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             e.unlog::<VM>();
         }
         let o = unsafe { e.load::<ObjectReference>() };
-        if immix_space.in_space(o) && object_forwarding::is_forwarded::<VM>(o) {
+        let ix_object = immix_space.in_space(o);
+        if ix_object && object_forwarding::is_forwarded::<VM>(o) {
             unsafe {
                 e.store(object_forwarding::read_forwarding_pointer::<VM>(o));
             }
             return;
         }
-        if !immix_space.in_space(o) || !Block::containing::<VM>(o).is_defrag_source() {
+        if !ix_object || !Block::containing::<VM>(o).is_defrag_source() {
             return;
         }
         let new = self.forward(o, immix_space);
