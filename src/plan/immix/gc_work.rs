@@ -1,7 +1,6 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -15,7 +14,6 @@ use crate::{
     plan::CopyContext,
     util::opaque_pointer::{VMThread, VMWorkerThread},
 };
-use std::mem;
 use std::ops::{Deref, DerefMut};
 use thread_priority::{self, ThreadPriority};
 
@@ -119,16 +117,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
                 self.plan.current_pause() == Some(Pause::FinalMark)
                     || self.plan.current_pause() == Some(Pause::FullTraceFast)
             );
-            if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && self.roots
-                && Block::in_defrag_block::<VM>(object)
-            {
-                self.mature_evac_remset_roots.push(slot);
-                if self.mature_evac_remset_roots.len() >= Self::CAPACITY {
-                    self.flush();
-                }
-            }
             self.immix().immix_space.fast_trace_object(self, object);
             object
         } else {
@@ -176,12 +164,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 &self.immix().immix_space,
             );
             self.new_scan_work(scan_objects_work);
-        }
-        if !self.mature_evac_remset_roots.is_empty() {
-            let mut roots_remset = vec![];
-            mem::swap(&mut roots_remset, &mut self.mature_evac_remset_roots);
-            let w = EvacuateMatureObjects::new_roots(roots_remset);
-            self.mmtk().scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
         }
     }
 

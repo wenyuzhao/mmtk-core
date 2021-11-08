@@ -105,6 +105,41 @@ pub fn forward_object<VM: VMBinding, CC: CopyContext>(
     new_object
 }
 
+#[inline]
+pub fn copy_object<VM: VMBinding, CC: CopyContext>(
+    object: ObjectReference,
+    semantics: AllocationSemantics,
+    copy_context: &mut CC,
+) -> ObjectReference {
+    VM::VMObjectModel::copy(object, semantics, copy_context)
+}
+
+#[inline]
+pub fn set_forwarding_pointer<VM: VMBinding>(
+    object: ObjectReference,
+    new_object: ObjectReference,
+) -> ObjectReference {
+    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+        store_metadata::<VM>(
+            &VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
+            object,
+            new_object.to_address().as_usize() | (FORWARDED << shift),
+            None,
+            Some(Ordering::SeqCst),
+        )
+    } else {
+        write_forwarding_pointer::<VM>(object, new_object);
+        store_metadata::<VM>(
+            &VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
+            object,
+            FORWARDED,
+            None,
+            Some(Ordering::SeqCst),
+        );
+    }
+    new_object
+}
+
 /// Return the forwarding bits for a given `ObjectReference`.
 #[inline]
 pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> usize {

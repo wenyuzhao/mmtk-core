@@ -761,16 +761,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    pub fn new_roots(roots: Vec<Address>) -> Self {
-        Self {
-            remset: vec![],
-            next_remset: vec![],
-            mmtk: None,
-            roots,
-            worker: std::ptr::null_mut(),
-        }
-    }
-
     const fn worker(&self) -> &mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
@@ -815,7 +805,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.next_remset);
             let w = Self::new(remset);
-            self.mmtk.unwrap().scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+            self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
         }
     }
 

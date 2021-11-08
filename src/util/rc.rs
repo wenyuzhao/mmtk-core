@@ -3,6 +3,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
+use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
@@ -243,13 +244,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         w
     }
 
-    #[inline]
-    pub fn new_x(incs: Vec<Address>, roots: bool, nursery: bool) -> Self {
-        let mut w = Self::new(incs, roots);
-        w.nursery = nursery;
-        w
-    }
-
     #[inline(always)]
     fn promote(&mut self, o: ObjectReference, copy: bool, los: bool, in_place: bool) {
         crate::stat(|s| {
@@ -279,11 +273,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
-            && (self.concurrent_marking_in_progress
-                || self.current_pause == Pause::FinalMark
-                || self.current_pause == Pause::FullTraceFast);
-        let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -302,28 +291,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         let x = in_place_promotion && !los;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            let o = unsafe { edge.load() };
-            if crate::args::RC_MATURE_EVACUATION
-                && check_mature_evac_remset
-                && !should_add_to_mature_evac_remset
-            {
-                if !self.immix().in_defrag(o) && self.immix().in_defrag(unsafe { edge.load() }) {
-                    should_add_to_mature_evac_remset = true;
-                }
-            }
+            let target: ObjectReference = unsafe { edge.load() };
             if x {
                 edge.unlog::<VM>();
             }
-            if !o.is_null() && !self::rc_stick(o) {
+            if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
                 self.recursive_inc(edge);
             }
         });
-        if should_add_to_mature_evac_remset {
-            self.mature_evac_remset.push(o);
-            if self.mature_evac_remset.len() >= Self::CAPACITY {
-                self.flush();
-            }
-        }
     }
 
     #[inline(always)]
@@ -350,6 +325,31 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
+    fn dont_evacuate(&self, o: ObjectReference, los: bool) -> bool {
+        if los {
+            return true;
+        }
+        let b = Block::containing::<VM>(o);
+        // Mature object
+        if self::count(o) != 0 {
+            if crate::args::RC_MATURE_EVACUATION && b.is_defrag_source() {
+                return false;
+            }
+            return true;
+        }
+        // In recycled lines
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+            && b.get_state() == BlockState::Reusing
+        {
+            if crate::args::RC_MATURE_EVACUATION && b.is_defrag_source() {
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    #[inline(always)]
     fn process_inc_and_evacuate(
         &mut self,
         e: Address,
@@ -363,11 +363,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         debug_assert!(!Self::DELAYED_EVACUATION);
         let los = self.immix().los().in_space(o);
-        if self::count(o) != 0
-            || los
-            || (crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-                && Block::containing::<VM>(o).get_state() == BlockState::Reusing)
-        {
+        if self.dont_evacuate(o, los) {
             if let Ok(0) = self::inc(o) {
                 self.promote(o, false, los, true);
             }
@@ -393,19 +389,39 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             let _ = self::inc(new);
             new
         } else {
-            if self::count(o) == 0 {
+            let mature_defrag = Block::containing::<VM>(o).is_defrag_source();
+            if self::count(o) == 0 || mature_defrag {
                 // Evacuate the object
-                let new = object_forwarding::forward_object::<VM, _>(
-                    o,
-                    AllocationSemantics::Default,
-                    copy_context,
-                );
-                unsafe {
-                    e.store(new);
+                if self::count(o) != 0 && mature_defrag {
+                    let new = object_forwarding::copy_object::<VM, _>(
+                        o,
+                        AllocationSemantics::Default,
+                        copy_context,
+                    );
+                    self::set(new, self::count(o));
+                    let _ = self::inc(new);
+                    object_forwarding::set_forwarding_pointer::<VM>(o, new);
+                    unsafe {
+                        e.store(new);
+                    }
+                    self::promote::<VM>(new);
+                    self.immix().immix_space.attempt_mark(new);
+                    self.immix().immix_space.unmark(o);
+                    self.mature_evac_remset.push(new);
+                    new
+                } else {
+                    let new = object_forwarding::forward_object::<VM, _>(
+                        o,
+                        AllocationSemantics::Default,
+                        copy_context,
+                    );
+                    unsafe {
+                        e.store(new);
+                    }
+                    let _ = self::inc(new);
+                    self.promote(new, true, false, false);
+                    new
                 }
-                let _ = self::inc(new);
-                self.promote(new, true, false, false);
-                new
             } else {
                 // Object is not moved.
                 object_forwarding::clear_forwarding_bits::<VM>(o);
@@ -433,6 +449,24 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 WorkBucketStage::RCEvacuateNursery,
                 RCEvacuateNursery::new(remset, self.roots),
             );
+        }
+        if !self.mature_evac_remset.is_empty() {
+            let mut remset = vec![];
+            mem::swap(&mut remset, &mut self.mature_evac_remset);
+            let w = EvacuateMatureObjects::new(remset);
+            if self.concurrent_marking_in_progress {
+                self.immix()
+                    .immix_space
+                    .mature_evac_remsets
+                    .lock()
+                    .push(box w)
+            } else {
+                if self.current_pause == Pause::FinalMark
+                    || self.current_pause == Pause::FullTraceFast
+                {
+                    self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+                }
+            }
         }
         if !self.scan_objects.is_empty() {
             let mut scan_objects = vec![];

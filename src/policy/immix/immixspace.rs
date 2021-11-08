@@ -266,20 +266,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 total_mature_blocks += 1;
             }
         }
-        let n = total_mature_blocks / 2;
-        if crate::args::LOG_PER_GC_STATE {
-            println!("Defrag {:?} / {} mature blocks", n, total_mature_blocks);
-        }
-        for c in self.chunk_map.committed_chunks() {
+        // let n = 1024;
+        let mut i = 0;
+        'out: for c in self.chunk_map.committed_chunks() {
             for b in c
                 .committed_blocks()
                 .filter(|c| c.get_state() != BlockState::Nursery)
             {
+                i += 1;
                 // println!(" - defrag {:?} {:?}", b, b.get_state());
                 b.set_as_defrag_source(true);
+                if i >= 32 {
+                    break 'out;
+                }
             }
         }
-        self.num_defrag_blocks.store(n, Ordering::SeqCst);
+        if crate::args::LOG_PER_GC_STATE {
+            println!("Defrag {:?} / {} mature blocks", i, total_mature_blocks);
+        }
+        self.num_defrag_blocks.store(i, Ordering::SeqCst);
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
@@ -914,8 +919,10 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         if !self.mature_evac_remset.is_empty() {
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+            self.worker().add_work(
+                WorkBucketStage::RCEvacuateMature,
+                EvacuateMatureObjects::new(remset),
+            );
         }
     }
 }
