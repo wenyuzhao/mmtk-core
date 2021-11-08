@@ -65,9 +65,9 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for Prepare<P, W> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(PrepareMutator::<P::VM>::new(mutator));
         }
-        for w in &mmtk.scheduler.worker_group().workers {
-            w.local_work_bucket.add(PrepareCollector::<W>::new());
-        }
+        // for w in &mmtk.scheduler.worker_group().workers {
+        //     w.local_work_bucket.add(PrepareCollector::<W>::new());
+        // }
     }
 }
 
@@ -96,6 +96,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareMutator<VM> {
 pub struct PrepareCollector<W: CopyContext + GCWorkerLocal>(PhantomData<W>);
 
 impl<W: CopyContext + GCWorkerLocal> PrepareCollector<W> {
+    #[allow(unused)]
     pub fn new() -> Self {
         PrepareCollector(PhantomData)
     }
@@ -214,16 +215,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         trace!("stop_all_mutators start");
         debug_assert_eq!(mmtk.plan.base().scanned_stacks.load(Ordering::SeqCst), 0);
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
-        let t = SystemTime::now();
-        crate::GC_START_TIME.store(t, Ordering::SeqCst);
         if crate::args::LOG_PER_GC_STATE {
             crate::RESERVED_PAGES_AT_GC_START
                 .store(mmtk.plan.get_pages_reserved(), Ordering::SeqCst);
         }
-        mmtk.plan.gc_pause_start();
         if crate::args::LOG_STAGES {
             println!(
-                "stop_all_mutators end  since-trigger={:?}ns",
+                "stop_all_mutators finish since-trigger={:?}ns",
                 crate::GC_TRIGGER_TIME
                     .load(Ordering::SeqCst)
                     .elapsed()
@@ -231,6 +229,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                     .as_nanos()
             );
         }
+        mmtk.plan.gc_pause_start();
         mmtk.scheduler.notify_mutators_paused(mmtk);
         if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
             // Prepare mutators if necessary
@@ -255,8 +254,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 }
             }
         }
-        mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(ScanVMSpecificRoots::<E>::new());
+        <E::VM as VMBinding>::VMScanning::scan_vm_specific_roots::<E>();
     }
 }
 
@@ -430,6 +428,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanStackRoot<E> {
 pub struct ScanVMSpecificRoots<Edges: ProcessEdgesWork>(PhantomData<Edges>);
 
 impl<E: ProcessEdgesWork> ScanVMSpecificRoots<E> {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self(PhantomData)
     }

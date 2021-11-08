@@ -4,6 +4,7 @@
 mod scheduler;
 pub(crate) use scheduler::CoordinatorMessage;
 pub(crate) use scheduler::GCWorkScheduler;
+pub(crate) use scheduler::LAST_ACTIVATE_TIME;
 
 mod stat;
 pub(self) mod work_counter;

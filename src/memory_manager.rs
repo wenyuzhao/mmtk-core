@@ -14,8 +14,8 @@
 use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
-use crate::scheduler::WorkBucketStage;
 use crate::scheduler::{GCWork, GCWorker};
+use crate::scheduler::{WorkBucketStage, LAST_ACTIVATE_TIME};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout_constants::HEAP_END;
@@ -28,15 +28,28 @@ use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
+    let t = SystemTime::now();
+    mmtk.plan.base().stats.start_gc();
     if cfg!(feature = "yield_and_roots_timer") && crate::inside_harness() {
-        let t = crate::GC_TRIGGER_TIME
-            .load(Ordering::SeqCst)
-            .elapsed()
+        let t = t
+            .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::Relaxed))
             .unwrap()
             .as_nanos();
         crate::PAUSES.yield_nanos.fetch_add(t, Ordering::Relaxed);
     }
-    mmtk.plan.base().stats.start_gc();
+
+    if crate::args::LOG_STAGES {
+        println!(
+            "safepoint start  since-trigger={:?}ns",
+            crate::GC_TRIGGER_TIME
+                .load(Ordering::Relaxed)
+                .elapsed()
+                .unwrap()
+                .as_nanos()
+        );
+        unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
+    }
+    crate::GC_START_TIME.store(t, Ordering::SeqCst);
 }
 
 /// Run the main loop for the GC controller thread. This method does not return.

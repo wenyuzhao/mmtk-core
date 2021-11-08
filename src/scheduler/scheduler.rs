@@ -297,9 +297,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Drain the message queue and execute coordinator work. Only the coordinator should call this.
     pub fn wait_for_completion(&self) {
         self.in_gc_pause.store(true, Ordering::SeqCst);
-        if crate::args::LOG_STAGES {
-            unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
-        }
         // At the start of a GC, we probably already have received a `ScheduleCollection` work. Run it now.
         if let Some(initializer) = self.startup.lock().unwrap().take() {
             self.process_coordinator_work(initializer);
@@ -547,20 +544,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         mmtk.plan.base().control_collector_context.clear_request();
         let first_stw_bucket = self.work_buckets.values().skip(1).next().unwrap();
         debug_assert!(!first_stw_bucket.is_activated());
-        if crate::args::LOG_STAGES {
-            println!(
-                "notify_mutators_paused since-gc={}ns",
-                crate::GC_START_TIME
-                    .load(Ordering::SeqCst)
-                    .elapsed()
-                    .unwrap()
-                    .as_nanos()
-            );
-        }
         first_stw_bucket.activate();
         let _guard = self.worker_monitor.0.lock().unwrap();
         self.worker_monitor.1.notify_all();
     }
 }
 
-static mut LAST_ACTIVATE_TIME: Option<SystemTime> = None;
+pub static mut LAST_ACTIVATE_TIME: Option<SystemTime> = None;
