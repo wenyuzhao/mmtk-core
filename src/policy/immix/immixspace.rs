@@ -440,6 +440,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
+        self.deinit_block(block, nursery);
+        self.pr.release_pages(block.start());
+    }
+
+    pub fn deinit_block(&self, block: Block, nursery: bool) {
         // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
         if crate::args::LOG_PER_GC_STATE {
             if nursery {
@@ -453,7 +458,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             block.clear_log_table::<VM>();
         }
         block.deinit();
-        self.pr.release_pages(block.start());
     }
 
     /// Allocate a clean block.

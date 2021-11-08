@@ -378,12 +378,15 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
         if self.blocks.is_empty() {
             return;
         }
+        let mut count = 0;
         let queue = ArrayQueue::new(self.blocks.len());
         for block in &self.blocks {
-            block.deinit();
-            queue.push(block.start()).unwrap();
+            if block.rc_sweep_nursery(self.space) {
+                count += 1;
+                queue.push(block.start()).unwrap();
+            }
         }
-        self.space.pr.release_bulk(self.blocks.len(), queue)
+        self.space.pr.release_bulk(count, queue)
     }
 }
 
@@ -395,7 +398,10 @@ struct RCSweepNurseryBlock<VM: VMBinding> {
 impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlock<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.block.rc_sweep_nursery(self.space);
+        if self.block.rc_sweep_nursery(self.space) {
+            // Push to a queue
+            unimplemented!()
+        }
     }
 }
 

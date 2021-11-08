@@ -479,23 +479,23 @@ impl Block {
         debug_assert!(crate::args::REF_COUNT);
         if crate::args::RC_NURSERY_EVACUATION {
             debug_assert!(self.rc_dead(), "{:?} has live rc counts", self);
-            space.release_block(*self, true);
+            space.deinit_block(*self, true);
             true
         } else {
             let live = !self.rc_dead();
             if !live {
-                space.release_block(*self, true);
+                space.deinit_block(*self, true);
             }
             return !live;
         }
     }
 
     #[inline(always)]
-    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::args::REF_COUNT);
         debug_assert_ne!(self.get_state(), BlockState::Unallocated, "{:?}", self);
         if self.is_defrag_source() {
-            return;
+            return false;
         }
         if self.rc_dead() {
             if !*crate::args::IGNORE_REUSING_BLOCKS
@@ -509,7 +509,8 @@ impl Block {
                     })
                     .is_ok()
             {
-                space.release_block(*self, false);
+                space.deinit_block(*self, false);
+                return true;
             }
         } else if !crate::args::BLOCK_ONLY {
             // See the caller of this function.
@@ -541,6 +542,7 @@ impl Block {
                 space.reusable_blocks.push(*self)
             }
         }
+        false
     }
 
     #[inline(always)]

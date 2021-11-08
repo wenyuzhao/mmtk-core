@@ -22,6 +22,7 @@ use crate::{
     AllocationSemantics, CopyContext, MMTK,
 };
 use atomic::Ordering;
+use crossbeam_queue::ArrayQueue;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::{
@@ -709,10 +710,19 @@ pub struct SweepBlocksAfterDecs {
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        for b in &self.blocks {
-            b.unlog_non_atomic();
-            b.rc_sweep_mature::<VM>(&immix.immix_space);
+        if self.blocks.is_empty() {
+            return;
         }
+        let mut count = 0;
+        let queue = ArrayQueue::new(self.blocks.len());
+        for block in &self.blocks {
+            block.unlog_non_atomic();
+            if block.rc_sweep_mature::<VM>(&immix.immix_space) {
+                count += 1;
+                queue.push(block.start()).unwrap();
+            }
+        }
+        immix.immix_space.pr.release_bulk(count, queue)
     }
 }
 

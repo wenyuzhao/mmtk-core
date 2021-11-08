@@ -101,26 +101,6 @@ impl Chunk {
             space.chunk_map.set(*self, ChunkState::Free)
         }
     }
-
-    pub fn sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        debug_assert!(crate::args::REF_COUNT);
-        // number of allocated blocks.
-        let mut allocated_blocks = 0;
-        // Iterate over all allocated blocks in this chunk.
-        for block in self
-            .blocks()
-            .filter(|block| block.get_state() != BlockState::Unallocated)
-        {
-            if !block.rc_sweep_nursery(space) {
-                // Block is live. Increment the allocated block count.
-                allocated_blocks += 1;
-            }
-        }
-        // Set this chunk as free if there is not live blocks.
-        if allocated_blocks == 0 {
-            space.chunk_map.set(*self, ChunkState::Free)
-        }
-    }
 }
 
 impl Step for Chunk {
@@ -351,7 +331,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if self.nursery_only {
-            self.chunk.sweep_nursery(self.space)
+            unreachable!()
         } else {
             let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
             let mut histogram = self.space.defrag.new_histogram();
