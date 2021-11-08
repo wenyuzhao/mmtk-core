@@ -1,7 +1,10 @@
 use spin::Lazy;
 use std::{env, sync::atomic::AtomicUsize};
 
-use crate::{policy::immix::block::Block, BarrierSelector};
+use crate::{
+    policy::immix::{block::Block, line::Line},
+    BarrierSelector,
+};
 
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
@@ -128,6 +131,8 @@ fn dump_features(active_barrier: BarrierSelector) {
         *CONCURRENT_MARKING_THRESHOLD
     );
     dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
+    dump_feature!("log_block_size", Block::LOG_BYTES);
+    dump_feature!("log_line_size", Line::LOG_BYTES);
 
     println!("----------------------------------------------------");
 }
