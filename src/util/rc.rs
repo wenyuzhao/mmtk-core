@@ -273,10 +273,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
-            && (self.concurrent_marking_in_progress
-                || self.current_pause == Pause::FinalMark
-                || self.current_pause == Pause::FullTraceFast);
+        let check_mature_evac_remset =
+            crate::args::RC_MATURE_EVACUATION && self.concurrent_marking_in_progress;
         let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(
@@ -296,7 +294,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         let x = in_place_promotion && !los;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            let target = unsafe { edge.load() };
+            let target = unsafe { edge.load::<ObjectReference>() };
             if crate::args::RC_MATURE_EVACUATION
                 && check_mature_evac_remset
                 && !should_add_to_mature_evac_remset
@@ -308,7 +306,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if x {
                 edge.unlog::<VM>();
             }
-            if !target.is_null() && !self::rc_stick(target) {
+            if !target.is_null()
+                && (!self::rc_stick(target)
+                    || (self.should_do_mature_evacuation() && self.immix().in_defrag(target)))
+            {
                 self.recursive_inc(edge);
             }
         });
@@ -743,9 +744,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             if o.is_null() {
                 continue;
             }
-            let o = if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && object_forwarding::is_forwarded::<VM>(o)
+            let o = if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(o)
             {
                 object_forwarding::read_forwarding_pointer::<VM>(o)
             } else {

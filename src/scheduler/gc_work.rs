@@ -809,12 +809,15 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    fn forward_edge(&mut self, e: Address, root: bool, immix_space: &ImmixSpace<VM>) {
+    fn forward_edge(&mut self, e: Address, root: bool, immix: &Immix<VM>) {
         if !root {
             e.unlog::<VM>();
         }
         let o = unsafe { e.load::<ObjectReference>() };
-        let ix_object = immix_space.in_space(o);
+        if o.is_null() {
+            return;
+        }
+        let ix_object = immix.immix_space.in_space(o);
         if ix_object && object_forwarding::is_forwarded::<VM>(o) {
             unsafe {
                 e.store(object_forwarding::read_forwarding_pointer::<VM>(o));
@@ -822,9 +825,12 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return;
         }
         if !ix_object || !Block::containing::<VM>(o).is_defrag_source() {
+            if immix.mark(o) {
+                self.process_node(o);
+            }
             return;
         }
-        let new = self.forward(o, immix_space);
+        let new = self.forward(o, &immix.immix_space);
         unsafe {
             e.store(new);
         }
@@ -842,12 +848,6 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                 || immix.current_pause() == Some(Pause::FullTraceFast)
         );
         let immix_space = &immix.immix_space;
-        // Roots
-        let mut roots = vec![];
-        mem::swap(&mut roots, &mut self.roots);
-        for e in roots {
-            self.forward_edge(e, true, immix_space)
-        }
         // Objects
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
@@ -874,10 +874,13 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                     continue;
                 }
             }
+            if !immix.is_marked(o) {
+                return;
+            }
             if immix_space.in_space(o) {
                 o = o.fix_start_address::<VM>();
             }
-            EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix_space));
+            EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix));
         }
         self.flush();
     }

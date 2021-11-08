@@ -334,7 +334,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[inline(always)]
-    fn is_marked(&self, object: ObjectReference) -> bool {
+    pub fn is_marked(&self, object: ObjectReference) -> bool {
         self.test_mark_bit(object, self.mark_state)
     }
 
