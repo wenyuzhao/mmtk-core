@@ -54,17 +54,17 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> Prepare<P, W> {
 }
 
 impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for Prepare<P, W> {
-    fn do_work(&mut self, worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<P::VM>, _mmtk: &'static MMTK<P::VM>) {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
         let plan_mut: &mut P = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.prepare(worker.tls);
 
-        for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(PrepareMutator::<P::VM>::new(mutator));
-        }
+        // for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
+        //     mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+        //         .add(PrepareMutator::<P::VM>::new(mutator));
+        // }
         // for w in &mmtk.scheduler.worker_group().workers {
         //     w.local_work_bucket.add(PrepareCollector::<W>::new());
         // }
@@ -79,6 +79,7 @@ pub struct PrepareMutator<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> PrepareMutator<VM> {
+    #[allow(unused)]
     pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
         Self { mutator }
     }
@@ -139,12 +140,14 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for Release<P, W> {
         let plan_mut: &mut P = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.release(worker.tls);
 
-        for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Release]
-                .add(ReleaseMutator::<P::VM>::new(mutator));
-        }
+        // for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
+        //     mmtk.scheduler.work_buckets[WorkBucketStage::Release]
+        //         .add(ReleaseMutator::<P::VM>::new(mutator));
+        // }
         for w in &mmtk.scheduler.worker_group().workers {
-            w.local_work_bucket.add(ReleaseCollector::<W>::new());
+            // w.local_work_bucket.add(ReleaseCollector::<W>::new());
+            let w = unsafe { &mut *(w as *const _ as *mut GCWorker<P::VM>) };
+            unsafe { w.local::<W>() }.release();
         }
         // TODO: Process weak references properly
         mmtk.reference_processors.clear();
@@ -159,6 +162,7 @@ pub struct ReleaseMutator<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> ReleaseMutator<VM> {
+    #[allow(unused)]
     pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
         Self { mutator }
     }
@@ -176,6 +180,7 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseMutator<VM> {
 pub struct ReleaseCollector<W: CopyContext + GCWorkerLocal>(PhantomData<W>);
 
 impl<W: CopyContext + GCWorkerLocal> ReleaseCollector<W> {
+    #[allow(unused)]
     pub fn new() -> Self {
         ReleaseCollector(PhantomData)
     }
@@ -385,6 +390,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanStackRoot<E> {
             unsafe { &mut *(self.0 as *mut _) },
             worker.tls,
         );
+        self.0.prepare(worker.tls);
         self.0.flush();
         let old = base.scanned_stacks.fetch_add(1, Ordering::SeqCst);
         trace!(

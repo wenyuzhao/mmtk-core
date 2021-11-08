@@ -13,7 +13,6 @@ use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
-use crate::MutatorContext;
 use crate::MMTK;
 use enum_map::enum_map;
 use enum_map::EnumMap;
@@ -27,7 +26,6 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
     immix_allocator.reset();
-    mutator.assert_is_flushed();
 }
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -39,7 +37,6 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
     immix_allocator.reset();
-    mutator.assert_is_flushed();
 }
 
 lazy_static! {

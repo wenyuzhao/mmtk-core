@@ -134,6 +134,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
             return (Steal::Empty, false);
         }
         let queue = self.queue.read();
+        if queue.is_empty() {
+            return (Steal::Empty, false);
+        }
         (queue.steal(), queue.is_empty())
     }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
