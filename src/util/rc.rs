@@ -273,6 +273,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
+        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
+            && (self.concurrent_marking_in_progress
+                || self.current_pause == Pause::FinalMark
+                || self.current_pause == Pause::FullTraceFast);
+        let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -291,14 +296,28 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         let x = in_place_promotion && !los;
         EdgeIterator::<VM>::iterate(o, |edge| {
-            let target: ObjectReference = unsafe { edge.load() };
+            let target = unsafe { edge.load() };
+            if crate::args::RC_MATURE_EVACUATION
+                && check_mature_evac_remset
+                && !should_add_to_mature_evac_remset
+            {
+                if !self.immix().in_defrag(o) && self.immix().in_defrag(target) {
+                    should_add_to_mature_evac_remset = true;
+                }
+            }
             if x {
                 edge.unlog::<VM>();
             }
-            if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
+            if !target.is_null() && !self::rc_stick(target) {
                 self.recursive_inc(edge);
             }
         });
+        if should_add_to_mature_evac_remset {
+            self.mature_evac_remset.push(o);
+            if self.mature_evac_remset.len() >= Self::CAPACITY {
+                self.flush();
+            }
+        }
     }
 
     #[inline(always)]
@@ -323,6 +342,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         o
     }
+    #[inline(always)]
+    const fn should_do_mature_evacuation(&self) -> bool {
+        self.current_pause == Pause::FullTraceFast || self.current_pause == Pause::FinalMark
+    }
 
     #[inline(always)]
     fn dont_evacuate(&self, o: ObjectReference, los: bool) -> bool {
@@ -332,7 +355,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let b = Block::containing::<VM>(o);
         // Mature object
         if self::count(o) != 0 {
-            if crate::args::RC_MATURE_EVACUATION && b.is_defrag_source() {
+            if crate::args::RC_MATURE_EVACUATION
+                && b.is_defrag_source()
+                && self.should_do_mature_evacuation()
+            {
                 return false;
             }
             return true;
@@ -341,7 +367,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
             && b.get_state() == BlockState::Reusing
         {
-            if crate::args::RC_MATURE_EVACUATION && b.is_defrag_source() {
+            if crate::args::RC_MATURE_EVACUATION
+                && b.is_defrag_source()
+                && self.should_do_mature_evacuation()
+            {
                 return false;
             }
             return true;
@@ -390,9 +419,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             new
         } else {
             let mature_defrag = Block::containing::<VM>(o).is_defrag_source();
-            if self::count(o) == 0 || mature_defrag {
+            let is_nursery = self::count(o) == 0;
+            if is_nursery || mature_defrag {
                 // Evacuate the object
-                if self::count(o) != 0 && mature_defrag {
+                if !is_nursery && mature_defrag {
+                    debug_assert!(
+                        self.current_pause == Pause::FullTraceFast
+                            || self.current_pause == Pause::FinalMark
+                    );
                     let new = object_forwarding::copy_object::<VM, _>(
                         o,
                         AllocationSemantics::Default,
@@ -408,6 +442,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     self.immix().immix_space.attempt_mark(new);
                     self.immix().immix_space.unmark(o);
                     self.mature_evac_remset.push(new);
+                    if self.mature_evac_remset.len() >= Self::CAPACITY {
+                        self.flush();
+                    }
                     new
                 } else {
                     let new = object_forwarding::forward_object::<VM, _>(

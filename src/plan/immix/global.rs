@@ -171,6 +171,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .control_collector_context
                 .is_concurrent_collection(),
         );
+        if crate::args::LOG_PER_GC_STATE {
+            println!("[pause] {:?}", pause);
+        }
         match pause {
             Pause::FullTraceFast => self
                 .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler),
