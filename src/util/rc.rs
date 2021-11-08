@@ -343,7 +343,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         o
     }
     #[inline(always)]
-    const fn should_do_mature_evacuation(&self) -> bool {
+    fn should_do_mature_evacuation(&self) -> bool {
         self.current_pause == Pause::FullTraceFast || self.current_pause == Pause::FinalMark
     }
 
