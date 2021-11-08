@@ -8,6 +8,7 @@ use crate::{
     MMTK,
 };
 use atomic::{Atomic, Ordering};
+use crossbeam_queue::ArrayQueue;
 use spin::Lazy;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -135,7 +136,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         (stw_packets, delayed_packets, blocks)
     }
 
-    pub fn reset_and_generate_nursery_sweep_tasks2(
+    pub fn reset_and_generate_nursery_sweep_tasks3(
         &mut self,
         _num_workers: usize,
     ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
@@ -161,7 +162,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         (packets, blocks)
     }
 
-    pub fn reset_and_generate_nursery_sweep_tasks3(
+    pub fn reset_and_generate_nursery_sweep_tasks2(
         &mut self,
         num_workers: usize,
     ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
@@ -183,18 +184,21 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 }
             }
         }
-        for i in blocks..high_water {
-            self.space()
-                .pr
-                .release_pages(self.buffer[i].load(Ordering::SeqCst).start())
-        }
-        self.high_water.store(0, Ordering::SeqCst);
-        self.cursor.store(0, Ordering::SeqCst);
         let space = self.space();
-        let packets = bins
+        let mut packets: Vec<Box<dyn GCWork<VM>>> = bins
             .into_iter()
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
             .collect();
+        let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
+        for i in blocks..high_water {
+            unallocated_nursery_blocks.push(self.buffer[i].load(Ordering::Relaxed));
+        }
+        packets.push(box RCReleaseUnallocatedNurseryBlocks {
+            space,
+            blocks: unallocated_nursery_blocks,
+        });
+        self.high_water.store(0, Ordering::SeqCst);
+        self.cursor.store(0, Ordering::SeqCst);
         (packets, blocks)
     }
 
@@ -371,9 +375,15 @@ struct RCSweepNurseryBlocks<VM: VMBinding> {
 impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        for b in &self.blocks {
-            b.rc_sweep_nursery(self.space);
+        if self.blocks.is_empty() {
+            return;
         }
+        let queue = ArrayQueue::new(self.blocks.len());
+        for block in &self.blocks {
+            block.deinit();
+            queue.push(block.start()).unwrap();
+        }
+        self.space.pr.release_bulk(self.blocks.len(), queue)
     }
 }
 
@@ -397,8 +407,13 @@ struct RCReleaseUnallocatedNurseryBlocks<VM: VMBinding> {
 impl<VM: VMBinding> GCWork<VM> for RCReleaseUnallocatedNurseryBlocks<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        for b in &self.blocks {
-            self.space.pr.release_pages(b.start());
+        if self.blocks.is_empty() {
+            return;
         }
+        let queue = ArrayQueue::new(self.blocks.len());
+        for block in &self.blocks {
+            queue.push(block.start()).unwrap();
+        }
+        self.space.pr.release_bulk(self.blocks.len(), queue)
     }
 }

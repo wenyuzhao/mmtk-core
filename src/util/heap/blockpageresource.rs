@@ -9,6 +9,7 @@ use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::{Atomic, Ordering};
+use crossbeam_queue::ArrayQueue;
 use crossbeam_queue::SegQueue;
 use std::marker::PhantomData;
 use std::sync::Mutex;
@@ -20,6 +21,8 @@ pub struct BlockPageResource<VM: VMBinding> {
     log_pages: usize,
     sync: Mutex<()>,
     released_blocks: SegQueue<Address>,
+    head_locally_freed_blocks: spin::RwLock<Option<ArrayQueue<Address>>>,
+    locally_freed_blocks: SegQueue<ArrayQueue<Address>>,
     highwater: Atomic<Address>,
     limit: Address,
     _p: PhantomData<VM>,
@@ -68,7 +71,9 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             log_pages,
             common: CommonPageResource::new(true, growable, vm_map),
             sync: Mutex::new(()),
-            released_blocks: SegQueue::new(),
+            released_blocks: Default::default(),
+            head_locally_freed_blocks: Default::default(),
+            locally_freed_blocks: Default::default(),
             highwater: Atomic::new(start),
             limit: (start + bytes).align_up(BYTES_IN_CHUNK),
             _p: PhantomData,
@@ -87,6 +92,30 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         debug_assert_eq!(reserved_pages, 1 << self.log_pages);
         // Fast allocate from the released-blocks list
         if let Some(block) = self.released_blocks.pop() {
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Result::Ok(PRAllocResult {
+                start: block,
+                pages: required_pages,
+                new_chunk: false,
+            });
+        }
+        // Fast allocate from the locally-released-blocks list
+        let head_locally_freed_blocks = self.head_locally_freed_blocks.upgradeable_read();
+        if let Some(block) = head_locally_freed_blocks
+            .as_ref()
+            .map(|q| q.pop())
+            .flatten()
+        {
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Result::Ok(PRAllocResult {
+                start: block,
+                pages: required_pages,
+                new_chunk: false,
+            });
+        } else if let Some(blocks) = self.locally_freed_blocks.pop() {
+            let block = blocks.pop().unwrap();
+            let mut head_locally_freed_blocks = head_locally_freed_blocks.upgrade();
+            *head_locally_freed_blocks = Some(blocks);
             self.commit_pages(reserved_pages, required_pages, tls);
             return Result::Ok(PRAllocResult {
                 start: block,
@@ -125,5 +154,14 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         debug_assert!(pages as usize <= self.common.accounting.get_committed_pages());
         self.common.accounting.release(pages as _);
         self.released_blocks.push(first);
+    }
+
+    pub fn release_bulk(&self, blocks: usize, queue: ArrayQueue<Address>) {
+        if blocks == 0 {
+            return;
+        }
+        let pages = blocks << self.log_pages;
+        self.common.accounting.release(pages as _);
+        self.locally_freed_blocks.push(queue);
     }
 }

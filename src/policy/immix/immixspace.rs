@@ -39,7 +39,7 @@ pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pub(super) pr: BlockPageResource<VM>,
+    pub pr: BlockPageResource<VM>,
     /// Allocation status for all chunks in immix space
     pub chunk_map: ChunkMap,
     /// Current line mark state
