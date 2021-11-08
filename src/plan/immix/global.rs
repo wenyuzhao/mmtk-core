@@ -1,6 +1,6 @@
 use super::gc_work::{ImmixCopyContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
-use super::{Pause, CURRENT_CONC_DECS_COUNTER, PREVIOUS_CONC_DECS_COUNTER};
+use super::Pause;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
@@ -32,7 +32,7 @@ use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector, LazySweepingJobsCounter};
 use std::env;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -151,7 +151,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.common.gc_init(heap_size, vm_map, scheduler);
         self.immix_space.init(vm_map);
         unsafe {
-            CURRENT_CONC_DECS_COUNTER = Some(Default::default());
+            crate::LAZY_SWEEPING_JOBS.swap();
+            let me = &*(self as *const Self);
+            crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
+                me.immix_space.schedule_rc_block_sweeping_tasks(c);
+            });
         }
     }
 
@@ -315,9 +319,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
         unsafe {
-            let c = CURRENT_CONC_DECS_COUNTER.take();
-            PREVIOUS_CONC_DECS_COUNTER = c;
-            CURRENT_CONC_DECS_COUNTER = Some(Arc::new(AtomicUsize::new(0)));
             crate::LAZY_SWEEPING_JOBS.swap();
         };
         let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
@@ -541,11 +542,7 @@ impl<VM: VMBinding> Immix<VM> {
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            let w = ProcessDecs::new(
-                decs,
-                unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LazySweepingJobsCounter::new(),
-            );
+            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs());
             work_packets.push(box w);
         }
         if crate::args::LAZY_DECREMENTS {

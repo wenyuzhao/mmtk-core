@@ -24,12 +24,9 @@ use crate::{
 };
 use atomic::Ordering;
 use crossbeam_queue::ArrayQueue;
+use std::iter::Step;
 use std::mem;
 use std::ops::{Deref, DerefMut};
-use std::{
-    iter::Step,
-    sync::{atomic::AtomicUsize, Arc},
-};
 
 pub const LOG_REF_COUNT_BITS: usize = 1;
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
@@ -569,8 +566,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
 pub struct ProcessDecs<VM: VMBinding> {
     /// Decrements to process
     decs: Vec<ObjectReference>,
-    /// Counter for the number of remaining `ProcessDecs` packages
-    count_down: Arc<AtomicUsize>,
     /// Recursively generated new decrements
     new_decs: Vec<ObjectReference>,
     /// Execution worker
@@ -589,16 +584,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[inline]
-    pub fn new(
-        decs: Vec<ObjectReference>,
-        count_down: Arc<AtomicUsize>,
-        counter: LazySweepingJobsCounter,
-    ) -> Self {
+    pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
         debug_assert!(crate::args::REF_COUNT);
-        count_down.fetch_add(1, Ordering::SeqCst);
         Self {
             decs,
-            count_down,
             new_decs: vec![],
             worker: std::ptr::null_mut(),
             counter,
@@ -620,7 +609,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::<VM>::new(new_decs, self.count_down.clone(), self.counter.clone()),
+                ProcessDecs::<VM>::new(new_decs, self.counter.clone_with_decs()),
             );
         }
     }
@@ -702,13 +691,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             });
         }
         self.flush();
-
-        // If all decs are finished, start sweeping blocks
-        if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix
-                .immix_space
-                .schedule_rc_block_sweeping_tasks(self.counter.clone());
-        }
     }
 }
 

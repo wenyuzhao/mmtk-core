@@ -1,4 +1,3 @@
-use crate::plan::immix::Immix;
 use crate::plan::PlanConstraints;
 use crate::plan::TransitiveClosure;
 use crate::policy::space::SpaceOptions;
@@ -25,8 +24,6 @@ use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -424,17 +421,12 @@ fn get_super_page(cell: Address) -> Address {
 }
 
 pub struct RCSweepMatureLOS {
-    count_down: Arc<AtomicUsize>,
-    counter: LazySweepingJobsCounter,
+    _counter: LazySweepingJobsCounter,
 }
 
 impl RCSweepMatureLOS {
-    pub fn new(count_down: Arc<AtomicUsize>, counter: LazySweepingJobsCounter) -> Self {
-        count_down.fetch_add(1, Ordering::SeqCst);
-        Self {
-            count_down,
-            counter,
-        }
+    pub fn new(counter: LazySweepingJobsCounter) -> Self {
+        Self { _counter: counter }
     }
 }
 
@@ -461,12 +453,6 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
                 rc::set(*o, 0);
                 los.rc_dead_objects.push(*o)
             }
-        }
-        if self.count_down.fetch_sub(1, Ordering::SeqCst) == 1 {
-            let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-            immix
-                .immix_space
-                .schedule_rc_block_sweeping_tasks(self.counter.clone());
         }
     }
 }

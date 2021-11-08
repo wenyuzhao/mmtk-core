@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicUsize;
 use atomic::Ordering;
 
 use crate::plan::immix::Immix;
-use crate::plan::immix::CURRENT_CONC_DECS_COUNTER;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::cm::ProcessModBufSATB;
@@ -413,11 +412,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             // Dec buffer
             let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
-            let w = ProcessDecs::new(
-                decs,
-                unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LazySweepingJobsCounter::new(),
-            );
+            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);
             } else {

@@ -1,7 +1,7 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, Pause, CURRENT_CONC_DECS_COUNTER};
+use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
@@ -352,10 +352,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureLOS::new(
-                unsafe { CURRENT_CONC_DECS_COUNTER.clone().unwrap() },
-                LazySweepingJobsCounter::new(),
-            );
+            let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
                 self.scheduler().postpone(sweep_los);
