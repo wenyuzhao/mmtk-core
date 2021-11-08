@@ -737,7 +737,6 @@ impl<VM: VMBinding> GCWork<VM> for UnlogEdges {
 
 pub struct EvacuateMatureObjects<VM: VMBinding> {
     remset: Vec<ObjectReference>,
-    roots: Vec<Address>,
     next_remset: Vec<ObjectReference>,
     mmtk: Option<&'static MMTK<VM>>,
     worker: *mut GCWorker<VM>,
@@ -756,7 +755,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             remset,
             next_remset: vec![],
             mmtk: None,
-            roots: vec![],
             worker: std::ptr::null_mut(),
         }
     }

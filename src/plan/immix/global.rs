@@ -304,13 +304,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_end(&self) {
-        if self.current_pause().unwrap() == Pause::InitialMark {
+        let pause = self.current_pause().unwrap();
+        if pause == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
             }
         }
-        let pause = self.current_pause.load(Ordering::SeqCst).unwrap();
         // if pause == Pause::RefCount || pause == Pause::InitialMark {
         //     self.resize_nursery();
         // }
