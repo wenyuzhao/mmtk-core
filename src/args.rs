@@ -1,5 +1,5 @@
 use spin::Lazy;
-use std::{env, sync::atomic::AtomicUsize};
+use std::env;
 
 use crate::{
     policy::immix::{block::Block, line::Line},
@@ -43,20 +43,22 @@ pub static NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
             .unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()),
     )
 });
-pub static MIN_NURSERY_BLOCKS: Lazy<usize> = Lazy::new(|| {
-    env::var("MIN_NURSERY_BLOCKS")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(*LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
-});
-pub static MAX_NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
-    env::var("MAX_NURSERY_BLOCKS")
-        .map(|x| x.parse().unwrap())
-        .ok()
-});
-pub static INITIAL_NURSERY_BLOCKS: Lazy<usize> =
-    Lazy::new(|| NURSERY_BLOCKS.unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()));
-pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
-    Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
+pub static NURSERY_RATIO: Lazy<Option<usize>> =
+    Lazy::new(|| env::var("NURSERY_RATIO").map(|x| x.parse().unwrap()).ok());
+// pub static MIN_NURSERY_BLOCKS: Lazy<usize> = Lazy::new(|| {
+//     env::var("MIN_NURSERY_BLOCKS")
+//         .map(|x| x.parse().unwrap())
+//         .unwrap_or(*LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
+// });
+// pub static MAX_NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
+//     env::var("MAX_NURSERY_BLOCKS")
+//         .map(|x| x.parse().unwrap())
+//         .ok()
+// });
+// pub static INITIAL_NURSERY_BLOCKS: Lazy<usize> =
+//     Lazy::new(|| NURSERY_BLOCKS.unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()));
+// pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
+//     Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
 pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> = Lazy::new(|| {
     env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").unwrap_or_else(|_| "1".to_string()) != "0"
 });
@@ -121,6 +123,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     );
     dump_feature!("lock_free_blocks", *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE);
     dump_feature!("nursery_blocks", *NURSERY_BLOCKS);
+    dump_feature!("nursery_ratio", *NURSERY_RATIO);
     dump_feature!(
         "low_concurrent_worker_priority",
         *LOWER_CONCURRENT_GC_THREAD_PRIORITY

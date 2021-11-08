@@ -52,6 +52,7 @@ pub struct Immix<VM: VMBinding> {
     previous_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
     last_gc_was_defrag: AtomicBool,
+    nursery_blocks: usize,
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -104,9 +105,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // RC nursery full
         if crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
-            && self.immix_space.block_allocation.nursery_blocks()
-                >= crate::args::NURSERY_BLOCKS
-                    .unwrap_or_else(|| crate::args::ADAPTIVE_NURSERY_BLOCKS.load(Ordering::Relaxed))
+            && self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
         {
             return true;
         }
@@ -157,6 +156,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
                 me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
+        }
+        if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
+            let total_blocks = heap_size >> Block::LOG_BYTES;
+            let nursery_blocks = total_blocks / (nursery_ratio + 1);
+            self.nursery_blocks = nursery_blocks;
         }
     }
 
@@ -307,9 +311,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             }
         }
         let pause = self.current_pause.load(Ordering::SeqCst).unwrap();
-        if pause == Pause::RefCount || pause == Pause::InitialMark {
-            self.resize_nursery();
-        }
+        // if pause == Pause::RefCount || pause == Pause::InitialMark {
+        //     self.resize_nursery();
+        // }
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
         unsafe {
@@ -369,6 +373,7 @@ impl<VM: VMBinding> Immix<VM> {
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
+            nursery_blocks: *crate::args::NURSERY_BLOCKS.as_ref().unwrap(),
         };
 
         {
@@ -592,46 +597,46 @@ impl<VM: VMBinding> Immix<VM> {
         &self.common.los
     }
 
-    fn resize_nursery(&self) {
-        // Don't resize if nursery is fixed.
-        if crate::args::NURSERY_BLOCKS.is_some() {
-            return;
-        }
-        // Resize based on throughput goal
-        let min_nursery = *crate::args::MIN_NURSERY_BLOCKS;
-        let max_nursery = crate::args::MAX_NURSERY_BLOCKS.unwrap_or_else(|| {
-            usize::max(
-                min_nursery,
-                (self.get_total_pages() >> Block::LOG_PAGES) / 3,
-            )
-        });
-        let pause_time = crate::GC_START_TIME
-            .load(Ordering::SeqCst)
-            .elapsed()
-            .unwrap()
-            .as_micros() as f64
-            / 1000f64;
-        static PREV_AVG_PAUSE: Atomic<f64> = Atomic::new(0f64);
-        let prev_avg_pause = PREV_AVG_PAUSE.load(Ordering::Relaxed);
-        let avg_pause = if prev_avg_pause == 0f64 {
-            pause_time
-        } else {
-            (prev_avg_pause + pause_time) / 2f64
-        };
-        PREV_AVG_PAUSE.store(avg_pause, Ordering::Relaxed);
-        let scale = avg_pause / 5f64;
-        let _ = crate::args::ADAPTIVE_NURSERY_BLOCKS.fetch_update(
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |x| Some((x as f64 * (1f64 / scale)) as _),
-        );
-        let mut n = crate::args::ADAPTIVE_NURSERY_BLOCKS.load(Ordering::SeqCst);
-        if n < min_nursery {
-            n = min_nursery;
-        }
-        if n > max_nursery {
-            n = max_nursery;
-        }
-        crate::args::ADAPTIVE_NURSERY_BLOCKS.store(n, Ordering::SeqCst);
-    }
+    // fn resize_nursery(&self) {
+    //     // Don't resize if nursery is fixed.
+    //     if crate::args::NURSERY_BLOCKS.is_some() {
+    //         return;
+    //     }
+    //     // Resize based on throughput goal
+    //     let min_nursery = *crate::args::MIN_NURSERY_BLOCKS;
+    //     let max_nursery = crate::args::MAX_NURSERY_BLOCKS.unwrap_or_else(|| {
+    //         usize::max(
+    //             min_nursery,
+    //             (self.get_total_pages() >> Block::LOG_PAGES) / 3,
+    //         )
+    //     });
+    //     let pause_time = crate::GC_START_TIME
+    //         .load(Ordering::SeqCst)
+    //         .elapsed()
+    //         .unwrap()
+    //         .as_micros() as f64
+    //         / 1000f64;
+    //     static PREV_AVG_PAUSE: Atomic<f64> = Atomic::new(0f64);
+    //     let prev_avg_pause = PREV_AVG_PAUSE.load(Ordering::Relaxed);
+    //     let avg_pause = if prev_avg_pause == 0f64 {
+    //         pause_time
+    //     } else {
+    //         (prev_avg_pause + pause_time) / 2f64
+    //     };
+    //     PREV_AVG_PAUSE.store(avg_pause, Ordering::Relaxed);
+    //     let scale = avg_pause / 5f64;
+    //     let _ = crate::args::ADAPTIVE_NURSERY_BLOCKS.fetch_update(
+    //         Ordering::SeqCst,
+    //         Ordering::SeqCst,
+    //         |x| Some((x as f64 * (1f64 / scale)) as _),
+    //     );
+    //     let mut n = crate::args::ADAPTIVE_NURSERY_BLOCKS.load(Ordering::SeqCst);
+    //     if n < min_nursery {
+    //         n = min_nursery;
+    //     }
+    //     if n > max_nursery {
+    //         n = max_nursery;
+    //     }
+    //     crate::args::ADAPTIVE_NURSERY_BLOCKS.store(n, Ordering::SeqCst);
+    // }
 }
