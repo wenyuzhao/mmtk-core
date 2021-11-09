@@ -305,10 +305,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 new_packets |= !bucket.is_drained();
             }
         }
-        if buckets_updated {
-            // Notify the workers for new work
-            self.worker_monitor.1.notify_all();
-        }
         buckets_updated && new_packets
     }
 
@@ -425,8 +421,18 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         !self.in_gc_pause.load(Ordering::SeqCst)
     }
 
-    #[inline]
-    fn pop_scheduable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
+    #[inline(always)]
+    fn all_activated_buckets_are_empty(&self) -> bool {
+        for bucket in self.work_buckets.values() {
+            if bucket.is_activated() && !bucket.is_drained() {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[inline(always)]
+    fn pop_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
         let mut retry = false;
         match worker.local_work_bucket.poll_no_batch() {
             Steal::Success(w) => return Steal::Success(w),
@@ -436,7 +442,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if self.in_concurrent() && !worker.is_concurrent_worker() {
             return Steal::Empty;
         }
-        for (_, work_bucket) in self.work_buckets.iter() {
+        for work_bucket in self.work_buckets.values() {
             match work_bucket.poll(&worker.local_work_buffer) {
                 Steal::Success(w) => return Steal::Success(w),
                 Steal::Retry => retry = true,
@@ -461,9 +467,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     #[inline]
-    fn pop_scheduable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
+    fn pop_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
         loop {
-            match self.pop_scheduable_work_once(worker) {
+            match self.pop_schedulable_work_once(worker) {
                 Steal::Success(w) => {
                     return Some(w);
                 }
@@ -477,10 +483,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
-    /// Get a scheduable work. Called by workers
+    /// Get a schedulable work. Called by workers
     #[inline]
     pub fn poll(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
-        let work = if let Some(work) = self.pop_scheduable_work(worker) {
+        let work = if let Some(work) = self.pop_schedulable_work(worker) {
             work
         } else {
             self.poll_slow(worker)
@@ -495,7 +501,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         loop {
             debug_assert!(!worker.is_parked());
             if !self.in_concurrent() || worker.is_concurrent_worker() {
-                if let Some(work) = self.pop_scheduable_work(worker) {
+                if let Some(work) = self.pop_schedulable_work(worker) {
                     return work;
                 }
             }
@@ -504,7 +510,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if all_parked {
                 if self.update_buckets() {
                     self.worker_group().dec_parked_workers();
-                    continue;
+                    // We guarantee that we can at least fetch one packet.
+                    let work = self.pop_schedulable_work(worker).unwrap();
+                    // Optimize for the case that a newly opened bucket only has one packet.
+                    if !self.all_activated_buckets_are_empty() {
+                        // Have more jobs in this buckets. Notify other workers.
+                        self.worker_monitor.1.notify_all();
+                    }
+                    return work;
                 }
                 worker.sender.send(CoordinatorMessage::Finish).unwrap();
             }
