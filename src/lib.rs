@@ -112,25 +112,54 @@ static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct LazySweepingJobsCounter {
-    decs_counter: Arc<AtomicUsize>,
+    counter: Arc<AtomicUsize>,
+    decs_counter: Option<Arc<AtomicUsize>>,
 }
 impl LazySweepingJobsCounter {
     #[inline(always)]
+    pub fn new() -> Self {
+        unsafe {
+            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            Self {
+                counter: counter.clone(),
+                decs_counter: None,
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn new_decs() -> Self {
         unsafe {
+            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
             let decs_counter = LAZY_SWEEPING_JOBS.curr_decs_counter.as_ref().unwrap();
             decs_counter.fetch_add(1, Ordering::SeqCst);
             Self {
-                decs_counter: decs_counter.clone(),
+                counter: counter.clone(),
+                decs_counter: Some(decs_counter.clone()),
             }
         }
     }
 
     #[inline(always)]
     pub fn clone_with_decs(&self) -> Self {
-        self.decs_counter.fetch_add(1, Ordering::SeqCst);
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        if let Some(c) = self.decs_counter.as_ref() {
+            c.fetch_add(1, Ordering::SeqCst);
+        }
         Self {
+            counter: self.counter.clone(),
             decs_counter: self.decs_counter.clone(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn clone(&self) -> Self {
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        Self {
+            counter: self.counter.clone(),
+            decs_counter: None,
         }
     }
 
@@ -138,7 +167,7 @@ impl LazySweepingJobsCounter {
     pub fn end_of_decs(&self) {
         unsafe {
             let f = LAZY_SWEEPING_JOBS.end_of_decs.as_ref().unwrap();
-            f()
+            f(self.clone())
         }
     }
 }
@@ -146,21 +175,28 @@ impl LazySweepingJobsCounter {
 impl Drop for LazySweepingJobsCounter {
     #[inline(always)]
     fn drop(&mut self) {
-        if self.decs_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.end_of_decs();
+        if let Some(c) = self.decs_counter.as_ref() {
+            if c.fetch_sub(1, Ordering::SeqCst) == 1 {
+                self.end_of_decs();
+            }
         }
+        self.counter.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 pub struct LazySweepingJobs {
+    prev_counter: Option<Arc<AtomicUsize>>,
+    curr_counter: Option<Arc<AtomicUsize>>,
     prev_decs_counter: Option<Arc<AtomicUsize>>,
     curr_decs_counter: Option<Arc<AtomicUsize>>,
-    pub end_of_decs: Option<Box<dyn Fn()>>,
+    pub end_of_decs: Option<Box<dyn Fn(LazySweepingJobsCounter)>>,
 }
 
 impl LazySweepingJobs {
     const fn new() -> Self {
         Self {
+            prev_counter: None,
+            curr_counter: None,
             prev_decs_counter: None,
             curr_decs_counter: None,
             end_of_decs: None,
@@ -170,6 +206,8 @@ impl LazySweepingJobs {
     pub fn init(&mut self) {}
 
     pub fn swap(&mut self) {
+        self.prev_counter = self.curr_counter.take();
+        self.curr_counter = Some(Arc::new(AtomicUsize::new(0)));
         self.prev_decs_counter = self.curr_decs_counter.take();
         self.curr_decs_counter = Some(Arc::new(AtomicUsize::new(0)));
     }

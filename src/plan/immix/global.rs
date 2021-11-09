@@ -154,8 +154,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.init();
             crate::LAZY_SWEEPING_JOBS.swap();
             let me = &*(self as *const Self);
-            crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move || {
-                me.immix_space.schedule_rc_block_sweeping_tasks();
+            crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
+                me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {

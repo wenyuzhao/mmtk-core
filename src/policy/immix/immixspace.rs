@@ -839,7 +839,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn schedule_rc_block_sweeping_tasks(&self) {
+    pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
         while let Some(x) = self.last_mutator_recycled_blocks.pop() {
             x.set_state(BlockState::Marked);
         }
@@ -861,10 +861,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let packets = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs::new(blocks))
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
+                box SweepBlocksAfterDecs::new(blocks, counter.clone())
+            })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(RCReleaseMatureLOS);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+            .add(RCReleaseMatureLOS::new(counter.clone()));
     }
 }
 

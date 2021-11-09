@@ -794,11 +794,15 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 
 pub struct SweepBlocksAfterDecs {
     blocks: Vec<Block>,
+    _counter: LazySweepingJobsCounter,
 }
 
 impl SweepBlocksAfterDecs {
-    pub fn new(blocks: Vec<Block>) -> Self {
-        Self { blocks }
+    pub fn new(blocks: Vec<Block>, counter: LazySweepingJobsCounter) -> Self {
+        Self {
+            blocks,
+            _counter: counter,
+        }
     }
 }
 
