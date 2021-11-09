@@ -157,14 +157,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
                 me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
-            // let me = &mut *(self as *const Self as *mut Self);
-            if super::REF_COUNT && crate::args::LAZY_DECREMENTS {
-                crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
-                    me.base().control_collector_context.scheduler().work_buckets
-                        [WorkBucketStage::Initial]
-                        .add(Prepare::<Self, ImmixCopyContext<VM>>::new(me));
-                });
-            }
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
             let total_blocks = heap_size >> Block::LOG_BYTES;
@@ -476,13 +468,8 @@ impl<VM: VMBinding> Immix<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
-        if !super::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        } else if !crate::args::LAZY_DECREMENTS {
-            scheduler.work_buckets[WorkBucketStage::Initial]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        }
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         // Release global/collectors/mutators
         if super::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
@@ -504,13 +491,8 @@ impl<VM: VMBinding> Immix<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
-        if !super::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        } else if !crate::args::LAZY_DECREMENTS {
-            scheduler.work_buckets[WorkBucketStage::Initial]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        }
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
@@ -530,13 +512,8 @@ impl<VM: VMBinding> Immix<VM> {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<CMImmixCollectRootEdges<VM>>::new())
         };
-        if !super::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        } else if !crate::args::LAZY_DECREMENTS {
-            scheduler.work_buckets[WorkBucketStage::Initial]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        }
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
@@ -547,13 +524,8 @@ impl<VM: VMBinding> Immix<VM> {
             Self::process_prev_roots(scheduler);
         }
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
-        if !super::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        } else if !crate::args::LAZY_DECREMENTS {
-            scheduler.work_buckets[WorkBucketStage::Initial]
-                .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        }
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         if super::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
