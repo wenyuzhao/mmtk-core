@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     /// A priority queue
-    pub queue: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    pub queue: Injector<Box<dyn GCWork<VM>>>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,
@@ -20,17 +20,18 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn new(active: bool, monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
         Self {
             active: AtomicBool::new(active),
-            queue: spin::RwLock::new(Injector::new()),
+            queue: Injector::new(),
             monitor,
             can_open: None,
             group: None,
         }
     }
-    pub fn swap_queue(
+    pub unsafe fn swap_queue(
         &self,
         mut queue: Injector<Box<dyn GCWork<VM>>>,
     ) -> Injector<Box<dyn GCWork<VM>>> {
-        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut self.queue.write(), &mut queue);
+        let me = &mut *(self as *const _ as *mut Self);
+        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut me.queue, &mut queue);
         queue
     }
     pub fn set_group(&mut self, group: Arc<WorkerGroup<VM>>) {
@@ -75,7 +76,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Test if the bucket is drained
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.queue.read().is_empty()
+        self.queue.is_empty()
     }
     #[inline(always)]
     pub fn is_drained(&self) -> bool {
@@ -83,16 +84,13 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     /// Disable the bucket
     pub fn deactivate(&self) {
-        debug_assert!(
-            self.queue.read().is_empty(),
-            "Bucket not drained before close"
-        );
+        debug_assert!(self.queue.is_empty(), "Bucket not drained before close");
         self.active.store(false, Ordering::SeqCst);
     }
     /// Add a work packet to this bucket, with a given priority
     #[inline(always)]
     pub fn add_with_priority(&self, _priority: usize, work: Box<dyn GCWork<VM>>) {
-        self.queue.read().push(work);
+        self.queue.push(work);
         if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
             self.notify_one_worker();
         }
@@ -106,7 +104,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     #[inline(always)]
     pub fn bulk_add_with_priority(&self, _priority: usize, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         for w in work_vec {
-            self.queue.read().push(w)
+            self.queue.push(w)
         }
         if self.is_activated() {
             self.notify_all_workers();
@@ -122,22 +120,20 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Get a work packet (with the greatest priority) from this bucket
     #[inline(always)]
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
-        if !self.active.load(Ordering::SeqCst) {
+        if !self.active.load(Ordering::SeqCst) || self.queue.is_empty() {
             return Steal::Empty;
         }
-        let queue = self.queue.read();
-        queue.steal_batch_and_pop(worker)
+        self.queue.steal_batch_and_pop(worker)
     }
     #[inline(always)]
     pub fn poll_no_batch(&self) -> Steal<Box<dyn GCWork<VM>>> {
         if !self.active.load(Ordering::SeqCst) {
             return Steal::Empty;
         }
-        let queue = self.queue.read();
-        if queue.is_empty() {
+        if self.queue.is_empty() {
             return Steal::Empty;
         }
-        queue.steal()
+        self.queue.steal()
     }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(box pred);

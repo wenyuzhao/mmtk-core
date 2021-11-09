@@ -47,7 +47,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
-    postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    postponed_concurrent_work: Injector<Box<dyn GCWork<VM>>>,
     pub pause_concurrent_work_packets_during_gc: AtomicBool,
     in_gc_pause: AtomicBool,
 }
@@ -81,7 +81,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             startup: Mutex::new(None),
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
-            postponed_concurrent_work: spin::RwLock::new(Injector::new()),
+            postponed_concurrent_work: Injector::new(),
             pause_concurrent_work_packets_during_gc: Default::default(),
             in_gc_pause: AtomicBool::new(false),
         })
@@ -89,20 +89,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     #[inline]
     pub fn pause_concurrent_work_packets_during_gc(&self) {
-        let concurrent_queue = self.work_buckets[WorkBucketStage::Unconstrained]
-            .queue
-            .read();
-        let postponed_concurrent_work = self.postponed_concurrent_work.write();
+        let concurrent_queue = &self.work_buckets[WorkBucketStage::Unconstrained].queue;
         let mut postponed = 0usize;
         let mut no_postpone = vec![];
         loop {
-            if postponed_concurrent_work.is_empty() {
+            if self.postponed_concurrent_work.is_empty() {
                 break;
             }
             match concurrent_queue.steal() {
                 Steal::Success(w) => {
                     if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
-                        postponed_concurrent_work.push(w);
+                        self.postponed_concurrent_work.push(w);
                         postponed += 1;
                     } else {
                         no_postpone.push(w)
@@ -123,15 +120,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn process_lazy_decrement_packets(&self) {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
-        let postponed_concurrent_work = self.postponed_concurrent_work.write();
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
         // Buggy
         loop {
-            if postponed_concurrent_work.is_empty() {
+            if self.postponed_concurrent_work.is_empty() {
                 break;
             }
-            match postponed_concurrent_work.steal() {
+            match self.postponed_concurrent_work.steal() {
                 Steal::Success(w) => {
                     if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
                         no_postpone.push(w)
@@ -144,7 +140,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         for w in cm_packets {
-            postponed_concurrent_work.push(w)
+            self.postponed_concurrent_work.push(w)
         }
         self.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(no_postpone);
     }
@@ -152,13 +148,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        self.postponed_concurrent_work.read().push(box w)
+        self.postponed_concurrent_work.push(box w)
     }
 
     #[inline]
     pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
-        let queue = self.postponed_concurrent_work.read();
-        ws.into_iter().for_each(|w| queue.push(w));
+        ws.into_iter()
+            .for_each(|w| self.postponed_concurrent_work.push(w));
     }
 
     #[inline]
@@ -359,13 +355,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     fn schedule_concurrent_packets(&self) {
         let mut unconstrained_bucket_refilled = false;
-        if !self.postponed_concurrent_work.read().is_empty() {
+        if !self.postponed_concurrent_work.is_empty() {
             let mut queue = Injector::new();
-            std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(
-                &mut self.postponed_concurrent_work.write(),
+            type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
+            std::mem::swap::<Q<VM>>(
+                unsafe { &mut *(&self.postponed_concurrent_work as *const Q<VM> as *mut Q<VM>) },
                 &mut queue,
             );
-            let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
+            let old_queue =
+                unsafe { self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue) };
             debug_assert!(old_queue.is_empty());
             unconstrained_bucket_refilled = true;
         }
