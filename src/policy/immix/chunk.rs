@@ -271,9 +271,16 @@ impl ChunkMap {
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| {
+        let mut x = self.generate_tasks(|chunk| {
             box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new_decs())
-        })
+        });
+        if x.is_empty() {
+            x.push(box SweepDeadCyclesChunk::new(
+                Chunk::ZERO,
+                LazySweepingJobsCounter::new_decs(),
+            ))
+        }
+        x
     }
 }
 
@@ -439,15 +446,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         self.worker = worker;
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let immix_space = &immix.immix_space;
-        for block in self.chunk.committed_blocks() {
-            if block.is_defrag_source() {
-                continue;
-            } else {
-                let state = block.get_state();
-                if state == BlockState::Nursery || state == BlockState::Reusing {
+        if self.chunk != Chunk::ZERO {
+            for block in self.chunk.committed_blocks() {
+                if block.is_defrag_source() {
                     continue;
+                } else {
+                    let state = block.get_state();
+                    if state == BlockState::Nursery || state == BlockState::Reusing {
+                        continue;
+                    }
+                    self.process_block(block, immix_space)
                 }
-                self.process_block(block, immix_space)
             }
         }
         while let Some(block) = immix_space.last_defrag_blocks.pop() {
