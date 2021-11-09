@@ -43,7 +43,7 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor: Mutex<FinalizableProcessor>,
     pub(crate) options: Arc<UnsafeOptionsWrapper>,
-    pub(crate) scheduler: Arc<GCWorkScheduler<VM>>,
+    pub scheduler: Arc<GCWorkScheduler<VM>>,
     #[cfg(feature = "sanity")]
     pub(crate) sanity_checker: Mutex<SanityChecker>,
     inside_harness: AtomicBool,

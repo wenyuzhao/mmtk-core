@@ -64,6 +64,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         Arc::new(Self {
             work_buckets: enum_map! {
                 WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone()),
+                WorkBucketStage::Initial => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone()),
                 WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone()),
@@ -200,7 +201,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         {
             // Unconstrained is always open. Prepare will be opened at the beginning of a GC.
             // This vec will grow for each stage we call with open_next()
-            let mut open_stages: Vec<WorkBucketStage> = vec![WorkBucketStage::Unconstrained];
+            let first_stw_stage = self
+                .work_buckets
+                .iter()
+                .skip(1)
+                .next()
+                .map(|(id, _)| id)
+                .unwrap();
+            let mut open_stages: Vec<WorkBucketStage> = vec![first_stw_stage];
             // The rest will open after the previous stage is done.
             let mut open_next = |s: WorkBucketStage| {
                 let cur_stages = open_stages.clone();
@@ -208,24 +216,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     let should_open =
                         self.are_buckets_drained(&cur_stages) && self.worker_group().all_parked();
                     // Additional check before the `RefClosure` bucket opens.
-                    if self.in_gc_pause.load(Ordering::Relaxed)
-                        && should_open
-                        && s == WorkBucketStage::RefClosure
-                    {
-                        if let Some(closure_end) = self.closure_end.lock().unwrap().as_ref() {
-                            if closure_end() {
-                                // Don't open `RefClosure` if `closure_end` added more works to `Closure`.
-                                return false;
-                            }
-                        }
-                    }
+                    // if should_open && s == WorkBucketStage::RefClosure {
+                    //     if let Some(closure_end) = self.closure_end.lock().unwrap().as_ref() {
+                    //         if closure_end() {
+                    //             // Don't open `RefClosure` if `closure_end` added more works to `Closure`.
+                    //             return false;
+                    //         }
+                    //     }
+                    // }
                     should_open
                 });
                 open_stages.push(s);
             };
 
             for (id, _) in self.work_buckets.iter() {
-                if id != WorkBucketStage::Unconstrained {
+                if id != WorkBucketStage::Unconstrained && id != first_stw_stage {
                     open_next(id);
                 }
             }
@@ -271,17 +276,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let x = bucket.update();
             if crate::args::LOG_STAGES && x {
                 unsafe {
-                    let since_gc = crate::GC_START_TIME
-                        .load(Ordering::SeqCst)
-                        .elapsed()
-                        .unwrap()
-                        .as_nanos();
-                    let since_prev_stage = LAST_ACTIVATE_TIME
-                        .map(|x| x.elapsed().unwrap().as_nanos())
-                        .unwrap_or(since_gc);
+                    let since_prev_stage =
+                        LAST_ACTIVATE_TIME.unwrap().elapsed().unwrap().as_nanos();
                     println!("Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
                         id, since_prev_stage,
-                        crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),since_gc
+                        crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                        crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
                     );
                     LAST_ACTIVATE_TIME = Some(SystemTime::now())
                 }
@@ -562,6 +562,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
         mmtk.plan.base().control_collector_context.clear_request();
+        let first_stw_bucket = self.work_buckets.values().skip(1).next().unwrap();
+        debug_assert!(!first_stw_bucket.is_activated());
+        first_stw_bucket.activate();
         let _guard = self.worker_monitor.0.lock().unwrap();
         self.worker_monitor.1.notify_all();
     }

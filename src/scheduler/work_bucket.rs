@@ -93,7 +93,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     #[inline(always)]
     pub fn add_with_priority(&self, _priority: usize, work: Box<dyn GCWork<VM>>) {
         self.queue.read().push(work);
-        if self.is_activated() {
+        if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
             self.notify_one_worker();
         }
     }
@@ -157,6 +157,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
 pub enum WorkBucketStage {
     Unconstrained,
+    Initial,
     Prepare,
     Closure,
     RefClosure,
@@ -168,7 +169,7 @@ pub enum WorkBucketStage {
 // Alias
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
-    pub const RCProcessIncs: Self = Self::Prepare;
+    pub const RCProcessIncs: Self = Self::Initial;
     #[cfg(feature = "ix_delayed_nursery_evacuation")]
     pub const RCEvacuateNursery: Self = Self::RefClosure;
     #[cfg(not(feature = "ix_delayed_nursery_evacuation"))]
