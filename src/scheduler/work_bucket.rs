@@ -121,23 +121,23 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
     /// Get a work packet (with the greatest priority) from this bucket
     #[inline(always)]
-    pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> (Steal<Box<dyn GCWork<VM>>>, bool) {
+    pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
         if !self.active.load(Ordering::SeqCst) {
-            return (Steal::Empty, false);
+            return Steal::Empty;
         }
         let queue = self.queue.read();
-        (queue.steal_batch_and_pop(worker), queue.is_empty())
+        queue.steal_batch_and_pop(worker)
     }
     #[inline(always)]
-    pub fn poll_no_batch(&self) -> (Steal<Box<dyn GCWork<VM>>>, bool) {
+    pub fn poll_no_batch(&self) -> Steal<Box<dyn GCWork<VM>>> {
         if !self.active.load(Ordering::SeqCst) {
-            return (Steal::Empty, false);
+            return Steal::Empty;
         }
         let queue = self.queue.read();
         if queue.is_empty() {
-            return (Steal::Empty, false);
+            return Steal::Empty;
         }
-        (queue.steal(), queue.is_empty())
+        queue.steal()
     }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(box pred);

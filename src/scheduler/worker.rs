@@ -6,7 +6,7 @@ use crate::util::opaque_pointer::*;
 use crate::vm::{Collection, VMBinding};
 use crossbeam_deque::{Stealer, Worker};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Weak};
 
@@ -165,6 +165,7 @@ impl<VM: VMBinding> GCWorker<VM> {
 pub struct WorkerGroup<VM: VMBinding> {
     pub workers: Vec<GCWorker<VM>>,
     pub stealers: Vec<(usize, Stealer<Box<dyn GCWork<VM>>>)>,
+    parked_workers: AtomicUsize,
 }
 
 impl<VM: VMBinding> WorkerGroup<VM> {
@@ -180,17 +181,35 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             .iter()
             .map(|w| (w.ordinal, w.local_work_buffer.stealer()))
             .collect();
-        Arc::new(Self { workers, stealers })
+        Arc::new(Self {
+            workers,
+            stealers,
+            parked_workers: Default::default(),
+        })
     }
 
+    #[inline(always)]
     pub fn worker_count(&self) -> usize {
         self.workers.len()
     }
 
-    pub fn parked_workers(&self) -> usize {
-        self.workers.iter().filter(|w| w.is_parked()).count()
+    #[inline(always)]
+    pub fn inc_parked_workers(&self) -> bool {
+        let old = self.parked_workers.fetch_add(1, Ordering::SeqCst);
+        old + 1 == self.worker_count()
     }
 
+    #[inline(always)]
+    pub fn dec_parked_workers(&self) {
+        self.parked_workers.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub fn parked_workers(&self) -> usize {
+        self.parked_workers.load(Ordering::SeqCst)
+    }
+
+    #[inline(always)]
     pub fn all_parked(&self) -> bool {
         self.parked_workers() == self.worker_count()
     }
