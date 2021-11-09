@@ -60,7 +60,7 @@ pub static NURSERY_RATIO: Lazy<Option<usize>> =
 // pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
 //     Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
 pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> = Lazy::new(|| {
-    env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").unwrap_or_else(|_| "1".to_string()) != "0"
+    env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").unwrap_or_else(|_| "0".to_string()) != "0"
 });
 pub static CONCURRENT_GC_THREADS_RATIO: Lazy<usize> = Lazy::new(|| {
     env::var("CONCURRENT_GC_THREADS_RATIO")
