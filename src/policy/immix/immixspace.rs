@@ -349,12 +349,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare_rc(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            assert!(self.last_defrag_blocks.is_empty());
+            debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
         }
         // Mutator reused blocks cannot be released until reaching a RC pause.
         // Remaing the block state as "reusing" and reset them here.
-        assert!(self.last_mutator_recycled_blocks.is_empty());
+        debug_assert!(self.last_mutator_recycled_blocks.is_empty());
         std::mem::swap(
             &mut self.last_mutator_recycled_blocks,
             &mut self.mutator_recycled_blocks,
