@@ -551,7 +551,8 @@ pub trait ProcessEdgesWork:
             // Executing these work packets now can remarkably reduce the global synchronization time.
             self.worker().do_work(work_packet);
         } else {
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure].add(work_packet);
+            self.worker()
+                .add_work(WorkBucketStage::Closure, work_packet);
         }
     }
 
@@ -763,6 +764,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         unsafe { &mut *self.worker }
     }
 
+    #[inline]
     fn forward(&mut self, o: ObjectReference, immix_space: &ImmixSpace<VM>) -> ObjectReference {
         let copy_context = unsafe { self.worker().local::<ImmixCopyContext<VM>>() };
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
@@ -807,6 +809,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
+    #[inline]
     fn forward_edge(&mut self, e: Address, root: bool, immix: &Immix<VM>) {
         if !root {
             e.unlog::<VM>();

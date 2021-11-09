@@ -868,6 +868,7 @@ pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     worker: *mut GCWorker<Edges::VM>,
     mature_evac_remset: Vec<ObjectReference>,
     mmtk: *const MMTK<Edges::VM>,
+    check_mature_evac_remset: bool,
 }
 
 unsafe impl<E: ProcessEdgesWork> Send for ScanObjectsAndMarkLines<E> {}
@@ -892,6 +893,14 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             worker: ptr::null_mut(),
             mature_evac_remset: vec![],
             mmtk: ptr::null_mut(),
+            check_mature_evac_remset: crate::args::REF_COUNT
+                && crate::args::RC_MATURE_EVACUATION
+                && immix
+                    .map(|ix| {
+                        let pause = ix.current_pause();
+                        pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
+                    })
+                    .unwrap_or(false),
         }
     }
 
@@ -901,30 +910,28 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
 
     #[inline(always)]
     fn process_node(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = crate::args::REF_COUNT
-            && crate::args::RC_MATURE_EVACUATION
-            && self
-                .immix
-                .map(|ix| {
-                    let pause = ix.current_pause();
-                    pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
-                })
-                .unwrap_or(false);
+        let check_mature_evac_remset = self.check_mature_evac_remset;
         let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<E::VM>::iterate(o, |e| {
-            self.edges.push(e);
             if check_mature_evac_remset && !should_add_to_mature_evac_remset {
                 let immix = unsafe { self.immix.unwrap_unchecked() };
                 if !immix.in_defrag(o) && immix.in_defrag(unsafe { e.load() }) {
                     should_add_to_mature_evac_remset = true;
                 }
             }
-            if self.edges.len() >= E::CAPACITY {
-                self.flush();
+            let t = unsafe { e.load::<ObjectReference>() };
+            if !t.is_null() {
+                self.edges.push(e);
             }
         });
+        if self.edges.len() >= E::CAPACITY {
+            self.flush();
+        }
         if should_add_to_mature_evac_remset {
             self.mature_evac_remset.push(o);
+            if self.mature_evac_remset.len() >= E::CAPACITY {
+                self.flush();
+            }
         }
     }
 

@@ -21,7 +21,7 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
                 .stat
                 .measure_work(std::any::TypeId::of::<Self>(), type_name::<Self>(), mmtk);
         if crate::args::LOG_WORK_PACKETS {
-            println!("> {}", type_name::<Self>());
+            println!("{} > {}", worker.ordinal, type_name::<Self>());
         }
         self.do_work(worker, mmtk);
         #[cfg(feature = "work_packet_timer")]

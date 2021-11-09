@@ -338,6 +338,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.test_mark_bit(object, self.mark_state)
     }
 
+    #[inline(always)]
     fn test_and_mark(&self, object: ObjectReference, value: usize) -> bool {
         loop {
             let mask = if self.in_nursery_gc {
