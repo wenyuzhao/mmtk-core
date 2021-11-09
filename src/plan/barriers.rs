@@ -412,7 +412,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             // Dec buffer
             let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
-            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs());
+            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new());
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone(w);
             } else {

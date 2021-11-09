@@ -393,7 +393,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
+            let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(work_packets);
                 self.scheduler().postpone(sweep_los);
