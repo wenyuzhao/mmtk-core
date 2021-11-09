@@ -957,6 +957,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
 ///
 /// * `chunk_start` - The starting address of the chunk whose metadata is being zeroed.
 ///
+#[inline(always)]
 pub fn bzero_metadata(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
     #[cfg(feature = "extreme_assertions")]
     let _lock = sanity::SANITY_LOCK.lock().unwrap();
@@ -1015,6 +1016,24 @@ pub fn bzero_metadata(metadata_spec: &SideMetadataSpec, start: Address, size: us
                 next_data_chunk += BYTES_IN_CHUNK;
             }
         }
+    }
+}
+
+#[inline(always)]
+pub fn bzero_metadata_nt(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
+    let meta_start = address_to_meta_address(metadata_spec, start);
+    memory::zero_nt(
+        meta_start,
+        address_to_meta_address(metadata_spec, start + size) - meta_start,
+    );
+}
+
+#[inline(always)]
+pub fn bzero_x(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
+    if crate::args::ENABLE_NON_TEMPORAL_MEMSET {
+        bzero_metadata(metadata_spec, start, size)
+    } else {
+        bzero_metadata_nt(metadata_spec, start, size)
     }
 }
 

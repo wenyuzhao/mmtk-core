@@ -16,6 +16,45 @@ pub fn zero(start: Address, len: usize) {
     unsafe { std::ptr::write_bytes::<u8>(start.to_mut_ptr(), 0, len) }
 }
 
+#[inline(always)]
+fn memset_nt_impl<T: Copy>(start: *mut T, len: usize, zero: T) {
+    for _ in 0..len {
+        unsafe {
+            let ptr = start.add(len);
+            std::intrinsics::nontemporal_store::<T>(ptr, zero);
+        }
+    }
+}
+
+#[inline(always)]
+pub fn zero_nt(start: Address, bytes: usize) {
+    match bytes {
+        _ if bytes & (16 - 1) == 0 && start.is_aligned_to(16) => {
+            write_nt::<u128>(start.to_mut_ptr(), bytes >> 4, 0)
+        }
+        _ if bytes & (8 - 1) == 0 && start.is_aligned_to(8) => {
+            write_nt::<u64>(start.to_mut_ptr(), bytes >> 3, 0)
+        }
+        _ if bytes & (4 - 1) == 0 && start.is_aligned_to(4) => {
+            write_nt::<u32>(start.to_mut_ptr(), bytes >> 2, 0)
+        }
+        _ if bytes & (2 - 1) == 0 && start.is_aligned_to(2) => {
+            write_nt::<u16>(start.to_mut_ptr(), bytes >> 1, 0)
+        }
+        _ => write_nt::<u8>(start.to_mut_ptr(), bytes, 0),
+    }
+}
+
+#[inline(always)]
+pub fn write_nt<T: Copy>(ptr: *mut T, count: usize, v: T) {
+    for i in 0..count {
+        unsafe {
+            let ptr = ptr.add(i);
+            std::intrinsics::nontemporal_store::<T>(ptr, v);
+        }
+    }
+}
+
 /// Demand-zero mmap:
 /// This function mmaps the memory and guarantees to zero all mapped memory.
 /// This function WILL overwrite existing memory mapping. The user of this function

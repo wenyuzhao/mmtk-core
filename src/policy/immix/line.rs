@@ -136,7 +136,11 @@ impl Line {
         );
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << LOG_META_BYTES_PER_LINE;
-        crate::util::memory::zero(meta_start, meta_bytes)
+        if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
+            crate::util::memory::zero_nt(meta_start, meta_bytes);
+        } else {
+            crate::util::memory::zero(meta_start, meta_bytes)
+        }
     }
 
     #[inline(always)]
@@ -152,8 +156,12 @@ impl Line {
         );
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << LOG_META_BYTES_PER_LINE;
-        unsafe {
-            std::ptr::write_bytes::<u8>(meta_start.to_mut_ptr(), 0xffu8, meta_bytes);
+        if crate::args::ENABLE_NON_TEMPORAL_MEMSET {
+            crate::util::memory::write_nt::<u8>(meta_start.to_mut_ptr(), meta_bytes, 0xffu8);
+        } else {
+            unsafe {
+                std::ptr::write_bytes::<u8>(meta_start.to_mut_ptr(), 0xffu8, meta_bytes);
+            }
         }
     }
 

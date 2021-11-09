@@ -6,6 +6,8 @@ use crate::{
     BarrierSelector,
 };
 
+pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
+
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
 pub const REF_COUNT: bool = cfg!(feature = "ix_ref_count");
@@ -136,6 +138,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
+    dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
 
     println!("----------------------------------------------------");
 }

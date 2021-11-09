@@ -289,9 +289,19 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 (o.to_address() + o.get_size::<VM>()).align_up(64),
             )
             .to_mut_ptr::<u8>();
-            unsafe {
-                let count = limit.offset_from(start) as usize;
-                std::ptr::write_bytes(start, 0xffu8, count);
+            let bytes = unsafe { limit.offset_from(start) as usize };
+            if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
+                let bytes = (bytes + 127usize) & !127usize;
+                debug_assert_eq!(bytes & (128 - 1), 0);
+                crate::util::memory::write_nt(
+                    start as *mut u128,
+                    bytes >> 16,
+                    0xffffffff_ffffffff_ffffffff_ffffffffu128,
+                );
+            } else {
+                unsafe {
+                    std::ptr::write_bytes(start, 0xffu8, bytes);
+                }
             }
         }
         let x = in_place_promotion && !los;

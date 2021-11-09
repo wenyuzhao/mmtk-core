@@ -4,7 +4,6 @@ use super::immixspace::ImmixSpace;
 use super::line::Line;
 use crate::plan::immix::Immix;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
-use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{self};
 use crate::util::ObjectReference;
 use crate::LazySweepingJobsCounter;
@@ -296,9 +295,11 @@ impl PrepareChunk {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-            side_metadata::bzero_metadata(&side, chunk.start(), Chunk::BYTES);
-        }
+        side_metadata::bzero_x(
+            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+            chunk.start(),
+            Chunk::BYTES,
+        );
     }
 }
 

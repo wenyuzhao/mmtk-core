@@ -306,17 +306,17 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_mark_table(&self) {
-        bzero_metadata(&Self::MARK_TABLE, self.start(), Block::BYTES);
+        side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
-        bzero_metadata(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
+        side_metadata::bzero_x(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_striddle_table<VM: VMBinding>(&self) {
-        bzero_metadata(
+        side_metadata::bzero_x(
             &crate::util::rc::RC_STRADDLE_LINES,
             self.start(),
             Block::BYTES,
@@ -358,7 +358,7 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        bzero_metadata(
+        side_metadata::bzero_x(
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             self.start(),
             Block::BYTES,
@@ -382,8 +382,18 @@ impl Block {
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {
-            let count = limit.offset_from(start) as usize;
-            std::ptr::write_bytes(start, 0xffu8, count);
+            let bytes = limit.offset_from(start) as usize;
+            if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
+                // Buggy
+                debug_assert_eq!(bytes & (128 - 1), 0);
+                crate::util::memory::write_nt(
+                    start as *mut u128,
+                    bytes >> 16,
+                    0xffffffff_ffffffff_ffffffff_ffffffffu128,
+                );
+            } else {
+                std::ptr::write_bytes(start, 0xffu8, bytes);
+            }
         }
     }
 
