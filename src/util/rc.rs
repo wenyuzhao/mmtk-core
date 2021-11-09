@@ -709,7 +709,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::<VM>::new(new_decs, self.counter.clone()),
+                ProcessDecs::<VM>::new(new_decs, self.counter.clone_with_decs()),
             );
         }
     }

@@ -272,12 +272,12 @@ impl ChunkMap {
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
         let mut x = self.generate_tasks(|chunk| {
-            box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new())
+            box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new_decs())
         });
         if x.is_empty() {
             x.push(box SweepDeadCyclesChunk::new(
                 Chunk::ZERO,
-                LazySweepingJobsCounter::new(),
+                LazySweepingJobsCounter::new_decs(),
             ))
         }
         x

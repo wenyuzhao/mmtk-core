@@ -538,7 +538,7 @@ impl<VM: VMBinding> Immix<VM> {
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new());
+            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs());
             work_packets.push(box w);
         }
         if crate::args::LAZY_DECREMENTS {
