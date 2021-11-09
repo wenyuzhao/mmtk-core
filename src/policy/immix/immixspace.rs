@@ -59,12 +59,11 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub block_allocation: BlockAllocation<VM>,
     possibly_dead_mature_blocks: SegQueue<Block>,
     initial_mark_pause: bool,
-    pub pending_release: SegQueue<Block>,
     pub last_mutator_recycled_blocks: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    pub last_defrag_blocks: SegQueue<Block>,
-    defrag_blocks: SegQueue<Block>,
+    last_defrag_blocks: Vec<Block>,
+    defrag_blocks: Vec<Block>,
     num_defrag_blocks: AtomicUsize,
     defrag_chunk_cursor: AtomicUsize,
 }
@@ -213,7 +212,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             block_allocation: BlockAllocation::new(),
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
-            pending_release: Default::default(),
             last_mutator_recycled_blocks: Default::default(),
             mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
@@ -261,13 +259,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn select_mature_evacuation_candidates(&self) {
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         let defrag_blocks = 1024;
         let mut count = 0;
         let chunks = self.chunk_map.all_chunks();
         let num_chunks = Chunk::steps_between(&chunks.start, &chunks.end).unwrap();
-        let search_defrag_blocks =
+        let mut search_defrag_blocks =
             |chunks: Range<Chunk>, chunk_cursor: &mut usize, limit: usize, count: &mut usize| {
                 'out: for c in chunks.skip(*chunk_cursor).filter(|c| c.is_committed()) {
                     for b in c.committed_blocks().filter(|c| {
@@ -275,7 +274,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     }) {
                         // println!(" - defrag {:?} {:?}", b, b.get_state());
                         b.set_as_defrag_source(true);
-                        self.defrag_blocks.push(b);
+                        me.defrag_blocks.push(b);
                         *count += 1;
                         if *count >= defrag_blocks {
                             break 'out;
@@ -384,23 +383,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         }
-        while let Some(x) = self.pending_release.pop() {
-            self.release_block(x, false);
-        }
     }
 
-    pub fn schedule_mature_evacuation(&self, pause: Pause) {
+    pub fn schedule_mature_evacuation(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
-            let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
+            let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
-                self.scheduler().postpone_all(work_packets);
+                self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
-                    .bulk_add(work_packets);
+                    .bulk_add(dead_cycle_sweep_packets);
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
+            }
+            while let Some(block) = self.last_defrag_blocks.pop() {
+                block.set_as_defrag_source(false);
+                block.clear_rc_table::<VM>();
+                block.clear_striddle_table::<VM>();
+                self.add_to_possibly_dead_mature_blocks(block);
             }
         }
     }
@@ -996,7 +998,8 @@ pub struct MatureEvacuation;
 impl<VM: VMBinding> GCWork<VM> for MatureEvacuation {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        immix
+        let immix_mut = unsafe { &mut *(immix as *const _ as *mut Immix<VM>) };
+        immix_mut
             .immix_space
             .schedule_mature_evacuation(immix.current_pause().unwrap())
     }

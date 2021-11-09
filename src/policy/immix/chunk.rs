@@ -459,9 +459,5 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 }
             }
         }
-        while let Some(block) = immix_space.last_defrag_blocks.pop() {
-            self.process_defrag_block(block, immix_space)
-        }
-        // self.flush();
     }
 }
