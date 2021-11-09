@@ -93,7 +93,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     #[inline(always)]
     pub fn add_with_priority(&self, _priority: usize, work: Box<dyn GCWork<VM>>) {
         self.queue.read().push(work);
-        if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
+        if self.is_activated() {
             self.notify_one_worker();
         }
     }
