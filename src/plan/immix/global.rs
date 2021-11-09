@@ -8,7 +8,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::MatureEvacuation;
+use crate::policy::immix::MatureSweeping;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -464,8 +464,8 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         // Release global/collectors/mutators
-        if super::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
-            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureEvacuation);
+        if super::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
@@ -519,8 +519,8 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        if super::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
-            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureEvacuation);
+        if super::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));

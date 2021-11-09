@@ -385,7 +385,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn schedule_mature_evacuation(&mut self, pause: Pause) {
+    pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
@@ -993,14 +993,14 @@ impl<E: ProcessEdgesWork> Drop for ScanObjectsAndMarkLines<E> {
     }
 }
 
-pub struct MatureEvacuation;
+pub struct MatureSweeping;
 
-impl<VM: VMBinding> GCWork<VM> for MatureEvacuation {
+impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let immix_mut = unsafe { &mut *(immix as *const _ as *mut Immix<VM>) };
         immix_mut
             .immix_space
-            .schedule_mature_evacuation(immix.current_pause().unwrap())
+            .schedule_mature_sweeping(immix.current_pause().unwrap())
     }
 }
