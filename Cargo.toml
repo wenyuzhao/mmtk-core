@@ -43,7 +43,7 @@ rand = "0.7.3"
 
 [features]
 # default = ["sanity"]
-default = ["perf_counter"]
+default = ["perf_counter", "work_packet_timer"]
 # default = []
 
 satb_timer = []
