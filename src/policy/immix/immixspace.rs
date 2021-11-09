@@ -63,6 +63,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub last_mutator_recycled_blocks: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
+    pub last_defrag_blocks: SegQueue<Block>,
+    defrag_blocks: SegQueue<Block>,
     num_defrag_blocks: AtomicUsize,
     defrag_chunk_cursor: AtomicUsize,
 }
@@ -217,6 +219,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mature_evac_remsets: Default::default(),
             num_defrag_blocks: AtomicUsize::new(0),
             defrag_chunk_cursor: AtomicUsize::new(0),
+            defrag_blocks: Default::default(),
+            last_defrag_blocks: Default::default(),
         }
     }
 
@@ -271,6 +275,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     }) {
                         // println!(" - defrag {:?} {:?}", b, b.get_state());
                         b.set_as_defrag_source(true);
+                        self.defrag_blocks.push(b);
                         *count += 1;
                         if *count >= defrag_blocks {
                             break 'out;
@@ -309,15 +314,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
-        // Mutator reused blocks cannot be released until reaching a RC pause.
-        // Remaing the block state as "reusing" and reset them here.
-        // Wait until the concurrent sweep job is done.
-        crate::LazySweepingJobs::wait_for_completion();
-        debug_assert!(self.last_mutator_recycled_blocks.is_empty());
-        std::mem::swap(
-            &mut self.last_mutator_recycled_blocks,
-            &mut self.mutator_recycled_blocks,
-        );
         let num_workers = self.scheduler().worker_group().worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
@@ -353,6 +349,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
+        assert!(self.last_defrag_blocks.is_empty());
+        std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
+        // Mutator reused blocks cannot be released until reaching a RC pause.
+        // Remaing the block state as "reusing" and reset them here.
+        assert!(self.last_mutator_recycled_blocks.is_empty());
+        std::mem::swap(
+            &mut self.last_mutator_recycled_blocks,
+            &mut self.mutator_recycled_blocks,
+        );
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
@@ -377,7 +382,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         }
+        while let Some(x) = self.pending_release.pop() {
+            self.release_block(x, false);
+        }
+    }
+
+    pub fn schedule_mature_evacuation(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+            let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let work_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
@@ -387,9 +399,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
                     .bulk_add(work_packets);
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
-            }
-            while let Some(x) = self.pending_release.pop() {
-                self.release_block(x, false);
             }
         }
     }
@@ -980,5 +989,16 @@ impl<E: ProcessEdgesWork> Drop for ScanObjectsAndMarkLines<E> {
         if self.concurrent {
             crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+}
+
+pub struct MatureEvacuation;
+
+impl<VM: VMBinding> GCWork<VM> for MatureEvacuation {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        immix
+            .immix_space
+            .schedule_mature_evacuation(immix.current_pause().unwrap())
     }
 }

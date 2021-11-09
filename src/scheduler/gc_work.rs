@@ -818,6 +818,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if o.is_null() {
             return;
         }
+        debug_assert_ne!(!rc::count(o), 0);
         let ix_object = immix.immix_space.in_space(o);
         if ix_object && object_forwarding::is_forwarded::<VM>(o) {
             unsafe {

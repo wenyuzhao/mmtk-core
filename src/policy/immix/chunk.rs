@@ -441,7 +441,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         let immix_space = &immix.immix_space;
         for block in self.chunk.committed_blocks() {
             if block.is_defrag_source() {
-                self.process_defrag_block(block, immix_space)
+                continue;
             } else {
                 let state = block.get_state();
                 if state == BlockState::Nursery || state == BlockState::Reusing {
@@ -449,6 +449,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 }
                 self.process_block(block, immix_space)
             }
+        }
+        while let Some(block) = immix_space.last_defrag_blocks.pop() {
+            self.process_defrag_block(block, immix_space)
         }
         // self.flush();
     }

@@ -8,6 +8,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::MatureEvacuation;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -283,13 +284,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             me.immix_space
                 .rc_eager_prepare(self.current_pause().unwrap());
         }
-        if self.current_pause().unwrap() == Pause::RefCount {
-            self.base()
-                .control_collector_context
-                .scheduler()
-                .work_buckets[WorkBucketStage::Closure]
-                .activate();
-        }
         if self.current_pause().unwrap() == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
@@ -470,13 +464,11 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         // Release global/collectors/mutators
-        if super::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease]
-                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
-        } else {
-            scheduler.work_buckets[WorkBucketStage::Release]
-                .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        if super::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureEvacuation);
         }
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
