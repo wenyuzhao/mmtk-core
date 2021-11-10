@@ -660,7 +660,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         mut object: ObjectReference,
-        pause: Pause,
+        _pause: Pause,
     ) -> ObjectReference {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
@@ -678,7 +678,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
         copy_context: &mut impl CopyContext,
-        pause: Pause,
+        _pause: Pause,
     ) -> ObjectReference {
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
