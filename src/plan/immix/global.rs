@@ -15,7 +15,7 @@ use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
-use crate::util::cm::{CMImmixCollectRootEdges, FinalMarkProcessEdgesWithMatureEvac};
+use crate::util::cm::CMImmixCollectRootEdges;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -530,12 +530,14 @@ impl<VM: VMBinding> Immix<VM> {
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
 
-    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        type E<VM> = FinalMarkProcessEdgesWithMatureEvac<VM>;
+    fn schedule_concurrent_marking_final_pause_impl<E: ProcessEdgesWork<VM = VM>>(
+        &'static self,
+        scheduler: &GCWorkScheduler<VM>,
+    ) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         if super::REF_COUNT {
@@ -543,6 +545,16 @@ impl<VM: VMBinding> Immix<VM> {
         }
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+    }
+
+    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if super::REF_COUNT {
+            self.schedule_concurrent_marking_final_pause_impl::<RCImmixCollectRootEdges<VM>>(
+                scheduler,
+            )
+        } else {
+            self.schedule_concurrent_marking_final_pause_impl::<ImmixProcessEdges<VM, {TraceKind::Fast}>>(scheduler)
+        }
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {

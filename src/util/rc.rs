@@ -3,6 +3,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
+use crate::util::cm::FinalMarkProcessEdgesWithMatureEvac;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
@@ -625,6 +626,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         // Process main buffer
+        let root_edges = if self.kind == EdgeKind::Root && self.current_pause == Pause::FinalMark {
+            self.incs.clone()
+        } else {
+            vec![]
+        };
         let mut incs = vec![];
         std::mem::swap(&mut incs, &mut self.incs);
         let roots = self.process_incs(self.kind, AddressBuffer::Owned(incs), copy_context);
@@ -634,8 +640,15 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .scheduler()
                     .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
-            unsafe {
-                crate::plan::immix::CURR_ROOTS.push(roots);
+            if self.current_pause == Pause::FinalMark {
+                worker.add_work(
+                    WorkBucketStage::Closure,
+                    FinalMarkProcessEdgesWithMatureEvac::<VM>::new(root_edges, true, mmtk),
+                )
+            } else {
+                unsafe {
+                    crate::plan::immix::CURR_ROOTS.push(roots);
+                }
             }
         }
         // Process recursively generated buffer

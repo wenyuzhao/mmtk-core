@@ -2,7 +2,6 @@ use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
-use crate::util::rc::ProcessIncs;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -319,8 +318,12 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
         if crate::args::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
-            let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
+            for x in &mut roots {
+                unsafe { *x = x.load::<Address>() }
+            }
+            unsafe {
+                crate::plan::immix::CURR_ROOTS.push(std::mem::transmute(roots));
+            }
         }
         self.flush();
     }
