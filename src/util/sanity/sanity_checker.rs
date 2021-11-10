@@ -275,10 +275,11 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             );
             assert!(
                 !object_forwarding::is_forwarded::<VM>(object),
-                "{:?} -> {:?} is forwarded, {:?}",
+                "{:?} -> {:?} is forwarded, {:?} {:?}",
                 slot,
                 object,
-                Block::containing::<VM>(object)
+                Block::containing::<VM>(object),
+                object_forwarding::read_forwarding_pointer::<VM>(object),
             );
             // Object is not "marked"
             sanity_checker.refs.insert(object); // "Mark" it

@@ -1,5 +1,8 @@
 use super::{Address, ObjectReference};
+use crate::plan::immix::Pause;
 use crate::policy::space::Space;
+use crate::scheduler::gc_work::ScanObjects;
+use crate::util::rc::ProcessIncs;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -242,5 +245,91 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
             let mut w = E::new(edges, false, mmtk);
             GCWork::do_work(&mut w, worker, mmtk);
         }
+    }
+}
+
+pub struct FinalMarkProcessEdgesWithMatureEvac<VM: VMBinding> {
+    plan: &'static Immix<VM>,
+    base: ProcessEdgesBase<Self>,
+}
+
+impl<VM: VMBinding> FinalMarkProcessEdgesWithMatureEvac<VM> {
+    const fn immix(&self) -> &'static Immix<VM> {
+        self.plan
+    }
+}
+
+impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM> {
+    type VM = VM;
+    const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
+
+    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
+        Self { plan, base }
+    }
+
+    #[cold]
+    fn flush(&mut self) {
+        if !self.nodes.is_empty() {
+            debug_assert_ne!(self.immix().current_pause(), Some(Pause::InitialMark));
+            let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false);
+            self.new_scan_work(scan_objects_work);
+        }
+    }
+
+    /// Trace  and evacuate objects.
+    #[inline(always)]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if object.is_null() {
+            return object;
+        }
+        let x = if self.immix().immix_space.in_space(object) {
+            if !crate::args::RC_MATURE_EVACUATION {
+                self.immix().immix_space.fast_trace_object(self, object)
+            } else {
+                self.immix().immix_space.trace_object(
+                    self,
+                    object,
+                    crate::plan::immix::ALLOC_IMMIX,
+                    unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                )
+            }
+        } else {
+            self.immix()
+                .common
+                .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
+        };
+        x
+    }
+
+    #[inline]
+    fn process_edges(&mut self) {
+        debug_assert_eq!(self.plan.current_pause(), Some(Pause::FinalMark));
+        for i in 0..self.edges.len() {
+            ProcessEdgesWork::process_edge(self, self.edges[i])
+        }
+        if crate::args::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
+            let mut roots = vec![];
+            std::mem::swap(&mut roots, &mut self.edges);
+            let bucket = WorkBucketStage::rc_process_incs_stage();
+            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
+        }
+        self.flush();
+    }
+}
+
+impl<VM: VMBinding> Deref for FinalMarkProcessEdgesWithMatureEvac<VM> {
+    type Target = ProcessEdgesBase<Self>;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<VM: VMBinding> DerefMut for FinalMarkProcessEdgesWithMatureEvac<VM> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
     }
 }

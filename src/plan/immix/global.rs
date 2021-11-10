@@ -15,7 +15,7 @@ use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
-use crate::util::cm::CMImmixCollectRootEdges;
+use crate::util::cm::{CMImmixCollectRootEdges, FinalMarkProcessEdgesWithMatureEvac};
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -235,9 +235,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 && crate::args::RC_MATURE_EVACUATION
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
             {
-                self.immix_space.process_mature_evacuation_remset();
-                self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                    .add(FlushMatureEvacRemsets);
+                self.immix_space
+                    .process_mature_evacuation_remset(pause == Pause::FinalMark);
+                self.immix_space.scheduler().work_buckets
+                    [WorkBucketStage::rc_evacuate_mature(pause == Pause::FinalMark)]
+                .add(FlushMatureEvacRemsets);
             }
             self.immix_space.prepare_rc(pause);
         }
@@ -529,7 +531,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        type E<VM> = ImmixProcessEdges<VM, { TraceKind::Fast }>;
+        type E<VM> = FinalMarkProcessEdgesWithMatureEvac<VM>;
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }

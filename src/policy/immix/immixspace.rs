@@ -14,8 +14,8 @@ use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
-use crate::util::object_forwarding as ForwardingWord;
 use crate::util::rc::SweepBlocksAfterDecs;
+use crate::util::{object_forwarding as ForwardingWord, rc};
 use crate::util::{Address, ObjectReference};
 use crate::{
     plan::TransitiveClosure,
@@ -528,10 +528,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Trace and mark objects without evacuation.
     #[inline(always)]
-    pub fn process_mature_evacuation_remset(&self) {
+    pub fn process_mature_evacuation_remset(&self, final_mark: bool) {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
-        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
+        self.scheduler.work_buckets[WorkBucketStage::rc_evacuate_mature(final_mark)]
+            .bulk_add(remsets);
     }
 
     /// Trace and mark objects without evacuation.
@@ -560,7 +561,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object
         );
         if Block::containing::<VM>(object).is_defrag_source() {
-            self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
+            if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
+                self.trace_farward_rc_mature_object(trace, object, semantics, copy_context)
+            } else {
+                self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
+            }
         } else {
             self.trace_object_without_moving(trace, object)
         }
@@ -632,6 +637,47 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             });
             trace.process_node(new_object);
             new_object
+        }
+    }
+
+    #[allow(clippy::assertions_on_constants)]
+    #[inline(always)]
+    pub fn trace_farward_rc_mature_object(
+        &self,
+        trace: &mut impl TransitiveClosure,
+        object: ObjectReference,
+        _semantics: AllocationSemantics,
+        copy_context: &mut impl CopyContext,
+    ) -> ObjectReference {
+        debug_assert!(!super::BLOCK_ONLY);
+        let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
+        if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
+            ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status)
+        } else {
+            // Evacuate the mature object
+            let new = ForwardingWord::forward_object::<VM, _>(
+                object,
+                AllocationSemantics::Default,
+                copy_context,
+            );
+            // Transfer RC count
+            new.log_start_address::<VM>();
+            if !crate::args::BLOCK_ONLY {
+                if new.get_size::<VM>() > Line::BYTES {
+                    rc::mark_straddle_object::<VM>(new);
+                }
+            }
+            // println!(
+            //     "{:?} -> {:?} {}",
+            //     object,
+            //     new,
+            //     ForwardingWord::is_forwarded::<VM>(new)
+            // );
+            rc::set(new, rc::count(object));
+            self.attempt_mark(new);
+            self.unmark(object);
+            trace.process_node(new);
+            new
         }
     }
 

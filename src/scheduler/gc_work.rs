@@ -572,6 +572,17 @@ pub trait ProcessEdgesWork:
         let object = unsafe { slot.load::<ObjectReference>() };
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
+            // println!(
+            //     "{:?}: {:?} -> {:?} {}",
+            //     slot,
+            //     object.range::<Self::VM>(),
+            //     new_object.range::<Self::VM>(),
+            //     if !new_object.is_null() {
+            //         rc::count(new_object)
+            //     } else {
+            //         0
+            //     }
+            // );
             unsafe { slot.store(new_object) };
         }
     }
@@ -805,7 +816,19 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.next_remset);
             let w = Self::new(remset);
-            self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
+            self.worker().add_work(
+                WorkBucketStage::rc_evacuate_mature(
+                    self.mmtk
+                        .as_ref()
+                        .unwrap()
+                        .plan
+                        .downcast_ref::<Immix<VM>>()
+                        .unwrap()
+                        .current_pause()
+                        == Some(Pause::FinalMark),
+                ),
+                w,
+            );
         }
     }
 
@@ -815,6 +838,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             e.unlog::<VM>();
         }
         let o = unsafe { e.load::<ObjectReference>() };
+        // println!("emo - {:?}: {:?}", e, o.range::<VM>());
         if o.is_null() {
             return;
         }
@@ -833,6 +857,12 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return;
         }
         let new = self.forward(o, &immix.immix_space);
+        // println!(
+        //     "emo {:?}: {:?} -> {:?}",
+        //     e,
+        //     o.range::<VM>(),
+        //     new.range::<VM>()
+        // );
         unsafe {
             e.store(new);
         }
@@ -846,6 +876,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if o.is_null() {
                 continue;
             }
+            // println!("emo ! {:?}", o);
             debug_assert!(o.is_mapped());
             // Skip dead object
             if rc::count(o) == 0 {
@@ -866,6 +897,11 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             }
             if immix.immix_space.in_space(o) {
                 o = o.fix_start_address::<VM>();
+            }
+            if object_forwarding::is_forwarded::<VM>(o) {
+                let o2 = object_forwarding::read_forwarding_pointer::<VM>(o);
+                // println!("emo ! {:?}", o2);
+                o = o2;
             }
             immix.mark(o);
             EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix));

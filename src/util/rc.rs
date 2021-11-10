@@ -240,7 +240,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline]
-    pub fn new_nursery(incs: Vec<Address>) -> Self {
+    fn new_nursery(incs: Vec<Address>) -> Self {
         let mut w = Self::new(incs, false);
         w.kind = EdgeKind::Nursery;
         w
@@ -396,7 +396,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         let b = Block::containing::<VM>(o);
         // Mature object
-        if self::count(o) != 0 {
+        if self::count(o) != 0 || b.get_state() == BlockState::Marked {
             if crate::args::RC_MATURE_EVACUATION
                 && self.should_do_mature_evac()
                 && b.is_defrag_source()
@@ -473,6 +473,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     self.immix().immix_space.attempt_mark(new);
                     self.immix().immix_space.unmark(o);
                     copy_context.add_mature_evac_remset(new);
+                    // if self.current_pause == Pause::FinalMark {
+                    //     println!("im {:?} -> {:?}", o.range::<VM>(), new.range::<VM>());
+                    // }
                     new
                 } else {
                     let new = object_forwarding::forward_object::<VM, _>(
@@ -485,6 +488,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     if mature_defrag {
                         copy_context.add_mature_evac_remset(new);
                     }
+                    // if self.current_pause == Pause::FinalMark {
+                    //     println!(
+                    //         "i {:?} -> {:?} {}",
+                    //         o.range::<VM>(),
+                    //         new.range::<VM>(),
+                    //         mature_defrag
+                    //     );
+                    // }
                     new
                 }
             } else {
