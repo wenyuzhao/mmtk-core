@@ -345,6 +345,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
+        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+            // Update mark_state
+            // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
+            //     self.mark_state = Self::MARKED_STATE;
+            // } else {
+            //     // For header metadata, we use cyclic mark bits.
+            //     unimplemented!("cyclic mark bits is not supported at the moment");
+            // }
+            // Reset block mark and object mark table.
+            let space = unsafe { &mut *(self as *mut Self) };
+            let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
+            self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
+        }
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
@@ -370,9 +383,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
             // Reset block mark and object mark table.
-            let space = unsafe { &mut *(self as *mut Self) };
-            let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
-            self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+            // let space = unsafe { &mut *(self as *mut Self) };
+            // let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
+            // self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
     }
 
