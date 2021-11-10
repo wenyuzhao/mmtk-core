@@ -176,7 +176,7 @@ impl WorkBucketStage {
 
     pub const fn rc_evacuate_mature(final_mark: bool) -> Self {
         if final_mark {
-            WorkBucketStage::RefClosure
+            WorkBucketStage::Closure
         } else {
             WorkBucketStage::RefClosure
         }
