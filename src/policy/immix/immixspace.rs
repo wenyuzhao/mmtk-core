@@ -531,7 +531,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
-        self.scheduler.work_buckets[WorkBucketStage::rc_evacuate_mature()].bulk_add(remsets);
+        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
     }
 
     /// Trace and mark objects without evacuation.
@@ -561,7 +561,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         if Block::containing::<VM>(object).is_defrag_source() {
             if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
-                self.trace_forward_rc_mature_object(trace, object, semantics, copy_context)
+                self.trace_forward_rc_mature_object(trace, object, copy_context)
             } else {
                 self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
             }
@@ -664,10 +664,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
-        _semantics: AllocationSemantics,
         copy_context: &mut impl CopyContext,
     ) -> ObjectReference {
-        debug_assert!(!super::BLOCK_ONLY);
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =

@@ -243,7 +243,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
             {
                 self.immix_space.process_mature_evacuation_remset();
-                self.immix_space.scheduler().work_buckets[WorkBucketStage::rc_evacuate_mature()]
+                self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
                     .add(FlushMatureEvacRemsets);
             }
             self.immix_space.prepare_rc(pause);
@@ -535,14 +535,16 @@ impl<VM: VMBinding> Immix<VM> {
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
     }
 
-    fn schedule_concurrent_marking_final_pause_impl<E: ProcessEdgesWork<VM = VM>>(
-        &'static self,
-        scheduler: &GCWorkScheduler<VM>,
-    ) {
+    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
         }
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
+
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
         if super::REF_COUNT {
@@ -550,16 +552,6 @@ impl<VM: VMBinding> Immix<VM> {
         }
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
-    }
-
-    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if super::REF_COUNT {
-            self.schedule_concurrent_marking_final_pause_impl::<RCImmixCollectRootEdges<VM>>(
-                scheduler,
-            )
-        } else {
-            self.schedule_concurrent_marking_final_pause_impl::<ImmixProcessEdges<VM, {TraceKind::Fast}>>(scheduler)
-        }
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {

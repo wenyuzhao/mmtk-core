@@ -101,9 +101,8 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
-            self.immix.immix_space().scheduler().work_buckets
-                [WorkBucketStage::rc_evacuate_mature()]
-            .add(w);
+            self.immix.immix_space().scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
+                .add(w);
         }
     }
 

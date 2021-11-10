@@ -255,14 +255,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
 }
 
 pub struct FinalMarkProcessEdgesWithMatureEvac<VM: VMBinding> {
-    plan: &'static Immix<VM>,
+    immix: &'static Immix<VM>,
     base: ProcessEdgesBase<Self>,
-}
-
-impl<VM: VMBinding> FinalMarkProcessEdgesWithMatureEvac<VM> {
-    const fn immix(&self) -> &'static Immix<VM> {
-        self.plan
-    }
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM> {
@@ -271,8 +265,8 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
-        let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self { plan, base }
+        let immix = base.plan().downcast_ref::<Immix<VM>>().unwrap();
+        Self { immix, base }
     }
 
     #[cold]
@@ -289,11 +283,11 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
         if object.is_null() {
             return object;
         }
-        let x = if self.immix().immix_space.in_space(object) {
+        if self.immix.immix_space.in_space(object) {
             if !crate::args::RC_MATURE_EVACUATION {
-                self.immix().immix_space.fast_trace_object(self, object)
+                self.immix.immix_space.fast_trace_object(self, object)
             } else {
-                self.immix().immix_space.trace_object(
+                self.immix.immix_space.trace_object(
                     self,
                     object,
                     crate::plan::immix::ALLOC_IMMIX,
@@ -301,28 +295,17 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
                 )
             }
         } else {
-            self.immix()
+            self.immix
                 .common
                 .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
-        };
-        x
+        }
     }
 
     #[inline]
     fn process_edges(&mut self) {
-        debug_assert_eq!(self.plan.current_pause(), Some(Pause::FinalMark));
+        debug_assert_eq!(self.immix.current_pause(), Some(Pause::FinalMark));
         for i in 0..self.edges.len() {
             ProcessEdgesWork::process_edge(self, self.edges[i])
-        }
-        if crate::args::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
-            let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.edges);
-            for x in &mut roots {
-                unsafe { *x = x.load::<Address>() }
-            }
-            unsafe {
-                crate::plan::immix::CURR_ROOTS.push(std::mem::transmute(roots));
-            }
         }
         self.flush();
     }
