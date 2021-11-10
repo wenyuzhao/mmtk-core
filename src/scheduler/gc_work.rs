@@ -747,7 +747,7 @@ unsafe impl<VM: VMBinding> Send for EvacuateMatureObjects<VM> {}
 unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
 
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
-    const CAPACITY: usize = 1024;
+    const CAPACITY: usize = 128;
 
     pub fn new(remset: Vec<ObjectReference>) -> Self {
         debug_assert!(crate::args::REF_COUNT);
@@ -837,6 +837,40 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             e.store(new);
         }
     }
+
+    #[inline]
+    fn evacuate_remset(&mut self, remset: &Vec<ObjectReference>, immix: &Immix<VM>) {
+        for o in remset {
+            let mut o = *o;
+            // Skip NULLs
+            if o.is_null() {
+                continue;
+            }
+            debug_assert!(o.is_mapped());
+            // Skip dead object
+            if rc::count(o) == 0 {
+                continue;
+            }
+            // Skip object in defrag source
+            if immix.immix_space.in_space(o) && Block::containing::<VM>(o).is_defrag_source() {
+                continue;
+            }
+            // Skip objects sits in striddle lines
+            if !crate::args::BLOCK_ONLY && immix.immix_space.in_space(o) {
+                let line = Line::containing::<VM>(o);
+                if rc::count(unsafe { line.start().to_object_reference() }) != 0
+                    && rc::is_straddle_line(line)
+                {
+                    continue;
+                }
+            }
+            if immix.immix_space.in_space(o) {
+                o = o.fix_start_address::<VM>();
+            }
+            immix.mark(o);
+            EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix));
+        }
+    }
 }
 
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
@@ -849,38 +883,14 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             immix.current_pause() == Some(Pause::FinalMark)
                 || immix.current_pause() == Some(Pause::FullTraceFast)
         );
-        let immix_space = &immix.immix_space;
         // Objects
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
-        for mut o in remset {
-            // Skip NULLs
-            if o.is_null() {
-                continue;
-            }
-            debug_assert!(o.is_mapped());
-            // Skip dead object
-            if rc::count(o) == 0 {
-                continue;
-            }
-            // Skip object in defrag source
-            if immix_space.in_space(o) && Block::containing::<VM>(o).is_defrag_source() {
-                continue;
-            }
-            // Skip objects sits in striddle lines
-            if !crate::args::BLOCK_ONLY && immix_space.in_space(o) {
-                let line = Line::containing::<VM>(o);
-                if rc::count(unsafe { line.start().to_object_reference() }) != 0
-                    && rc::is_straddle_line(line)
-                {
-                    continue;
-                }
-            }
-            if immix_space.in_space(o) {
-                o = o.fix_start_address::<VM>();
-            }
-            immix.mark(o);
-            EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix));
+        self.evacuate_remset(&remset, immix);
+        while !self.next_remset.is_empty() {
+            remset.clear();
+            mem::swap(&mut remset, &mut self.next_remset);
+            self.evacuate_remset(&remset, immix);
         }
         self.flush();
     }

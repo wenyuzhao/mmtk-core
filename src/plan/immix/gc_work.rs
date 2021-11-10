@@ -2,7 +2,7 @@ use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
 use crate::policy::space::Space;
-use crate::scheduler::gc_work::*;
+use crate::scheduler::{gc_work::*, GCWork, GCWorker};
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
 use crate::util::object_forwarding;
@@ -20,6 +20,7 @@ use thread_priority::{self, ThreadPriority};
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
     immix: ImmixAllocator<VM>,
+    mature_evac_remset: Vec<ObjectReference>,
 }
 
 impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
@@ -78,6 +79,37 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 &*mmtk.plan,
                 true,
             ),
+            mature_evac_remset: vec![],
+        }
+    }
+
+    pub fn flush_mature_evac_remset(&mut self) {
+        if self.mature_evac_remset.len() > 0 {
+            let mut remset = vec![];
+            std::mem::swap(&mut remset, &mut self.mature_evac_remset);
+            let w = EvacuateMatureObjects::new(remset);
+            self.immix
+                .immix_space()
+                .mature_evac_remsets
+                .lock()
+                .push(box w);
+        }
+    }
+
+    pub fn flush_mature_evac_remset_to_scheduler(&mut self) {
+        if self.mature_evac_remset.len() > 0 {
+            let mut remset = vec![];
+            std::mem::swap(&mut remset, &mut self.mature_evac_remset);
+            let w = EvacuateMatureObjects::new(remset);
+            self.immix.immix_space().scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
+                .add(w);
+        }
+    }
+
+    pub fn add_mature_evac_remset(&mut self, o: ObjectReference) {
+        self.mature_evac_remset.push(o);
+        if self.mature_evac_remset.len() >= 128 {
+            self.flush_mature_evac_remset()
         }
     }
 }
@@ -85,6 +117,25 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
 impl<VM: VMBinding> GCWorkerLocal for ImmixCopyContext<VM> {
     fn init(&mut self, tls: VMWorkerThread) {
         CopyContext::init(self, tls);
+    }
+}
+
+pub struct FlushMatureEvacRemsets;
+
+impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
+    fn do_work(&mut self, worker: &mut crate::scheduler::GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        for w in &worker.scheduler().worker_group().workers {
+            let cc = unsafe {
+                let w = &mut *(w as *const GCWorker<VM> as *mut GCWorker<VM>);
+                w.local::<ImmixCopyContext<VM>>()
+            };
+            cc.flush_mature_evac_remset_to_scheduler();
+        }
+        mmtk.plan
+            .downcast_ref::<Immix<VM>>()
+            .unwrap()
+            .immix_space
+            .process_mature_evacuation_remset();
     }
 }
 

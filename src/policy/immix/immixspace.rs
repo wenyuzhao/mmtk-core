@@ -1,7 +1,7 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, Pause};
+use crate::plan::immix::{Immix, ImmixCopyContext, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::chunk::Chunk;
@@ -254,7 +254,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Get work packet scheduler
-    fn scheduler(&self) -> &GCWorkScheduler<VM> {
+    #[inline(always)]
+    pub fn scheduler(&self) -> &GCWorkScheduler<VM> {
         &self.scheduler
     }
 
@@ -954,9 +955,10 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             self.flush();
         }
         if should_add_to_mature_evac_remset {
-            self.mature_evac_remset.push(o);
-            if self.mature_evac_remset.len() >= E::CAPACITY {
-                self.flush();
+            unsafe {
+                self.worker()
+                    .local::<ImmixCopyContext<E::VM>>()
+                    .add_mature_evac_remset(o)
             }
         }
     }

@@ -122,7 +122,11 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
             }
         });
         if should_add_to_mature_evac_remset {
-            self.mature_evac_remset.push(object);
+            unsafe {
+                self.worker()
+                    .local::<ImmixCopyContext<VM>>()
+                    .add_mature_evac_remset(object)
+            }
         }
     }
 }

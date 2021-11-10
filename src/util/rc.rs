@@ -21,7 +21,7 @@ use crate::{
         object_forwarding, ObjectReference,
     },
     vm::*,
-    AllocationSemantics, CopyContext, MMTK,
+    AllocationSemantics, MMTK,
 };
 use atomic::Ordering;
 use crossbeam_queue::ArrayQueue;
@@ -332,9 +332,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.flush(true)
         }
         if should_add_to_mature_evac_remset {
-            self.mature_evac_remset.push(o);
-            if self.mature_evac_remset.len() >= Self::CAPACITY {
-                self.flush(true);
+            unsafe {
+                self.worker()
+                    .local::<ImmixCopyContext<VM>>()
+                    .add_mature_evac_remset(o)
             }
         }
     }
@@ -444,7 +445,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     fn process_inc_and_evacuate(
         &mut self,
         o: ObjectReference,
-        copy_context: &mut impl CopyContext<VM = VM>,
+        copy_context: &mut ImmixCopyContext<VM>,
     ) -> ObjectReference {
         crate::stat(|s| {
             s.inc_objects += 1;
@@ -493,9 +494,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     self.immix().immix_space.attempt_mark(new);
                     self.immix().immix_space.unmark(o);
                     self.mature_evac_remset.push(new);
-                    if self.mature_evac_remset.len() >= Self::CAPACITY {
-                        self.flush(true);
-                    }
+                    copy_context.add_mature_evac_remset(new);
                     new
                 } else {
                     let new = object_forwarding::forward_object::<VM, _>(
@@ -506,10 +505,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     let _ = self::inc(new);
                     self.promote(new, true, false);
                     if mature_defrag {
-                        self.mature_evac_remset.push(new);
-                        if self.mature_evac_remset.len() >= Self::CAPACITY {
-                            self.flush(true);
-                        }
+                        copy_context.add_mature_evac_remset(new);
                     }
                     new
                 }
@@ -543,7 +539,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         &mut self,
         kind: EdgeKind,
         e: Address,
-        cc: &mut impl CopyContext<VM = VM>,
+        cc: &mut ImmixCopyContext<VM>,
     ) -> Option<ObjectReference> {
         // println!(" - inc e {:?}", e);
         let o = match self.unlog_and_load_rc_object(kind, e) {
@@ -567,7 +563,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         &mut self,
         kind: EdgeKind,
         mut incs: AddressBuffer<'_>,
-        copy_context: &mut impl CopyContext<VM = VM>,
+        copy_context: &mut ImmixCopyContext<VM>,
     ) -> Option<Vec<ObjectReference>> {
         let roots = incs.as_mut_ptr() as *mut ObjectReference;
         let mut num_roots = 0usize;
