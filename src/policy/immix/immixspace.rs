@@ -665,7 +665,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
-        if pause == Pause::FullTraceFast && self.attempt_mark(object) {
+        if self.attempt_mark(object) {
             trace.process_node(object);
         }
         object
@@ -684,7 +684,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =
                 ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
-            if pause == Pause::FullTraceFast && self.attempt_mark(new) {
+            if self.attempt_mark(new) {
                 trace.process_node(new)
             }
             new

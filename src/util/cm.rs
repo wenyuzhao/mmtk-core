@@ -243,7 +243,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
             let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
             if immix.current_pause() == Some(Pause::FinalMark) {
                 let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = FinalMarkProcessEdgesWithMatureEvac::<E::VM>::new(edges, false, mmtk);
+                let mut w = LXRStopTheWorldProcessEdges::<E::VM>::new(edges, false, mmtk);
                 GCWork::do_work(&mut w, worker, mmtk);
             } else {
                 let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
@@ -254,13 +254,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     }
 }
 
-pub struct FinalMarkProcessEdgesWithMatureEvac<VM: VMBinding> {
+pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     immix: &'static Immix<VM>,
     pause: Pause,
     base: ProcessEdgesBase<Self>,
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM> {
+impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
@@ -312,7 +312,7 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
     }
 }
 
-impl<VM: VMBinding> Deref for FinalMarkProcessEdgesWithMatureEvac<VM> {
+impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
     type Target = ProcessEdgesBase<Self>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -320,7 +320,7 @@ impl<VM: VMBinding> Deref for FinalMarkProcessEdgesWithMatureEvac<VM> {
     }
 }
 
-impl<VM: VMBinding> DerefMut for FinalMarkProcessEdgesWithMatureEvac<VM> {
+impl<VM: VMBinding> DerefMut for LXRStopTheWorldProcessEdges<VM> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base

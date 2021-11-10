@@ -3,7 +3,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
-use crate::util::cm::FinalMarkProcessEdgesWithMatureEvac;
+use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
@@ -404,8 +404,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             && b.get_state() == BlockState::Reusing
         {
             if crate::args::RC_MATURE_EVACUATION
-                && b.is_defrag_source()
                 && self.should_do_mature_evac()
+                && b.is_defrag_source()
             {
                 return false;
             }
@@ -631,7 +631,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
             {
                 worker.add_work(
                     WorkBucketStage::Closure,
-                    FinalMarkProcessEdgesWithMatureEvac::<VM>::new(root_edges, true, mmtk),
+                    LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
                 )
             } else {
                 unsafe {
