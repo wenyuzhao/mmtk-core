@@ -256,6 +256,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
 
 pub struct FinalMarkProcessEdgesWithMatureEvac<VM: VMBinding> {
     immix: &'static Immix<VM>,
+    pause: Pause,
     base: ProcessEdgesBase<Self>,
 }
 
@@ -266,7 +267,11 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let immix = base.plan().downcast_ref::<Immix<VM>>().unwrap();
-        Self { immix, base }
+        Self {
+            immix,
+            base,
+            pause: Pause::RefCount,
+        }
     }
 
     #[cold]
@@ -284,16 +289,12 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
             return object;
         }
         if self.immix.immix_space.in_space(object) {
-            if !crate::args::RC_MATURE_EVACUATION {
-                self.immix.immix_space.fast_trace_object(self, object)
-            } else {
-                self.immix.immix_space.trace_object(
-                    self,
-                    object,
-                    crate::plan::immix::ALLOC_IMMIX,
-                    unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
-                )
-            }
+            self.immix.immix_space.rc_trace_object(
+                self,
+                object,
+                unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                self.pause,
+            )
         } else {
             self.immix
                 .common
@@ -303,7 +304,7 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
 
     #[inline]
     fn process_edges(&mut self) {
-        debug_assert_eq!(self.immix.current_pause(), Some(Pause::FinalMark));
+        self.pause = self.immix.current_pause().unwrap();
         for i in 0..self.edges.len() {
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
@@ -313,14 +314,14 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
 
 impl<VM: VMBinding> Deref for FinalMarkProcessEdgesWithMatureEvac<VM> {
     type Target = ProcessEdgesBase<Self>;
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
 impl<VM: VMBinding> DerefMut for FinalMarkProcessEdgesWithMatureEvac<VM> {
-    #[inline]
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }

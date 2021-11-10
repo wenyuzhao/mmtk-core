@@ -727,9 +727,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         immix.mark(o);
-        // if immix.current_pause() == Some(Pause::FullTraceFast) {
-        //     // println!(" - dead {:?}", o);
-        // }
+        // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {

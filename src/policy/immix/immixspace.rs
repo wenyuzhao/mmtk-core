@@ -560,17 +560,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object
         );
         if Block::containing::<VM>(object).is_defrag_source() {
-            if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
-                self.trace_forward_rc_mature_object(trace, object, copy_context)
-            } else {
-                self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
-            }
+            self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
         } else {
-            if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
-                self.trace_mark_rc_mature_object(trace, object)
-            } else {
-                self.trace_object_without_moving(trace, object)
-            }
+            self.trace_object_without_moving(trace, object)
         }
     }
 
@@ -644,15 +636,36 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[inline(always)]
+    pub fn rc_trace_object(
+        &self,
+        trace: &mut impl TransitiveClosure,
+        object: ObjectReference,
+        copy_context: &mut impl CopyContext,
+        pause: Pause,
+    ) -> ObjectReference {
+        debug_assert!(crate::args::REF_COUNT);
+        if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
+            self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
+        } else {
+            if crate::args::RC_MATURE_EVACUATION {
+                self.trace_mark_rc_mature_object(trace, object, pause)
+            } else {
+                self.trace_object_without_moving(trace, object)
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn trace_mark_rc_mature_object(
         &self,
         trace: &mut impl TransitiveClosure,
         mut object: ObjectReference,
+        pause: Pause,
     ) -> ObjectReference {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
-        if self.attempt_mark(object) {
+        if pause == Pause::FullTraceFast && self.attempt_mark(object) {
             trace.process_node(object);
         }
         object
@@ -665,12 +678,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
         copy_context: &mut impl CopyContext,
+        pause: Pause,
     ) -> ObjectReference {
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =
                 ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
-            if self.attempt_mark(new) {
+            if pause == Pause::FullTraceFast && self.attempt_mark(new) {
                 trace.process_node(new)
             }
             new
