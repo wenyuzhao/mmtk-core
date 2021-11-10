@@ -458,7 +458,15 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
     }
 }
 
-pub struct RCReleaseMatureLOS;
+pub struct RCReleaseMatureLOS {
+    _counter: LazySweepingJobsCounter,
+}
+
+impl RCReleaseMatureLOS {
+    pub fn new(counter: LazySweepingJobsCounter) -> Self {
+        Self { _counter: counter }
+    }
+}
 
 impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
     fn do_work(

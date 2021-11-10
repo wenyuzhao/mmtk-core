@@ -725,7 +725,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::<VM>::new(new_decs, self.counter.clone()),
+                ProcessDecs::<VM>::new(new_decs, self.counter.clone_with_decs()),
             );
         }
     }
@@ -820,11 +820,15 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 
 pub struct SweepBlocksAfterDecs {
     blocks: Vec<Block>,
+    _counter: LazySweepingJobsCounter,
 }
 
 impl SweepBlocksAfterDecs {
-    pub fn new(blocks: Vec<Block>) -> Self {
-        Self { blocks }
+    pub fn new(blocks: Vec<Block>, counter: LazySweepingJobsCounter) -> Self {
+        Self {
+            blocks,
+            _counter: counter,
+        }
     }
 }
 

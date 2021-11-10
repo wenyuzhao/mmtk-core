@@ -95,7 +95,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             std::mem::swap(new_queue, &mut old_queue)
         }
         let mut postponed = 0usize;
-        if crate::args::LAZY_DECREMENTS {
+        if crate::args::LAZY_DECREMENTS && false {
             let mut no_postpone = vec![];
             loop {
                 match old_queue.steal() {

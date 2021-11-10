@@ -402,7 +402,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new());
+            let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_desc());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
@@ -852,7 +852,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn schedule_rc_block_sweeping_tasks(&self) {
+    pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
         while let Some(x) = self.last_mutator_recycled_blocks.pop() {
             x.set_state(BlockState::Marked);
         }
@@ -874,10 +874,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let packets = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box SweepBlocksAfterDecs::new(blocks))
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
+                box SweepBlocksAfterDecs::new(blocks, counter.clone())
+            })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(RCReleaseMatureLOS);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+            .add(RCReleaseMatureLOS::new(counter.clone()));
     }
 }
 

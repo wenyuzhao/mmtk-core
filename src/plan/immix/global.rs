@@ -31,7 +31,7 @@ use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
-use crate::{scheduler::*, BarrierSelector, LazySweepingJobsCounter};
+use crate::{scheduler::*, BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -90,6 +90,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     type VM = VM;
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
+        // Don't do a GC until we finished the lazy reclaimation.
+        if !LazySweepingJobs::all_finished() {
+            return false;
+        }
         // Spaces or heap full
         if self.base().collection_required(self, space_full, space) {
             self.next_gc_may_perform_cycle_collection
@@ -114,6 +118,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn concurrent_collection_required(&self) -> bool {
+        // Don't do a GC until we finished the lazy reclaimation.
+        if !LazySweepingJobs::all_finished() {
+            return false;
+        }
         super::CONCURRENT_MARKING
             && !crate::plan::barriers::BARRIER_MEASUREMENT
             && !crate::concurrent_marking_in_progress()
@@ -154,8 +162,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.init();
             crate::LAZY_SWEEPING_JOBS.swap();
             let me = &*(self as *const Self);
-            crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move || {
-                me.immix_space.schedule_rc_block_sweeping_tasks();
+            crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
+                me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -538,7 +546,7 @@ impl<VM: VMBinding> Immix<VM> {
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new());
+            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
             work_packets.push(box w);
         }
         if crate::args::LAZY_DECREMENTS {
