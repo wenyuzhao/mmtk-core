@@ -96,13 +96,13 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
         }
     }
 
-    pub fn flush_mature_evac_remset_to_scheduler(&mut self, final_mark: bool) {
+    pub fn flush_mature_evac_remset_to_scheduler(&mut self) {
         if self.mature_evac_remset.len() > 0 {
             let mut remset = vec![];
             std::mem::swap(&mut remset, &mut self.mature_evac_remset);
             let w = EvacuateMatureObjects::new(remset);
             self.immix.immix_space().scheduler().work_buckets
-                [WorkBucketStage::rc_evacuate_mature(final_mark)]
+                [WorkBucketStage::rc_evacuate_mature()]
             .add(w);
         }
     }
@@ -125,19 +125,18 @@ pub struct FlushMatureEvacRemsets;
 
 impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
     fn do_work(&mut self, worker: &mut crate::scheduler::GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         for w in &worker.scheduler().worker_group().workers {
             let cc = unsafe {
                 let w = &mut *(w as *const GCWorker<VM> as *mut GCWorker<VM>);
                 w.local::<ImmixCopyContext<VM>>()
             };
-            cc.flush_mature_evac_remset_to_scheduler(
-                immix.current_pause().unwrap() == Pause::FinalMark,
-            );
+            cc.flush_mature_evac_remset_to_scheduler();
         }
-        immix
+        mmtk.plan
+            .downcast_ref::<Immix<VM>>()
+            .unwrap()
             .immix_space
-            .process_mature_evacuation_remset(immix.current_pause().unwrap() == Pause::FinalMark);
+            .process_mature_evacuation_remset();
     }
 }
 

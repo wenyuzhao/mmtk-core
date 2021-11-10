@@ -72,7 +72,7 @@ lxr_block_1m = []
 ix_ref_count = ["ix_lock_free_block_allocation"]
 lxr_lazy_decrements = ["ix_ref_count"]
 lxr_nursery_evacuation = ["ix_ref_count"]
-lxr_mature_evacuation = ["ix_ref_count"]
+lxr_mature_evacuation = ["ix_ref_count", "lxr_nursery_evacuation"]
 lxr_concurrent_marking = ["ix_ref_count", "ix_concurrent_marking"]
 lxr_block_only = ["ix_ref_count", "ix_block_only"]
 # LXR Features (unused)

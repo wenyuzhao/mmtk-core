@@ -278,7 +278,6 @@ impl<VM: VMBinding> ProcessEdgesWork for FinalMarkProcessEdgesWithMatureEvac<VM>
     #[cold]
     fn flush(&mut self) {
         if !self.nodes.is_empty() {
-            debug_assert_ne!(self.immix().current_pause(), Some(Pause::InitialMark));
             let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false);
             self.new_scan_work(scan_objects_work);
         }

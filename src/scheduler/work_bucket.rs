@@ -174,12 +174,8 @@ impl WorkBucketStage {
     pub const RCFullHeapRelease: Self = Self::RefForwarding;
     pub const RCProcessDecs: Self = Self::Release;
 
-    pub const fn rc_evacuate_mature(final_mark: bool) -> Self {
-        if final_mark {
-            WorkBucketStage::Closure
-        } else {
-            WorkBucketStage::RefClosure
-        }
+    pub const fn rc_evacuate_mature() -> Self {
+        WorkBucketStage::Closure
     }
 
     pub const fn rc_process_incs_stage() -> Self {

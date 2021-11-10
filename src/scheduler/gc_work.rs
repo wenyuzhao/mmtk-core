@@ -816,19 +816,8 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             let mut remset = vec![];
             mem::swap(&mut remset, &mut self.next_remset);
             let w = Self::new(remset);
-            self.worker().add_work(
-                WorkBucketStage::rc_evacuate_mature(
-                    self.mmtk
-                        .as_ref()
-                        .unwrap()
-                        .plan
-                        .downcast_ref::<Immix<VM>>()
-                        .unwrap()
-                        .current_pause()
-                        == Some(Pause::FinalMark),
-                ),
-                w,
-            );
+            self.worker()
+                .add_work(WorkBucketStage::rc_evacuate_mature(), w);
         }
     }
 

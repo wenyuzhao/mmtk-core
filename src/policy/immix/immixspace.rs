@@ -528,11 +528,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Trace and mark objects without evacuation.
     #[inline(always)]
-    pub fn process_mature_evacuation_remset(&self, final_mark: bool) {
+    pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
-        self.scheduler.work_buckets[WorkBucketStage::rc_evacuate_mature(final_mark)]
-            .bulk_add(remsets);
+        self.scheduler.work_buckets[WorkBucketStage::rc_evacuate_mature()].bulk_add(remsets);
     }
 
     /// Trace and mark objects without evacuation.

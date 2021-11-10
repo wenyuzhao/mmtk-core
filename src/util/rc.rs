@@ -265,11 +265,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.immix().mark2(o, los);
         } else if self.current_pause == Pause::FullTraceFast {
             // Create object scanning packets
-            if copied {
-                if self.immix().mark2(o, los) {
-                    self.scan_objects.push(o)
-                }
-            }
+            // if copied {
+            //     if self.immix().mark2(o, los) {
+            //         self.scan_objects.push(o)
+            //     }
+            // }
         }
         self.scan_nursery_object(o, los, !copied);
     }
@@ -471,8 +471,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     let _ = self::inc(new);
                     object_forwarding::set_forwarding_pointer::<VM>(o, new);
                     self::promote::<VM>(new);
-                    self.immix().immix_space.attempt_mark(new);
-                    self.immix().immix_space.unmark(o);
+                    if self.current_pause == Pause::FinalMark {
+                        self.immix().immix_space.attempt_mark(new);
+                        self.immix().immix_space.unmark(o);
+                    }
                     copy_context.add_mature_evac_remset(new);
                     // if self.current_pause == Pause::FinalMark {
                     //     println!("im {:?} -> {:?}", o.range::<VM>(), new.range::<VM>());
@@ -626,7 +628,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         // Process main buffer
-        let root_edges = if self.kind == EdgeKind::Root && self.current_pause == Pause::FinalMark {
+        let root_edges = if self.kind == EdgeKind::Root
+            && (self.current_pause == Pause::FinalMark
+                || self.current_pause == Pause::FullTraceFast)
+        {
             self.incs.clone()
         } else {
             vec![]
@@ -640,7 +645,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .scheduler()
                     .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
-            if self.current_pause == Pause::FinalMark {
+            if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
+            {
                 worker.add_work(
                     WorkBucketStage::Closure,
                     FinalMarkProcessEdgesWithMatureEvac::<VM>::new(root_edges, true, mmtk),

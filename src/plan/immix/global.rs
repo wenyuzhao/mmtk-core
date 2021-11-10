@@ -187,8 +187,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             println!("[pause] {:?}", pause);
         }
         match pause {
-            Pause::FullTraceFast => self
-                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(scheduler),
+            Pause::FullTraceFast => {
+                if crate::args::REF_COUNT {
+                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>>(scheduler)
+                } else {
+                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(
+                        scheduler,
+                    )
+                }
+            }
             Pause::FullTraceDefrag => self
                 .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(
                     scheduler,
@@ -235,11 +242,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 && crate::args::RC_MATURE_EVACUATION
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
             {
-                self.immix_space
-                    .process_mature_evacuation_remset(pause == Pause::FinalMark);
-                self.immix_space.scheduler().work_buckets
-                    [WorkBucketStage::rc_evacuate_mature(pause == Pause::FinalMark)]
-                .add(FlushMatureEvacRemsets);
+                self.immix_space.process_mature_evacuation_remset();
+                self.immix_space.scheduler().work_buckets[WorkBucketStage::rc_evacuate_mature()]
+                    .add(FlushMatureEvacRemsets);
             }
             self.immix_space.prepare_rc(pause);
         }
