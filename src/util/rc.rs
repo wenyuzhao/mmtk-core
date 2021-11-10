@@ -25,6 +25,7 @@ use crate::{
 };
 use atomic::Ordering;
 use crossbeam_queue::ArrayQueue;
+use std::intrinsics::unlikely;
 use std::iter::Step;
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -200,6 +201,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     immix: *const Immix<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
+    current_pause_should_do_mature_evac: bool,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -236,6 +238,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             immix: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
+            current_pause_should_do_mature_evac: false,
         }
     }
 
@@ -247,7 +250,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn promote(&mut self, o: ObjectReference, copy: bool, los: bool, in_place: bool) {
+    fn promote(&mut self, o: ObjectReference, copied: bool, los: bool) {
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
@@ -264,13 +267,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.immix().mark2(o, los);
         } else if self.current_pause == Pause::FullTraceFast {
             // Create object scanning packets
-            if copy {
+            if copied {
                 if self.immix().mark2(o, los) {
                     self.scan_objects.push(o)
                 }
             }
         }
-        self.scan_nursery_object(o, los, in_place);
+        self.scan_nursery_object(o, los, !copied);
     }
 
     #[inline(always)]
@@ -320,7 +323,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             }
             if !target.is_null()
                 && (!self::rc_stick(target)
-                    || (self.should_do_mature_evacuation() && self.immix().in_defrag(target)))
+                    || (self.should_do_mature_evac() && self.immix().in_defrag(target)))
             {
                 self.new_incs.push(edge);
             }
@@ -396,15 +399,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let r = self::inc(o);
         // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
         if let Ok(0) = r {
-            self.promote(o, false, self.immix().los().in_space(o), true);
+            self.promote(o, false, self.immix().los().in_space(o));
         }
         o
     }
 
     #[inline(always)]
-    fn should_do_mature_evacuation(&self) -> bool {
-        crate::args::RC_MATURE_EVACUATION && self.current_pause == Pause::FullTraceFast
-            || self.current_pause == Pause::FinalMark
+    const fn should_do_mature_evac(&self) -> bool {
+        crate::args::RC_MATURE_EVACUATION && self.current_pause_should_do_mature_evac
     }
 
     #[inline(always)]
@@ -416,8 +418,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         // Mature object
         if self::count(o) != 0 {
             if crate::args::RC_MATURE_EVACUATION
+                && self.should_do_mature_evac()
                 && b.is_defrag_source()
-                && self.should_do_mature_evacuation()
             {
                 return false;
             }
@@ -429,7 +431,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         {
             if crate::args::RC_MATURE_EVACUATION
                 && b.is_defrag_source()
-                && self.should_do_mature_evacuation()
+                && self.should_do_mature_evac()
             {
                 return false;
             }
@@ -453,7 +455,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let los = self.immix().los().in_space(o);
         if self.dont_evacuate(o, los) {
             if let Ok(0) = self::inc(o) {
-                self.promote(o, false, los, true);
+                self.promote(o, false, los);
             }
             return o;
         }
@@ -469,7 +471,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             let _ = self::inc(new);
             new
         } else {
-            let mature_defrag = Block::containing::<VM>(o).is_defrag_source();
+            let mature_defrag =
+                crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(o).is_defrag_source();
             let is_nursery = self::count(o) == 0;
             if is_nursery || mature_defrag {
                 // Evacuate the object
@@ -501,7 +504,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         copy_context,
                     );
                     let _ = self::inc(new);
-                    self.promote(new, true, false, false);
+                    self.promote(new, true, false);
                     if mature_defrag {
                         self.mature_evac_remset.push(new);
                         if self.mature_evac_remset.len() >= Self::CAPACITY {
@@ -631,6 +634,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         self.current_pause = self.immix().current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        self.current_pause_should_do_mature_evac = crate::args::RC_MATURE_EVACUATION
+            && self.current_pause == Pause::FullTraceFast
+            || self.current_pause == Pause::FinalMark;
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         // Process main buffer
@@ -686,7 +692,7 @@ pub struct ProcessDecs<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
 
 impl<VM: VMBinding> ProcessDecs<VM> {
-    const CAPACITY: usize = 512;
+    const CAPACITY: usize = 128;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -724,7 +730,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
     }
 
-    #[inline]
+    #[cold]
     fn process_dead_object(&mut self, o: ObjectReference, immix: &Immix<VM>) {
         crate::stat(|s| {
             s.dead_objects += 1;
@@ -762,6 +768,36 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             immix.los().rc_free(o);
         }
     }
+
+    #[inline]
+    fn process_decs(&mut self, decs: &Vec<ObjectReference>, immix: &Immix<VM>) {
+        for o in decs {
+            if o.is_null() {
+                continue;
+            }
+            let o =
+                if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(*o) {
+                    object_forwarding::read_forwarding_pointer::<VM>(*o)
+                } else {
+                    *o
+                };
+            let mut dead = false;
+            let _ = self::fetch_update(o, |c| {
+                if c == 1 {
+                    if unlikely(!dead) {
+                        dead = true;
+                        self.process_dead_object(o, immix);
+                    }
+                }
+                debug_assert!(c <= MAX_REF_COUNT);
+                if unlikely(c == 0 || c == MAX_REF_COUNT) {
+                    None /* sticky */
+                } else {
+                    Some(c - 1)
+                }
+            });
+        }
+    }
 }
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
@@ -772,31 +808,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut decs = vec![];
         std::mem::swap(&mut decs, &mut self.decs);
-        for o in decs {
-            if o.is_null() {
-                continue;
-            }
-            let o = if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(o)
-            {
-                object_forwarding::read_forwarding_pointer::<VM>(o)
-            } else {
-                o
-            };
-            let mut dead = false;
-            let _ = self::fetch_update(o, |c| {
-                if c == 1 {
-                    if !dead {
-                        dead = true;
-                        self.process_dead_object(o, immix);
-                    }
-                }
-                debug_assert!(c <= MAX_REF_COUNT);
-                if c == 0 || c == MAX_REF_COUNT {
-                    None /* sticky */
-                } else {
-                    Some(c - 1)
-                }
-            });
+        self.process_decs(&decs, immix);
+        while !self.new_decs.is_empty() {
+            decs.clear();
+            std::mem::swap(&mut decs, &mut self.new_decs);
+            self.process_decs(&decs, immix);
         }
         self.flush();
     }
