@@ -8,7 +8,6 @@ use crate::policy::immix::chunk::Chunk;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
-use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
@@ -893,7 +892,6 @@ pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     immix_space: &'static ImmixSpace<Edges::VM>,
     edges: Vec<Address>,
     worker: *mut GCWorker<Edges::VM>,
-    mature_evac_remset: Vec<ObjectReference>,
     mmtk: *const MMTK<Edges::VM>,
     check_mature_evac_remset: bool,
 }
@@ -918,7 +916,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             immix_space,
             edges: vec![],
             worker: ptr::null_mut(),
-            mature_evac_remset: vec![],
             mmtk: ptr::null_mut(),
             check_mature_evac_remset: crate::args::REF_COUNT
                 && crate::args::RC_MATURE_EVACUATION
@@ -970,14 +967,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             self.worker().add_work(
                 WorkBucketStage::Closure,
                 E::new(new_edges, false, unsafe { &*self.mmtk }),
-            );
-        }
-        if !self.mature_evac_remset.is_empty() {
-            let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.mature_evac_remset);
-            self.worker().add_work(
-                WorkBucketStage::RCEvacuateMature,
-                EvacuateMatureObjects::new(remset),
             );
         }
     }

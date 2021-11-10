@@ -1,6 +1,5 @@
 use super::{Address, ObjectReference};
 use crate::policy::space::Space;
-use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -25,7 +24,6 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
     objects: Vec<ObjectReference>,
     next_objects: Vec<ObjectReference>,
     worker: *mut GCWorker<VM>,
-    mature_evac_remset: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
@@ -42,7 +40,6 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             objects,
             next_objects: vec![],
             worker: ptr::null_mut(),
-            mature_evac_remset: vec![],
         }
     }
 
@@ -60,12 +57,6 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             debug_assert!(crate::args::CONCURRENT_MARKING);
             let w = ImmixConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
-        }
-        if !self.mature_evac_remset.is_empty() {
-            let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.plan.immix_space.mature_evac_remsets.lock().push(box w);
         }
     }
 

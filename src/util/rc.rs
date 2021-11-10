@@ -3,7 +3,6 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::ScanObjectsAndMarkLines;
-use crate::scheduler::gc_work::EvacuateMatureObjects;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
@@ -192,7 +191,6 @@ pub struct ProcessIncs<VM: VMBinding> {
     new_incs: Vec<Address>,
     /// Delayed nursery increments
     remset: Vec<Address>,
-    mature_evac_remset: Vec<ObjectReference>,
     scan_objects: Vec<ObjectReference>,
     /// Root edges?
     kind: EdgeKind,
@@ -233,7 +231,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             new_incs: vec![],
             remset: vec![],
             worker: std::ptr::null_mut(),
-            mature_evac_remset: vec![],
             scan_objects: vec![],
             immix: std::ptr::null(),
             current_pause: Pause::RefCount,
@@ -364,24 +361,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 RCEvacuateNursery::new(remset, self.roots),
             );
         }
-        if !self.mature_evac_remset.is_empty() {
-            let mut remset = vec![];
-            mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            if self.concurrent_marking_in_progress {
-                self.immix()
-                    .immix_space
-                    .mature_evac_remsets
-                    .lock()
-                    .push(box w)
-            } else {
-                if self.current_pause == Pause::FinalMark
-                    || self.current_pause == Pause::FullTraceFast
-                {
-                    self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
-                }
-            }
-        }
         if !self.scan_objects.is_empty() {
             let mut scan_objects = vec![];
             mem::swap(&mut scan_objects, &mut self.scan_objects);
@@ -493,7 +472,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     self::promote::<VM>(new);
                     self.immix().immix_space.attempt_mark(new);
                     self.immix().immix_space.unmark(o);
-                    self.mature_evac_remset.push(new);
                     copy_context.add_mature_evac_remset(new);
                     new
                 } else {
