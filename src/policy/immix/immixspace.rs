@@ -561,12 +561,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         if Block::containing::<VM>(object).is_defrag_source() {
             if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
-                self.trace_farward_rc_mature_object(trace, object, semantics, copy_context)
+                self.trace_forward_rc_mature_object(trace, object, semantics, copy_context)
             } else {
                 self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
             }
         } else {
-            self.trace_object_without_moving(trace, object)
+            if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION {
+                self.trace_mark_rc_mature_object(trace, object)
+            } else {
+                self.trace_object_without_moving(trace, object)
+            }
         }
     }
 
@@ -639,9 +643,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    #[inline(always)]
+    pub fn trace_mark_rc_mature_object(
+        &self,
+        trace: &mut impl TransitiveClosure,
+        mut object: ObjectReference,
+    ) -> ObjectReference {
+        if ForwardingWord::is_forwarded::<VM>(object) {
+            object = ForwardingWord::read_forwarding_pointer::<VM>(object);
+        }
+        if self.attempt_mark(object) {
+            trace.process_node(object);
+        }
+        object
+    }
+
     #[allow(clippy::assertions_on_constants)]
     #[inline(always)]
-    pub fn trace_farward_rc_mature_object(
+    pub fn trace_forward_rc_mature_object(
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
@@ -651,7 +670,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!super::BLOCK_ONLY);
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
-            ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status)
+            let new =
+                ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
+            if self.attempt_mark(new) {
+                trace.process_node(new)
+            }
+            new
         } else {
             // Evacuate the mature object
             let new = ForwardingWord::forward_object::<VM, _>(
@@ -666,12 +690,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     rc::mark_straddle_object::<VM>(new);
                 }
             }
-            // println!(
-            //     "{:?} -> {:?} {}",
-            //     object,
-            //     new,
-            //     ForwardingWord::is_forwarded::<VM>(new)
-            // );
             rc::set(new, rc::count(object));
             self.attempt_mark(new);
             self.unmark(object);

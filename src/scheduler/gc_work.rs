@@ -834,9 +834,17 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         debug_assert_ne!(!rc::count(o), 0);
         let ix_object = immix.immix_space.in_space(o);
         if ix_object && object_forwarding::is_forwarded::<VM>(o) {
+            let new = object_forwarding::read_forwarding_pointer::<VM>(o);
+            // immix.mark(o);
             unsafe {
-                e.store(object_forwarding::read_forwarding_pointer::<VM>(o));
+                e.store(new);
             }
+            // println!(
+            //     "emo2 {:?}: {:?} -> {:?}",
+            //     e,
+            //     o.range::<VM>(),
+            //     new.range::<VM>()
+            // );
             return;
         }
         if !ix_object || !Block::containing::<VM>(o).is_defrag_source() {

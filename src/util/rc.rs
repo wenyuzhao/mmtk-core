@@ -474,9 +474,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     if self.current_pause == Pause::FinalMark {
                         self.immix().immix_space.attempt_mark(new);
                         self.immix().immix_space.unmark(o);
+                        copy_context.add_mature_evac_remset(new);
                     }
-                    copy_context.add_mature_evac_remset(new);
-                    // if self.current_pause == Pause::FinalMark {
+                    // if self.current_pause == Pause::FullTraceFast {
                     //     println!("im {:?} -> {:?}", o.range::<VM>(), new.range::<VM>());
                     // }
                     new
@@ -488,15 +488,16 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     );
                     let _ = self::inc(new);
                     self.promote(new, true, false);
-                    if mature_defrag {
+                    if mature_defrag && self.current_pause == Pause::FinalMark {
                         copy_context.add_mature_evac_remset(new);
                     }
-                    // if self.current_pause == Pause::FinalMark {
+                    // if self.current_pause == Pause::FullTraceFast {
                     //     println!(
-                    //         "i {:?} -> {:?} {}",
+                    //         "i {:?} -> {:?} {} {}",
                     //         o.range::<VM>(),
                     //         new.range::<VM>(),
-                    //         mature_defrag
+                    //         mature_defrag,
+                    //         self::count(new)
                     //     );
                     // }
                     new
@@ -533,11 +534,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         e: Address,
         cc: &mut ImmixCopyContext<VM>,
     ) -> Option<ObjectReference> {
-        // println!(" - inc e {:?}", e);
         let o = match self.unlog_and_load_rc_object(kind, e) {
             Some(o) => o,
             _ => return None,
         };
+        // println!(" - inc e {:?} -> {:?}", e, o);
         debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
         let new = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
             self.process_inc(o)
@@ -745,7 +746,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         immix.mark(o);
-        // println!(" - dead {:?}", o);
+        // if immix.current_pause() == Some(Pause::FullTraceFast) {
+        //     // println!(" - dead {:?}", o);
+        // }
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {
