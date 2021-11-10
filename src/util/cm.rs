@@ -241,9 +241,16 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 mmtk,
             );
         } else {
-            let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-            let mut w = E::new(edges, false, mmtk);
-            GCWork::do_work(&mut w, worker, mmtk);
+            let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
+            if immix.current_pause() == Some(Pause::FinalMark) {
+                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+                let mut w = FinalMarkProcessEdgesWithMatureEvac::<E::VM>::new(edges, false, mmtk);
+                GCWork::do_work(&mut w, worker, mmtk);
+            } else {
+                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+                let mut w = E::new(edges, false, mmtk);
+                GCWork::do_work(&mut w, worker, mmtk);
+            }
         }
     }
 }
