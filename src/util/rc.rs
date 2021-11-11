@@ -270,7 +270,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                o.to_address() + 16usize,
+                o.to_address(),
             )
             .to_mut_ptr::<u8>();
             let limit = side_metadata::address_to_meta_address(
@@ -279,12 +279,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             )
             .to_mut_ptr::<u8>();
             let bytes = unsafe { limit.offset_from(start) as usize };
-            if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
-                let bytes = (bytes + 127usize) & !127usize;
-                debug_assert_eq!(bytes & (128 - 1), 0);
+            if crate::args::ENABLE_NON_TEMPORAL_MEMSET {
+                let bytes = (bytes + 15usize) & !15usize;
+                debug_assert_eq!(bytes & 15usize, 0);
                 crate::util::memory::write_nt(
                     start as *mut u128,
-                    bytes >> 16,
+                    bytes >> 4,
                     0xffffffff_ffffffff_ffffffff_ffffffffu128,
                 );
             } else {

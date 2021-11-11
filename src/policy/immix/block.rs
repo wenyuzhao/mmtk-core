@@ -384,11 +384,10 @@ impl Block {
         unsafe {
             let bytes = limit.offset_from(start) as usize;
             if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
-                // Buggy
-                debug_assert_eq!(bytes & (128 - 1), 0);
+                debug_assert_eq!(bytes & ((1 << 4) - 1), 0);
                 crate::util::memory::write_nt(
                     start as *mut u128,
-                    bytes >> 16,
+                    bytes >> 4,
                     0xffffffff_ffffffff_ffffffff_ffffffffu128,
                 );
             } else {
