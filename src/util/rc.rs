@@ -1,8 +1,6 @@
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
-use crate::plan::immix::gc_work::{ImmixProcessEdges, TraceKind};
 use crate::policy::immix::block::BlockState;
-use crate::policy::immix::ScanObjectsAndMarkLines;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::LazySweepingJobsCounter;
 use crate::{
@@ -27,7 +25,6 @@ use atomic::Ordering;
 use crossbeam_queue::ArrayQueue;
 use std::intrinsics::unlikely;
 use std::iter::Step;
-use std::mem;
 use std::ops::{Deref, DerefMut};
 
 pub const LOG_REF_COUNT_BITS: usize = 1;
@@ -192,7 +189,6 @@ pub struct ProcessIncs<VM: VMBinding> {
     new_incs: Vec<Address>,
     /// Delayed nursery increments
     remset: Vec<Address>,
-    scan_objects: Vec<ObjectReference>,
     /// Root edges?
     kind: EdgeKind,
     /// Execution worker
@@ -232,7 +228,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             new_incs: vec![],
             remset: vec![],
             worker: std::ptr::null_mut(),
-            scan_objects: vec![],
             immix: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
@@ -354,17 +349,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 WorkBucketStage::RCEvacuateNursery,
                 RCEvacuateNursery::new(remset, self.roots),
             );
-        }
-        if !self.scan_objects.is_empty() {
-            let mut scan_objects = vec![];
-            mem::swap(&mut scan_objects, &mut self.scan_objects);
-            let w = ScanObjectsAndMarkLines::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
-                scan_objects,
-                false,
-                Some(self.immix()),
-                &self.immix().immix_space,
-            );
-            self.worker().add_work(WorkBucketStage::Closure, w);
         }
     }
 
