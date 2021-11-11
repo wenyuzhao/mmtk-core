@@ -3,13 +3,53 @@ use super::*;
 use crate::vm::VMBinding;
 use crossbeam_deque::{Injector, Steal, Worker};
 use enum_map::Enum;
+use spin::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+
+enum BucketQueue<VM: VMBinding> {
+    LockFree(Injector<Box<dyn GCWork<VM>>>),
+    LwLock(RwLock<Injector<Box<dyn GCWork<VM>>>>),
+}
+
+impl<VM: VMBinding> BucketQueue<VM> {
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::LockFree(x) => x.is_empty(),
+            Self::LwLock(x) => x.read().is_empty(),
+        }
+    }
+    #[inline(always)]
+    fn steal(&self) -> Steal<Box<dyn GCWork<VM>>> {
+        match self {
+            Self::LockFree(x) => x.steal(),
+            Self::LwLock(x) => x.read().steal(),
+        }
+    }
+    #[inline(always)]
+    fn steal_batch_and_pop(
+        &self,
+        dest: &Worker<Box<dyn GCWork<VM>>>,
+    ) -> Steal<Box<dyn GCWork<VM>>> {
+        match self {
+            Self::LockFree(x) => x.steal_batch_and_pop(dest),
+            Self::LwLock(x) => x.read().steal_batch_and_pop(dest),
+        }
+    }
+    #[inline(always)]
+    fn push(&self, w: Box<dyn GCWork<VM>>) {
+        match self {
+            Self::LockFree(x) => x.push(w),
+            Self::LwLock(x) => x.read().push(w),
+        }
+    }
+}
 
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     /// A priority queue
-    pub queue: Injector<Box<dyn GCWork<VM>>>,
+    queue: BucketQueue<VM>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,
@@ -17,22 +57,30 @@ pub struct WorkBucket<VM: VMBinding> {
 
 impl<VM: VMBinding> WorkBucket<VM> {
     pub const DEFAULT_PRIORITY: usize = 1000;
-    pub fn new(active: bool, monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
+    pub fn new(active: bool, monitor: Arc<(Mutex<()>, Condvar)>, unconstrained: bool) -> Self {
         Self {
             active: AtomicBool::new(active),
-            queue: Injector::new(),
+            queue: if unconstrained {
+                BucketQueue::LwLock(RwLock::new(Injector::new()))
+            } else {
+                BucketQueue::LockFree(Injector::new())
+            },
             monitor,
             can_open: None,
             group: None,
         }
     }
-    pub unsafe fn swap_queue(
+    pub fn swap_queue(
         &self,
         mut queue: Injector<Box<dyn GCWork<VM>>>,
     ) -> Injector<Box<dyn GCWork<VM>>> {
-        let me = &mut *(self as *const _ as *mut Self);
-        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut me.queue, &mut queue);
-        queue
+        match &self.queue {
+            BucketQueue::LockFree(_) => unreachable!(),
+            BucketQueue::LwLock(x) => {
+                std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut x.write(), &mut queue);
+                queue
+            }
+        }
     }
     pub fn set_group(&mut self, group: Arc<WorkerGroup<VM>>) {
         self.group = Some(group)

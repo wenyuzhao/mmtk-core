@@ -47,7 +47,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
-    postponed_concurrent_work: Injector<Box<dyn GCWork<VM>>>,
+    postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     in_gc_pause: AtomicBool,
 }
 
@@ -63,14 +63,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let worker_monitor: Arc<(Mutex<()>, Condvar)> = Default::default();
         Arc::new(Self {
             work_buckets: enum_map! {
-                WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone()),
-                WorkBucketStage::Initial => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone()),
-                WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone()),
+                WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone(), true),
+                WorkBucketStage::Initial => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone(), false),
             },
             worker_group: None,
             worker_monitor: worker_monitor.clone(),
@@ -80,50 +80,31 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             startup: Mutex::new(None),
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
-            postponed_concurrent_work: Injector::new(),
+            postponed_concurrent_work: spin::RwLock::new(Injector::new()),
             in_gc_pause: AtomicBool::new(false),
         })
     }
 
     #[inline]
     pub fn pause_concurrent_work_packets_during_gc(&self) {
-        let concurrent_queue = &self.work_buckets[WorkBucketStage::Unconstrained].queue;
         let mut old_queue = Injector::new();
-        unsafe {
-            let new_queue = &mut *(concurrent_queue as *const Injector<Box<dyn GCWork<VM>>>
-                as *mut Injector<Box<dyn GCWork<VM>>>);
-            std::mem::swap(new_queue, &mut old_queue)
-        }
+        old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(old_queue);
         let mut postponed = 0usize;
-        if crate::args::LAZY_DECREMENTS && false {
-            let mut no_postpone = vec![];
-            loop {
-                match old_queue.steal() {
-                    Steal::Success(w) => {
-                        if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
-                            self.postponed_concurrent_work.push(w);
-                            postponed += 1;
-                        } else {
-                            no_postpone.push(w)
-                        }
-                    }
-                    Steal::Empty => break,
-                    Steal::Retry => {}
+        loop {
+            match old_queue.steal() {
+                Steal::Success(w) => {
+                    assert_eq!(w.type_id(), TypeId::of::<ImmixConcurrentTraceObjects<VM>>());
+                    postponed += 1;
+                    self.postponed_concurrent_work.read().push(w);
                 }
-            }
-            self.work_buckets[WorkBucketStage::Unconstrained].bulk_add(no_postpone);
-            if crate::args::LOG_PER_GC_STATE {
-                println!("Pause {} concurrent packets", postponed);
-            }
-        } else {
-            let postponed_queue = &self.work_buckets[WorkBucketStage::Unconstrained].queue;
-            debug_assert!(postponed_queue.is_empty());
-            unsafe {
-                let postponed_queue = &mut *(postponed_queue as *const Injector<Box<dyn GCWork<VM>>>
-                    as *mut Injector<Box<dyn GCWork<VM>>>);
-                std::mem::swap(postponed_queue, &mut old_queue);
+                Steal::Empty => break,
+                Steal::Retry => {}
             }
         }
+        if crate::args::LOG_PER_GC_STATE {
+            println!("Pause {} concurrent packets", postponed);
+        }
+        // crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
 
     #[inline]
@@ -132,11 +113,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
         // Buggy
+        let postponed_concurrent_work = self.postponed_concurrent_work.read();
         loop {
-            if self.postponed_concurrent_work.is_empty() {
+            if postponed_concurrent_work.is_empty() {
                 break;
             }
-            match self.postponed_concurrent_work.steal() {
+            match postponed_concurrent_work.steal() {
                 Steal::Success(w) => {
                     if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
                         no_postpone.push(w)
@@ -149,7 +131,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         for w in cm_packets {
-            self.postponed_concurrent_work.push(w)
+            postponed_concurrent_work.push(w)
         }
         self.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(no_postpone);
     }
@@ -157,13 +139,20 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        self.postponed_concurrent_work.push(box w)
+        self.postponed_concurrent_work.read().push(box w)
+    }
+
+    #[inline]
+    pub fn postpone_dyn(&self, w: Box<dyn GCWork<VM>>) {
+        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+        self.postponed_concurrent_work.read().push(w)
     }
 
     #[inline]
     pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+        let postponed_concurrent_work = self.postponed_concurrent_work.read();
         ws.into_iter()
-            .for_each(|w| self.postponed_concurrent_work.push(w));
+            .for_each(|w| postponed_concurrent_work.push(w));
     }
 
     #[inline]
@@ -364,16 +353,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     fn schedule_concurrent_packets(&self) {
+        // crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
         let mut unconstrained_bucket_refilled = false;
-        if !self.postponed_concurrent_work.is_empty() {
+        if !self.postponed_concurrent_work.read().is_empty() {
             let mut queue = Injector::new();
             type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
-            std::mem::swap::<Q<VM>>(
-                unsafe { &mut *(&self.postponed_concurrent_work as *const Q<VM> as *mut Q<VM>) },
-                &mut queue,
-            );
-            let old_queue =
-                unsafe { self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue) };
+            std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
+            let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
             debug_assert!(old_queue.is_empty());
             unconstrained_bucket_refilled = true;
         }
@@ -475,11 +461,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     fn pop_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
         loop {
+            std::hint::spin_loop();
             match self.pop_schedulable_work_once(worker) {
                 Steal::Success(w) => {
                     return Some(w);
                 }
                 Steal::Retry => {
+                    // std::thread::yield_now();
                     continue;
                 }
                 Steal::Empty => {
@@ -492,12 +480,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Get a schedulable work. Called by workers
     #[inline]
     pub fn poll(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
-        let work = if let Some(work) = self.pop_schedulable_work(worker) {
-            work
-        } else {
-            self.poll_slow(worker)
-        };
-        work
+        self.pop_schedulable_work(worker)
+            .unwrap_or_else(|| self.poll_slow(worker))
     }
 
     #[cold]
