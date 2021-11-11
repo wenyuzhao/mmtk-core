@@ -40,12 +40,8 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
 
     if crate::args::LOG_STAGES {
         println!(
-            "safepoint start  since-trigger={:?}ns",
-            crate::GC_TRIGGER_TIME
-                .load(Ordering::Relaxed)
-                .elapsed()
-                .unwrap()
-                .as_nanos()
+            " - [{:.6}ms] Safepoint start",
+            crate::gc_trigger_time() as f64 / 1000000f64
         );
         unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
     }
@@ -98,7 +94,7 @@ pub fn gc_init<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, heap_size: usize) {
     info!("Initialized MMTk with {:?}", mmtk.options.plan);
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
-    crate::BOOT_TIME.store(SystemTime::now(), Ordering::Relaxed);
+    spin::Lazy::force(&crate::BOOT_TIME);
 }
 
 /// Request MMTk to create a mutator for the given thread. For performance reasons, A VM should

@@ -226,12 +226,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         }
         if crate::args::LOG_STAGES {
             println!(
-                "stop_all_mutators finish since-trigger={:?}ns",
-                crate::GC_TRIGGER_TIME
-                    .load(Ordering::SeqCst)
-                    .elapsed()
-                    .unwrap()
-                    .as_nanos()
+                " - [{:.6}ms] Stop mutators done",
+                crate::gc_trigger_time() as f64 / 1000000f64
             );
         }
         mmtk.plan.gc_pause_start();
@@ -286,12 +282,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 .unwrap()
                 .as_micros() as f64
                 / 1000f64;
-            let boot_time = crate::BOOT_TIME
-                .load(Ordering::SeqCst)
-                .elapsed()
-                .unwrap()
-                .as_millis() as f64
-                / 1000f64;
+            let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
             let pause = if let Some(immix) = mmtk.plan.downcast_ref::<Immix<VM>>() {
                 match immix.current_pause().unwrap() {
                     Pause::RefCount => "RefCount",

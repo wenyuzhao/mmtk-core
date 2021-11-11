@@ -285,7 +285,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 unsafe {
                     let since_prev_stage =
                         LAST_ACTIVATE_TIME.unwrap().elapsed().unwrap().as_nanos();
-                    println!("Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                    println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                        crate::gc_trigger_time() as f64 / 1000000f64,
                         id, since_prev_stage,
                         crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
                         crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
@@ -527,7 +528,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 worker.sender.send(CoordinatorMessage::Finish).unwrap();
             }
             // Wait
+            // println!("[{}] sleep", worker.ordinal);
             guard = self.worker_monitor.1.wait(guard).unwrap();
+            // println!("[{}] wake", worker.ordinal);
             // Unpark this worker
             self.worker_group().dec_parked_workers();
         }

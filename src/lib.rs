@@ -242,11 +242,20 @@ fn disable_lasy_dec_for_current_gc() -> bool {
 
 static GC_TRIGGER_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
-static BOOT_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
+static BOOT_TIME: spin::Lazy<SystemTime> = spin::Lazy::new(|| SystemTime::now());
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
 static SATB_START: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
+
+#[inline(always)]
+fn gc_trigger_time() -> u128 {
+    crate::GC_TRIGGER_TIME
+        .load(Ordering::SeqCst)
+        .elapsed()
+        .unwrap()
+        .as_nanos()
+}
 
 #[inline(always)]
 fn inside_harness() -> bool {
