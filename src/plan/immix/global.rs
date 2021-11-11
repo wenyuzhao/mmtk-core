@@ -184,7 +184,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .is_concurrent_collection(),
         );
         if crate::args::LOG_PER_GC_STATE {
-            println!("[pause] {:?}", pause);
+            let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
+            println!("[{:.3}s][pause] {:?}", boot_time, pause);
         }
         match pause {
             Pause::FullTraceFast => {

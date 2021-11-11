@@ -338,7 +338,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             std::mem::swap(&mut new_incs, &mut self.new_incs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessIncs::<VM>::new_nursery(new_incs),
+                ProcessIncs::new_nursery(new_incs),
             );
         }
         #[cfg(feature = "ix_delayed_nursery_evacuation")]
@@ -695,7 +695,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             self.worker().add_work(
                 WorkBucketStage::Unconstrained,
-                ProcessDecs::<VM>::new(new_decs, self.counter.clone_with_decs()),
+                ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
             );
         }
     }
@@ -1080,7 +1080,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
             self.worker()
-                .add_work(bucket, ProcessIncs::<VM>::new(roots, true));
+                .add_work(bucket, ProcessIncs::new(roots, true));
         }
     }
 }
