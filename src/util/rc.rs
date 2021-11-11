@@ -197,7 +197,6 @@ pub struct ProcessIncs<VM: VMBinding> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     current_pause_should_do_mature_evac: bool,
-    scan_objects: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -233,7 +232,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             current_pause_should_do_mature_evac: false,
-            scan_objects: vec![],
         }
     }
 
