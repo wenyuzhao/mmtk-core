@@ -572,9 +572,18 @@ impl Block {
     #[inline(always)]
     pub fn has_holes(&self) -> bool {
         let rc_array = RCArray::of(*self);
+        let mut find_free_line = false;
         for i in 0..Self::LINES {
             if rc_array.is_dead(i) {
-                return true;
+                if i == 0 {
+                    return true;
+                } else if !find_free_line {
+                    find_free_line = true;
+                } else {
+                    return true;
+                }
+            } else {
+                find_free_line = false;
             }
         }
         false

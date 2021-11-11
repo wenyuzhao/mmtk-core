@@ -827,7 +827,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Search holes by ref-counts instead of line marks
     #[allow(clippy::assertions_on_constants)]
-    #[inline]
+    #[inline(always)]
     pub fn rc_get_next_available_lines(
         &self,
         copy: bool,
@@ -837,32 +837,44 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(super::REF_COUNT);
         let block = search_start.block();
         let rc_array = RCArray::of(block);
-        let mut cursor = search_start.get_index_within_block();
         let limit = Block::LINES;
         // Find start
-        while cursor < limit {
-            if rc_array.is_dead(cursor) {
-                break;
+        let first_free_cursor = {
+            let start_cursor = search_start.get_index_within_block();
+            let mut first_free_cursor = None;
+            let mut find_free_line = false;
+            for i in start_cursor..limit {
+                if rc_array.is_dead(i) {
+                    if i == 0 {
+                        first_free_cursor = Some(i);
+                        break;
+                    } else if !find_free_line {
+                        find_free_line = true;
+                    } else {
+                        first_free_cursor = Some(i);
+                        break;
+                    }
+                } else {
+                    find_free_line = false;
+                }
             }
-            cursor += 1;
-        }
-        // Conservatively skip the next line
-        cursor += 1;
-        if cursor >= limit {
-            return None;
-        }
-        let start = cursor;
+            first_free_cursor
+        };
+        let start = match first_free_cursor {
+            Some(c) => c,
+            _ => return None,
+        };
         // Find limit
-        while cursor < limit {
-            if !rc_array.is_dead(cursor) {
-                break;
+        let end = {
+            let mut cursor = start + 1;
+            while cursor < limit {
+                if !rc_array.is_dead(cursor) {
+                    break;
+                }
+                cursor += 1;
             }
-            cursor += 1;
-        }
-        if cursor == start {
-            return None;
-        }
-        let end = cursor;
+            cursor
+        };
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
         if self.common.needs_log_bit {
@@ -874,7 +886,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
-        //     println!("reuse {:?} copy={}", start..end, _copy);
+        //     println!("reuse {:?} copy={}", start..end, copy);
         // }
         Some(start..end)
     }
