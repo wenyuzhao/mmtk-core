@@ -47,7 +47,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
-    postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    postponed_concurrent_work: Injector<Box<dyn GCWork<VM>>>,
     in_gc_pause: AtomicBool,
 }
 
@@ -81,7 +81,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             startup: Mutex::new(None),
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
-            postponed_concurrent_work: spin::RwLock::new(Injector::new()),
+            postponed_concurrent_work: Injector::new(),
             in_gc_pause: AtomicBool::new(false),
         })
     }
@@ -96,7 +96,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 Steal::Success(w) => {
                     debug_assert_eq!(w.type_id(), TypeId::of::<ImmixConcurrentTraceObjects<VM>>());
                     postponed += 1;
-                    self.postponed_concurrent_work.read().push(w);
+                    self.postponed_concurrent_work.push(w);
                 }
                 Steal::Empty => break,
                 Steal::Retry => {}
@@ -113,13 +113,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
-        // Buggy
-        let postponed_concurrent_work = self.postponed_concurrent_work.read();
         loop {
-            if postponed_concurrent_work.is_empty() {
+            if self.postponed_concurrent_work.is_empty() {
                 break;
             }
-            match postponed_concurrent_work.steal() {
+            match self.postponed_concurrent_work.steal() {
                 Steal::Success(w) => {
                     if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
                         no_postpone.push(w)
@@ -132,7 +130,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         for w in cm_packets {
-            postponed_concurrent_work.push(w)
+            self.postponed_concurrent_work.push(w)
         }
         self.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(no_postpone);
     }
@@ -140,20 +138,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        self.postponed_concurrent_work.read().push(box w)
+        self.postponed_concurrent_work.push(box w)
     }
 
     #[inline]
     pub fn postpone_dyn(&self, w: Box<dyn GCWork<VM>>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        self.postponed_concurrent_work.read().push(w)
+        self.postponed_concurrent_work.push(w)
     }
 
     #[inline]
     pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
-        let postponed_concurrent_work = self.postponed_concurrent_work.read();
         ws.into_iter()
-            .for_each(|w| postponed_concurrent_work.push(w));
+            .for_each(|w| self.postponed_concurrent_work.push(w));
     }
 
     #[inline]
@@ -358,16 +355,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     fn schedule_concurrent_packets(&self) {
         crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
-        let mut unconstrained_bucket_refilled = false;
-        if !self.postponed_concurrent_work.read().is_empty() {
+        if !self.postponed_concurrent_work.is_empty() {
             let mut queue = Injector::new();
             type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
-            std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
+            unsafe {
+                let postponed_concurrent_work =
+                    &mut *(&self.postponed_concurrent_work as *const Q<VM> as *mut Q<VM>);
+                std::mem::swap::<Q<VM>>(&mut queue, postponed_concurrent_work);
+            }
             let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
             debug_assert!(old_queue.is_empty());
-            unconstrained_bucket_refilled = true;
-        }
-        if unconstrained_bucket_refilled {
             self.work_buckets[WorkBucketStage::Unconstrained].notify_all_workers();
         }
     }
