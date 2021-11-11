@@ -147,6 +147,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         loop {
             let mut work = self.poll();
             debug_assert!(!self.is_parked());
+            if work.should_defer() {
+                mmtk.scheduler.postpone_dyn(work);
+                continue;
+            }
             work.do_work_with_stat(self, mmtk);
         }
     }

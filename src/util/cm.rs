@@ -125,6 +125,9 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
+    fn should_defer(&self) -> bool {
+        crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
+    }
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;

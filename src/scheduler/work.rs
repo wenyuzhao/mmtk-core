@@ -11,6 +11,10 @@ use std::any::{type_name, Any};
 pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
 
 pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
+    #[inline(always)]
+    fn should_defer(&self) -> bool {
+        false
+    }
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>);
     #[inline]
     fn do_work_with_stat(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {

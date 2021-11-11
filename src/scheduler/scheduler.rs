@@ -104,7 +104,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if crate::args::LOG_PER_GC_STATE {
             println!("Pause {} concurrent packets", postponed);
         }
-        // crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
+        crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
 
     #[inline]
@@ -353,7 +353,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     fn schedule_concurrent_packets(&self) {
-        // crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
+        crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
         let mut unconstrained_bucket_refilled = false;
         if !self.postponed_concurrent_work.read().is_empty() {
             let mut queue = Injector::new();
