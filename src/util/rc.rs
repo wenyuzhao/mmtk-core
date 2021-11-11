@@ -197,6 +197,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     current_pause_should_do_mature_evac: bool,
+    scan_objects: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -232,6 +233,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             current_pause_should_do_mature_evac: false,
+            scan_objects: vec![],
         }
     }
 
@@ -373,26 +375,17 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             return true;
         }
         let b = Block::containing::<VM>(o);
-        // Mature object
-        if self::count(o) != 0 || b.get_state() == BlockState::Marked {
-            if crate::args::RC_MATURE_EVACUATION
-                && self.should_do_mature_evac()
-                && b.is_defrag_source()
-            {
-                return false;
-            }
+        let state = b.get_state();
+        // Evacuate objects in defrag blocks
+        if self.should_do_mature_evac() && b.is_defrag_source() {
+            return false;
+        }
+        // Skip mature object
+        if self::count(o) != 0 || state == BlockState::Marked {
             return true;
         }
-        // In recycled lines
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-            && b.get_state() == BlockState::Reusing
-        {
-            if crate::args::RC_MATURE_EVACUATION
-                && self.should_do_mature_evac()
-                && b.is_defrag_source()
-            {
-                return false;
-            }
+        // Skip recycled lines
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && state == BlockState::Reusing {
             return true;
         }
         false
@@ -656,7 +649,10 @@ pub struct ProcessDecs<VM: VMBinding> {
     new_decs: Vec<ObjectReference>,
     /// Execution worker
     worker: *mut GCWorker<VM>,
+    mmtk: *const MMTK<VM>,
     counter: LazySweepingJobsCounter,
+    mark_objects: Vec<ObjectReference>,
+    concurrent_marking_in_progress: bool,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
@@ -676,7 +672,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             decs,
             new_decs: vec![],
             worker: std::ptr::null_mut(),
+            mmtk: std::ptr::null_mut(),
             counter,
+            mark_objects: vec![],
+            concurrent_marking_in_progress: false,
         }
     }
 
@@ -698,6 +697,16 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
             );
         }
+        if !self.mark_objects.is_empty() {
+            let mut objects = vec![];
+            std::mem::swap(&mut objects, &mut self.mark_objects);
+            let w = ImmixConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
+            if crate::args::LAZY_DECREMENTS {
+                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            } else {
+                self.worker().scheduler().postpone(w);
+            }
+        }
     }
 
     #[cold]
@@ -718,6 +727,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let x = unsafe { edge.load::<ObjectReference>() };
             if !x.is_null() && !self::rc_stick(x) {
                 self.recursive_dec(x);
+            }
+            if self.concurrent_marking_in_progress {
+                if !x.is_null() && !immix.is_marked(x) {
+                    self.mark_objects.push(x);
+                }
             }
         });
         let in_ix_space = immix.immix_space.in_space(o);
@@ -774,6 +788,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
+        self.mmtk = mmtk;
+        self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut decs = vec![];

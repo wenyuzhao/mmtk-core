@@ -64,6 +64,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         Arc::new(Self {
             work_buckets: enum_map! {
                 WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone(), true),
+                WorkBucketStage::FinishConcurrentWork => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Initial => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone(), false),
@@ -93,7 +94,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         loop {
             match old_queue.steal() {
                 Steal::Success(w) => {
-                    assert_eq!(w.type_id(), TypeId::of::<ImmixConcurrentTraceObjects<VM>>());
+                    debug_assert_eq!(w.type_id(), TypeId::of::<ImmixConcurrentTraceObjects<VM>>());
                     postponed += 1;
                     self.postponed_concurrent_work.read().push(w);
                 }
@@ -272,8 +273,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let x = bucket.update();
             if crate::args::LOG_STAGES && x {
                 unsafe {
-                    let since_prev_stage =
-                        LAST_ACTIVATE_TIME.unwrap().elapsed().unwrap().as_nanos();
+                    let since_prev_stage = LAST_ACTIVATE_TIME
+                        .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
+                        .elapsed()
+                        .unwrap()
+                        .as_nanos();
                     println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
                         crate::gc_trigger_time() as f64 / 1000000f64,
                         id, since_prev_stage,

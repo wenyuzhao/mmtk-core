@@ -2,6 +2,7 @@ use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
+use crate::util::object_forwarding;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -73,6 +74,11 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
         if no_trace {
             return object;
         }
+        debug_assert!(
+            !object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
+            "{:?}",
+            object
+        );
         if self.plan.immix_space.in_space(object) {
             self.plan.immix_space.fast_trace_object(self, object);
             object

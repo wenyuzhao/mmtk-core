@@ -303,11 +303,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .rc_eager_prepare(self.current_pause().unwrap());
         }
         if self.current_pause().unwrap() == Pause::RefCount {
-            self.base()
-                .control_collector_context
-                .scheduler()
-                .work_buckets[WorkBucketStage::Initial]
-                .activate();
+            let scheduler = self.base().control_collector_context.scheduler();
+            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
+            scheduler.work_buckets[WorkBucketStage::Initial].activate();
         }
         if self.current_pause().unwrap() == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
