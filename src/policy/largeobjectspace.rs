@@ -341,11 +341,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[inline(always)]
     fn test_and_mark(&self, object: ObjectReference, value: usize) -> bool {
         loop {
-            let mask = if self.in_nursery_gc {
-                LOS_BIT_MASK
-            } else {
-                MARK_BIT
-            };
+            let mask = MARK_BIT;
             let old_value = load_metadata::<VM>(
                 &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
                 object,

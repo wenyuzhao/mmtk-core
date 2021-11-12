@@ -736,9 +736,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         if !crate::args::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
         }
-        if in_ix_space {
-            o.clear_start_address_log::<VM>();
-        }
         #[cfg(feature = "sanity")]
         unsafe {
             o.to_address().store(0xdeadusize);

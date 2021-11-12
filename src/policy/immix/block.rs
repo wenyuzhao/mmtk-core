@@ -516,6 +516,18 @@ impl Block {
     }
 
     #[inline(always)]
+    pub fn attempt_mutator_reuse(&self) -> bool {
+        self.fetch_update_state(|s| {
+            if let BlockState::Reusable { .. } = s {
+                Some(BlockState::Reusing)
+            } else {
+                None
+            }
+        })
+        .is_ok()
+    }
+
+    #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         debug_assert!(crate::args::REF_COUNT);
         if self.is_defrag_source() || self.get_state() == BlockState::Unallocated {

@@ -358,6 +358,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                     if !block.get_state().is_reusable() {
                         continue;
                     }
+                    if !copy {
+                        if !block.attempt_mutator_reuse() {
+                            continue;
+                        }
+                    }
                 }
                 block.init(copy, true, self.space());
                 return Some(block);
