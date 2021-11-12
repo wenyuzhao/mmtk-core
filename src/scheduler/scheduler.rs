@@ -491,10 +491,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut guard = self.worker_monitor.0.lock().unwrap();
         loop {
             debug_assert!(!worker.is_parked());
-            if !self.in_concurrent() || worker.is_concurrent_worker() {
-                if let Some(work) = self.pop_schedulable_work(worker) {
-                    return work;
-                }
+            if let Some(work) = self.pop_schedulable_work(worker) {
+                return work;
             }
             // Park this worker
             let all_parked = self.worker_group().inc_parked_workers();
