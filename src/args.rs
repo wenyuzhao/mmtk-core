@@ -35,14 +35,15 @@ pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
 pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
     env::var("LOCK_FREE_BLOCKS")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(32)
+        .ok()
+        .unwrap_or_else(|| 8 * num_cpus::get())
 });
 pub static NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
     Some(
         env::var("NURSERY_BLOCKS")
             .map(|x| x.parse().unwrap())
             .ok()
-            .unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()),
+            .unwrap_or_else(|| (1 << (22 - Block::LOG_BYTES)) * num_cpus::get()),
     )
 });
 pub static NURSERY_RATIO: Lazy<Option<usize>> =
