@@ -1,6 +1,5 @@
 //! Read/Write barrier implementations.
 
-use std::mem;
 use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
@@ -12,7 +11,6 @@ use crate::util::cm::ProcessModBufSATB;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
-use crate::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::rc::ProcessDecs;
@@ -447,57 +445,57 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 len,
                 ..
             } => {
-                if len == 0 {
-                    return;
-                }
-
-                if len == 1 {
-                    self.enqueue_node(dst, dst.to_address() + dst_offset, None);
-                    return;
-                }
-
-                type UInt = u128;
-                const BYTES_IN_UINT: usize = mem::size_of::<UInt>();
-                const BITS_IN_UINT: usize = BYTES_IN_UINT * 8;
-                const LOG_BITS_IN_UINT: usize = BITS_IN_UINT.trailing_zeros() as _;
-                let mut cursor = dst.to_address() + dst_offset;
-                let limit = cursor + (len << 3);
-                let mut meta_addr: *const UInt = unsafe {
-                    GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS
-                        .to_ptr::<UInt>()
-                        .add(cursor.as_usize() >> (LOG_BITS_IN_UINT + 3))
-                };
-                let val = unsafe { *meta_addr };
-                while cursor < limit {
-                    if cursor.is_aligned_to(BITS_IN_UINT * 8) {
-                        let val = unsafe { *meta_addr };
-                        if val != 0 {
-                            'x: for j in 0usize..BITS_IN_UINT {
-                                if ((val >> j) & 1) != 0 {
-                                    let e = cursor + (j << 3);
-                                    if e < limit {
-                                        self.enqueue_node(dst, e, None);
-                                    } else {
-                                        break 'x;
-                                    }
-                                }
-                            }
-                        }
-                        cursor += BITS_IN_UINT * 8;
-                        meta_addr = unsafe { meta_addr.add(1) };
-                    } else {
-                        let shift = (cursor.as_usize() >> 3) & (BITS_IN_UINT - 1);
-                        if (val >> shift) & 1 != 0 {
-                            self.enqueue_node(dst, cursor, None);
-                        }
-                        cursor += 8usize;
-                    }
-                }
-
-                // let dst_base = dst.to_address() + dst_offset;
-                // for i in 0..len {
-                //     self.enqueue_node(dst, dst_base + (i << 3), None);
+                // if len == 0 {
+                //     return;
                 // }
+
+                // if len == 1 {
+                //     self.enqueue_node(dst, dst.to_address() + dst_offset, None);
+                //     return;
+                // }
+
+                // type UInt = u128;
+                // const BYTES_IN_UINT: usize = mem::size_of::<UInt>();
+                // const BITS_IN_UINT: usize = BYTES_IN_UINT * 8;
+                // const LOG_BITS_IN_UINT: usize = BITS_IN_UINT.trailing_zeros() as _;
+                // let mut cursor = dst.to_address() + dst_offset;
+                // let limit = cursor + (len << 3);
+                // let mut meta_addr: *const UInt = unsafe {
+                //     GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS
+                //         .to_ptr::<UInt>()
+                //         .add(cursor.as_usize() >> (LOG_BITS_IN_UINT + 3))
+                // };
+                // let val = unsafe { *meta_addr };
+                // while cursor < limit {
+                //     if cursor.is_aligned_to(BITS_IN_UINT * 8) {
+                //         let val = unsafe { *meta_addr };
+                //         if val != 0 {
+                //             'x: for j in 0usize..BITS_IN_UINT {
+                //                 if ((val >> j) & 1) != 0 {
+                //                     let e = cursor + (j << 3);
+                //                     if e < limit {
+                //                         self.enqueue_node(dst, e, None);
+                //                     } else {
+                //                         break 'x;
+                //                     }
+                //                 }
+                //             }
+                //         }
+                //         cursor += BITS_IN_UINT * 8;
+                //         meta_addr = unsafe { meta_addr.add(1) };
+                //     } else {
+                //         let shift = (cursor.as_usize() >> 3) & (BITS_IN_UINT - 1);
+                //         if (val >> shift) & 1 != 0 {
+                //             self.enqueue_node(dst, cursor, None);
+                //         }
+                //         cursor += 8usize;
+                //     }
+                // }
+
+                let dst_base = dst.to_address() + dst_offset;
+                for i in 0..len {
+                    self.enqueue_node(dst, dst_base + (i << 3), None);
+                }
 
                 // const BYTES_PER_LOCK_BIT: usize = 1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT;
                 // let dst_base = dst.to_address() + dst_offset;
