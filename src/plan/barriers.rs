@@ -22,6 +22,7 @@ use crate::LazySweepingJobsCounter;
 use crate::MMTK;
 
 use super::immix::Pause;
+use super::EdgeIterator;
 
 pub const BARRIER_MEASUREMENT: bool = crate::args::BARRIER_MEASUREMENT;
 pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
@@ -531,7 +532,9 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 // {
                 // }
             }
-            WriteTarget::Clone { .. } => {}
+            WriteTarget::Clone { dst, .. } => {
+                EdgeIterator::<E::VM>::iterate(dst, |x| self.enqueue_node(dst, x, None))
+            }
         }
     }
 }
