@@ -187,6 +187,8 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
         }
         let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
         if !sanity_checker.refs.contains(&object) {
+            sanity_checker.refs.insert(object); // "Mark" it
+            std::mem::drop(sanity_checker);
             // FIXME steveb consider VM-specific integrity check on reference.
             if !object.is_sane() {
                 panic!("Invalid reference {:?} -> {:?}", slot, object);
@@ -282,7 +284,6 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                 object_forwarding::read_forwarding_pointer::<VM>(object),
             );
             // Object is not "marked"
-            sanity_checker.refs.insert(object); // "Mark" it
             ProcessEdgesWork::process_node(self, object);
         }
         object
