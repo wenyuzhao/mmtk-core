@@ -431,18 +431,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                         }
                     }
                 }
-                // let o = o.fix_start_address::<VM>();
-                // assert_eq!(o, o.fix_start_address::<VM>());
-                // if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
-                //     if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
-                //         continue;
-                //     } else {
-                //         std::sync::atomic::fence(Ordering::SeqCst);
-                //         if rc::count(o) == 0 {
-                //             continue;
-                //         }
-                //     }
-                // }
                 self.process_dead_object(o);
                 has_dead_object = true;
             }

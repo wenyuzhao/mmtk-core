@@ -478,6 +478,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.add_to_possibly_dead_mature_blocks(block);
             }
         }
+        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Marked);
+        }
     }
 
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
@@ -1000,9 +1003,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
-        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Marked);
-        }
         // This may happen either within a pause, or in concurrent.
         let size = self.possibly_dead_mature_blocks.len();
         let num_bins = self.scheduler().num_workers() << 1;

@@ -101,12 +101,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // Concurrent tracing finished
-        // if crate::args::CONCURRENT_MARKING
-        //     && crate::concurrent_marking_in_progress()
-        //     && crate::concurrent_marking_packets_drained()
-        // {
-        //     return true;
-        // }
+        if crate::args::CONCURRENT_MARKING
+            && crate::concurrent_marking_in_progress()
+            && crate::concurrent_marking_packets_drained()
+        {
+            return true;
+        }
         // RC nursery full
         if crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
