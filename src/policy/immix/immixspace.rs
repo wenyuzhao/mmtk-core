@@ -276,7 +276,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
-        let mut count = 0;
         // let chunks = self.chunk_map.all_chunks();
         // let num_chunks = Chunk::steps_between(&chunks.start, &chunks.end).unwrap();
         // let mut search_defrag_blocks =
@@ -331,17 +330,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     }
                 }
             }
-            blocks.sort_by_key(|x| x.1);
-            blocks.reverse();
-            for _ in 0..defrag_blocks {
-                if count < blocks.len() {
-                    let b = blocks[count].0;
-                    b.set_as_defrag_source(true);
-                    me.defrag_blocks.push(b);
-                    // println!(" - defrag {:?} {:?} {}", b, b.get_state(), blocks[count].1);
-                }
-                count += 1;
-            }
         } else {
             while let Some(mut x) = self.fragmented_blocks.pop() {
                 blocks.append(&mut x);
@@ -349,10 +337,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let mut count = 0;
         blocks.sort_by_key(|x| x.1);
-        blocks.reverse();
         for _ in 0..defrag_blocks {
             if count < blocks.len() {
-                let b = blocks[count].0;
+                let b = blocks[blocks.len() - 1 - count].0;
                 b.set_as_defrag_source(true);
                 me.defrag_blocks.push(b);
                 count += 1;
