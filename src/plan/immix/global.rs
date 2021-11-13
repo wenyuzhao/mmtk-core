@@ -478,7 +478,8 @@ impl<VM: VMBinding> Immix<VM> {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
             if crate::args::RC_MATURE_EVACUATION {
-                self.immix_space.select_mature_evacuation_candidates();
+                self.immix_space
+                    .select_mature_evacuation_candidates(Pause::FullTraceFast);
             }
         }
         // Stop & scan mutators (mutator scanning can happen before STW)
@@ -518,7 +519,8 @@ impl<VM: VMBinding> Immix<VM> {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
             if crate::args::RC_MATURE_EVACUATION {
-                self.immix_space.select_mature_evacuation_candidates();
+                self.immix_space
+                    .schedule_initial_mark_mature_evacuation_candidates_selection_packets();
             }
         }
         if crate::args::REF_COUNT {

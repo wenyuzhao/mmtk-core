@@ -226,7 +226,7 @@ impl ChunkMap {
     }
 
     /// Helper function to create per-chunk processing work packets.
-    fn generate_tasks<VM: VMBinding>(
+    pub fn generate_tasks<VM: VMBinding>(
         &self,
         func: impl Fn(Chunk) -> Box<dyn GCWork<VM>>,
     ) -> Vec<Box<dyn GCWork<VM>>> {

@@ -173,7 +173,7 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
 }
 
 #[inline(always)]
-fn promote<VM: VMBinding>(o: ObjectReference) {
+pub fn promote<VM: VMBinding>(o: ObjectReference) {
     o.log_start_address::<VM>();
     if !crate::args::BLOCK_ONLY {
         if o.get_size::<VM>() > Line::BYTES {
@@ -264,8 +264,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        let check_mature_evac_remset = crate::args::RC_MATURE_EVACUATION
-            && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark);
+        let check_mature_evac_remset =
+            crate::args::RC_MATURE_EVACUATION && (self.concurrent_marking_in_progress);
         let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(

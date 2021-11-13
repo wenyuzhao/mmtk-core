@@ -551,7 +551,8 @@ impl Block {
                     false
                 }
             } else {
-                let has_holes = self.has_holes();
+                let holes = self.calc_holes();
+                let has_holes = holes != 0;
                 self.fetch_update_state(|s| {
                     if s == BlockState::Reusing
                         || s == BlockState::Unallocated
@@ -561,7 +562,7 @@ impl Block {
                         None
                     } else {
                         Some(BlockState::Reusable {
-                            unavailable_lines: 1,
+                            unavailable_lines: holes as _,
                         })
                     }
                 })
@@ -598,6 +599,58 @@ impl Block {
             }
         }
         false
+    }
+
+    #[inline(always)]
+    pub fn calc_holes(&self) -> usize {
+        let rc_array = RCArray::of(*self);
+        let search_next_hole = |start: usize| -> Option<usize> {
+            // Find start
+            let first_free_cursor = {
+                let start_cursor = start;
+                let mut first_free_cursor = None;
+                let mut find_free_line = false;
+                for i in start_cursor..Block::LINES {
+                    if rc_array.is_dead(i) {
+                        if i == 0 {
+                            first_free_cursor = Some(i);
+                            break;
+                        } else if !find_free_line {
+                            find_free_line = true;
+                        } else {
+                            first_free_cursor = Some(i);
+                            break;
+                        }
+                    } else {
+                        find_free_line = false;
+                    }
+                }
+                first_free_cursor
+            };
+            let start = match first_free_cursor {
+                Some(c) => c,
+                _ => return None,
+            };
+            // Find limit
+            let end = {
+                let mut cursor = start + 1;
+                while cursor < Block::LINES {
+                    if !rc_array.is_dead(cursor) {
+                        break;
+                    }
+                    cursor += 1;
+                }
+                cursor
+            };
+            Some(end)
+        };
+        let mut holes = 0;
+        let mut cursor = 0;
+        while let Some(end) = search_next_hole(cursor) {
+            cursor = end;
+            holes += 1;
+        }
+        holes
     }
 }
 

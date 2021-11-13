@@ -64,7 +64,9 @@ pub struct ImmixSpace<VM: VMBinding> {
     last_defrag_blocks: Vec<Block>,
     defrag_blocks: Vec<Block>,
     num_defrag_blocks: AtomicUsize,
+    #[allow(dead_code)]
     defrag_chunk_cursor: AtomicUsize,
+    pub fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -218,6 +220,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag_chunk_cursor: AtomicUsize::new(0),
             defrag_blocks: Default::default(),
             last_defrag_blocks: Default::default(),
+            fragmented_blocks: Default::default(),
         }
     }
 
@@ -258,56 +261,110 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn select_mature_evacuation_candidates(&self) {
+    pub fn schedule_initial_mark_mature_evacuation_candidates_selection_packets(&self) {
+        let tasks = self
+            .chunk_map
+            .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
+                chunk,
+                defrag_threshold: 10,
+            });
+        self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(tasks);
+    }
+
+    pub fn select_mature_evacuation_candidates(&self, pause: Pause) {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let defrag_blocks = 1024;
+        let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
         let mut count = 0;
-        let chunks = self.chunk_map.all_chunks();
-        let num_chunks = Chunk::steps_between(&chunks.start, &chunks.end).unwrap();
-        let mut search_defrag_blocks =
-            |chunks: Range<Chunk>, chunk_cursor: &mut usize, limit: usize, count: &mut usize| {
-                'out: for c in chunks.skip(*chunk_cursor).filter(|c| c.is_committed()) {
-                    for b in c.committed_blocks().filter(|c| {
-                        c.get_state() != BlockState::Nursery && c.get_state() != BlockState::Reusing
-                    }) {
-                        // println!(" - defrag {:?} {:?}", b, b.get_state());
-                        b.set_as_defrag_source(true);
-                        me.defrag_blocks.push(b);
-                        *count += 1;
-                        if *count >= defrag_blocks {
-                            break 'out;
-                        }
+        // let chunks = self.chunk_map.all_chunks();
+        // let num_chunks = Chunk::steps_between(&chunks.start, &chunks.end).unwrap();
+        // let mut search_defrag_blocks =
+        //     |chunks: Range<Chunk>, chunk_cursor: &mut usize, limit: usize, count: &mut usize| {
+        //         'out: for c in chunks.skip(*chunk_cursor).filter(|c| c.is_committed()) {
+        //             for b in c.committed_blocks().filter(|c| {
+        //                 c.get_state() != BlockState::Nursery && c.get_state() != BlockState::Reusing
+        //             }) {
+        //                 println!(" - defrag {:?} {:?} {}", b, b.get_state(), b.calc_holes());
+        //                 b.set_as_defrag_source(true);
+        //                 me.defrag_blocks.push(b);
+        //                 *count += 1;
+        //                 if *count >= defrag_blocks {
+        //                     break 'out;
+        //                 }
+        //             }
+        //             *chunk_cursor += 1;
+        //             if *chunk_cursor >= limit {
+        //                 break 'out;
+        //             }
+        //         }
+        //     };
+        // let mut chunk_cursor = self.defrag_chunk_cursor.load(Ordering::SeqCst);
+        // let original_cursor = chunk_cursor;
+        // search_defrag_blocks(chunks.clone(), &mut chunk_cursor, num_chunks, &mut count);
+        // if count < defrag_blocks && chunk_cursor >= num_chunks {
+        //     chunk_cursor = 0;
+        //     search_defrag_blocks(
+        //         chunks.clone(),
+        //         &mut chunk_cursor,
+        //         original_cursor,
+        //         &mut count,
+        //     );
+        // }
+        // if chunk_cursor >= num_chunks {
+        //     chunk_cursor = 0;
+        // }
+        // self.defrag_chunk_cursor
+        //     .store(chunk_cursor, Ordering::SeqCst);
+
+        let mut blocks = vec![];
+        if pause == Pause::FullTraceFast {
+            for c in self.chunk_map.committed_chunks() {
+                for b in c.committed_blocks() {
+                    let state = b.get_state();
+                    if state == BlockState::Nursery || state == BlockState::Reusing {
+                        continue;
                     }
-                    *chunk_cursor += 1;
-                    if *chunk_cursor >= limit {
-                        break 'out;
+                    let holes = b.calc_holes();
+                    if holes >= 10 {
+                        blocks.push((b, b.calc_holes()));
                     }
                 }
-            };
-        let mut chunk_cursor = self.defrag_chunk_cursor.load(Ordering::SeqCst);
-        let original_cursor = chunk_cursor;
-        search_defrag_blocks(chunks.clone(), &mut chunk_cursor, num_chunks, &mut count);
-        if count < defrag_blocks && chunk_cursor >= num_chunks {
-            chunk_cursor = 0;
-            search_defrag_blocks(
-                chunks.clone(),
-                &mut chunk_cursor,
-                original_cursor,
-                &mut count,
-            );
+            }
+            blocks.sort_by_key(|x| x.1);
+            blocks.reverse();
+            for _ in 0..defrag_blocks {
+                if count < blocks.len() {
+                    let b = blocks[count].0;
+                    b.set_as_defrag_source(true);
+                    me.defrag_blocks.push(b);
+                    // println!(" - defrag {:?} {:?} {}", b, b.get_state(), blocks[count].1);
+                }
+                count += 1;
+            }
+        } else {
+            while let Some(mut x) = self.fragmented_blocks.pop() {
+                blocks.append(&mut x);
+            }
         }
-        if chunk_cursor >= num_chunks {
-            chunk_cursor = 0;
+        let mut count = 0;
+        blocks.sort_by_key(|x| x.1);
+        blocks.reverse();
+        for _ in 0..defrag_blocks {
+            if count < blocks.len() {
+                let b = blocks[count].0;
+                b.set_as_defrag_source(true);
+                me.defrag_blocks.push(b);
+                // println!(" - defrag {:?} {:?} {}", b, b.get_state(), blocks[count].1);
+            }
+            count += 1;
         }
-        self.defrag_chunk_cursor
-            .store(chunk_cursor, Ordering::SeqCst);
         if crate::args::LOG_PER_GC_STATE {
-            println!(
-                " - Defrag {} mature blocks (cursor @ {}/{})",
-                count, chunk_cursor, num_chunks
-            );
+            println!(" - Defrag {} mature blocks", count);
+            // println!(
+            //     " - Defrag {} mature blocks (cursor @ {}/{})",
+            //     count, chunk_cursor, num_chunks
+            // );
         }
         self.num_defrag_blocks.store(count, Ordering::SeqCst);
     }
@@ -361,6 +418,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
+        if pause == Pause::InitialMark {
+            self.select_mature_evacuation_candidates(pause)
+        }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -1096,5 +1156,34 @@ impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
         immix_mut
             .immix_space
             .schedule_mature_sweeping(immix.current_pause().unwrap())
+    }
+}
+
+struct SelectDefragBlocksInChunk {
+    chunk: Chunk,
+    defrag_threshold: usize,
+}
+
+impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let mut blocks = vec![];
+        // Iterate over all blocks in this chunk
+        for block in self.chunk.committed_blocks() {
+            let state = block.get_state();
+            // Skip unallocated blocks.
+            if state == BlockState::Nursery || state == BlockState::Reusing {
+                continue;
+            }
+            let holes = match state {
+                BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
+                _ => block.calc_holes(),
+            };
+            if holes >= self.defrag_threshold {
+                blocks.push((block, holes));
+            }
+        }
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        immix.immix_space.fragmented_blocks.push(blocks);
     }
 }

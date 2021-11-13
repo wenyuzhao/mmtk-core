@@ -769,12 +769,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 copy_context,
             );
             // Transfer RC countsf
-            new.log_start_address::<VM>();
-            if !crate::args::BLOCK_ONLY {
-                if new.get_size::<VM>() > Line::BYTES {
-                    rc::mark_straddle_object::<VM>(new);
-                }
-            }
+            rc::promote::<VM>(new);
             rc::set(new, rc::count(o));
             immix_space.attempt_mark(new);
             immix_space.unmark(o);
@@ -818,14 +813,16 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return;
         }
         if !ix_object || !Block::containing::<VM>(o).is_defrag_source() {
-            if immix.mark(o) {
+            if immix.mark2(o, !ix_object) {
                 self.process_node(o);
             }
             return;
         }
         let new = self.forward(o, &immix.immix_space);
-        unsafe {
-            e.store(new);
+        if o != new {
+            unsafe {
+                e.store(new);
+            }
         }
     }
 
@@ -842,12 +839,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if rc::count(o) == 0 {
                 continue;
             }
+            let los = !immix.immix_space.in_space(o);
             // Skip object in defrag source
-            if immix.immix_space.in_space(o) && Block::containing::<VM>(o).is_defrag_source() {
+            if !los && Block::containing::<VM>(o).is_defrag_source() {
                 continue;
             }
             // Skip objects sits in striddle lines
-            if !crate::args::BLOCK_ONLY && immix.immix_space.in_space(o) {
+            if !crate::args::BLOCK_ONLY && !los {
                 let line = Line::containing::<VM>(o);
                 if rc::count(unsafe { line.start().to_object_reference() }) != 0
                     && rc::is_straddle_line(line)
@@ -855,13 +853,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                     continue;
                 }
             }
-            if immix.immix_space.in_space(o) {
+            if !los {
                 o = o.fix_start_address::<VM>();
             }
             if object_forwarding::is_forwarded::<VM>(o) {
                 o = object_forwarding::read_forwarding_pointer::<VM>(o);
             }
-            immix.mark(o);
+            immix.mark2(o, los);
             EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix));
         }
     }

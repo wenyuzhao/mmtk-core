@@ -75,6 +75,11 @@ pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(90)
 });
+pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
+    env::var("MAX_MATURE_DEFRAG_BLOCKS")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(128)
+});
 
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
@@ -140,6 +145,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
+    dump_feature!("max_mature_defrag_blocks", *MAX_MATURE_DEFRAG_BLOCKS);
 
     println!("----------------------------------------------------");
 }
