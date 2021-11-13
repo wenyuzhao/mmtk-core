@@ -266,7 +266,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
                 chunk,
-                defrag_threshold: 10,
+                defrag_threshold: 1,
             });
         self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(tasks);
     }
@@ -326,8 +326,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         continue;
                     }
                     let holes = b.calc_holes();
-                    if holes >= 10 {
-                        blocks.push((b, b.calc_holes()));
+                    if holes >= 1 {
+                        blocks.push((b, holes));
                     }
                 }
             }
@@ -355,9 +355,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let b = blocks[count].0;
                 b.set_as_defrag_source(true);
                 me.defrag_blocks.push(b);
+                count += 1;
                 // println!(" - defrag {:?} {:?} {}", b, b.get_state(), blocks[count].1);
             }
-            count += 1;
         }
         if crate::args::LOG_PER_GC_STATE {
             println!(" - Defrag {} mature blocks", count);
@@ -456,6 +456,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         }
+        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Marked);
+        }
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
@@ -478,9 +481,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.add_to_possibly_dead_mature_blocks(block);
             }
         }
-        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Marked);
-        }
+        // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+        //     x.set_state(BlockState::Marked);
+        // }
     }
 
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
@@ -562,7 +565,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn deinit_block(&self, block: Block, nursery: bool) {
-        // println!("Release {:?} {} defrag={}", block, nursery, block.is_defrag_source());
+        // println!(
+        //     "Release {:?} nursery={} defrag={}",
+        //     block,
+        //     nursery,
+        //     block.is_defrag_source()
+        // );
         if crate::args::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);

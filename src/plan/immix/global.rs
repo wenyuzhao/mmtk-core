@@ -90,15 +90,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     type VM = VM;
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        // Don't do a GC until we finished the lazy reclaimation.
-        if !LazySweepingJobs::all_finished() {
-            return false;
-        }
         // Spaces or heap full
         if self.base().collection_required(self, space_full, space) {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
             return true;
+        }
+        // Don't do a GC until we finished the lazy reclaimation.
+        if !LazySweepingJobs::all_finished() {
+            return false;
         }
         // Concurrent tracing finished
         if crate::args::CONCURRENT_MARKING
@@ -302,11 +302,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             me.immix_space
                 .rc_eager_prepare(self.current_pause().unwrap());
         }
-        if self.current_pause().unwrap() == Pause::RefCount {
-            let scheduler = self.base().control_collector_context.scheduler();
-            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
-            scheduler.work_buckets[WorkBucketStage::Initial].activate();
-        }
+        // if self.current_pause().unwrap() == Pause::RefCount {
+        //     let scheduler = self.base().control_collector_context.scheduler();
+        //     scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
+        //     scheduler.work_buckets[WorkBucketStage::Initial].activate();
+        // }
         if self.current_pause().unwrap() == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
