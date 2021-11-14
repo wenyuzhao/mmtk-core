@@ -7,7 +7,7 @@ use crate::{
 };
 
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
-pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: bool = true;
+pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: bool = false;
 
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
@@ -79,7 +79,7 @@ pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
 pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_BLOCKS")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(128)
+        .unwrap_or(1024)
 });
 
 // ---------- Barrier flags ---------- //

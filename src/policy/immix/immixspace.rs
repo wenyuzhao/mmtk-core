@@ -56,7 +56,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
     pub block_allocation: BlockAllocation<VM>,
-    possibly_dead_mature_blocks: SegQueue<Block>,
+    possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
     pub last_mutator_recycled_blocks: SegQueue<Block>,
     pub mutator_recycled_blocks: SegQueue<Block>,
@@ -321,7 +321,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             for c in self.chunk_map.committed_chunks() {
                 for b in c.committed_blocks() {
                     let state = b.get_state();
-                    if state == BlockState::Nursery || state == BlockState::Reusing {
+                    if state == BlockState::Nursery {
                         continue;
                     }
                     let holes = b.calc_holes();
@@ -337,13 +337,27 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let mut count = 0;
         blocks.sort_by_key(|x| x.1);
-        for _ in 0..defrag_blocks {
-            if count < blocks.len() {
-                let b = blocks[blocks.len() - 1 - count].0;
-                b.set_as_defrag_source(true);
-                me.defrag_blocks.push(b);
-                count += 1;
-                // println!(" - defrag {:?} {:?} {}", b, b.get_state(), blocks[count].1);
+        while let Some((block, holes)) = blocks.pop() {
+            if block.is_defrag_source() || block.get_state() == BlockState::Unallocated
+            // || block.get_state() == BlockState::Reusing
+            {
+                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
+                continue;
+            }
+            if !block.attempt_to_set_as_defrag_source() {
+                continue;
+            }
+            // println!(
+            //     " - defrag {:?} {:?} {} {}",
+            //     block,
+            //     block.get_state(),
+            //     block.is_defrag_source(),
+            //     holes
+            // );
+            me.defrag_blocks.push(block);
+            count += 1;
+            if count >= defrag_blocks {
+                break;
             }
         }
         if crate::args::LOG_PER_GC_STATE {
@@ -459,10 +473,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
             }
             while let Some(block) = self.last_defrag_blocks.pop() {
-                block.set_as_defrag_source(false);
                 block.clear_rc_table::<VM>();
                 block.clear_striddle_table::<VM>();
-                self.add_to_possibly_dead_mature_blocks(block);
+                self.add_to_possibly_dead_mature_blocks(block, true);
             }
         }
         // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
@@ -988,9 +1001,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[inline(always)]
-    pub fn add_to_possibly_dead_mature_blocks(&self, block: Block) {
+    pub fn add_to_possibly_dead_mature_blocks(&self, block: Block, is_defrag_source: bool) {
         if block.log() {
-            self.possibly_dead_mature_blocks.push(block);
+            self.possibly_dead_mature_blocks
+                .push((block, is_defrag_source));
         }
     }
 
@@ -1004,7 +1018,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
         let mut bins = (0..num_bins)
             .map(|_| Vec::with_capacity(bin_cap))
-            .collect::<Vec<Vec<Block>>>();
+            .collect::<Vec<Vec<(Block, bool)>>>();
         'out: for i in 0..num_bins {
             for _ in 0..bin_cap {
                 if let Some(block) = self.possibly_dead_mature_blocks.pop() {

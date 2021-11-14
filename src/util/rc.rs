@@ -745,7 +745,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
         if in_ix_space {
             let block = Block::containing::<VM>(o);
-            immix.immix_space.add_to_possibly_dead_mature_blocks(block);
+            immix
+                .immix_space
+                .add_to_possibly_dead_mature_blocks(block, false);
         } else {
             immix.los().rc_free(o);
         }
@@ -803,12 +805,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
 }
 
 pub struct SweepBlocksAfterDecs {
-    blocks: Vec<Block>,
+    blocks: Vec<(Block, bool)>,
     _counter: LazySweepingJobsCounter,
 }
 
 impl SweepBlocksAfterDecs {
-    pub fn new(blocks: Vec<Block>, counter: LazySweepingJobsCounter) -> Self {
+    pub fn new(blocks: Vec<(Block, bool)>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             blocks,
             _counter: counter,
@@ -824,11 +826,16 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         }
         let mut count = 0;
         let queue = ArrayQueue::new(self.blocks.len());
-        for block in &self.blocks {
+        for (block, defrag) in &self.blocks {
             block.unlog_non_atomic();
-            if block.rc_sweep_mature::<VM>(&immix.immix_space) {
+            if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
                 count += 1;
                 queue.push(block.start()).unwrap();
+            } else {
+                assert!(!*defrag);
+            }
+            if *defrag {
+                block.set_as_defrag_source(false);
             }
         }
         immix.immix_space.pr.release_bulk(count, queue)

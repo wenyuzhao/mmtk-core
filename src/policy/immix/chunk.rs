@@ -406,14 +406,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 
     #[inline]
-    fn process_defrag_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
-        block.set_as_defrag_source(false);
-        block.clear_rc_table::<VM>();
-        block.clear_striddle_table::<VM>();
-        immix_space.add_to_possibly_dead_mature_blocks(block);
-    }
-
-    #[inline]
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
         let mut has_dead_object = false;
         for o in (block.start()..block.end())
@@ -437,7 +429,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             }
         }
         if has_dead_object {
-            immix_space.add_to_possibly_dead_mature_blocks(block);
+            immix_space.add_to_possibly_dead_mature_blocks(block, false);
         }
     }
 }

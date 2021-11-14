@@ -248,6 +248,32 @@ impl Block {
         );
     }
 
+    #[inline(always)]
+    pub fn attempt_to_set_as_defrag_source(&self) -> bool {
+        loop {
+            let old_value = side_metadata::load_atomic(
+                &Self::DEFRAG_STATE_TABLE,
+                self.start(),
+                Ordering::SeqCst,
+            ) as u8;
+            if old_value == Self::DEFRAG_SOURCE_STATE {
+                return false;
+            }
+
+            if side_metadata::compare_exchange_atomic(
+                &Self::DEFRAG_STATE_TABLE,
+                self.start(),
+                old_value as usize,
+                Self::DEFRAG_SOURCE_STATE as _,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                break;
+            }
+        }
+        true
+    }
+
     /// Record the number of holes in the block.
     #[inline(always)]
     pub fn set_holes(&self, holes: usize) {
@@ -294,6 +320,7 @@ impl Block {
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
+        self.set_as_defrag_source(false);
     }
 
     /// Get the range of lines within the block.
@@ -528,12 +555,12 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
+    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
         debug_assert!(crate::args::REF_COUNT);
-        if self.is_defrag_source() || self.get_state() == BlockState::Unallocated {
+        if (!defrag && self.is_defrag_source()) || self.get_state() == BlockState::Unallocated {
             return false;
         }
-        if self.rc_dead() {
+        if defrag || self.rc_dead() {
             if self.attempt_dealloc(*crate::args::IGNORE_REUSING_BLOCKS) {
                 space.deinit_block(*self, false);
                 return true;
