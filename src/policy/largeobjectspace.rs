@@ -330,7 +330,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     #[inline]
     pub fn rc_free(&self, o: ObjectReference) {
-        self.rc_dead_objects.push(o)
+        if o.to_address().attempt_log::<VM>() {
+            // println!(" - add to rc_dead_objects {:?}", o);
+            self.rc_dead_objects.push(o);
+        }
     }
 
     #[inline(always)]
@@ -448,7 +451,8 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
                     s.dead_mature_los_volume += o.get_size::<VM>();
                 });
                 rc::set(*o, 0);
-                los.rc_dead_objects.push(*o)
+                // println!("dead los 2 {:?}", o);
+                los.rc_free(*o);
             }
         }
     }
@@ -474,8 +478,12 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         let mut mature_objects = los.rc_mature_objects.lock();
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
+            o.to_address().unlog::<VM>();
             if removed {
+                // println!("kill los {:?}", o);
                 los.release_object(o.to_address());
+            } else {
+                // println!("keep los {:?}", o);
             }
         }
     }

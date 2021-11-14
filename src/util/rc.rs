@@ -254,6 +254,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         });
         if !los {
             self::promote::<VM>(o);
+        } else {
+            // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
@@ -490,11 +492,11 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         e: Address,
         cc: &mut ImmixCopyContext<VM>,
     ) -> Option<ObjectReference> {
-        // println!(" - inc e {:?}", e);
         let o = match self.unlog_and_load_rc_object(kind, e) {
             Some(o) => o,
             _ => return None,
         };
+        // println!(" - inc {:?} -> {:?}", e, o);
         debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
         let new = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
             self.process_inc(o)
@@ -502,6 +504,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.process_inc_and_evacuate(o, cc)
         };
         if new != o {
+            // println!(" - inc {:?} -> {:?} => {:?}", e, o, new);
             unsafe { e.store(new) }
         }
         Some(new)

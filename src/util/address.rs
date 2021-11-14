@@ -400,6 +400,32 @@ impl Address {
     }
 
     #[inline(always)]
+    pub fn attempt_log<VM: VMBinding>(self) -> bool {
+        debug_assert!(!self.is_zero());
+        loop {
+            let old_value = load_metadata::<VM>(
+                &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+                unsafe { self.to_object_reference() },
+                None,
+                Some(Ordering::SeqCst),
+            );
+            if old_value == LOGGED_VALUE {
+                return false;
+            }
+            if compare_exchange_atomic2(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                self,
+                UNLOGGED_VALUE,
+                LOGGED_VALUE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                return true;
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn log<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
         store_metadata::<VM>(

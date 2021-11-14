@@ -270,16 +270,9 @@ impl ChunkMap {
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        let mut x = self.generate_tasks(|chunk| {
+        self.generate_tasks(|chunk| {
             box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new_desc())
-        });
-        if x.is_empty() {
-            x.push(box SweepDeadCyclesChunk::new(
-                Chunk::ZERO,
-                LazySweepingJobsCounter::new_desc(),
-            ))
-        }
-        x
+        })
     }
 }
 
@@ -367,6 +360,7 @@ struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
     worker: *mut GCWorker<VM>,
     _counter: LazySweepingJobsCounter,
+    immix: *const Immix<VM>,
 }
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
@@ -380,11 +374,17 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         unsafe { &mut *self.worker }
     }
 
+    #[inline(always)]
+    const fn immix(&self) -> &Immix<VM> {
+        unsafe { &*self.immix }
+    }
+
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         Self {
             chunk,
             worker: std::ptr::null_mut(),
+            immix: std::ptr::null_mut(),
             _counter: counter,
         }
     }
@@ -398,6 +398,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
         });
+        // self.immix().mark(o);
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
@@ -446,18 +447,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        self.immix = immix;
         let immix_space = &immix.immix_space;
-        if self.chunk != Chunk::ZERO {
-            for block in self.chunk.committed_blocks() {
-                if block.is_defrag_source() {
+        for block in self.chunk.committed_blocks() {
+            if block.is_defrag_source() {
+                continue;
+            } else {
+                let state = block.get_state();
+                if state == BlockState::Nursery || state == BlockState::Reusing {
                     continue;
-                } else {
-                    let state = block.get_state();
-                    if state == BlockState::Nursery || state == BlockState::Reusing {
-                        continue;
-                    }
-                    self.process_block(block, immix_space)
                 }
+                self.process_block(block, immix_space)
             }
         }
     }
