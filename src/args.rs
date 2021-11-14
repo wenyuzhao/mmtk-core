@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
+pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: bool = true;
 
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");

@@ -90,6 +90,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     type VM = VM;
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
+        if crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
+            return false;
+        }
         // Spaces or heap full
         if self.base().collection_required(self, space_full, space) {
             self.next_gc_may_perform_cycle_collection
@@ -97,7 +100,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // Don't do a GC until we finished the lazy reclaimation.
-        if !LazySweepingJobs::all_finished() {
+        if !crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
             return false;
         }
         // Concurrent tracing finished
