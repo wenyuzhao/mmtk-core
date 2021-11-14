@@ -443,9 +443,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         }
-        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Marked);
-        }
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
@@ -998,6 +995,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
+        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Marked);
+        }
         // This may happen either within a pause, or in concurrent.
         let size = self.possibly_dead_mature_blocks.len();
         let num_bins = self.scheduler().num_workers() << 1;
