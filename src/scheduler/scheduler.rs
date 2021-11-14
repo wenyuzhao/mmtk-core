@@ -94,10 +94,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         loop {
             match old_queue.steal() {
                 Steal::Success(w) => {
-                    unimplemented!("Can be other packets as well!");
-                    debug_assert_eq!(w.type_id(), TypeId::of::<ImmixConcurrentTraceObjects<VM>>());
-                    postponed += 1;
-                    self.postponed_concurrent_work.read().push(w);
+                    if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
+                        postponed += 1;
+                        self.postponed_concurrent_work.read().push(w);
+                    } else {
+                        self.work_buckets[WorkBucketStage::Unconstrained].add_dyn(w);
+                    }
                 }
                 Steal::Empty => break,
                 Steal::Retry => {}

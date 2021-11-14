@@ -150,6 +150,11 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 
     #[inline(always)]
+    pub fn add_dyn(&self, work: Box<dyn GCWork<VM>>) {
+        self.add_with_priority(Self::DEFAULT_PRIORITY, work);
+    }
+
+    #[inline(always)]
     pub fn bulk_add_with_priority(&self, _priority: usize, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         for w in work_vec {
             self.queue.push(w)

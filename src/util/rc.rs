@@ -496,7 +496,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             Some(o) => o,
             _ => return None,
         };
-        // println!(" - inc {:?} -> {:?}", e, o);
+        // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
         debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
         let new = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
             self.process_inc(o)
@@ -504,8 +504,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.process_inc_and_evacuate(o, cc)
         };
         if new != o {
-            // println!(" - inc {:?} -> {:?} => {:?}", e, o, new);
+            // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));
             unsafe { e.store(new) }
+        } else {
+            // println!(" -- inc {:?}: {:?} rc={}", e, o, count(o));
         }
         Some(new)
     }
@@ -831,11 +833,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
                 count += 1;
                 queue.push(block.start()).unwrap();
+                if *defrag {
+                    block.set_as_defrag_source(false);
+                }
             } else {
-                assert!(!*defrag);
-            }
-            if *defrag {
-                block.set_as_defrag_source(false);
+                assert!(
+                    !*defrag,
+                    "defrag block is freed? {:?} {:?} {}",
+                    block,
+                    block.get_state(),
+                    block.is_defrag_source()
+                );
             }
         }
         immix.immix_space.pr.release_bulk(count, queue)

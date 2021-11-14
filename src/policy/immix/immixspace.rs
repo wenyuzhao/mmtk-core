@@ -262,13 +262,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn schedule_initial_mark_mature_evacuation_candidates_selection_packets(&self) {
-        let tasks = self
-            .chunk_map
-            .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
-                chunk,
-                defrag_threshold: 1,
-            });
-        self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(tasks);
+        // let tasks = self
+        //     .chunk_map
+        //     .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
+        //         chunk,
+        //         defrag_threshold: 1,
+        //     });
+        // self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(tasks);
     }
 
     pub fn select_mature_evacuation_candidates(&self, pause: Pause) {
@@ -337,9 +337,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let mut count = 0;
         blocks.sort_by_key(|x| x.1);
-        while let Some((block, holes)) = blocks.pop() {
-            if block.is_defrag_source() || block.get_state() == BlockState::Unallocated
-            // || block.get_state() == BlockState::Reusing
+        while let Some((block, _)) = blocks.pop() {
+            if block.is_defrag_source()
+                || block.get_state() == BlockState::Unallocated
+                || block.get_state() == BlockState::Nursery
             {
                 // println!(" - skip defrag {:?} {:?}", block, block.get_state());
                 continue;
@@ -642,6 +643,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
+            if crate::args::REF_COUNT {
+                let straddle = rc::is_straddle_line(Line::from(Line::align(object.to_address())));
+                if straddle {
+                    return object;
+                }
+            }
             // println!("Mark {:?}", object.range::<VM>());
             if !crate::args::REF_COUNT {
                 // Mark block and lines
