@@ -300,17 +300,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
+        let pause = self.current_pause().unwrap();
         if crate::args::REF_COUNT {
             let me = unsafe { &mut *(self as *const _ as *mut Self) };
-            me.immix_space
-                .rc_eager_prepare(self.current_pause().unwrap());
+            me.immix_space.rc_eager_prepare(pause);
         }
         // if self.current_pause().unwrap() == Pause::RefCount {
         //     let scheduler = self.base().control_collector_context.scheduler();
         //     scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
         //     scheduler.work_buckets[WorkBucketStage::Initial].activate();
         // }
-        if self.current_pause().unwrap() == Pause::FinalMark {
+        if pause == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START
@@ -320,6 +320,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     .as_nanos();
                 crate::PAUSES.satb_nanos.fetch_add(t, Ordering::SeqCst);
             }
+        } else if cfg!(feature = "satb_timer")
+            && pause == Pause::RefCount
+            && crate::concurrent_marking_in_progress()
+        {
+            let t = crate::SATB_START
+                .load(Ordering::SeqCst)
+                .elapsed()
+                .unwrap()
+                .as_nanos();
+            crate::PAUSES.satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
     }
 
@@ -330,6 +340,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
             }
+        } else if cfg!(feature = "satb_timer")
+            && pause == Pause::RefCount
+            && crate::concurrent_marking_in_progress()
+        {
+            crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
         }
         // if pause == Pause::RefCount || pause == Pause::InitialMark {
         //     self.resize_nursery();
