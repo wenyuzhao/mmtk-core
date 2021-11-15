@@ -1150,7 +1150,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             {
                 continue;
             }
-            let holes = b.dead_bytes();
+            let holes = block.dead_bytes();
             if holes >= 1 {
                 blocks.push((block, holes));
             }
