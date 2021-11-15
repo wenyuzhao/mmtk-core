@@ -66,7 +66,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     num_defrag_blocks: AtomicUsize,
     #[allow(dead_code)]
     defrag_chunk_cursor: AtomicUsize,
-    pub fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
+    fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
+    fragmented_blocks_size: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -222,6 +223,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag_blocks: Default::default(),
             last_defrag_blocks: Default::default(),
             fragmented_blocks: Default::default(),
+            fragmented_blocks_size: Default::default(),
         }
     }
 
@@ -262,40 +264,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn schedule_initial_mark_mature_evacuation_candidates_selection_packets(&self) {
-        // let tasks = self
-        //     .chunk_map
-        //     .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
-        //         chunk,
-        //         defrag_threshold: 1,
-        //     });
-        // self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(tasks);
-    }
-
-    pub fn select_mature_evacuation_candidates(&self, pause: Pause) {
+    fn select_mature_evacuation_candidates(&self, _pause: Pause) {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
-        let mut blocks = vec![];
-        if pause == Pause::FullTraceFast {
-            for c in self.chunk_map.committed_chunks() {
-                for b in c.committed_blocks() {
-                    let state = b.get_state();
-                    if state == BlockState::Nursery {
-                        continue;
-                    }
-                    let holes = b.dead_bytes();
-                    if holes >= 1 {
-                        blocks.push((b, holes));
-                    }
-                }
-            }
-        } else {
-            unreachable!();
-            while let Some(mut x) = self.fragmented_blocks.pop() {
-                blocks.append(&mut x);
-            }
+        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
+        while let Some(mut x) = self.fragmented_blocks.pop() {
+            blocks.append(&mut x);
         }
         let mut count = 0;
         blocks.sort_by_key(|x| x.1);
@@ -335,7 +311,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_defrag_blocks.store(count, Ordering::SeqCst);
     }
 
+    pub fn schedule_defrag_selection_packets(&self, _pause: Pause) {
+        let tasks = self
+            .chunk_map
+            .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
+                chunk,
+                defrag_threshold: 1,
+            });
+        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
+        SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
+        self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+    }
+
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
+        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+            self.schedule_defrag_selection_packets(pause);
+        }
         let num_workers = self.scheduler().worker_group().worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
@@ -384,9 +375,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
-        if pause == Pause::InitialMark {
-            self.select_mature_evacuation_candidates(pause)
-        }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -1141,6 +1129,8 @@ impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     }
 }
 
+static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
 struct SelectDefragBlocksInChunk {
     chunk: Chunk,
     defrag_threshold: usize,
@@ -1154,18 +1144,27 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         for block in self.chunk.committed_blocks() {
             let state = block.get_state();
             // Skip unallocated blocks.
-            if state == BlockState::Nursery || state == BlockState::Reusing {
+            if state == BlockState::Unallocated
+                || state == BlockState::Nursery
+                || block.is_defrag_source()
+            {
                 continue;
             }
-            let holes = match state {
-                BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
-                _ => block.calc_holes(),
-            };
-            if holes >= self.defrag_threshold {
+            let holes = b.dead_bytes();
+            if holes >= 1 {
                 blocks.push((block, holes));
             }
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        immix
+            .immix_space
+            .fragmented_blocks_size
+            .fetch_add(blocks.len(), Ordering::SeqCst);
         immix.immix_space.fragmented_blocks.push(blocks);
+        if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
+            immix
+                .immix_space
+                .select_mature_evacuation_candidates(immix.current_pause().unwrap())
+        }
     }
 }
