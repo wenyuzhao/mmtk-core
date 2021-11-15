@@ -364,6 +364,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                         }
                     }
                 }
+                // println!("Recycle {:?} {} {}", block, block.dead_bytes(), copy);
                 block.init(copy, true, self.space());
                 return Some(block);
             } else {

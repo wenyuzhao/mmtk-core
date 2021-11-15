@@ -298,7 +298,7 @@ impl PrepareChunk {
 
 impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         Self::reset_object_mark::<VM>(self.chunk);
         // Iterate over all blocks in this chunk
@@ -447,7 +447,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 continue;
             } else {
                 let state = block.get_state();
-                if state == BlockState::Nursery || state == BlockState::Reusing {
+                if state == BlockState::Nursery
+                    || (crate::args::LAZY_DECREMENTS && state == BlockState::Reusing)
+                {
                     continue;
                 }
                 self.process_block(block, immix_space)

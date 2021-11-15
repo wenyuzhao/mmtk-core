@@ -785,6 +785,17 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
+            let in_ix_space = immix.immix_space.in_space(o);
+            if in_ix_space {
+                let b = Block::containing::<VM>(o);
+                // println!(
+                //     "dec {:?} in block {:?} {:?} {:?}",
+                //     o,
+                //     b,
+                //     b.get_state(),
+                //     b.dead_bytes()
+                // );
+            }
         }
     }
 }
@@ -833,7 +844,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         let queue = ArrayQueue::new(self.blocks.len());
         for (block, defrag) in &self.blocks {
             block.unlog();
-            println!("unlog {:?}", block);
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
                 count += 1;
                 queue.push(block.start()).unwrap();

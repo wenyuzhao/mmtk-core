@@ -136,7 +136,7 @@ impl Block {
         //     new = Self::BYTES - 1;
         // }
         // unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
-        side_metadata::fetch_update(
+        let x = side_metadata::fetch_update(
             &Self::DEAD_WORDS,
             self.start(),
             Ordering::SeqCst,
@@ -153,13 +153,19 @@ impl Block {
                 }
             },
         );
+        // println!(
+        //     "inc_dead_bytes {:?} {:?} {:?} {}",
+        //     self,
+        //     x,
+        //     self.get_state(),
+        //     self.is_defrag_source()
+        // );
     }
 
     #[inline(always)]
     pub fn dec_dead_bytes_sloppy(&self, bytes: usize) {
         let words = bytes >> LOG_BYTES_IN_WORD;
         let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
-        let mut new = old + words;
         let new = if old <= words { 0 } else { old - words };
         unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
     }
@@ -185,6 +191,11 @@ impl Block {
     #[inline(always)]
     fn reset_dead_bytes(&self) {
         unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), 0) };
+    }
+
+    #[inline(always)]
+    pub fn set_dead_bytes(&self, v: usize) {
+        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), v >> LOG_BYTES_IN_WORD) };
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -648,8 +659,8 @@ impl Block {
                     false
                 }
             } else {
-                let holes = self.calc_holes();
-                let has_holes = holes != 0;
+                // let holes = self.calc_holes();
+                let has_holes = self.has_holes();
                 self.fetch_update_state(|s| {
                     if s == BlockState::Reusing
                         || s == BlockState::Unallocated
@@ -659,7 +670,7 @@ impl Block {
                         None
                     } else {
                         Some(BlockState::Reusable {
-                            unavailable_lines: holes as _,
+                            unavailable_lines: 1 as _,
                         })
                     }
                 })

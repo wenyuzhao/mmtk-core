@@ -8,7 +8,7 @@ use crate::{
 
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
 pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
-    env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "1".to_string()) != "0"
+    env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
 });
 
 // ---------- Immix flags ---------- //
