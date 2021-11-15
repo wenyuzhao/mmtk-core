@@ -829,7 +829,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         let mut count = 0;
         let queue = ArrayQueue::new(self.blocks.len());
         for (block, defrag) in &self.blocks {
-            block.unlog_non_atomic();
+            block.unlog();
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
                 count += 1;
                 queue.push(block.start()).unwrap();

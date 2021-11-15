@@ -2,7 +2,7 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::immix::{Immix, Pause};
+use crate::plan::immix::Immix;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::rc::{self};
 use crate::util::ObjectReference;
@@ -302,30 +302,13 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         Self::reset_object_mark::<VM>(self.chunk);
         // Iterate over all blocks in this chunk
-        let mut fragmented_blocks = vec![];
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let pause = immix.current_pause().unwrap();
         for block in self.chunk.blocks() {
             let state = block.get_state();
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;
             }
-
-            if pause == Pause::InitialMark {
-                // Skip unallocated blocks.
-                if state == BlockState::Nursery || state == BlockState::Reusing {
-                    continue;
-                }
-                let holes = match state {
-                    BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
-                    _ => block.calc_holes(),
-                };
-                if holes >= 1 {
-                    fragmented_blocks.push((block, holes));
-                }
-            }
-
             // FIXME: Don't need this when doing RC
             if crate::args::BARRIER_MEASUREMENT
                 || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)
@@ -343,10 +326,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
             debug_assert_ne!(block.get_state(), BlockState::Nursery);
-        }
-        if !fragmented_blocks.is_empty() {
-            let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-            immix.immix_space.fragmented_blocks.push(fragmented_blocks);
         }
     }
 }

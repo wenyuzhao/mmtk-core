@@ -90,8 +90,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     type VM = VM;
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        let no_gc_until_lazy_sweeping_finished = *crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED;
-        if no_gc_until_lazy_sweeping_finished && !LazySweepingJobs::all_finished() {
+        // Don't do a GC until we finished the lazy reclaimation.
+        if *crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
             return false;
         }
         // Spaces or heap full
@@ -99,10 +99,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
             return true;
-        }
-        // Don't do a GC until we finished the lazy reclaimation.
-        if !no_gc_until_lazy_sweeping_finished && !LazySweepingJobs::all_finished() {
-            return false;
         }
         // Concurrent tracing finished
         if crate::args::CONCURRENT_MARKING
@@ -496,10 +492,6 @@ impl<VM: VMBinding> Immix<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-            if crate::args::RC_MATURE_EVACUATION {
-                self.immix_space
-                    .select_mature_evacuation_candidates(Pause::FullTraceFast);
-            }
         }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -537,10 +529,6 @@ impl<VM: VMBinding> Immix<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
-            if crate::args::RC_MATURE_EVACUATION {
-                self.immix_space
-                    .schedule_initial_mark_mature_evacuation_candidates_selection_packets();
-            }
         }
         if crate::args::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
