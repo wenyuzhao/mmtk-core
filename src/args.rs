@@ -30,7 +30,25 @@ pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
 pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
 pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
 /// One more atomic-store per barrier slow-path if this value is smaller than 6.
-pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = (super::constants::LOG_BYTES_IN_PAGE - 6) as _;
+pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = {
+    if cfg!(feature = "lxr_lock_3") {
+        3
+    } else if cfg!(feature = "lxr_lock_4") {
+        4
+    } else if cfg!(feature = "lxr_lock_5") {
+        5
+    } else if cfg!(feature = "lxr_lock_6") {
+        6
+    } else if cfg!(feature = "lxr_lock_7") {
+        7
+    } else if cfg!(feature = "lxr_lock_8") {
+        8
+    } else if cfg!(feature = "lxr_lock_9") {
+        9
+    } else {
+        (super::constants::LOG_BYTES_IN_PAGE - 6) as _
+    }
+};
 pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
     !cfg!(feature = "lxr_evacuate_nursery_in_recycled_lines");
 pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
@@ -153,6 +171,7 @@ fn dump_features(active_barrier: BarrierSelector) {
         "no_gc_until_lazy_sweeping_finished",
         *NO_GC_UNTIL_LAZY_SWEEPING_FINISHED
     );
+    dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
 
     println!("----------------------------------------------------");
 }
