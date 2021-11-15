@@ -280,20 +280,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 || block.get_state() == BlockState::Unallocated
                 || block.get_state() == BlockState::Nursery
             {
-                // println!(
-                //     " - skip defrag {:?} {:?} {:?} {}",
-                //     block,
-                //     block.dead_bytes(),
-                //     block.get_state(),
-                //     block.is_defrag_source(),
-                // );
+                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
                 continue;
             }
             if !block.attempt_to_set_as_defrag_source() {
                 continue;
             }
-            // println!(" - defrag {:?} {}", block, block.dead_bytes());
-            debug_assert!(!block.is_logged());
+            // println!(
+            //     " - defrag {:?} {:?} {}",
+            //     block,
+            //     block.get_state(),
+            //     block.dead_bytes()
+            // );
             me.defrag_blocks.push(block);
             count += 1;
             if count >= defrag_blocks {
@@ -505,7 +503,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
-        assert!(!crate::args::REF_COUNT);
+        debug_assert!(!crate::args::REF_COUNT);
         self.deinit_block(block, nursery);
         self.pr.release_pages(block.start());
     }
@@ -907,7 +905,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
         }
-        // block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
+        block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);
@@ -1145,17 +1143,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             {
                 continue;
             }
-            // println!(
-            //     "{:?} {:?} {} {}",
-            //     block,
-            //     block.get_state(),
-            //     block.is_defrag_source(),
-            //     block.dead_bytes()
-            // );
             let holes = block.dead_bytes();
-            // if holes >= 1 {
-            blocks.push((block, holes));
-            // }
+            if holes >= 1 {
+                blocks.push((block, holes));
+            }
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         immix

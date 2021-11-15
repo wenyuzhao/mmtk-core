@@ -785,17 +785,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
-            let in_ix_space = immix.immix_space.in_space(o);
-            if in_ix_space {
-                let b = Block::containing::<VM>(o);
-                // println!(
-                //     "dec {:?} in block {:?} {:?} {:?}",
-                //     o,
-                //     b,
-                //     b.get_state(),
-                //     b.dead_bytes()
-                // );
-            }
         }
     }
 }

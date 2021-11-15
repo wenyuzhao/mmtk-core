@@ -130,36 +130,12 @@ impl Block {
     #[inline(always)]
     fn inc_dead_bytes_sloppy(&self, bytes: usize) {
         let words = bytes >> LOG_BYTES_IN_WORD;
-        // let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
-        // let mut new = old + words;
-        // if new > Self::BYTES - 1 {
-        //     new = Self::BYTES - 1;
-        // }
-        // unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
-        let x = side_metadata::fetch_update(
-            &Self::DEAD_WORDS,
-            self.start(),
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |x| {
-                let mut new = x + words;
-                if new > Self::BYTES - 1 {
-                    new = Self::BYTES - 1;
-                }
-                if new == x {
-                    None
-                } else {
-                    Some(new)
-                }
-            },
-        );
-        // println!(
-        //     "inc_dead_bytes {:?} {:?} {:?} {}",
-        //     self,
-        //     x,
-        //     self.get_state(),
-        //     self.is_defrag_source()
-        // );
+        let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
+        let mut new = old + words;
+        if new > Self::BYTES - 1 {
+            new = Self::BYTES - 1;
+        }
+        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
     }
 
     #[inline(always)]
@@ -191,11 +167,6 @@ impl Block {
     #[inline(always)]
     fn reset_dead_bytes(&self) {
         unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), 0) };
-    }
-
-    #[inline(always)]
-    pub fn set_dead_bytes(&self, v: usize) {
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), v >> LOG_BYTES_IN_WORD) };
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -422,13 +393,6 @@ impl Block {
             self.start(),
             Block::BYTES,
         );
-    }
-
-    #[inline(always)]
-    pub fn is_logged(&self) -> bool {
-        let old_value =
-            side_metadata::load_atomic(&Self::LOG_TABLE, self.start(), Ordering::Relaxed);
-        old_value == 1
     }
 
     #[inline(always)]
