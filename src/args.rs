@@ -7,7 +7,9 @@ use crate::{
 };
 
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
-pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: bool = false;
+pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
+    env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "1".to_string()) != "0"
+});
 
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
@@ -147,6 +149,10 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
     dump_feature!("max_mature_defrag_blocks", *MAX_MATURE_DEFRAG_BLOCKS);
+    dump_feature!(
+        "no_gc_until_lazy_sweeping_finished",
+        *NO_GC_UNTIL_LAZY_SWEEPING_FINISHED
+    );
 
     println!("----------------------------------------------------");
 }
