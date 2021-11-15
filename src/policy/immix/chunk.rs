@@ -302,7 +302,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         Self::reset_object_mark::<VM>(self.chunk);
         // Iterate over all blocks in this chunk
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         for block in self.chunk.blocks() {
             let state = block.get_state();
             // Skip unallocated blocks.
