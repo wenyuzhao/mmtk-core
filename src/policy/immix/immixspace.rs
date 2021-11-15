@@ -143,6 +143,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
+                MetadataSpec::OnSide(Block::DEAD_WORDS),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -276,46 +277,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
-        // let chunks = self.chunk_map.all_chunks();
-        // let num_chunks = Chunk::steps_between(&chunks.start, &chunks.end).unwrap();
-        // let mut search_defrag_blocks =
-        //     |chunks: Range<Chunk>, chunk_cursor: &mut usize, limit: usize, count: &mut usize| {
-        //         'out: for c in chunks.skip(*chunk_cursor).filter(|c| c.is_committed()) {
-        //             for b in c.committed_blocks().filter(|c| {
-        //                 c.get_state() != BlockState::Nursery && c.get_state() != BlockState::Reusing
-        //             }) {
-        //                 println!(" - defrag {:?} {:?} {}", b, b.get_state(), b.calc_holes());
-        //                 b.set_as_defrag_source(true);
-        //                 me.defrag_blocks.push(b);
-        //                 *count += 1;
-        //                 if *count >= defrag_blocks {
-        //                     break 'out;
-        //                 }
-        //             }
-        //             *chunk_cursor += 1;
-        //             if *chunk_cursor >= limit {
-        //                 break 'out;
-        //             }
-        //         }
-        //     };
-        // let mut chunk_cursor = self.defrag_chunk_cursor.load(Ordering::SeqCst);
-        // let original_cursor = chunk_cursor;
-        // search_defrag_blocks(chunks.clone(), &mut chunk_cursor, num_chunks, &mut count);
-        // if count < defrag_blocks && chunk_cursor >= num_chunks {
-        //     chunk_cursor = 0;
-        //     search_defrag_blocks(
-        //         chunks.clone(),
-        //         &mut chunk_cursor,
-        //         original_cursor,
-        //         &mut count,
-        //     );
-        // }
-        // if chunk_cursor >= num_chunks {
-        //     chunk_cursor = 0;
-        // }
-        // self.defrag_chunk_cursor
-        //     .store(chunk_cursor, Ordering::SeqCst);
-
         let mut blocks = vec![];
         if pause == Pause::FullTraceFast {
             for c in self.chunk_map.committed_chunks() {
@@ -324,13 +285,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     if state == BlockState::Nursery {
                         continue;
                     }
-                    let holes = b.calc_holes();
+                    let holes = b.dead_bytes();
                     if holes >= 1 {
                         blocks.push((b, holes));
                     }
                 }
             }
         } else {
+            unreachable!();
             while let Some(mut x) = self.fragmented_blocks.pop() {
                 blocks.append(&mut x);
             }
@@ -342,19 +304,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 || block.get_state() == BlockState::Unallocated
                 || block.get_state() == BlockState::Nursery
             {
-                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
+                println!(
+                    " - skip defrag {:?} {:?} {:?} {}",
+                    block,
+                    block.dead_bytes(),
+                    block.get_state(),
+                    block.is_defrag_source(),
+                );
                 continue;
             }
             if !block.attempt_to_set_as_defrag_source() {
                 continue;
             }
-            // println!(
-            //     " - defrag {:?} {:?} {} {}",
-            //     block,
-            //     block.get_state(),
-            //     block.is_defrag_source(),
-            //     holes
-            // );
+            println!(
+                " - defrag {:?} {} {}",
+                block,
+                block.dead_bytes(),
+                block.is_logged()
+            );
+            assert!(!block.is_logged());
             me.defrag_blocks.push(block);
             count += 1;
             if count >= defrag_blocks {
@@ -363,10 +331,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         if crate::args::LOG_PER_GC_STATE {
             println!(" - Defrag {} mature blocks", count);
-            // println!(
-            //     " - Defrag {} mature blocks (cursor @ {}/{})",
-            //     count, chunk_cursor, num_chunks
-            // );
         }
         self.num_defrag_blocks.store(count, Ordering::SeqCst);
     }
@@ -959,6 +923,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
         }
+        // block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);
@@ -1010,6 +975,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn add_to_possibly_dead_mature_blocks(&self, block: Block, is_defrag_source: bool) {
         if block.log() {
+            println!("add_to_possibly_dead_mature_blocks {:?}", block);
             self.possibly_dead_mature_blocks
                 .push((block, is_defrag_source));
         }

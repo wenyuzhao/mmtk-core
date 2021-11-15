@@ -1,3 +1,4 @@
+use crate::policy::immix::block::Block;
 use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::metadata::side_metadata::constants::{
@@ -80,6 +81,7 @@ define_side_metadata_specs!(
     RC_STRADDLE_LINES = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     // LXR Block logging bits
     IX_BLOCK_LOG   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
+    IX_BLOCK_DEAD_WORDS = (global: false, log_num_of_bits: (Block::LOG_BYTES - 3).next_power_of_two().trailing_zeros() as _, log_bytes_in_region: Block::LOG_BYTES),
 );
 
 #[cfg(test)]

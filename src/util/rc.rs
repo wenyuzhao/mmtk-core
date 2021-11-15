@@ -738,6 +738,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         let in_ix_space = immix.immix_space.in_space(o);
+        if in_ix_space {
+            Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
+        }
         if !crate::args::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
         }
@@ -829,7 +832,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         let mut count = 0;
         let queue = ArrayQueue::new(self.blocks.len());
         for (block, defrag) in &self.blocks {
-            block.unlog_non_atomic();
+            block.unlog();
+            println!("unlog {:?}", block);
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
                 count += 1;
                 queue.push(block.start()).unwrap();
