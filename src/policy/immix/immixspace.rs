@@ -1144,9 +1144,9 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 continue;
             }
             let holes = block.dead_bytes();
-            if holes >= 1 {
-                blocks.push((block, holes));
-            }
+            // if holes >= 1 {
+            blocks.push((block, holes));
+            // }
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         immix
