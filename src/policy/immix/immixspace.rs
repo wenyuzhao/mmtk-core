@@ -313,7 +313,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        self.scheduler().work_buckets[WorkBucketStage::CollectionSetSelection].bulk_add(tasks);
+        self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
