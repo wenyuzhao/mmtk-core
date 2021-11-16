@@ -361,7 +361,9 @@ impl Block {
     /// Deinitalize a block before releasing.
     #[inline]
     pub fn deinit(&self) {
-        self.reset_dead_bytes();
+        if !crate::args::HOLE_COUNTING {
+            self.reset_dead_bytes();
+        }
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
@@ -623,7 +625,11 @@ impl Block {
                     false
                 }
             } else {
-                // let holes = self.calc_holes();
+                let holes = if crate::args::HOLE_COUNTING {
+                    self.calc_holes()
+                } else {
+                    1
+                };
                 let has_holes = self.has_holes();
                 self.fetch_update_state(|s| {
                     if s == BlockState::Reusing
@@ -634,7 +640,7 @@ impl Block {
                         None
                     } else {
                         Some(BlockState::Reusable {
-                            unavailable_lines: 1 as _,
+                            unavailable_lines: holes as _,
                         })
                     }
                 })

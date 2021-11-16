@@ -398,7 +398,9 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
         });
-        Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
+        if !crate::args::HOLE_COUNTING {
+            Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
+        }
         self.immix().mark(o);
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {

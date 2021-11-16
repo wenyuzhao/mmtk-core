@@ -738,7 +738,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         let in_ix_space = immix.immix_space.in_space(o);
-        if in_ix_space {
+        if !crate::args::HOLE_COUNTING && in_ix_space {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
         if !crate::args::BLOCK_ONLY && in_ix_space {

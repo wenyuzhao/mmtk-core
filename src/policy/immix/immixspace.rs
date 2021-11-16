@@ -309,7 +309,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
                 chunk,
-                defrag_threshold: 1,
+                defrag_threshold: 0,
             });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
@@ -1143,10 +1143,17 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             {
                 continue;
             }
-            let holes = block.dead_bytes();
-            // if holes >= 1 {
-            blocks.push((block, holes));
-            // }
+            let score = if !crate::args::HOLE_COUNTING {
+                match state {
+                    BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
+                    _ => block.calc_holes(),
+                }
+            } else {
+                block.dead_bytes()
+            };
+            if score >= self.defrag_threshold {
+                blocks.push((block, score));
+            }
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         immix
