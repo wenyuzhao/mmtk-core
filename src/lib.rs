@@ -178,8 +178,9 @@ impl Drop for LazySweepingJobsCounter {
         }
         if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
             unsafe {
-                let f = LAZY_SWEEPING_JOBS.end_of_lazy.as_ref().unwrap();
-                f()
+                if let Some(f) = LAZY_SWEEPING_JOBS.end_of_lazy.as_ref() {
+                    f()
+                }
             }
         }
     }
