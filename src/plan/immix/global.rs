@@ -310,11 +310,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let me = unsafe { &mut *(self as *const _ as *mut Self) };
             me.immix_space.rc_eager_prepare(pause);
         }
-        // if self.current_pause().unwrap() == Pause::RefCount {
-        //     let scheduler = self.base().control_collector_context.scheduler();
-        //     scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
-        //     scheduler.work_buckets[WorkBucketStage::Initial].activate();
-        // }
+        if crate::args::REF_COUNT {
+            let scheduler = self.base().control_collector_context.scheduler();
+            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
+            if pause == Pause::RefCount {
+                scheduler.work_buckets[WorkBucketStage::Initial].activate();
+            }
+            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
+        }
         if pause == Pause::FinalMark {
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
