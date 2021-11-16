@@ -11,6 +11,8 @@ use crate::vm::VMBinding;
 
 use enum_map::EnumMap;
 
+use super::immix::Immix;
+
 type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
 
 // This struct is part of the Mutator struct.
@@ -86,6 +88,12 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
     fn barrier(&mut self) -> &mut dyn Barrier {
         &mut *self.barrier
+    }
+    fn flush_remembered_sets(&mut self) {
+        self.barrier().flush();
+        if let Some(_immix) = self.plan.downcast_ref::<Immix<VM>>() {
+            unsafe { self.allocators.immix[0].assume_init_mut().flush() }
+        }
     }
 }
 

@@ -341,10 +341,9 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
+    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, _space: &ImmixSpace<VM>) {
         if !copy && reuse {
             self.set_state(BlockState::Reusing);
-            space.mutator_recycled_blocks.push(*self);
             debug_assert!(!self.is_defrag_source());
         } else if copy {
             if reuse {

@@ -58,8 +58,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub block_allocation: BlockAllocation<VM>,
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
-    pub last_mutator_recycled_blocks: SegQueue<Block>,
-    pub mutator_recycled_blocks: SegQueue<Block>,
+    pub mutator_recycled_blocks: SegQueue<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     last_defrag_blocks: Vec<Block>,
     defrag_blocks: Vec<Block>,
@@ -215,7 +214,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             block_allocation: BlockAllocation::new(),
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
-            last_mutator_recycled_blocks: Default::default(),
             mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
             num_defrag_blocks: AtomicUsize::new(0),
@@ -304,7 +302,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_defrag_blocks.store(count, Ordering::SeqCst);
     }
 
-    pub fn schedule_defrag_selection_packets(&self, _pause: Pause) {
+    fn schedule_defrag_selection_packets(&self, _pause: Pause) {
         let tasks = self
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
@@ -372,13 +370,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
         }
-        // Mutator reused blocks cannot be released until reaching a RC pause.
-        // Remaing the block state as "reusing" and reset them here.
-        debug_assert!(self.last_mutator_recycled_blocks.is_empty());
-        std::mem::swap(
-            &mut self.last_mutator_recycled_blocks,
-            &mut self.mutator_recycled_blocks,
-        );
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
@@ -394,8 +385,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
             // self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
-        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Marked);
+        // SATB sweep has problem scanning mutator recycled blocks.
+        // Remaing the block state as "reusing" and reset them here.
+        while let Some(blocks) = self.mutator_recycled_blocks.pop() {
+            for b in blocks {
+                b.set_state(BlockState::Marked);
+            }
         }
     }
 

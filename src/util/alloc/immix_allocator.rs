@@ -1,12 +1,17 @@
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use crate::plan::Plan;
+use crate::policy::immix::block::Block;
+use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
+use crate::scheduler::GCWork;
+use crate::scheduler::GCWorker;
 use crate::util::alloc::Allocator;
 use crate::util::opaque_pointer::VMThread;
 use crate::util::Address;
 use crate::vm::*;
+use crate::MMTK;
 
 /// Immix allocator
 #[repr(C)]
@@ -30,6 +35,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
+    mutator_recycled_blocks: Box<Vec<Block>>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -133,6 +139,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
+            mutator_recycled_blocks: box vec![],
+        }
+    }
+
+    pub fn flush(&mut self) {
+        if !self.mutator_recycled_blocks.is_empty() {
+            let mut v = box vec![];
+            std::mem::swap(&mut v, &mut self.mutator_recycled_blocks);
+            self.immix_space().mutator_recycled_blocks.push(*v);
+            // self.immix_space().scheduler().work_buckets[WorkBucketStage::Initial]
+            //     .add(ResetMutatorRecycledBlocks(v));
         }
     }
 
@@ -209,11 +226,32 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("acquire_recyclable_block -> {:?}", block);
+                if !self.copy {
+                    self.mutator_recycled_blocks.push(block);
+                    // if self.mutator_recycled_blocks.len() >= ResetMutatorRecycledBlocks::CAPACITY {
+                    // self.flush();
+                    // }
+                }
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.lines().start);
                 true
             }
             _ => false,
+        }
+    }
+}
+
+#[allow(unused)]
+struct ResetMutatorRecycledBlocks(Box<Vec<Block>>);
+
+impl ResetMutatorRecycledBlocks {
+    pub const CAPACITY: usize = 1024;
+}
+
+impl<VM: VMBinding> GCWork<VM> for ResetMutatorRecycledBlocks {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        for b in &*self.0 {
+            b.set_state(BlockState::Marked);
         }
     }
 }
