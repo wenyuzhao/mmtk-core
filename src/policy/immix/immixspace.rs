@@ -309,7 +309,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
                 chunk,
-                defrag_threshold: 0,
+                defrag_threshold: 1,
             });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
