@@ -165,6 +165,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
                 me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
+            if crate::args::LOG_PER_GC_STATE {
+                crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
+                    println!(
+                        " - lazy jobs done, heap {:?}M",
+                        me.get_pages_reserved() / 256
+                    );
+                });
+            }
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
             let total_blocks = heap_size >> Block::LOG_BYTES;

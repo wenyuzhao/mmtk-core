@@ -25,7 +25,7 @@ use crate::{
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
-use crossbeam_queue::SegQueue;
+use crossbeam_queue::{ArrayQueue, SegQueue};
 use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::{
@@ -418,10 +418,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .bulk_add(dead_cycle_sweep_packets);
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
             }
-            while let Some(block) = self.last_defrag_blocks.pop() {
-                block.clear_rc_table::<VM>();
-                block.clear_striddle_table::<VM>();
-                self.add_to_possibly_dead_mature_blocks(block, true);
+            if self.last_defrag_blocks.len() > 0 {
+                let queue = ArrayQueue::new(self.last_defrag_blocks.len());
+                while let Some(block) = self.last_defrag_blocks.pop() {
+                    block.clear_rc_table::<VM>();
+                    block.clear_striddle_table::<VM>();
+                    if block.rc_sweep_mature::<VM>(self, true) {
+                        queue.push(block.start()).unwrap();
+                    }
+                }
+                self.pr.release_bulk(queue.len(), queue);
             }
         }
         // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
