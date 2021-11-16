@@ -332,6 +332,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         if crate::args::REF_COUNT
             && crate::args::RC_MATURE_EVACUATION
             && crate::concurrent_marking_in_progress()
+            && !self.immix.in_defrag(src)
         {
             self.mature_evac_remset.push(src);
         }
