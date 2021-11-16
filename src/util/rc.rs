@@ -728,7 +728,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {
             let x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() && !self::rc_stick(x) {
+            if !x.is_null() && !self::rc_stick(x) && self::count(x) == 0 {
                 self.recursive_dec(x);
             }
             if self.concurrent_marking_in_progress {
@@ -762,6 +762,13 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     fn process_decs(&mut self, decs: &Vec<ObjectReference>, immix: &Immix<VM>) {
         for o in decs {
             if o.is_null() {
+                continue;
+            }
+            if self::count(*o) == 0 {
+                continue;
+            }
+            let in_ix_space = immix.immix_space.in_space(*o);
+            if in_ix_space && Block::containing::<VM>(*o).get_state() == BlockState::Nursery {
                 continue;
             }
             let o =

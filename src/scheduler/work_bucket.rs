@@ -207,6 +207,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 pub enum WorkBucketStage {
     Unconstrained,
     FinishConcurrentWork,
+    CollectionSetSelection,
     Initial,
     Prepare,
     Closure,

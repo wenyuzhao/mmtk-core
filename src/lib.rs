@@ -176,7 +176,12 @@ impl Drop for LazySweepingJobsCounter {
                 }
             }
         }
-        self.counter.fetch_sub(1, Ordering::SeqCst);
+        if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
+            unsafe {
+                let f = LAZY_SWEEPING_JOBS.end_of_lazy.as_ref().unwrap();
+                f()
+            }
+        }
     }
 }
 
@@ -186,6 +191,7 @@ pub struct LazySweepingJobs {
     prev_counter: Option<Arc<AtomicUsize>>,
     curr_counter: Option<Arc<AtomicUsize>>,
     pub end_of_decs: Option<Box<dyn Fn(LazySweepingJobsCounter)>>,
+    pub end_of_lazy: Option<Box<dyn Fn()>>,
 }
 
 impl LazySweepingJobs {
@@ -196,6 +202,7 @@ impl LazySweepingJobs {
             prev_counter: None,
             curr_counter: None,
             end_of_decs: None,
+            end_of_lazy: None,
         }
     }
 

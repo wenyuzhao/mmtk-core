@@ -65,6 +65,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             work_buckets: enum_map! {
                 WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone(), true),
                 WorkBucketStage::FinishConcurrentWork => WorkBucket::new(false, worker_monitor.clone(), false),
+                WorkBucketStage::CollectionSetSelection => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Initial => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone(), false),
