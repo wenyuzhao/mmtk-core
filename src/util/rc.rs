@@ -770,10 +770,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             if self::count(*o) == 0 {
                 continue;
             }
-            let in_ix_space = immix.immix_space.in_space(*o);
-            if in_ix_space && Block::containing::<VM>(*o).get_state() == BlockState::Nursery {
-                continue;
-            }
             let o =
                 if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(*o) {
                     object_forwarding::read_forwarding_pointer::<VM>(*o)
