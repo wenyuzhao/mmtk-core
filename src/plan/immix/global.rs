@@ -314,7 +314,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let scheduler = self.base().control_collector_context.scheduler();
             scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
             if pause == Pause::RefCount {
-                scheduler.work_buckets[WorkBucketStage::Initial].activate();
+                // scheduler.work_buckets[WorkBucketStage::Initial].activate();
             }
             scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
         }
