@@ -394,6 +394,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
             // self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
+        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+            x.set_state(BlockState::Marked);
+        }
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
@@ -407,6 +410,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+            if self.last_defrag_blocks.len() > 0 {
+                let queue = ArrayQueue::new(self.last_defrag_blocks.len());
+                while let Some(block) = self.last_defrag_blocks.pop() {
+                    block.clear_rc_table::<VM>();
+                    block.clear_striddle_table::<VM>();
+                    if block.rc_sweep_mature::<VM>(self, true) {
+                        queue.push(block.start()).unwrap();
+                    }
+                    assert!(!block.is_defrag_source());
+                    assert_eq!(block.get_state(), BlockState::Unallocated);
+                }
+                self.pr.release_bulk(queue.len(), queue);
+            }
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_desc());
@@ -418,21 +434,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .bulk_add(dead_cycle_sweep_packets);
                 self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
             }
-            if self.last_defrag_blocks.len() > 0 {
-                let queue = ArrayQueue::new(self.last_defrag_blocks.len());
-                while let Some(block) = self.last_defrag_blocks.pop() {
-                    block.clear_rc_table::<VM>();
-                    block.clear_striddle_table::<VM>();
-                    if block.rc_sweep_mature::<VM>(self, true) {
-                        queue.push(block.start()).unwrap();
-                    }
-                }
-                self.pr.release_bulk(queue.len(), queue);
-            }
         }
-        // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-        //     x.set_state(BlockState::Marked);
-        // }
     }
 
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
@@ -969,9 +971,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
-        while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-            x.set_state(BlockState::Marked);
-        }
+        // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
+        //     x.set_state(BlockState::Marked);
+        // }
         // This may happen either within a pause, or in concurrent.
         let size = self.possibly_dead_mature_blocks.len();
         let num_bins = self.scheduler().num_workers() << 1;

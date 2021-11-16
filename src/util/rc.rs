@@ -423,7 +423,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             new
         } else {
             let mature_defrag =
-                crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(o).is_defrag_source();
+                self.should_do_mature_evac() && Block::containing::<VM>(o).is_defrag_source();
             let is_nursery = self::count(o) == 0;
             if is_nursery || mature_defrag {
                 // Evacuate the object
