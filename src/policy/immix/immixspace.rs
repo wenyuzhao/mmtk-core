@@ -1,7 +1,7 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, ImmixCopyContext, Pause};
+use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::chunk::Chunk;
@@ -1001,12 +1001,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     buffer: Vec<ObjectReference>,
     concurrent: bool,
-    immix: Option<&'static Immix<Edges::VM>>,
     immix_space: &'static ImmixSpace<Edges::VM>,
     edges: Vec<Address>,
     worker: *mut GCWorker<Edges::VM>,
     mmtk: *const MMTK<Edges::VM>,
-    check_mature_evac_remset: bool,
 }
 
 unsafe impl<E: ProcessEdgesWork> Send for ScanObjectsAndMarkLines<E> {}
@@ -1015,7 +1013,7 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     pub fn new(
         buffer: Vec<ObjectReference>,
         concurrent: bool,
-        immix: Option<&'static Immix<E::VM>>,
+        _immix: Option<&'static Immix<E::VM>>,
         immix_space: &'static ImmixSpace<E::VM>,
     ) -> Self {
         debug_assert!(!concurrent);
@@ -1025,19 +1023,10 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         Self {
             buffer,
             concurrent,
-            immix,
             immix_space,
             edges: vec![],
             worker: ptr::null_mut(),
             mmtk: ptr::null_mut(),
-            check_mature_evac_remset: crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && immix
-                    .map(|ix| {
-                        let pause = ix.current_pause();
-                        pause == Some(Pause::FinalMark) || pause == Some(Pause::FullTraceFast)
-                    })
-                    .unwrap_or(false),
         }
     }
 
@@ -1047,15 +1036,7 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
 
     #[inline(always)]
     fn process_node(&mut self, o: ObjectReference) {
-        let check_mature_evac_remset = self.check_mature_evac_remset;
-        let mut should_add_to_mature_evac_remset = false;
         EdgeIterator::<E::VM>::iterate(o, |e| {
-            if check_mature_evac_remset && !should_add_to_mature_evac_remset {
-                let immix = unsafe { self.immix.unwrap_unchecked() };
-                if !immix.in_defrag(o) && immix.in_defrag(unsafe { e.load() }) {
-                    should_add_to_mature_evac_remset = true;
-                }
-            }
             let t = unsafe { e.load::<ObjectReference>() };
             if !t.is_null() {
                 self.edges.push(e);
@@ -1063,9 +1044,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         });
         if self.edges.len() >= E::CAPACITY {
             self.flush();
-        }
-        if should_add_to_mature_evac_remset {
-            unreachable!();
         }
     }
 

@@ -195,7 +195,6 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     nodes: Vec<ObjectReference>,
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
-    mature_evac_remset: Vec<ObjectReference>,
     immix: &'static Immix<E::VM>,
 }
 
@@ -213,7 +212,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             nodes: vec![],
             incs: Vec::with_capacity(Self::CAPACITY),
             decs: Vec::with_capacity(Self::CAPACITY),
-            mature_evac_remset: vec![],
             immix: mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap(),
         }
     }
@@ -333,7 +331,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
         if self.edges.len() >= Self::CAPACITY
             || self.incs.len() >= Self::CAPACITY
             || self.decs.len() >= Self::CAPACITY
-            || self.mature_evac_remset.len() >= Self::CAPACITY
         {
             self.flush();
         }

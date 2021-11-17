@@ -1,18 +1,13 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::immix::gc_work::ImmixProcessEdges;
 use crate::plan::immix::Immix;
-use crate::plan::immix::ImmixCopyContext;
 use crate::plan::immix::Pause;
 use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
-use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
-use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -733,70 +728,22 @@ impl<VM: VMBinding> GCWork<VM> for UnlogEdges {
 
 pub struct EvacuateMatureObjects<VM: VMBinding> {
     remset: Vec<Address>,
-    next_remset: Vec<Address>,
-    mmtk: Option<&'static MMTK<VM>>,
-    worker: *mut GCWorker<VM>,
+    _p: PhantomData<VM>,
 }
 
 unsafe impl<VM: VMBinding> Send for EvacuateMatureObjects<VM> {}
 unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
 
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
-    const CAPACITY: usize = 128;
+    pub const CAPACITY: usize = 128;
 
     pub fn new(remset: Vec<Address>) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         Self {
             remset,
-            next_remset: vec![],
-            mmtk: None,
-            worker: std::ptr::null_mut(),
+            _p: PhantomData,
         }
-    }
-
-    const fn worker(&self) -> &mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
-    }
-
-    // #[inline]
-    // fn forward(&mut self, o: ObjectReference, immix_space: &ImmixSpace<VM>) -> ObjectReference {
-    //     let copy_context = unsafe { self.worker().local::<ImmixCopyContext<VM>>() };
-    //     let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
-    //     if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
-    //         object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status)
-    //     } else {
-    //         // Evacuate the young object
-    //         let new = object_forwarding::forward_object::<VM, _>(
-    //             o,
-    //             AllocationSemantics::Default,
-    //             copy_context,
-    //         );
-    //         // Transfer RC countsf
-    //         rc::promote::<VM>(new);
-    //         rc::set(new, rc::count(o));
-    //         immix_space.attempt_mark(new);
-    //         immix_space.unmark(o);
-    //         self.process_node(new);
-    //         new
-    //     }
-    // }
-
-    // #[inline]
-    // fn process_node(&mut self, o: ObjectReference) {
-    //     self.next_remset.push(o);
-    //     if self.next_remset.len() >= Self::CAPACITY {
-    //         self.flush();
-    //     }
-    // }
-
-    fn flush(&mut self) {
-        // if !self.next_remset.is_empty() {
-        //     let mut remset = vec![];
-        //     mem::swap(&mut remset, &mut self.next_remset);
-        //     let w = Self::new(remset);
-        //     self.worker().add_work(WorkBucketStage::RCEvacuateMature, w);
-        // }
     }
 
     fn address_is_valid_oop_edge(&self, e: Address, immix: &Immix<VM>) -> bool {
@@ -855,52 +802,11 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             && !rc::address_is_in_straddle_line(o.to_address())
             && Block::in_defrag_block::<VM>(o)
     }
-
-    // #[inline]
-    // fn evacuate_remset(&mut self, remset: &Vec<Address>, immix: &Immix<VM>) {
-    //     remset.
-    //     for o in remset {
-    //         let mut o = *o;
-    //         // Skip NULLs
-    //         if o.is_null() {
-    //             continue;
-    //         }
-    //         debug_assert!(o.is_mapped());
-    //         // Skip dead object
-    //         if rc::count(o) == 0 {
-    //             continue;
-    //         }
-    //         let los = !immix.immix_space.in_space(o);
-    //         // Skip object in defrag source
-    //         if !los && Block::containing::<VM>(o).is_defrag_source() {
-    //             continue;
-    //         }
-    //         // Skip objects sits in striddle lines
-    //         if !crate::args::BLOCK_ONLY && !los {
-    //             let line = Line::containing::<VM>(o);
-    //             if rc::count(unsafe { line.start().to_object_reference() }) != 0
-    //                 && rc::is_straddle_line(line)
-    //             {
-    //                 continue;
-    //             }
-    //         }
-    //         if !los {
-    //             o = o.fix_start_address::<VM>();
-    //         }
-    //         if object_forwarding::is_forwarded::<VM>(o) {
-    //             o = object_forwarding::read_forwarding_pointer::<VM>(o);
-    //         }
-    //         immix.mark2(o, los);
-    //         EdgeIterator::<VM>::iterate(o, |e| self.forward_edge(e, false, immix));
-    //     }
-    // }
 }
 
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.mmtk = Some(mmtk);
-        self.worker = worker;
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         debug_assert!(
             immix.current_pause() == Some(Pause::FinalMark)
@@ -910,18 +816,7 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
         let edges = remset
-            .drain_filter(|e| {
-                // println!("try process mature evac remset {:?}", e);
-                let x = self.process_edge(*e, immix);
-                if x {
-                    // println!("process mature evac remset {:?} -> {:?}", e, unsafe {
-                    //     e.load::<ObjectReference>()
-                    // });
-                } else {
-                    // println!("skip mature evac remset {:?}", e);
-                }
-                x
-            })
+            .drain_filter(|e| self.process_edge(*e, immix))
             .collect::<Vec<_>>();
         // transitive closure
         let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);

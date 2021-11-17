@@ -2,7 +2,6 @@ use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
-use crate::util::object_forwarding;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -304,17 +303,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     fn process_edges(&mut self) {
         self.pause = self.immix.current_pause().unwrap();
         for i in 0..self.edges.len() {
-            let o = unsafe { self.edges[i].load::<ObjectReference>() };
-            // println!(
-            //     "STW trace {:?} -> {:?} {}",
-            //     self.edges[i],
-            //     o,
-            //     if o.is_null() {
-            //         false
-            //     } else {
-            //         object_forwarding::is_forwarded::<VM>(o)
-            //     }
-            // );
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
         self.flush();

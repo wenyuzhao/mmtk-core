@@ -106,8 +106,8 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
         }
     }
 
+    #[inline(always)]
     pub fn add_mature_evac_remset(&mut self, e: Address) {
-        // println!("add_mature_evac_remset {:?}", e);
         self.mature_evac_remset.push(e);
         if self.mature_evac_remset.len() >= 128 {
             self.flush_mature_evac_remset()

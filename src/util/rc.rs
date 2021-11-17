@@ -22,7 +22,6 @@ use crate::{
     AllocationSemantics, MMTK,
 };
 use atomic::Ordering;
-use atomic_traits::Atomic;
 use crossbeam_queue::ArrayQueue;
 use std::intrinsics::unlikely;
 use std::iter::Step;
@@ -204,7 +203,6 @@ pub struct ProcessIncs<VM: VMBinding> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     current_pause_should_do_mature_evac: bool,
-    mature_evac_remset: Vec<Address>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -240,7 +238,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             current_pause_should_do_mature_evac: false,
-            mature_evac_remset: vec![],
         }
     }
 
@@ -286,9 +283,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     .local::<ImmixCopyContext<VM>>()
                     .add_mature_evac_remset(e)
             }
-            // println!("x add remset {:?}", e);
-        } else {
-            // println!("x skip add remset {:?}", e);
         }
     }
 
@@ -327,12 +321,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 edge.unlog::<VM>();
             }
             self.record_mature_evac_remset(edge, target);
-            // println!("rec inc {:?} -> {:?}", edge, target);
-            // self.record_mature_evac_remset(edge, target);
             if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
                 self.new_incs.push(edge);
-            } else {
-                // println!("skip rec inc {:?} -> {:?}", edge, target);
             }
         });
         if self.new_incs.len() >= Self::CAPACITY {
@@ -454,9 +444,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     object_forwarding::set_forwarding_pointer::<VM>(o, new);
                     self::promote::<VM>(new);
                     if self.current_pause == Pause::FinalMark {
-                        // println!("cp1 {:?} -> {:?}", o, new);
                         if self.immix().immix_space.is_marked(o) {
-                            // println!("mark {:?}", new);
                             self.immix().immix_space.attempt_mark(new);
                             EdgeIterator::<VM>::iterate(new, |e| {
                                 let t = unsafe { e.load() };
@@ -467,7 +455,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                             })
                         }
                         self.immix().immix_space.unmark(o);
-                        //     // copy_context.add_mature_evac_remset(new);
                     }
                     new
                 } else {
@@ -477,18 +464,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         copy_context,
                     );
                     let _ = self::inc(new);
-                    // if self.current_pause == Pause::FinalMark {
-                    //     if self.immix().immix_space.is_marked(o) {
-                    //         println!("mark {:?}", new);
-                    //         self.immix().immix_space.attempt_mark(new);
-                    //     }
-                    //     self.immix().immix_space.unmark(o);
-                    // }
                     self.promote(new, true, false);
-                    // println!("cp2 {:?} -> {:?}", o, new);
-                    // if mature_defrag && self.current_pause == Pause::FinalMark {
-                    //     copy_context.add_mature_evac_remset(new);
-                    // }
                     new
                 }
             } else {
@@ -538,23 +514,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.record_mature_evac_remset(e, o);
         }
         if new != o {
-            // println!(
-            //     " -- inc {:?} {:?}: {:?} => {:?} rc={}",
-            //     kind,
-            //     e,
-            //     o.range::<VM>(),
-            //     new.range::<VM>(),
-            //     count(new)
-            // );
+            // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));
             unsafe { e.store(new) }
         } else {
-            // println!(
-            //     " -- inc {:?} {:?}: {:?} rc={}",
-            //     kind,
-            //     e,
-            //     o.range::<VM>(),
-            //     count(o)
-            // );
+            // println!(" -- inc {:?}: {:?} rc={}", e, o, count(o));
         }
         Some(new)
     }

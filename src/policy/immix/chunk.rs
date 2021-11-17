@@ -401,7 +401,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
-        // println!("SATB kill {:?}", o);
         self.immix().mark(o);
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {
