@@ -747,9 +747,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     #[inline(always)]
     fn address_is_valid_oop_edge(&self, e: Address, immix: &Immix<VM>) -> bool {
-        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
-            return true;
-        }
         // Skip edges not in the mmtk heap
         if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
             return false;
@@ -757,6 +754,9 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // Skip edges in collection set
         if immix.address_in_defrag(e) {
             return false;
+        }
+        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
+            return true;
         }
         // Check if it is a real oop field
         if immix.immix_space.address_in_space(e) {
