@@ -326,6 +326,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 self.decs.push(old);
             }
             self.incs.push(edge);
+            crate::util::rc::inc_inc_buffer_size();
         }
         // Flush
         if self.edges.len() >= Self::CAPACITY

@@ -26,6 +26,7 @@ use crossbeam_queue::ArrayQueue;
 use std::intrinsics::unlikely;
 use std::iter::Step;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicUsize;
 
 pub const LOG_REF_COUNT_BITS: usize = 1;
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
@@ -203,6 +204,26 @@ pub struct ProcessIncs<VM: VMBinding> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     current_pause_should_do_mature_evac: bool,
+}
+
+static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
+
+#[inline(always)]
+pub fn inc_buffer_size() -> usize {
+    INC_BUFFER_SIZE.load(Ordering::Relaxed)
+}
+
+#[inline(always)]
+pub fn inc_inc_buffer_size() {
+    INC_BUFFER_SIZE.store(
+        INC_BUFFER_SIZE.load(Ordering::Relaxed) + 1,
+        Ordering::Relaxed,
+    );
+}
+
+#[inline(always)]
+pub fn reset_inc_buffer_size() {
+    INC_BUFFER_SIZE.store(0, Ordering::Relaxed)
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}

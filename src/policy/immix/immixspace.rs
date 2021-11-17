@@ -403,6 +403,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         }
+        rc::reset_inc_buffer_size();
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {

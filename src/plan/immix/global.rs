@@ -24,7 +24,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
 use crate::util::options::UnsafeOptionsWrapper;
-use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
+use crate::util::rc::{self, ProcessDecs, RCImmixCollectRootEdges};
 use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
@@ -112,7 +112,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(crate::concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
-            && self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
+            && (self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
+                || crate::args::INC_BUFFER_LIMIT
+                    .map(|limit| rc::inc_buffer_size() >= limit)
+                    .unwrap_or(false))
         {
             return true;
         }
@@ -195,7 +198,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         );
         if crate::args::LOG_PER_GC_STATE {
             let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
-            println!("[{:.3}s][pause] {:?}", boot_time, pause);
+            println!(
+                "[{:.3}s][pause] {:?} {}",
+                boot_time,
+                pause,
+                crate::util::rc::inc_buffer_size()
+            );
         }
         match pause {
             Pause::FullTraceFast => {
