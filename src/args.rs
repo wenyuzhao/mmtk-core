@@ -13,7 +13,8 @@ pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
 pub const HOLE_COUNTING: bool = cfg!(feature = "lxr_hole_counting");
 pub const NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY: bool = false;
 
-pub const INC_BUFFER_LIMIT: Option<usize> = None;
+pub const INC_BUFFER_LIMIT: Lazy<Option<usize>> =
+    Lazy::new(|| env::var("INCS_LIMIT").map(|x| x.parse().unwrap()).ok());
 
 // ---------- Immix flags ---------- //
 pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
