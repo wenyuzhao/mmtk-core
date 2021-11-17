@@ -67,9 +67,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
         if object.is_null() {
             return object;
         }
-        let no_trace = crate::args::REF_COUNT
-            && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-            && crate::util::rc::count(object) == 0;
+        let no_trace = crate::args::REF_COUNT && crate::util::rc::count(object) == 0;
         if no_trace {
             return object;
         }
