@@ -762,7 +762,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 if rc != MAX_REF_COUNT && rc != 0 {
                     self.recursive_dec(x);
                 }
-                if not_marked && self.concurrent_marking_in_progress && rc != 0 {
+                if not_marked && self.concurrent_marking_in_progress {
                     if !immix.is_marked(x) {
                         self.mark_objects.push(x);
                     }
