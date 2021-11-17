@@ -103,7 +103,7 @@ pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
 pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_BLOCKS")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(1024)
+        .unwrap_or(512)
 });
 
 // ---------- Barrier flags ---------- //
