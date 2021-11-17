@@ -12,6 +12,7 @@ use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
+use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -803,23 +804,16 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             let block = Block::of(e);
             let mut cursor = e - 16;
             while cursor >= block.start() {
+                // Skip straddle lines
                 if rc::address_is_in_straddle_line(cursor) {
                     cursor = Line::align(cursor);
                     cursor = cursor - rc::MIN_OBJECT_SIZE;
                     continue;
                 }
+                // Check if the edge points to a real oop
                 let mut o = unsafe { cursor.to_object_reference() };
-                unsafe {
-                    // println!(
-                    //     "test {:?} {:?} {:?}",
-                    //     cursor,
-                    //     cursor.load::<Address>(),
-                    //     (cursor + 8usize).load::<Address>()
-                    // );
-                }
                 if rc::count(o) != 0 {
                     o = o.fix_start_address::<VM>();
-                    // println!(" - rc != 0");
                     let end = o.to_address() + o.get_size::<VM>();
                     if end <= e {
                         return false;
@@ -832,7 +826,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                     });
                     return has_edge;
                 }
-                // println!("test end {:?} -> {:?}", cursor, o);
                 cursor = cursor - rc::MIN_OBJECT_SIZE;
             }
             return false;
@@ -844,45 +837,23 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     #[inline]
     fn process_edge(&mut self, e: Address, immix: &Immix<VM>) -> bool {
         // Skip edges not in the mmtk heap
-        // println!("1");
         if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
             return false;
         }
-        // println!("2");
         // Skip edges in collection set
         if immix.address_in_defrag(e) {
             return false;
         }
+        // Skip edges that does not contain a real oop
         if !self.address_is_valid_oop_edge(e, immix) {
             return false;
         }
-        // println!("3");
-        // Skip recycled edges
-        // if immix.immix_space.address_in_space(e) {
-        //     // let block = Block::of(e);
-        //     // let mut cursor = e - 16;
-        //     // while cursor >= block.start() {
-        //     //     if rc::address_is_in_straddle_line(e) {
-        //     //         cursor = Line::align(cursor);
-        //     //         cursor = cursor - rc::MIN_OBJECT_SIZE;
-        //     //         continue;
-        //     //     }
-        //     //     let o = unsafe {e.to_object_reference()};
-        //     //     if rc::count(o) != 0 {
-        //     //         let end = o.to_address() + o.get_size::<VM>();
-        //     //         return if o.get_size::<VM>()
-        //     //     }
-        //     //     cursor = cursor - rc::MIN_OBJECT_SIZE;
-        //     // }
-
-        //     for e in (block.start()..e).step_by(rc::MIN_OBJECT_SIZE).rev() {}
-        // }
+        // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
-
         immix.immix_space.in_space(o)
             && rc::count(o) != 0
             && !rc::address_is_in_straddle_line(o.to_address())
-            && Block::containing::<VM>(o).get_state() != BlockState::Unallocated
+            && Block::in_defrag_block::<VM>(o)
     }
 
     // #[inline]
