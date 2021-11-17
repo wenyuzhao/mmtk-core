@@ -2,7 +2,6 @@ use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::immix::Immix;
 use crate::plan::immix::Pause;
-use crate::plan::EdgeIterator;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::line::Line;
@@ -766,13 +765,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                     if end <= e {
                         return false;
                     }
-                    let mut has_edge = false;
-                    EdgeIterator::<VM>::iterate(o, |x| {
-                        if x == e {
-                            has_edge = true;
-                        }
-                    });
-                    return has_edge;
+                    return VM::VMScanning::is_oop_field(o, e);
                 }
                 cursor = cursor - rc::MIN_OBJECT_SIZE;
             }

@@ -1,8 +1,8 @@
 use crate::plan::{Mutator, TransitiveClosure};
 use crate::scheduler::GCWorker;
 use crate::scheduler::ProcessEdgesWork;
-use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
+use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
 /// VM-specific methods for scanning roots/objects.
@@ -28,6 +28,11 @@ pub trait Scanning<VM: VMBinding> {
         object: ObjectReference,
         tls: VMWorkerThread,
     );
+
+    #[inline(always)]
+    fn is_oop_field(_o: ObjectReference, _e: Address) -> bool {
+        unreachable!()
+    }
 
     /// MMTk calls this method at the first time during a collection that thread's stacks
     /// have been scanned. This can be used (for example) to clean up
