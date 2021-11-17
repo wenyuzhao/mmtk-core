@@ -746,6 +746,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
+    #[inline(always)]
     fn address_is_valid_oop_edge(&self, e: Address, immix: &Immix<VM>) -> bool {
         if immix.immix_space.address_in_space(e) {
             let block = Block::of(e);
