@@ -110,6 +110,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // RC nursery full
         if crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
+            && !(crate::concurrent_marking_in_progress()
+                && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
             && self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
         {
             return true;

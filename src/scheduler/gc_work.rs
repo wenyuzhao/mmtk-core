@@ -747,6 +747,18 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     #[inline(always)]
     fn address_is_valid_oop_edge(&self, e: Address, immix: &Immix<VM>) -> bool {
+        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
+            return true;
+        }
+        // Skip edges not in the mmtk heap
+        if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
+            return false;
+        }
+        // Skip edges in collection set
+        if immix.address_in_defrag(e) {
+            return false;
+        }
+        // Check if it is a real oop field
         if immix.immix_space.address_in_space(e) {
             let block = Block::of(e);
             let mut cursor = e - 16;
@@ -777,14 +789,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     #[inline]
     fn process_edge(&mut self, e: Address, immix: &Immix<VM>) -> bool {
-        // Skip edges not in the mmtk heap
-        if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
-            return false;
-        }
-        // Skip edges in collection set
-        if immix.address_in_defrag(e) {
-            return false;
-        }
         // Skip edges that does not contain a real oop
         if !self.address_is_valid_oop_edge(e, immix) {
             return false;
@@ -792,9 +796,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
         if !immix.immix_space.in_space(o) {
-            return false;
-        }
-        if rc::address_is_in_straddle_line(o.to_address()) {
             return false;
         }
         // Maybe a forwarded nursery or mature object from inc processing.
