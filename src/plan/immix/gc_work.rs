@@ -20,7 +20,7 @@ use thread_priority::{self, ThreadPriority};
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
     immix: ImmixAllocator<VM>,
-    mature_evac_remset: Vec<ObjectReference>,
+    mature_evac_remset: Vec<Address>,
 }
 
 impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
@@ -106,8 +106,9 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
         }
     }
 
-    pub fn add_mature_evac_remset(&mut self, o: ObjectReference) {
-        self.mature_evac_remset.push(o);
+    pub fn add_mature_evac_remset(&mut self, e: Address) {
+        // println!("add_mature_evac_remset {:?}", e);
+        self.mature_evac_remset.push(e);
         if self.mature_evac_remset.len() >= 128 {
             self.flush_mature_evac_remset()
         }

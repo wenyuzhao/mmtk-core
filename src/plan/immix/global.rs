@@ -28,7 +28,7 @@ use crate::util::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
-use crate::util::{metadata, ObjectReference};
+use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{scheduler::*, BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
@@ -607,6 +607,11 @@ impl<VM: VMBinding> Immix<VM> {
     #[inline(always)]
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
         self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
+    }
+
+    #[inline(always)]
+    pub fn address_in_defrag(&self, a: Address) -> bool {
+        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
     }
 
     #[inline(always)]

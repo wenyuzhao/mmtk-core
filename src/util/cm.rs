@@ -2,6 +2,7 @@ use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
+use crate::util::object_forwarding;
 use crate::{
     plan::{
         immix::{Immix, ImmixCopyContext},
@@ -98,15 +99,16 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         {
             self.plan.immix_space.mark_lines(object);
         }
-        let mut should_add_to_mature_evac_remset = false;
+        let should_check_remset = !self.plan.in_defrag(object);
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && !should_add_to_mature_evac_remset
-            {
-                if !self.plan.in_defrag(object) && self.plan.in_defrag(t) {
-                    should_add_to_mature_evac_remset = true;
+            if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION && should_check_remset {
+                if self.plan.in_defrag(t) {
+                    unsafe {
+                        self.worker()
+                            .local::<ImmixCopyContext<VM>>()
+                            .add_mature_evac_remset(e)
+                    }
                 }
             }
             self.next_objects.push(t);
@@ -114,13 +116,6 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                 self.flush();
             }
         });
-        if should_add_to_mature_evac_remset {
-            unsafe {
-                self.worker()
-                    .local::<ImmixCopyContext<VM>>()
-                    .add_mature_evac_remset(object)
-            }
-        }
     }
 }
 
@@ -309,6 +304,17 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     fn process_edges(&mut self) {
         self.pause = self.immix.current_pause().unwrap();
         for i in 0..self.edges.len() {
+            let o = unsafe { self.edges[i].load::<ObjectReference>() };
+            // println!(
+            //     "STW trace {:?} -> {:?} {}",
+            //     self.edges[i],
+            //     o,
+            //     if o.is_null() {
+            //         false
+            //     } else {
+            //         object_forwarding::is_forwarded::<VM>(o)
+            //     }
+            // );
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
         self.flush();

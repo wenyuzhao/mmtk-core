@@ -22,6 +22,7 @@ use crate::{
     AllocationSemantics, MMTK,
 };
 use atomic::Ordering;
+use atomic_traits::Atomic;
 use crossbeam_queue::ArrayQueue;
 use std::intrinsics::unlikely;
 use std::iter::Step;
@@ -132,6 +133,12 @@ pub fn is_straddle_line(line: Line) -> bool {
 }
 
 #[inline(always)]
+pub fn address_is_in_straddle_line(a: Address) -> bool {
+    let line = Line::from(Line::align(a));
+    self::count(unsafe { a.to_object_reference() }) != 0 && self::is_straddle_line(line)
+}
+
+#[inline(always)]
 pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     debug_assert!(!crate::args::BLOCK_ONLY);
     // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
@@ -197,6 +204,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     current_pause_should_do_mature_evac: bool,
+    mature_evac_remset: Vec<Address>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -232,6 +240,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             current_pause_should_do_mature_evac: false,
+            mature_evac_remset: vec![],
         }
     }
 
@@ -265,10 +274,26 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
+    fn record_mature_evac_remset(&mut self, e: Address, o: ObjectReference) {
+        if !(crate::args::RC_MATURE_EVACUATION
+            && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
+        {
+            return;
+        }
+        if !self.immix().address_in_defrag(e) && self.immix().in_defrag(o) {
+            unsafe {
+                self.worker()
+                    .local::<ImmixCopyContext<VM>>()
+                    .add_mature_evac_remset(e)
+            }
+            // println!("x add remset {:?}", e);
+        } else {
+            // println!("x skip add remset {:?}", e);
+        }
+    }
+
+    #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        let check_mature_evac_remset =
-            crate::args::RC_MATURE_EVACUATION && (self.concurrent_marking_in_progress);
-        let mut should_add_to_mature_evac_remset = false;
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -298,33 +323,20 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let x = in_place_promotion && !los;
         EdgeIterator::<VM>::iterate(o, |edge| {
             let target = unsafe { edge.load::<ObjectReference>() };
-            if crate::args::RC_MATURE_EVACUATION
-                && check_mature_evac_remset
-                && !should_add_to_mature_evac_remset
-            {
-                if !self.immix().in_defrag(o) && self.immix().in_defrag(target) {
-                    should_add_to_mature_evac_remset = true;
-                }
-            }
             if x {
                 edge.unlog::<VM>();
             }
-            if !target.is_null()
-                && (!self::rc_stick(target)
-                    || (self.should_do_mature_evac() && self.immix().in_defrag(target)))
-            {
+            self.record_mature_evac_remset(edge, target);
+            // println!("rec inc {:?} -> {:?}", edge, target);
+            // self.record_mature_evac_remset(edge, target);
+            if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
                 self.new_incs.push(edge);
+            } else {
+                // println!("skip rec inc {:?} -> {:?}", edge, target);
             }
         });
         if self.new_incs.len() >= Self::CAPACITY {
             self.flush(true)
-        }
-        if should_add_to_mature_evac_remset {
-            unsafe {
-                self.worker()
-                    .local::<ImmixCopyContext<VM>>()
-                    .add_mature_evac_remset(o)
-            }
         }
     }
 
@@ -442,9 +454,20 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     object_forwarding::set_forwarding_pointer::<VM>(o, new);
                     self::promote::<VM>(new);
                     if self.current_pause == Pause::FinalMark {
-                        self.immix().immix_space.attempt_mark(new);
+                        // println!("cp1 {:?} -> {:?}", o, new);
+                        if self.immix().immix_space.is_marked(o) {
+                            // println!("mark {:?}", new);
+                            self.immix().immix_space.attempt_mark(new);
+                            EdgeIterator::<VM>::iterate(new, |e| {
+                                let t = unsafe { e.load() };
+                                self.record_mature_evac_remset(e, t);
+                                if !t.is_null() && self::count(t) == 0 {
+                                    self.new_incs.push(e)
+                                }
+                            })
+                        }
                         self.immix().immix_space.unmark(o);
-                        copy_context.add_mature_evac_remset(new);
+                        //     // copy_context.add_mature_evac_remset(new);
                     }
                     new
                 } else {
@@ -454,10 +477,18 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         copy_context,
                     );
                     let _ = self::inc(new);
+                    // if self.current_pause == Pause::FinalMark {
+                    //     if self.immix().immix_space.is_marked(o) {
+                    //         println!("mark {:?}", new);
+                    //         self.immix().immix_space.attempt_mark(new);
+                    //     }
+                    //     self.immix().immix_space.unmark(o);
+                    // }
                     self.promote(new, true, false);
-                    if mature_defrag && self.current_pause == Pause::FinalMark {
-                        copy_context.add_mature_evac_remset(new);
-                    }
+                    // println!("cp2 {:?} -> {:?}", o, new);
+                    // if mature_defrag && self.current_pause == Pause::FinalMark {
+                    //     copy_context.add_mature_evac_remset(new);
+                    // }
                     new
                 }
             } else {
@@ -503,11 +534,27 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         } else {
             self.process_inc_and_evacuate(o, cc)
         };
+        if kind != EdgeKind::Root {
+            self.record_mature_evac_remset(e, o);
+        }
         if new != o {
-            // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));
+            // println!(
+            //     " -- inc {:?} {:?}: {:?} => {:?} rc={}",
+            //     kind,
+            //     e,
+            //     o.range::<VM>(),
+            //     new.range::<VM>(),
+            //     count(new)
+            // );
             unsafe { e.store(new) }
         } else {
-            // println!(" -- inc {:?}: {:?} rc={}", e, o, count(o));
+            // println!(
+            //     " -- inc {:?} {:?}: {:?} rc={}",
+            //     kind,
+            //     e,
+            //     o.range::<VM>(),
+            //     count(o)
+            // );
         }
         Some(new)
     }
@@ -543,7 +590,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EdgeKind {
     Root,
     Nursery,
@@ -585,8 +632,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         self.current_pause = self.immix().current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         self.current_pause_should_do_mature_evac = crate::args::RC_MATURE_EVACUATION
-            && self.current_pause == Pause::FullTraceFast
-            || self.current_pause == Pause::FinalMark;
+            && (self.current_pause == Pause::FullTraceFast
+                || self.current_pause == Pause::FinalMark);
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         // Process main buffer

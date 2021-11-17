@@ -1065,11 +1065,7 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
             self.flush();
         }
         if should_add_to_mature_evac_remset {
-            unsafe {
-                self.worker()
-                    .local::<ImmixCopyContext<E::VM>>()
-                    .add_mature_evac_remset(o)
-            }
+            unreachable!();
         }
     }
 

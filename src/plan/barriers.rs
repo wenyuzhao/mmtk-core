@@ -311,7 +311,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn slow(&mut self, src: ObjectReference, edge: Address, old: ObjectReference) {
+    fn slow(&mut self, _src: ObjectReference, edge: Address, old: ObjectReference) {
         // Concurrent Marking
         if !crate::args::REF_COUNT
             && crate::args::CONCURRENT_MARKING
@@ -328,13 +328,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 self.decs.push(old);
             }
             self.incs.push(edge);
-        }
-        if crate::args::REF_COUNT
-            && crate::args::RC_MATURE_EVACUATION
-            && crate::concurrent_marking_in_progress()
-            && !self.immix.in_defrag(src)
-        {
-            self.mature_evac_remset.push(src);
         }
         // Flush
         if self.edges.len() >= Self::CAPACITY
@@ -418,20 +411,6 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             } else {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
             }
-        }
-        // Flush dec buffer
-        if crate::args::RC_MATURE_EVACUATION && !self.mature_evac_remset.is_empty() {
-            let mut remset = vec![];
-            std::mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.mmtk
-                .plan
-                .downcast_ref::<Immix<E::VM>>()
-                .unwrap()
-                .immix_space
-                .mature_evac_remsets
-                .lock()
-                .push(box w);
         }
     }
 

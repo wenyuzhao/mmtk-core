@@ -188,6 +188,11 @@ impl Block {
         Self(address)
     }
 
+    #[inline(always)]
+    pub fn of(a: Address) -> Self {
+        Self::from(Self::align(a))
+    }
+
     /// Get the block containing the given address.
     /// The input address does not need to be aligned.
     #[inline(always)]
@@ -278,6 +283,11 @@ impl Block {
     #[inline(always)]
     pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
         Block::containing::<VM>(o).is_defrag_source()
+    }
+
+    #[inline(always)]
+    pub fn address_in_defrag_block(a: Address) -> bool {
+        Block::from(Block::align(a)).is_defrag_source()
     }
 
     /// Mark the block for defragmentation.
