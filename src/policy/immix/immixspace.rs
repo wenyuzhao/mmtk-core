@@ -331,23 +331,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .reset_and_generate_nursery_sweep_tasks2(num_workers);
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
-        let mature_blocks = if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
-            self.num_defrag_blocks.load(Ordering::SeqCst)
-        } else {
-            0
-        };
-        if crate::args::LAZY_DECREMENTS
-            && (nursery_blocks + mature_blocks) < crate::args::NO_LAZY_DEC_THRESHOLD
-        {
-            if crate::args::LOG_PER_GC_STATE {
-                println!(
-                    "disable lazy dec: nursery_blocks={} mature_blocks={} threshold={}",
-                    nursery_blocks,
-                    mature_blocks,
-                    crate::args::NO_LAZY_DEC_THRESHOLD
-                );
+        if crate::args::NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY {
+            let mature_blocks = if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+                self.num_defrag_blocks.load(Ordering::SeqCst)
+            } else {
+                0
+            };
+            if crate::args::LAZY_DECREMENTS
+                && (nursery_blocks + mature_blocks) < crate::args::NO_LAZY_DEC_THRESHOLD
+            {
+                if crate::args::LOG_PER_GC_STATE {
+                    println!(
+                        "disable lazy dec: nursery_blocks={} mature_blocks={} threshold={}",
+                        nursery_blocks,
+                        mature_blocks,
+                        crate::args::NO_LAZY_DEC_THRESHOLD
+                    );
+                }
+                crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
             }
-            crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
