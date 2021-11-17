@@ -86,7 +86,6 @@ use std::{
     time::SystemTime,
 };
 
-use crate::util::constants;
 use atomic::{Atomic, Ordering};
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
