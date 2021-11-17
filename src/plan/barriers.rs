@@ -338,7 +338,6 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn enqueue_node(&mut self, src: ObjectReference, edge: Address, _new: Option<ObjectReference>) {
-        debug_assert!(!src.is_null());
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
