@@ -108,9 +108,11 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                     }
                 }
             }
-            self.next_objects.push(t);
-            if self.next_objects.len() >= Self::CAPACITY {
-                self.flush();
+            if !t.is_null() {
+                self.next_objects.push(t);
+                if self.next_objects.len() >= Self::CAPACITY {
+                    self.flush();
+                }
             }
         });
     }
