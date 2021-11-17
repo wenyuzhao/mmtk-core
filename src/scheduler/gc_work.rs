@@ -798,10 +798,17 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
         // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
-        immix.immix_space.in_space(o)
-            && rc::count(o) != 0
-            && !rc::address_is_in_straddle_line(o.to_address())
-            && Block::in_defrag_block::<VM>(o)
+        if !immix.immix_space.in_space(o) {
+            return false;
+        }
+        if rc::address_is_in_straddle_line(o.to_address()) {
+            return false;
+        }
+        // Maybe a forwarded nursery or mature object from inc processing.
+        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
+            return true;
+        }
+        rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 }
 

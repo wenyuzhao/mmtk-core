@@ -271,13 +271,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn record_mature_evac_remset(&mut self, e: Address, o: ObjectReference) {
+    fn record_mature_evac_remset(&mut self, e: Address, o: ObjectReference, force: bool) {
         if !(crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
         {
             return;
         }
-        if !self.immix().address_in_defrag(e) && self.immix().in_defrag(o) {
+        if force || (!self.immix().address_in_defrag(e) && self.immix().in_defrag(o)) {
             unsafe {
                 self.worker()
                     .local::<ImmixCopyContext<VM>>()
@@ -320,7 +320,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if x {
                 edge.unlog::<VM>();
             }
-            self.record_mature_evac_remset(edge, target);
             if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
                 self.new_incs.push(edge);
             }
@@ -448,9 +447,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                             self.immix().immix_space.attempt_mark(new);
                             EdgeIterator::<VM>::iterate(new, |e| {
                                 let t = unsafe { e.load() };
-                                self.record_mature_evac_remset(e, t);
-                                if !t.is_null() && self::count(t) == 0 {
-                                    self.new_incs.push(e)
+                                if self.immix().immix_space.in_space(t) {
+                                    self.record_mature_evac_remset(e, t, true);
                                 }
                             })
                         }
@@ -511,7 +509,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.process_inc_and_evacuate(o, cc)
         };
         if kind != EdgeKind::Root {
-            self.record_mature_evac_remset(e, o);
+            self.record_mature_evac_remset(e, o, false);
         }
         if new != o {
             // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));
