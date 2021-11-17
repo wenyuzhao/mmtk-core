@@ -751,7 +751,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 s.dead_los_volume += o.get_size::<VM>();
             }
         });
-        immix.mark(o);
+        let not_marked = immix.mark(o);
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
@@ -762,10 +762,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 if rc != MAX_REF_COUNT && rc != 0 {
                     self.recursive_dec(x);
                 }
-            }
-            if self.concurrent_marking_in_progress {
-                if !x.is_null() && !immix.is_marked(x) {
-                    self.mark_objects.push(x);
+                if not_marked && self.concurrent_marking_in_progress && rc != 0 {
+                    if !immix.is_marked(x) {
+                        self.mark_objects.push(x);
+                    }
                 }
             }
         });
@@ -793,6 +793,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     #[inline]
     fn process_decs(&mut self, decs: &Vec<ObjectReference>, immix: &Immix<VM>) {
         for o in decs {
+            // println!("dec {:?}", o);
             if o.is_null() {
                 continue;
             }
