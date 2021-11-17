@@ -47,7 +47,7 @@ pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = {
     } else if cfg!(feature = "lxr_lock_9") {
         9
     } else {
-        (super::constants::LOG_BYTES_IN_PAGE - 6) as _
+        9
     }
 };
 pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
