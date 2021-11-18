@@ -110,7 +110,7 @@ pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
 pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_BLOCKS")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(512)
+        .unwrap_or(128)
 });
 
 // ---------- Barrier flags ---------- //
