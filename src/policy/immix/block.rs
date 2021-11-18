@@ -370,7 +370,7 @@ impl Block {
     /// Deinitalize a block before releasing.
     #[inline]
     pub fn deinit(&self) {
-        if !crate::args::HOLE_COUNTING {
+        if !crate::args::HOLE_COUNTING && crate::args::REF_COUNT {
             self.reset_dead_bytes();
         }
         #[cfg(feature = "global_alloc_bit")]
