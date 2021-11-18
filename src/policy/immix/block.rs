@@ -129,11 +129,12 @@ impl Block {
 
     #[inline(always)]
     fn inc_dead_bytes_sloppy(&self, bytes: usize) {
+        let max_words = Self::BYTES >> LOG_BYTES_IN_WORD;
         let words = bytes >> LOG_BYTES_IN_WORD;
         let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
         let mut new = old + words;
-        if new > Self::BYTES - 1 {
-            new = Self::BYTES - 1;
+        if new >= max_words {
+            new = max_words - 1;
         }
         unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
     }

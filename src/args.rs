@@ -107,10 +107,10 @@ pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(10f32)
 });
-pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
-    env::var("MAX_MATURE_DEFRAG_BLOCKS")
+pub static MAX_MATURE_DEFRAG_MB: Lazy<usize> = Lazy::new(|| {
+    env::var("MAX_MATURE_DEFRAG_MB")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(128)
+        .unwrap_or(4)
 });
 
 // ---------- Barrier flags ---------- //
@@ -177,7 +177,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
-    dump_feature!("max_mature_defrag_blocks", *MAX_MATURE_DEFRAG_BLOCKS);
+    dump_feature!("max_mature_defrag_mb", *MAX_MATURE_DEFRAG_MB);
     dump_feature!(
         "no_gc_until_lazy_sweeping_finished",
         *NO_GC_UNTIL_LAZY_SWEEPING_FINISHED

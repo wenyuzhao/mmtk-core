@@ -268,14 +268,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
+        let defrag_bytes = *crate::args::MAX_MATURE_DEFRAG_MB << 20;
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
             blocks.append(&mut x);
         }
-        let mut count = 0;
+        let mut live_bytes = 0usize;
+        let mut num_blocks = 0usize;
         blocks.sort_by_key(|x| x.1);
-        while let Some((block, _)) = blocks.pop() {
+        while let Some((block, dead_bytes)) = blocks.pop() {
             if block.is_defrag_source()
                 || block.get_state() == BlockState::Unallocated
                 || block.get_state() == BlockState::Nursery
@@ -293,15 +294,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     block.dead_bytes()
             // );
             me.defrag_blocks.push(block);
-            count += 1;
-            if count >= defrag_blocks {
+            live_bytes += Block::BYTES - dead_bytes;
+            num_blocks += 1;
+            if live_bytes >= defrag_bytes {
                 break;
             }
         }
         if crate::args::LOG_PER_GC_STATE {
-            println!(" - Defrag {} mature blocks", count);
+            println!(
+                " - Defrag {} mature bytes ({} blocks)",
+                live_bytes, num_blocks
+            );
         }
-        self.num_defrag_blocks.store(count, Ordering::SeqCst);
+        self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
     }
 
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
