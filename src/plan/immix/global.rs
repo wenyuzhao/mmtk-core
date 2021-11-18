@@ -96,8 +96,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         // Spaces or heap full
         if self.base().collection_required(self, space_full, space) {
-            self.next_gc_may_perform_cycle_collection
-                .store(true, Ordering::SeqCst);
+            if !crate::args::HEAP_HEALTH_GUIDED_GC {
+                self.next_gc_may_perform_cycle_collection
+                    .store(true, Ordering::SeqCst);
+            }
             return true;
         }
         // Concurrent tracing finished
@@ -108,7 +110,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // RC nursery full
-        if crate::args::REF_COUNT
+        if !crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(crate::concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
@@ -123,6 +126,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn concurrent_collection_required(&self) -> bool {
+        if crate::args::HEAP_HEALTH_GUIDED_GC {
+            return false;
+        }
         // Don't do a GC until we finished the lazy reclaimation.
         if !LazySweepingJobs::all_finished() {
             return false;
@@ -170,14 +176,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
                 me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
-            if crate::args::LOG_PER_GC_STATE {
-                crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
+            crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
+                if crate::args::LOG_PER_GC_STATE {
                     println!(
                         " - lazy jobs done, heap {:?}M",
                         me.get_pages_reserved() / 256
                     );
-                });
-            }
+                }
+                me.decide_next_gc_may_perform_cycle_collection();
+            });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
             let total_blocks = heap_size >> Block::LOG_BYTES;
@@ -376,6 +383,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
+        if crate::args::REF_COUNT {
+            self.decide_next_gc_may_perform_cycle_collection();
+        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -442,6 +452,69 @@ impl<VM: VMBinding> Immix<VM> {
         immix
     }
 
+    fn decide_next_gc_may_perform_cycle_collection(&self) {
+        if !crate::args::HEAP_HEALTH_GUIDED_GC {
+            return;
+        }
+        let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
+        let threshold = *crate::args::TRACE_THRESHOLD;
+        let last_freed_blocks = self
+            .immix_space
+            .num_clean_blocks_released
+            .load(Ordering::SeqCst);
+        if last_freed_blocks * 100 < (threshold * total_blocks as f32) as usize {
+            if crate::args::LOG_PER_GC_STATE {
+                println!("next trace ({} / {})", last_freed_blocks, total_blocks);
+            }
+            self.next_gc_may_perform_cycle_collection
+                .store(true, Ordering::SeqCst);
+        } else {
+            if crate::args::LOG_PER_GC_STATE {
+                println!("next rc ({} / {})", last_freed_blocks, total_blocks);
+            }
+            self.next_gc_may_perform_cycle_collection
+                .store(false, Ordering::SeqCst);
+        }
+    }
+
+    fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
+        let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
+        if crate::args::LOG_PER_GC_STATE {
+            println!(
+                "next_gc_may_perform_cycle_collection: {:?}",
+                self.next_gc_may_perform_cycle_collection
+                    .load(Ordering::Relaxed)
+            );
+        }
+        if crate::args::CONCURRENT_MARKING
+            && concurrent_marking_in_progress
+            && concurrent_marking_packets_drained
+        {
+            return Pause::FinalMark;
+        }
+        if emergency {
+            return if crate::args::CONCURRENT_MARKING && concurrent_marking_in_progress {
+                Pause::FinalMark
+            } else {
+                Pause::FullTraceFast
+            };
+        }
+        if self
+            .next_gc_may_perform_cycle_collection
+            .load(Ordering::Relaxed)
+            && !concurrent_marking_in_progress
+        {
+            return if crate::args::CONCURRENT_MARKING {
+                Pause::InitialMark
+            } else {
+                Pause::FullTraceFast
+            };
+        } else {
+            return Pause::RefCount;
+        }
+    }
+
     fn select_collection_kind(&self, concurrent: bool) -> Pause {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
@@ -468,7 +541,9 @@ impl<VM: VMBinding> Immix<VM> {
         let force_no_rc = self
             .next_gc_may_perform_cycle_collection
             .load(Ordering::SeqCst);
-        let pause = if emergency_collection {
+        let pause = if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
+            self.select_lxr_collection_kind(emergency_collection)
+        } else if emergency_collection {
             if crate::inside_harness() {
                 crate::PAUSES.emergency.fetch_add(1, Ordering::Relaxed);
             }

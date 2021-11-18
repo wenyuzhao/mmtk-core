@@ -67,6 +67,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     defrag_chunk_cursor: AtomicUsize,
     fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
     fragmented_blocks_size: AtomicUsize,
+    pub num_clean_blocks_released: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -222,6 +223,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             last_defrag_blocks: Default::default(),
             fragmented_blocks: Default::default(),
             fragmented_blocks_size: Default::default(),
+            num_clean_blocks_released: Default::default(),
         }
     }
 
@@ -368,6 +370,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
+        self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -532,6 +535,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         {
             block.clear_log_table::<VM>();
         }
+        self.num_clean_blocks_released
+            .fetch_add(1, Ordering::Relaxed);
         block.deinit();
     }
 

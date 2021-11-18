@@ -6,6 +6,7 @@ use crate::{
     BarrierSelector,
 };
 
+pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
 pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
     env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
@@ -101,6 +102,11 @@ pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(90)
 });
+pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
+    env::var("TRACE_THRESHOLD")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(10f32)
+});
 pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_BLOCKS")
         .map(|x| x.parse().unwrap())
@@ -177,6 +183,7 @@ fn dump_features(active_barrier: BarrierSelector) {
         *NO_GC_UNTIL_LAZY_SWEEPING_FINISHED
     );
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
+    dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
 
     println!("----------------------------------------------------");
 }
