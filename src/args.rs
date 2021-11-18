@@ -107,6 +107,12 @@ pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(10f32)
 });
+pub const COUNT_BYTES_FOR_MATURE_EVAC: bool = cfg!(feature = "lxr_count_bytes_for_mature_evac");
+pub static MAX_MATURE_DEFRAG_BLOCKS: Lazy<usize> = Lazy::new(|| {
+    env::var("MAX_MATURE_DEFRAG_BLOCKS")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(128)
+});
 pub static MAX_MATURE_DEFRAG_MB: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_MB")
         .map(|x| x.parse().unwrap())
@@ -177,6 +183,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
+    dump_feature!("max_mature_defrag_blocks", *MAX_MATURE_DEFRAG_BLOCKS);
     dump_feature!("max_mature_defrag_mb", *MAX_MATURE_DEFRAG_MB);
     dump_feature!(
         "no_gc_until_lazy_sweeping_finished",
@@ -184,6 +191,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     );
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
+    dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
 
     println!("----------------------------------------------------");
 }

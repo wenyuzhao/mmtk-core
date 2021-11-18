@@ -268,6 +268,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
+        let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
         let defrag_bytes = *crate::args::MAX_MATURE_DEFRAG_MB << 20;
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
@@ -296,8 +297,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             me.defrag_blocks.push(block);
             live_bytes += Block::BYTES - dead_bytes;
             num_blocks += 1;
-            if live_bytes >= defrag_bytes {
-                break;
+            if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
+                if live_bytes >= defrag_bytes {
+                    break;
+                }
+            } else {
+                if num_blocks >= defrag_blocks {
+                    break;
+                }
             }
         }
         if crate::args::LOG_PER_GC_STATE {
