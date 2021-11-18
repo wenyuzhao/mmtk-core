@@ -52,20 +52,22 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> Prepare<P, W> {
 }
 
 impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for Prepare<P, W> {
-    fn do_work(&mut self, worker: &mut GCWorker<P::VM>, _mmtk: &'static MMTK<P::VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
         let plan_mut: &mut P = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.prepare(worker.tls);
 
-        // for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-        //     mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-        //         .add(PrepareMutator::<P::VM>::new(mutator));
-        // }
-        // for w in &mmtk.scheduler.worker_group().workers {
-        //     w.local_work_bucket.add(PrepareCollector::<W>::new());
-        // }
+        if !crate::args::REF_COUNT {
+            for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
+                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                    .add(PrepareMutator::<P::VM>::new(mutator));
+            }
+            for w in &mmtk.scheduler.worker_group().workers {
+                w.local_work_bucket.add(PrepareCollector::<W>::new());
+            }
+        }
     }
 }
 
@@ -138,10 +140,12 @@ impl<P: Plan, W: CopyContext + GCWorkerLocal> GCWork<P::VM> for Release<P, W> {
         let plan_mut: &mut P = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.release(worker.tls);
 
-        // for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-        //     mmtk.scheduler.work_buckets[WorkBucketStage::Release]
-        //         .add(ReleaseMutator::<P::VM>::new(mutator));
-        // }
+        if !crate::args::REF_COUNT {
+            for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
+                mmtk.scheduler.work_buckets[WorkBucketStage::Release]
+                    .add(ReleaseMutator::<P::VM>::new(mutator));
+            }
+        }
         for w in &mmtk.scheduler.worker_group().workers {
             // w.local_work_bucket.add(ReleaseCollector::<W>::new());
             let w = unsafe { &mut *(w as *const _ as *mut GCWorker<P::VM>) };
