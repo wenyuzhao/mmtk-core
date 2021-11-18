@@ -1144,11 +1144,16 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     #[inline(always)]
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
-            let bucket = WorkBucketStage::rc_process_incs_stage();
+            // let bucket = WorkBucketStage::rc_process_incs_stage();
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
-            self.worker()
-                .add_work(bucket, ProcessIncs::new(roots, true));
+            GCWork::do_work(
+                &mut ProcessIncs::new(roots, true),
+                self.worker(),
+                self.mmtk(),
+            )
+            // self.worker()
+            //     .add_work(bucket, );
         }
     }
 }
