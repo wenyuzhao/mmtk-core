@@ -203,7 +203,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 }
 
-#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum WorkBucketStage {
     Unconstrained,
     FinishConcurrentWork,

@@ -274,20 +274,23 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let x = bucket.update();
-            if crate::args::LOG_STAGES && x {
+            if (crate::args::LOG_STAGES || cfg!(feature = "pause_time")) && x {
                 unsafe {
                     let since_prev_stage = LAST_ACTIVATE_TIME
                         .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
                         .elapsed()
                         .unwrap()
                         .as_nanos();
-                    println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
-                        crate::gc_trigger_time() as f64 / 1000000f64,
-                        id, since_prev_stage,
-                        crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                        crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                    );
-                    LAST_ACTIVATE_TIME = Some(SystemTime::now())
+                    crate::add_bucket_time(id, since_prev_stage);
+                    if crate::args::LOG_STAGES {
+                        println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                            crate::gc_trigger_time() as f64 / 1000000f64,
+                            id, since_prev_stage,
+                            crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                            crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                        );
+                    }
+                    LAST_ACTIVATE_TIME = Some(SystemTime::now());
                 }
             }
             if cfg!(feature = "yield_and_roots_timer")
@@ -346,6 +349,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         self.deactivate_all();
+        unsafe { LAST_ACTIVATE_TIME = None };
         // Finalization: Resume mutators, reset gc states
         // Note: Resume-mutators must happen after all work buckets are closed.
         //       Otherwise, for generational GCs, workers will receive and process

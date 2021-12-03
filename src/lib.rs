@@ -79,6 +79,10 @@ extern crate downcast_rs;
 
 mod mmtk;
 use std::{
+    collections::HashMap,
+    fs::File,
+    io::Write,
+    lazy::SyncLazy,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
@@ -87,9 +91,11 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
+use crossbeam_queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
+use scheduler::WorkBucketStage;
 use spin::Mutex;
 
 #[macro_use]
@@ -428,4 +434,69 @@ fn stat(f: impl Fn(&mut GCStat)) {
         return;
     }
     f(&mut STAT.lock())
+}
+
+static PER_BUCKET_TIMERS: SyncLazy<HashMap<WorkBucketStage, SegQueue<u128>>> =
+    SyncLazy::new(|| {
+        let mut x = HashMap::new();
+        // x.insert(WorkBucketStage::Unconstrained, SegQueue::new());
+        // x.insert(WorkBucketStage::FinishConcurrentWork, SegQueue::new());
+        x.insert(WorkBucketStage::Initial, SegQueue::new());
+        x.insert(WorkBucketStage::Prepare, SegQueue::new());
+        x.insert(WorkBucketStage::Closure, SegQueue::new());
+        x.insert(WorkBucketStage::RefClosure, SegQueue::new());
+        x.insert(WorkBucketStage::RefForwarding, SegQueue::new());
+        x.insert(WorkBucketStage::Release, SegQueue::new());
+        x.insert(WorkBucketStage::Final, SegQueue::new());
+        x
+    });
+
+#[inline(always)]
+fn should_record_pause_time() -> bool {
+    cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
+}
+
+#[inline(always)]
+fn add_bucket_time(stage: WorkBucketStage, nanos: u128) {
+    if should_record_pause_time() {
+        PER_BUCKET_TIMERS[&stage].push(nanos);
+    }
+}
+
+static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();
+
+#[inline(always)]
+fn add_pause_time(nanos: u128) {
+    if should_record_pause_time() {
+        PAUSE_TIMES.push(nanos);
+    }
+}
+
+fn output_pause_time() {
+    let pop_record = || {
+        let mut x = vec![];
+        x.push(PAUSE_TIMES.pop()?);
+        use WorkBucketStage::*;
+        // x.push(PER_BUCKET_TIMERS[&Unconstrained].pop().unwrap());
+        // x.push(PER_BUCKET_TIMERS[&FinishConcurrentWork].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&Initial].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&Prepare].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&Closure].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&RefClosure].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&RefForwarding].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&Release].pop().unwrap());
+        x.push(PER_BUCKET_TIMERS[&Final].pop().unwrap());
+        Some(x)
+    };
+    let mut s = "".to_string();
+    while let Some(record) = pop_record() {
+        s += &record
+            .iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        s += "\n";
+    }
+    let mut file = File::create("scratch/pauses.csv").unwrap();
+    file.write_all(s.as_bytes()).unwrap();
 }

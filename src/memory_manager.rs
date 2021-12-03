@@ -24,6 +24,7 @@ use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::Collection;
 use crate::vm::VMBinding;
+use std::lazy::SyncLazy;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
@@ -95,6 +96,7 @@ pub fn gc_init<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, heap_size: usize) {
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
     spin::Lazy::force(&crate::BOOT_TIME);
+    SyncLazy::force(&crate::PER_BUCKET_TIMERS);
 }
 
 /// Request MMTk to create a mutator for the given thread. For performance reasons, A VM should
@@ -388,6 +390,7 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.harness_end();
+    crate::output_pause_time();
 }
 
 /// Register a finalizable object. MMTk will retain the liveness of

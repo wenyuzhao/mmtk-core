@@ -269,6 +269,11 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
+        let pause_time = crate::GC_START_TIME
+            .load(Ordering::SeqCst)
+            .elapsed()
+            .unwrap();
+        crate::add_pause_time(pause_time.as_nanos());
         if crate::args::LOG_PER_GC_STATE {
             let _released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
@@ -278,12 +283,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
 
-            let pause_time = crate::GC_START_TIME
-                .load(Ordering::SeqCst)
-                .elapsed()
-                .unwrap()
-                .as_micros() as f64
-                / 1000f64;
+            let pause_time = pause_time.as_micros() as f64 / 1000f64;
             let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
             let pause = if let Some(immix) = mmtk.plan.downcast_ref::<Immix<VM>>() {
                 match immix.current_pause().unwrap() {
