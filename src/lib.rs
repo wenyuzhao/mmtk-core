@@ -436,6 +436,33 @@ fn stat(f: impl Fn(&mut GCStat)) {
     f(&mut STAT.lock())
 }
 
+#[inline(always)]
+fn should_record_copy_bytes() -> bool {
+    cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
+}
+
+static mut SLOPPY_COPY_BYTES: usize = 0;
+
+#[inline(always)]
+fn add_copy_bytes(bytes: usize) {
+    if should_record_copy_bytes() {
+        COPY_BYTES.push(bytes);
+        unsafe {
+            SLOPPY_COPY_BYTES = 0;
+        }
+    }
+}
+
+#[inline(always)]
+fn add_incs(incs: usize) {
+    if should_record_copy_bytes() {
+        INCS.push(incs);
+    }
+}
+
+static COPY_BYTES: SegQueue<usize> = SegQueue::new();
+static INCS: SegQueue<usize> = SegQueue::new();
+
 static PER_BUCKET_TIMERS: SyncLazy<HashMap<WorkBucketStage, SegQueue<u128>>> =
     SyncLazy::new(|| {
         let mut x = HashMap::new();
@@ -486,6 +513,8 @@ fn output_pause_time() {
         x.push(PER_BUCKET_TIMERS[&RefForwarding].pop().unwrap());
         x.push(PER_BUCKET_TIMERS[&Release].pop().unwrap());
         x.push(PER_BUCKET_TIMERS[&Final].pop().unwrap());
+        x.push(COPY_BYTES.pop().unwrap() as _);
+        x.push(INCS.pop().unwrap() as _);
         Some(x)
     };
     let mut s = "".to_string();

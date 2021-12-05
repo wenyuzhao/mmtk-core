@@ -739,6 +739,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 AllocationSemantics::Default,
                 copy_context,
             );
+            if crate::should_record_copy_bytes() {
+                unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
+            }
             // Transfer RC count
             new.log_start_address::<VM>();
             if !crate::args::BLOCK_ONLY {

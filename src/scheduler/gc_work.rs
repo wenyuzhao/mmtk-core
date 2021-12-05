@@ -273,6 +273,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .load(Ordering::SeqCst)
             .elapsed()
             .unwrap();
+        crate::add_copy_bytes(unsafe { crate::SLOPPY_COPY_BYTES });
         crate::add_pause_time(pause_time.as_nanos());
         if crate::args::LOG_PER_GC_STATE {
             let _released_n =

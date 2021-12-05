@@ -223,6 +223,7 @@ pub fn inc_inc_buffer_size() {
 
 #[inline(always)]
 pub fn reset_inc_buffer_size() {
+    crate::add_incs(inc_buffer_size());
     INC_BUFFER_SIZE.store(0, Ordering::Relaxed)
 }
 
@@ -461,6 +462,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         AllocationSemantics::Default,
                         copy_context,
                     );
+                    if crate::should_record_copy_bytes() {
+                        unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
+                    }
                     self::set(new, self::count(o));
                     let _ = self::inc(new);
                     object_forwarding::set_forwarding_pointer::<VM>(o, new);
@@ -484,6 +488,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         AllocationSemantics::Default,
                         copy_context,
                     );
+                    if crate::should_record_copy_bytes() {
+                        unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
+                    }
                     let _ = self::inc(new);
                     self.promote(new, true, false);
                     new
