@@ -65,6 +65,7 @@ impl From<BlockState> for u8 {
                 debug_assert_ne!(unavailable_lines, BlockState::MARK_UNMARKED);
                 debug_assert_ne!(unavailable_lines, BlockState::MARK_MARKED);
                 debug_assert_ne!(unavailable_lines, BlockState::MARK_NURSERY);
+                debug_assert_ne!(unavailable_lines, BlockState::MARK_REUSING);
                 unavailable_lines
             }
         }
@@ -360,7 +361,11 @@ impl Block {
             if reuse {
                 debug_assert!(!self.is_defrag_source());
             }
-            self.set_state(BlockState::Marked);
+            self.set_state(if crate::args::REF_COUNT {
+                BlockState::Unmarked
+            } else {
+                BlockState::Marked
+            });
             self.set_as_defrag_source(false);
         } else {
             self.set_state(BlockState::Nursery);
@@ -388,10 +393,10 @@ impl Block {
         Line::from(self.start())..Line::from(self.end())
     }
 
-    #[inline(always)]
-    pub fn clear_mark_table(&self) {
-        side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
-    }
+    // #[inline(always)]
+    // pub fn clear_mark_table(&self) {
+    //     side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
+    // }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
