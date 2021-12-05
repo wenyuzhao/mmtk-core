@@ -598,6 +598,8 @@ pub struct ObjectReference(usize);
 
 impl ObjectReference {
     pub const NULL: Self = Self(0);
+    pub const STRICT_VERIFICATION: bool =
+        cfg!(debug_assertions) || cfg!(feature = "sanity") || false;
 
     /// converts the ObjectReference to an Address
     #[inline(always)]
@@ -726,12 +728,40 @@ impl ObjectReference {
     }
 
     #[inline(always)]
+    pub fn class_is_valid(self) -> bool {
+        let klass = self.class_pointer();
+        klass.as_usize() & 0x700000000000 == 0x700000000000
+    }
+
+    #[inline(always)]
+    fn assert_class_is_valid(self) {
+        assert!(
+            self.class_is_valid(),
+            "Invalid class pointer obj={:?} cls={:?}",
+            self,
+            self.class_pointer()
+        );
+    }
+
+    #[inline(always)]
     pub fn fix_start_address<VM: VMBinding>(self) -> Self {
         let a = unsafe { Address::from_usize(self.to_address().as_usize() >> 4 << 4) };
         if !(a + BYTES_IN_WORD).is_logged::<VM>() {
             unsafe { (a + BYTES_IN_WORD).to_object_reference() }
         } else {
             unsafe { a.to_object_reference() }
+        }
+    }
+
+    #[inline(always)]
+    pub fn verify(self) {
+        if cfg!(debug_assertions) || Self::STRICT_VERIFICATION {
+            if self.is_null() {
+                return;
+            }
+            assert!(self.is_mapped());
+            assert_ne!(unsafe { self.to_address().load::<usize>() }, 0xdead);
+            self.assert_class_is_valid();
         }
     }
 }

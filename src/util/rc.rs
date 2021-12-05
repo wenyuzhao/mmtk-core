@@ -271,6 +271,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
 
     #[inline(always)]
     fn promote(&mut self, o: ObjectReference, copied: bool, los: bool) {
+        o.verify();
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
@@ -403,7 +404,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             return false;
         }
         // Skip mature object
-        if self::count(o) != 0 || state == BlockState::Marked {
+        if self::count(o) != 0 {
             return true;
         }
         // Skip recycled lines
@@ -419,6 +420,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         o: ObjectReference,
         copy_context: &mut ImmixCopyContext<VM>,
     ) -> ObjectReference {
+        o.verify();
         crate::stat(|s| {
             s.inc_objects += 1;
             s.inc_volume += o.get_size::<VM>();
@@ -523,7 +525,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             _ => return None,
         };
         // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
-        debug_assert_ne!(unsafe { o.to_address().load::<usize>() }, 0xdeadusize);
+        o.verify();
         let new = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
             self.process_inc(o)
         } else {
@@ -642,10 +644,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     WorkBucketStage::Closure,
                     LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
                 )
-            } else {
-                unsafe {
-                    crate::plan::immix::CURR_ROOTS.push(roots);
-                }
+            }
+            unsafe {
+                crate::plan::immix::CURR_ROOTS.push(roots);
             }
         }
         // Process recursively generated buffer
@@ -776,9 +777,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         if !crate::args::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
         }
-        #[cfg(feature = "sanity")]
-        unsafe {
-            o.to_address().store(0xdeadusize);
+        if cfg!(feature = "sanity") || ObjectReference::STRICT_VERIFICATION {
+            unsafe { o.to_address().store(0xdeadusize) };
         }
         if in_ix_space {
             let block = Block::containing::<VM>(o);
