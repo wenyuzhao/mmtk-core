@@ -355,20 +355,23 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
+
+        let mut queue = Injector::new();
+        type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
+        std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
+
         if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
             self.process_coordinator_work(finalizer);
         }
         self.in_gc_pause.store(false, Ordering::SeqCst);
-        self.schedule_concurrent_packets();
+
+        self.schedule_concurrent_packets(queue);
         self.assert_all_deactivated();
     }
 
-    fn schedule_concurrent_packets(&self) {
+    fn schedule_concurrent_packets(&self, queue: Injector<Box<dyn GCWork<VM>>>) {
         crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
-        if !self.postponed_concurrent_work.read().is_empty() {
-            let mut queue = Injector::new();
-            type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
-            std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
+        if !queue.is_empty() {
             let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
             debug_assert!(old_queue.is_empty());
             self.work_buckets[WorkBucketStage::Unconstrained].notify_all_workers();
