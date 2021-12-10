@@ -267,7 +267,12 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .elapsed()
             .unwrap();
         crate::add_copy_bytes(unsafe { crate::SLOPPY_COPY_BYTES });
-        crate::add_pause_time(pause_time.as_nanos());
+        let pause = mmtk
+            .plan
+            .downcast_ref::<Immix<VM>>()
+            .map(|ix| ix.current_pause().unwrap())
+            .unwrap_or(Pause::FullTraceFast);
+        crate::add_pause_time(pause, pause_time.as_nanos());
         if crate::args::LOG_PER_GC_STATE {
             let _released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
@@ -279,15 +284,11 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
 
             let pause_time = pause_time.as_micros() as f64 / 1000f64;
             let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
-            let pause = if let Some(immix) = mmtk.plan.downcast_ref::<Immix<VM>>() {
-                match immix.current_pause().unwrap() {
-                    Pause::RefCount => "RefCount",
-                    Pause::InitialMark => "InitialMark",
-                    Pause::FinalMark => "FinalMark",
-                    _ => "Full",
-                }
-            } else {
-                "Full"
+            let pause = match pause {
+                Pause::RefCount => "RefCount",
+                Pause::InitialMark => "InitialMark",
+                Pause::FinalMark => "FinalMark",
+                _ => "Full",
             };
             println!(
                 "[{:.3}s][info][gc] GC({}) Pause {} {}M->{}M({}M) {:.3}ms",

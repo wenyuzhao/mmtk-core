@@ -94,6 +94,7 @@ use crossbeam_queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
+use plan::immix::Pause;
 use scheduler::WorkBucketStage;
 use spin::Mutex;
 
@@ -491,15 +492,36 @@ fn add_bucket_time(stage: WorkBucketStage, nanos: u128) {
 }
 
 static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();
+static PAUSE_TYPES: SegQueue<Pause> = SegQueue::new();
 
 #[inline(always)]
-fn add_pause_time(nanos: u128) {
+fn add_pause_time(pause: Pause, nanos: u128) {
     if should_record_pause_time() {
+        PAUSE_TYPES.push(pause);
         PAUSE_TIMES.push(nanos);
     }
 }
 
 fn output_pause_time() {
+    let pause_to_id = |p: Pause| match p {
+        Pause::RefCount => 0u128,
+        Pause::InitialMark => 1u128,
+        Pause::FinalMark => 2u128,
+        Pause::FullTraceFast => 3u128,
+        Pause::FullTraceDefrag => 4u128,
+    };
+    let headers = [
+        "total",
+        "init",
+        "prepare",
+        "closure",
+        "refclosure",
+        "refforward",
+        "release",
+        "copy",
+        "incs",
+        "pause",
+    ];
     let pop_record = || {
         use WorkBucketStage::*;
         Some(vec![
@@ -515,9 +537,10 @@ fn output_pause_time() {
             PER_BUCKET_TIMERS[&Final].pop().unwrap(),
             COPY_BYTES.pop().unwrap() as _,
             INCS.pop().unwrap() as _,
+            pause_to_id(PAUSE_TYPES.pop().unwrap()),
         ])
     };
-    let mut s = "".to_string();
+    let mut s = headers.join(",") + "\n";
     while let Some(record) = pop_record() {
         s += &record
             .iter()
