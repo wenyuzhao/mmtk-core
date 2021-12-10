@@ -477,7 +477,7 @@ impl Block {
                 crate::util::memory::write_nt(
                     start as *mut u128,
                     bytes >> 4,
-                    0xffffffff_ffffffff_ffffffff_ffffffffu128,
+                    0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff_u128,
                 );
             } else {
                 std::ptr::write_bytes(start, 0xffu8, bytes);
@@ -590,17 +590,15 @@ impl Block {
             debug_assert!(self.rc_dead(), "{:?} has live rc counts", self);
             space.deinit_block(*self, true);
             true
-        } else {
-            if self.rc_dead() {
-                if self.attempt_dealloc(false) {
-                    space.deinit_block(*self, true);
-                    true
-                } else {
-                    false
-                }
+        } else if self.rc_dead() {
+            if self.attempt_dealloc(false) {
+                space.deinit_block(*self, true);
+                true
             } else {
                 false
             }
+        } else {
+            false
         }
     }
 

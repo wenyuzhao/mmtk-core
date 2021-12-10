@@ -50,15 +50,13 @@ pub fn fetch_update(
     o: ObjectReference,
     f: impl FnMut(usize) -> Option<usize>,
 ) -> Result<usize, usize> {
-    let r = side_metadata::fetch_update(
+    side_metadata::fetch_update(
         &RC_TABLE,
         o.to_address(),
         Ordering::Relaxed,
         Ordering::Relaxed,
         f,
-    );
-    // println!("fetch_update {:?} {:?} -> {:?}", o, r, count(o));
-    r
+    )
 }
 
 #[inline(always)]
@@ -68,21 +66,19 @@ pub fn rc_stick(o: ObjectReference) -> bool {
 
 #[inline(always)]
 pub fn inc(o: ObjectReference) -> Result<usize, usize> {
-    let r = fetch_update(o, |x| {
+    fetch_update(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == MAX_REF_COUNT {
             None
         } else {
             Some(x + 1)
         }
-    });
-    // println!("inc {:?} {:?} -> {:?}", o, r, count(o));
-    r
+    })
 }
 
 #[inline(always)]
 pub fn dec(o: ObjectReference) -> Result<usize, usize> {
-    let r = fetch_update(o, |x| {
+    fetch_update(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == 0 || x == MAX_REF_COUNT
         /* sticky */
@@ -91,9 +87,7 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
         } else {
             Some(x - 1)
         }
-    });
-    // println!("dec {:?} {:?} -> {:?}", o, r, count(o));
-    r
+    })
 }
 
 #[inline(always)]
@@ -182,10 +176,8 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
 #[inline(always)]
 pub fn promote<VM: VMBinding>(o: ObjectReference) {
     o.log_start_address::<VM>();
-    if !crate::args::BLOCK_ONLY {
-        if o.get_size::<VM>() > Line::BYTES {
-            self::mark_straddle_object::<VM>(o);
-        }
+    if !crate::args::BLOCK_ONLY && o.get_size::<VM>() > Line::BYTES {
+        self::mark_straddle_object::<VM>(o);
     }
 }
 
@@ -329,7 +321,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 crate::util::memory::write_nt(
                     start as *mut u128,
                     bytes >> 4,
-                    0xffffffff_ffffffff_ffffffff_ffffffffu128,
+                    0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff_u128,
                 );
             } else {
                 unsafe {
@@ -770,10 +762,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 if rc != MAX_REF_COUNT && rc != 0 {
                     self.recursive_dec(x);
                 }
-                if not_marked && self.concurrent_marking_in_progress {
-                    if !immix.is_marked(x) {
-                        self.mark_objects.push(x);
-                    }
+                if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(x) {
+                    self.mark_objects.push(x);
                 }
             }
         });
@@ -815,11 +805,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 };
             let mut dead = false;
             let _ = self::fetch_update(o, |c| {
-                if c == 1 {
-                    if unlikely(!dead) {
-                        dead = true;
-                        self.process_dead_object(o, immix);
-                    }
+                if c == 1 && unlikely(!dead) {
+                    dead = true;
+                    self.process_dead_object(o, immix);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if unlikely(c == 0 || c == MAX_REF_COUNT) {

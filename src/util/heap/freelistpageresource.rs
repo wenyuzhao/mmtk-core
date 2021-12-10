@@ -313,10 +313,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = &mut *(self as *const _ as *mut _);
-        let mut sync = (&mut *(self as *const _ as *mut Self))
-            .sync
-            .get_mut()
-            .unwrap();
+        let mut sync = (*(self as *const _ as *mut Self)).sync.get_mut().unwrap();
         let mut new_chunk = false;
         let mut page_offset = self_mut.free_list.alloc(required_pages as _);
         if page_offset == generic_freelist::FAILURE && self.common.growable {

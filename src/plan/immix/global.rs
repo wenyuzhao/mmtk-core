@@ -34,7 +34,7 @@ use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
-use crate::{scheduler::*, BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
+use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -518,6 +518,7 @@ impl<VM: VMBinding> Immix<VM> {
         }
     }
 
+    #[allow(clippy::collapsible_else_if)]
     fn select_collection_kind(&self, concurrent: bool) -> Pause {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
@@ -606,6 +607,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        #[allow(clippy::collapsible_if)]
         if crate::args::CONCURRENT_MARKING && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             if crate::concurrent_marking_in_progress() {
                 scheduler.pause_concurrent_work_packets_during_gc();

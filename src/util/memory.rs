@@ -46,6 +46,7 @@ pub fn zero_nt(start: Address, bytes: usize) {
 }
 
 #[inline(always)]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn write_nt<T: Copy>(ptr: *mut T, count: usize, v: T) {
     for i in 0..count {
         unsafe {

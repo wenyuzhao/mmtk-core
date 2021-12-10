@@ -147,6 +147,7 @@ impl LazySweepingJobsCounter {
     }
 
     #[inline(always)]
+    #[allow(clippy::should_implement_trait)]
     pub fn clone(&self) -> Self {
         self.counter.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -254,7 +255,7 @@ fn disable_lasy_dec_for_current_gc() -> bool {
 
 static GC_TRIGGER_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
-static BOOT_TIME: spin::Lazy<SystemTime> = spin::Lazy::new(|| SystemTime::now());
+static BOOT_TIME: spin::Lazy<SystemTime> = spin::Lazy::new(SystemTime::now);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
@@ -500,21 +501,21 @@ fn add_pause_time(nanos: u128) {
 
 fn output_pause_time() {
     let pop_record = || {
-        let mut x = vec![];
-        x.push(PAUSE_TIMES.pop()?);
         use WorkBucketStage::*;
-        // x.push(PER_BUCKET_TIMERS[&Unconstrained].pop().unwrap());
-        // x.push(PER_BUCKET_TIMERS[&FinishConcurrentWork].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&Initial].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&Prepare].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&Closure].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&RefClosure].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&RefForwarding].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&Release].pop().unwrap());
-        x.push(PER_BUCKET_TIMERS[&Final].pop().unwrap());
-        x.push(COPY_BYTES.pop().unwrap() as _);
-        x.push(INCS.pop().unwrap() as _);
-        Some(x)
+        Some(vec![
+            PAUSE_TIMES.pop()?,
+            // x.push(PER_BUCKET_TIMERS[&Unconstrained].pop().unwrap());
+            // x.push(PER_BUCKET_TIMERS[&FinishConcurrentWork].pop().unwrap());
+            PER_BUCKET_TIMERS[&Initial].pop().unwrap(),
+            PER_BUCKET_TIMERS[&Prepare].pop().unwrap(),
+            PER_BUCKET_TIMERS[&Closure].pop().unwrap(),
+            PER_BUCKET_TIMERS[&RefClosure].pop().unwrap(),
+            PER_BUCKET_TIMERS[&RefForwarding].pop().unwrap(),
+            PER_BUCKET_TIMERS[&Release].pop().unwrap(),
+            PER_BUCKET_TIMERS[&Final].pop().unwrap(),
+            COPY_BYTES.pop().unwrap() as _,
+            INCS.pop().unwrap() as _,
+        ])
     };
     let mut s = "".to_string();
     while let Some(record) = pop_record() {

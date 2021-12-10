@@ -301,10 +301,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 if live_bytes >= defrag_bytes {
                     break;
                 }
-            } else {
-                if num_blocks >= defrag_blocks {
-                    break;
-                }
+            } else if num_blocks >= defrag_blocks {
+                break;
             }
         }
         if crate::args::LOG_PER_GC_STATE {
@@ -690,12 +688,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(crate::args::REF_COUNT);
         if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
             self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
+        } else if crate::args::RC_MATURE_EVACUATION {
+            self.trace_mark_rc_mature_object(trace, object, pause)
         } else {
-            if crate::args::RC_MATURE_EVACUATION {
-                self.trace_mark_rc_mature_object(trace, object, pause)
-            } else {
-                self.trace_object_without_moving(trace, object)
-            }
+            self.trace_object_without_moving(trace, object)
         }
     }
 
@@ -744,10 +740,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             // Transfer RC count
             new.log_start_address::<VM>();
-            if !crate::args::BLOCK_ONLY {
-                if new.get_size::<VM>() > Line::BYTES {
-                    rc::mark_straddle_object::<VM>(new);
-                }
+            if !crate::args::BLOCK_ONLY && new.get_size::<VM>() > Line::BYTES {
+                rc::mark_straddle_object::<VM>(new);
             }
             rc::set(new, rc::count(object));
             self.attempt_mark(new);

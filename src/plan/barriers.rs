@@ -375,6 +375,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             return;
         }
         // Concurrent Marking: Flush satb buffer
+        #[allow(clippy::collapsible_if)]
         if crate::plan::immix::CONCURRENT_MARKING
             && (crate::concurrent_marking_in_progress()
                 || self.immix.current_pause() == Some(Pause::FinalMark))

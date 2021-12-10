@@ -99,13 +99,15 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         let should_check_remset = !self.plan.in_defrag(object);
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
-            if crate::args::REF_COUNT && crate::args::RC_MATURE_EVACUATION && should_check_remset {
-                if self.plan.in_defrag(t) {
-                    unsafe {
-                        self.worker()
-                            .local::<ImmixCopyContext<VM>>()
-                            .add_mature_evac_remset(e)
-                    }
+            if crate::args::REF_COUNT
+                && crate::args::RC_MATURE_EVACUATION
+                && should_check_remset
+                && self.plan.in_defrag(t)
+            {
+                unsafe {
+                    self.worker()
+                        .local::<ImmixCopyContext<VM>>()
+                        .add_mature_evac_remset(e)
                 }
             }
             if !t.is_null() {
@@ -127,16 +129,14 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
         self.worker = worker;
         if !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
             && crate::args::SLOW_CONCURRENT_MARKING
-        {
-            if mmtk
+            && mmtk
                 .plan
                 .downcast_ref::<Immix<VM>>()
                 .unwrap()
                 .current_pause()
                 .is_none()
-            {
-                std::thread::sleep(std::time::Duration::from_micros(200));
-            }
+        {
+            std::thread::sleep(std::time::Duration::from_micros(200));
         }
         for i in 0..self.objects.len() {
             self.trace_object(self.objects[i]);

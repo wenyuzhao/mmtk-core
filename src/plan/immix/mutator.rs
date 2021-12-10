@@ -1,6 +1,5 @@
 use super::Immix;
 use crate::plan::barriers::FieldLoggingBarrier;
-use crate::plan::barriers::NoBarrier;
 use crate::plan::barriers::ObjectRememberingBarrier;
 use crate::plan::immix::gc_work::ImmixProcessEdges;
 use crate::plan::immix::gc_work::TraceKind;
@@ -11,7 +10,6 @@ use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
-use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
@@ -19,7 +17,6 @@ use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
 use crate::MMTK;
-use enum_map::enum_map;
 use enum_map::EnumMap;
 
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {

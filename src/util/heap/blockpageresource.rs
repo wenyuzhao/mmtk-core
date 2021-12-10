@@ -141,9 +141,9 @@ impl<VM: VMBinding> BlockPageResource<VM> {
 
         self.commit_pages(reserved_pages, required_pages, tls);
         Result::Ok(PRAllocResult {
-            start: start,
+            start,
             pages: required_pages,
-            new_chunk: new_chunk,
+            new_chunk,
         })
     }
 
