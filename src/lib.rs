@@ -11,7 +11,6 @@
 #![feature(associated_type_defaults)]
 #![feature(specialization)]
 #![feature(trait_alias)]
-#![feature(const_panic)]
 #![feature(step_trait)]
 #![feature(once_cell)]
 #![feature(const_generics_defaults)]

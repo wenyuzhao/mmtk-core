@@ -9,7 +9,6 @@ use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
-use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
@@ -136,6 +135,9 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::PageProtect => {
             crate::plan::pageprotect::mutator::create_pp_mutator(tls, &*mmtk.plan)
         }
+        PlanSelector::MarkCompact => {
+            crate::plan::markcompact::mutator::create_markcompact_mutator(tls, &*mmtk.plan)
+        }
     })
 }
 
@@ -164,6 +166,9 @@ pub fn create_plan<VM: VMBinding>(
             vm_map, mmapper, options, scheduler,
         )),
         PlanSelector::PageProtect => Box::new(crate::plan::pageprotect::PageProtect::new(
+            vm_map, mmapper, options,
+        )),
+        PlanSelector::MarkCompact => Box::new(crate::plan::markcompact::MarkCompact::new(
             vm_map, mmapper, options,
         )),
     }
@@ -250,6 +255,12 @@ pub trait Plan: 'static + Sync + Downcast {
 
     fn is_initialized(&self) -> bool {
         self.base().initialized.load(Ordering::SeqCst)
+    }
+
+    fn should_trigger_gc_when_heap_is_full(&self) -> bool {
+        self.base()
+            .trigger_gc_when_heap_is_full
+            .load(Ordering::SeqCst)
     }
 
     fn prepare(&mut self, tls: VMWorkerThread);
@@ -358,12 +369,11 @@ pub trait Plan: 'static + Sync + Downcast {
     fn force_full_heap_collection(&self) {}
 
     fn modify_check(&self, object: ObjectReference) {
-        if self.base().gc_in_progress_proper() && object.is_movable() {
-            panic!(
-                "GC modifying a potentially moving object via Java (i.e. not magic) obj= {}",
-                object
-            );
-        }
+        assert!(
+            !(self.base().gc_in_progress_proper() && object.is_movable()),
+            "GC modifying a potentially moving object via Java (i.e. not magic) obj= {}",
+            object
+        );
     }
 
     fn gc_pause_start(&self) {}
@@ -383,11 +393,13 @@ pub enum GcStatus {
 BasePlan should contain all plan-related state and functions that are _fundamental_ to _all_ plans.  These include VM-specific (but not plan-specific) features such as a code space or vm space, which are fundamental to all plans for a given VM.  Features that are common to _many_ (but not intrinsically _all_) plans should instead be included in CommonPlan.
 */
 pub struct BasePlan<VM: VMBinding> {
-    // Whether MMTk is now ready for collection. This is set to true when enable_collection() is called.
+    /// Whether MMTk is now ready for collection. This is set to true when initialize_collection() is called.
     pub initialized: AtomicBool,
+    /// Should we trigger a GC when the heap is full? It seems this should always be true. However, we allow
+    /// bindings to temporarily disable GC, at which point, we do not trigger GC even if the heap is full.
+    pub trigger_gc_when_heap_is_full: AtomicBool,
     pub gc_status: Mutex<GcStatus>,
     pub last_stress_pages: AtomicUsize,
-    pub stacks_prepared: AtomicBool,
     pub emergency_collection: AtomicBool,
     pub user_triggered_collection: AtomicBool,
     pub internal_triggered_collection: AtomicBool,
@@ -406,11 +418,13 @@ pub struct BasePlan<VM: VMBinding> {
     pub heap: HeapMeta,
     #[cfg(feature = "sanity")]
     pub inside_sanity: AtomicBool,
-    // A counter for per-mutator stack scanning
-    pub scanned_stacks: AtomicUsize,
+    /// A counter for per-mutator stack scanning
+    scanned_stacks: AtomicUsize,
+    /// Have we scanned all the stacks?
+    stacks_prepared: AtomicBool,
     pub mutator_iterator_lock: Mutex<()>,
     // A counter that keeps tracks of the number of bytes allocated since last stress test
-    pub allocation_bytes: AtomicUsize,
+    allocation_bytes: AtomicUsize,
     // Wrapper around analysis counters
     #[cfg(feature = "analysis")]
     pub analysis_manager: AnalysisManager<VM>,
@@ -516,6 +530,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             ),
 
             initialized: AtomicBool::new(false),
+            trigger_gc_when_heap_is_full: AtomicBool::new(true),
             gc_status: Mutex::new(GcStatus::NotInGC),
             last_stress_pages: AtomicUsize::new(0),
             stacks_prepared: AtomicBool::new(false),
@@ -720,8 +735,35 @@ impl<VM: VMBinding> BasePlan<VM> {
         }
     }
 
+    /// Are the stacks scanned?
     pub fn stacks_prepared(&self) -> bool {
         self.stacks_prepared.load(Ordering::SeqCst)
+    }
+
+    /// Prepare for stack scanning. This is usually used with `inform_stack_scanned()`.
+    /// This should be called before doing stack scanning.
+    pub fn prepare_for_stack_scanning(&self) {
+        self.scanned_stacks.store(0, Ordering::SeqCst);
+        self.stacks_prepared.store(false, Ordering::SeqCst);
+    }
+
+    /// Inform that 1 stack has been scanned. The argument `n_mutators` indicates the
+    /// total stacks we should scan. This method returns true if the number of scanned
+    /// stacks equals the total mutator count. Otherwise it returns false. This method
+    /// is thread safe and we guarantee only one thread will return true.
+    pub fn inform_stack_scanned(&self, n_mutators: usize) -> bool {
+        let old = self.scanned_stacks.fetch_add(1, Ordering::SeqCst);
+        debug_assert!(
+            old < n_mutators,
+            "The number of scanned stacks ({}) is more than the number of mutators ({})",
+            old,
+            n_mutators
+        );
+        let scanning_done = old + 1 == n_mutators;
+        if scanning_done {
+            self.stacks_prepared.store(true, Ordering::SeqCst);
+        }
+        scanning_done
     }
 
     pub fn gc_in_progress(&self) -> bool {
@@ -756,7 +798,8 @@ impl<VM: VMBinding> BasePlan<VM> {
         is_internal_triggered
     }
 
-    pub fn increase_allocation_bytes_by(&self, size: usize) {
+    /// Increase the allocation bytes and return the current allocation bytes after increasing
+    pub fn increase_allocation_bytes_by(&self, size: usize) -> usize {
         let old_allocation_bytes = self.allocation_bytes.fetch_add(size, Ordering::SeqCst);
         trace!(
             "Stress GC: old_allocation_bytes = {}, size = {}, allocation_bytes = {}",
@@ -764,25 +807,28 @@ impl<VM: VMBinding> BasePlan<VM> {
             size,
             self.allocation_bytes.load(Ordering::Relaxed),
         );
+        old_allocation_bytes + size
     }
 
-    #[inline]
-    pub(super) fn stress_test_gc_required(&self) -> bool {
-        let stress_factor = self.options.stress_factor;
-        if self.initialized.load(Ordering::SeqCst)
-            && (self.allocation_bytes.load(Ordering::SeqCst) > stress_factor)
-        {
-            trace!(
-                "Stress GC: allocation_bytes = {}, stress_factor = {}",
-                self.allocation_bytes.load(Ordering::Relaxed),
-                stress_factor
-            );
-            trace!("Doing stress GC");
-            self.allocation_bytes.store(0, Ordering::SeqCst);
-            true
-        } else {
-            false
-        }
+    /// Check if the options are set for stress GC. If either stress_factor or analysis_factor is set,
+    /// we should do stress GC.
+    pub fn is_stress_test_gc_enabled(&self) -> bool {
+        use crate::util::constants::DEFAULT_STRESS_FACTOR;
+        self.options.stress_factor != DEFAULT_STRESS_FACTOR
+            || self.options.analysis_factor != DEFAULT_STRESS_FACTOR
+    }
+
+    /// Check if we should do precise stress test. If so, we need to check for stress GCs for every allocation.
+    /// Otherwise, we only check in the allocation slow path.
+    pub fn is_precise_stress(&self) -> bool {
+        self.options.precise_stress
+    }
+
+    /// Check if we should do a stress GC now. If GC is initialized and the allocation bytes exceeds
+    /// the stress factor, we should do a stress GC.
+    pub fn should_do_stress_gc(&self) -> bool {
+        self.initialized.load(Ordering::SeqCst)
+            && (self.allocation_bytes.load(Ordering::SeqCst) > self.options.stress_factor)
     }
 
     pub(super) fn collection_required<P: Plan>(
@@ -791,7 +837,17 @@ impl<VM: VMBinding> BasePlan<VM> {
         space_full: bool,
         _space: &dyn Space<VM>,
     ) -> bool {
-        let stress_force_gc = self.stress_test_gc_required();
+        let stress_force_gc = self.should_do_stress_gc();
+        if stress_force_gc {
+            debug!(
+                "Stress GC: allocation_bytes = {}, stress_factor = {}",
+                self.allocation_bytes.load(Ordering::Relaxed),
+                self.options.stress_factor
+            );
+            debug!("Doing stress GC");
+            self.allocation_bytes.store(0, Ordering::SeqCst);
+        }
+
         debug!(
             "self.get_pages_reserved()={}, self.get_total_pages()={}",
             plan.get_pages_reserved(),
@@ -911,24 +967,6 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.immortal.release();
         self.los.release(full_heap);
         self.base.release(tls, full_heap)
-    }
-
-    pub fn schedule_common<E: ProcessEdgesWork<VM = VM>>(
-        &self,
-        constraints: &'static PlanConstraints,
-        scheduler: &GCWorkScheduler<VM>,
-    ) {
-        // Schedule finalization
-        if !self.base.options.no_finalizer {
-            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-            // finalization
-            scheduler.work_buckets[WorkBucketStage::RefClosure].add(Finalization::<E>::new());
-            // forward refs
-            if constraints.needs_forward_after_liveness {
-                scheduler.work_buckets[WorkBucketStage::RefForwarding]
-                    .add(ForwardFinalization::<E>::new());
-            }
-        }
     }
 
     pub fn stacks_prepared(&self) -> bool {

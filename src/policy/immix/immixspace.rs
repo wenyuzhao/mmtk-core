@@ -980,6 +980,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Some(start..end)
     }
 
+    pub fn is_last_gc_exhaustive(did_defrag_for_last_gc: bool) -> bool {
+        if super::DEFRAG {
+            did_defrag_for_last_gc
+        } else {
+            // If defrag is disabled, every GC is exhaustive.
+            true
+        }
+    }
+
     #[inline(always)]
     pub fn add_to_possibly_dead_mature_blocks(&self, block: Block, is_defrag_source: bool) {
         if block.log() {

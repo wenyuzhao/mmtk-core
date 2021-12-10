@@ -221,12 +221,16 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            self.immix().immix_space.trace_object(
-                self,
-                object,
-                super::global::ALLOC_IMMIX,
-                unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
-            )
+            if KIND == TraceKind::Fast {
+                self.immix().immix_space.fast_trace_object(self, object)
+            } else {
+                self.immix().immix_space.trace_object(
+                    self,
+                    object,
+                    super::global::ALLOC_IMMIX,
+                    unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                )
+            }
         } else {
             self.immix()
                 .common
@@ -269,4 +273,16 @@ impl<VM: VMBinding, const KIND: TraceKind> DerefMut for ImmixProcessEdges<VM, KI
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
+}
+
+pub(super) struct ImmixGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
+    std::marker::PhantomData<VM>,
+);
+impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
+    for ImmixGCWorkContext<VM, KIND>
+{
+    type VM = VM;
+    type PlanType = Immix<VM>;
+    type CopyContextType = ImmixCopyContext<VM>;
+    type ProcessEdgesWorkType = ImmixProcessEdges<VM, KIND>;
 }

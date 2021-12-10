@@ -1,4 +1,6 @@
-use super::gc_work::{FlushMatureEvacRemsets, ImmixCopyContext, ImmixProcessEdges, TraceKind};
+use super::gc_work::{
+    FlushMatureEvacRemsets, ImmixCopyContext, ImmixGCWorkContext, ImmixProcessEdges, TraceKind,
+};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::Pause;
 use crate::plan::global::BasePlan;
@@ -12,6 +14,7 @@ use crate::policy::immix::MatureSweeping;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
+use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
@@ -215,15 +218,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         match pause {
             Pause::FullTraceFast => {
                 if crate::args::REF_COUNT {
-                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>>(scheduler)
+                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TraceKind::Fast }>(scheduler)
                 } else {
-                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>>(
+                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>, { TraceKind::Fast }>(
                         scheduler,
                     )
                 }
             }
             Pause::FullTraceDefrag => self
-                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>>(
+                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>, { TraceKind::Defrag }>(
                     scheduler,
                 ),
             Pause::RefCount => self.schedule_rc_collection(scheduler),
@@ -581,7 +584,7 @@ impl<VM: VMBinding> Immix<VM> {
         pause
     }
 
-    fn schedule_immix_collection<E: ProcessEdgesWork<VM = VM>>(
+    fn schedule_immix_collection<E: ProcessEdgesWork<VM = VM>, const KIND: TraceKind>(
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
@@ -593,13 +596,13 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+            .add(Prepare::<ImmixGCWorkContext<VM, KIND>>::new(self));
         // Release global/collectors/mutators
         if super::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+            .add(Release::<ImmixGCWorkContext<VM, KIND>>::new(self));
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -615,11 +618,13 @@ impl<VM: VMBinding> Immix<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -633,10 +638,12 @@ impl<VM: VMBinding> Immix<VM> {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<CMImmixCollectRootEdges<VM>>::new())
         };
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -649,13 +656,15 @@ impl<VM: VMBinding> Immix<VM> {
                 .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
         }
 
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
         if super::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
