@@ -512,6 +512,7 @@ fn output_pause_time() {
     };
     let headers = [
         "total",
+        "wait",
         "init",
         "prepare",
         "closure",
