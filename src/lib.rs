@@ -553,3 +553,5 @@ fn output_pause_time() {
     let mut file = File::create("scratch/pauses.csv").unwrap();
     file.write_all(s.as_bytes()).unwrap();
 }
+
+static NO_EVAC: AtomicBool = AtomicBool::new(false);
