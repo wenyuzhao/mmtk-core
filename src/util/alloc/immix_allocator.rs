@@ -134,6 +134,9 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         offset: isize,
         need_poll: bool,
     ) -> Address {
+        if crate::args::REF_COUNT {
+            unreachable!();
+        }
         trace!("{:?}: alloc_slow_once_precise_stress", self.tls);
         // If we are required to make a poll, we call acquire_clean_block() which will acquire memory
         // from the space which includes a GC poll.
@@ -314,7 +317,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     // Get a clean block from ImmixSpace.
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: isize) -> Address {
         match self.immix_space().get_clean_block(self.tls, self.copy) {
-            None => Address::ZERO,
+            None => {
+                if !self.immix_space().reusable_blocks_drained() {
+                    self.request_for_large = false;
+                    self.alloc(size, align, offset)
+                } else {
+                    Address::ZERO
+                }
+            },
             Some(block) => {
                 trace!("{:?}: Acquired a new block {:?}", self.tls, block);
                 if self.request_for_large {

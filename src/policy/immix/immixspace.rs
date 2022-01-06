@@ -562,6 +562,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.block_allocation.get_reusable_block(copy)
     }
 
+    #[inline(always)]
+    pub fn reusable_blocks_drained(&self) -> bool {
+        self.reusable_blocks.len() == 0
+    }
+
     /// Trace and mark objects without evacuation.
     #[inline(always)]
     pub fn process_mature_evacuation_remset(&self) {
