@@ -57,6 +57,7 @@ pub struct Immix<VM: VMBinding> {
     next_gc_may_perform_cycle_collection: AtomicBool,
     last_gc_was_defrag: AtomicBool,
     nursery_blocks: usize,
+    inc_buffer_limit: Option<usize>,
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -105,6 +106,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             }
             return true;
         }
+        // if crate::args::HEAP_HEALTH_GUIDED_GC && self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false) {
+        //     println!("incs {}", rc::inc_buffer_size());
+        //     return true;
+        // }
         // Concurrent tracing finished
         if crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
@@ -119,9 +124,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !(crate::concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
             && (self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
-                || crate::args::INC_BUFFER_LIMIT
-                    .map(|limit| rc::inc_buffer_size() >= limit)
-                    .unwrap_or(false))
+                || self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false))
         {
             return true;
         }
@@ -193,6 +196,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             let total_blocks = heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
             self.nursery_blocks = nursery_blocks;
+        }
+        if let Some(inc_buffer_limit) = *crate::args::INC_BUFFER_LIMIT {
+            self.inc_buffer_limit = Some(inc_buffer_limit);
         }
     }
 
@@ -441,6 +447,7 @@ impl<VM: VMBinding> Immix<VM> {
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
             nursery_blocks: *crate::args::NURSERY_BLOCKS.as_ref().unwrap(),
+            inc_buffer_limit: None,
         };
 
         {

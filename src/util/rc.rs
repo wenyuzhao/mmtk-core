@@ -217,7 +217,7 @@ pub fn inc_inc_buffer_size() {
 #[inline(always)]
 pub fn reset_inc_buffer_size() {
     crate::add_incs(inc_buffer_size());
-    INC_BUFFER_SIZE.store(0, Ordering::Relaxed)
+    INC_BUFFER_SIZE.store(0, Ordering::SeqCst)
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessIncs<VM> {}
@@ -647,7 +647,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         if *crate::args::OPPORTUNISTIC_EVAC {
-            if crate::NO_EVAC.load(Ordering::Relaxed) {
+            if crate::NO_EVAC.load(Ordering::SeqCst) {
                 self.no_evac = true;
             } else {
                 let pause_time = crate::GC_START_TIME

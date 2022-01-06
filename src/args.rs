@@ -126,7 +126,7 @@ pub static OPPORTUNISTIC_EVAC: Lazy<bool> = Lazy::new(|| {
 pub static OPPORTUNISTIC_EVAC_THRESHOLD: Lazy<usize> = Lazy::new(|| {
     env::var("OPPORTUNISTIC_EVAC_THRESHOLD")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(20)
+        .unwrap_or(50)
 });
 
 // ---------- Barrier flags ---------- //
@@ -204,6 +204,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
     dump_feature!("opportunistic_evac", *OPPORTUNISTIC_EVAC);
     dump_feature!("opportunistic_evac_threshold", *OPPORTUNISTIC_EVAC_THRESHOLD);
+    dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
 
     println!("----------------------------------------------------");
 }
