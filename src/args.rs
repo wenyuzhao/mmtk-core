@@ -100,7 +100,7 @@ pub static CONCURRENT_GC_THREADS_RATIO: Lazy<usize> = Lazy::new(|| {
 pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
     env::var("CONCURRENT_MARKING_THRESHOLD")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(90)
+        .unwrap_or(70)
 });
 pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
     env::var("TRACE_THRESHOLD")

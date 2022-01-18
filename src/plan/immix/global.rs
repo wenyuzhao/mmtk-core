@@ -36,7 +36,7 @@ use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -58,6 +58,8 @@ pub struct Immix<VM: VMBinding> {
     last_gc_was_defrag: AtomicBool,
     nursery_blocks: usize,
     inc_buffer_limit: Option<usize>,
+    avail_pages_at_end_of_last_gc: AtomicUsize,
+    cm_threshold: usize,
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -200,6 +202,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if let Some(inc_buffer_limit) = *crate::args::INC_BUFFER_LIMIT {
             self.inc_buffer_limit = Some(inc_buffer_limit);
         }
+        self.cm_threshold = *crate::args::CONCURRENT_MARKING_THRESHOLD;
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -393,6 +396,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
+        self.avail_pages_at_end_of_last_gc.store(self.get_pages_avail(), Ordering::SeqCst);
         if crate::args::REF_COUNT {
             self.decide_next_gc_may_perform_cycle_collection();
         }
@@ -448,6 +452,8 @@ impl<VM: VMBinding> Immix<VM> {
             last_gc_was_defrag: AtomicBool::new(false),
             nursery_blocks: *crate::args::NURSERY_BLOCKS.as_ref().unwrap(),
             inc_buffer_limit: None,
+            avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
+            cm_threshold: 0,
         };
 
         {
@@ -467,6 +473,8 @@ impl<VM: VMBinding> Immix<VM> {
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
             return;
         }
+        let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
+        avail_pages += self.immix_space.num_clean_blocks_released_lazy.load(Ordering::SeqCst) << Block::LOG_PAGES;
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
         let threshold = *crate::args::TRACE_THRESHOLD;
         let last_freed_blocks = self
@@ -475,7 +483,13 @@ impl<VM: VMBinding> Immix<VM> {
             .load(Ordering::SeqCst);
         if last_freed_blocks * 100 < (threshold * total_blocks as f32) as usize {
             if crate::args::LOG_PER_GC_STATE {
-                println!("next trace ({} / {})", last_freed_blocks, total_blocks);
+                println!("next trace ({} / {}) 1", last_freed_blocks, total_blocks);
+            }
+            self.next_gc_may_perform_cycle_collection
+                .store(true, Ordering::SeqCst);
+        } else if crate::args::CONCURRENT_MARKING && avail_pages * 100 < self.cm_threshold * self.get_total_pages() && !crate::concurrent_marking_in_progress() {
+            if crate::args::LOG_PER_GC_STATE {
+                println!("next trace ({} / {}) 2", last_freed_blocks, total_blocks);
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
@@ -489,6 +503,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
+        self.decide_next_gc_may_perform_cycle_collection();
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
