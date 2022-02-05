@@ -227,8 +227,16 @@ impl WorkBucketStage {
     #[cfg(not(feature = "ix_delayed_nursery_evacuation"))]
     pub const RCEvacuateMature: Self = Self::Closure;
     pub const RCReleaseNursery: Self = Self::Release;
+    #[cfg(not(feature = "instrumentation"))]
     pub const RCFullHeapRelease: Self = Self::RefForwarding;
+    #[cfg(not(feature = "instrumentation"))]
     pub const RCProcessDecs: Self = Self::Release;
+
+
+    #[cfg(feature = "instrumentation")]
+    pub const RCFullHeapRelease: Self = Self::Compact;
+    #[cfg(feature = "instrumentation")]
+    pub const RCProcessDecs: Self = Self::RefForwarding;
 
     pub const fn rc_process_incs_stage() -> Self {
         if crate::args::EAGER_INCREMENTS && !crate::args::BARRIER_MEASUREMENT {
