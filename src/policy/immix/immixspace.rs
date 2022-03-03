@@ -103,6 +103,15 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit(_object);
     }
+    #[inline(always)]
+    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+        debug_assert!(!object.is_null());
+        if ForwardingWord::is_forwarded::<VM>(object) {
+            Some(ForwardingWord::read_forwarding_pointer::<VM>(object))
+        } else {
+            None
+        }
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
