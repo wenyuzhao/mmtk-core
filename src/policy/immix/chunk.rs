@@ -459,7 +459,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 if state == BlockState::Nursery || state == BlockState::Reusing {
                     continue;
                 }
-                crate::SCANNED_MATURE_BLOCKS.fetch_add(1, Ordering::Relaxed);
                 self.process_block(block, immix_space)
             }
         }
