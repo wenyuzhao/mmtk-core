@@ -90,11 +90,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
-            if crate::args::REF_COUNT && *crate::args::DISABLE_MUTATOR_LINE_REUSING && !self.copy {
-                // only bump allocate into clean blocks
-                debug_assert!(!self.request_for_large);
-                self.alloc_slow(size, align, offset)
-            } else if size > Line::BYTES {
+            if size > Line::BYTES {
                 // Size larger than a line: do large allocation
                 self.overflow_alloc(size, align, offset)
             } else {

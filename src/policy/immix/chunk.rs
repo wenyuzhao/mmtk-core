@@ -321,10 +321,12 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
                 block.set_as_defrag_source(false);
             }
             // Clear block mark data.
-            block.set_state(BlockState::Unmarked);
+            if block.get_state() != BlockState::Nursery {
+                block.set_state(BlockState::Unmarked);
+            }
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
-            debug_assert_ne!(block.get_state(), BlockState::Nursery);
+            // debug_assert_ne!(block.get_state(), BlockState::Nursery);
         }
     }
 }
@@ -411,6 +413,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline]
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
         let mut has_dead_object = false;
+        let mut has_live = false;
         for o in (block.start()..block.end())
             .step_by(rc::MIN_OBJECT_SIZE)
             .map(|a| unsafe { a.to_object_reference() })
@@ -429,9 +432,13 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                 }
                 self.process_dead_object(o);
                 has_dead_object = true;
+            } else {
+                if c != 0 {
+                    has_live = true;
+                }
             }
         }
-        if has_dead_object {
+        if has_dead_object || !has_live {
             immix_space.add_to_possibly_dead_mature_blocks(block, false);
         }
     }
@@ -452,6 +459,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 if state == BlockState::Nursery || state == BlockState::Reusing {
                     continue;
                 }
+                crate::SCANNED_MATURE_BLOCKS.fetch_add(1, Ordering::Relaxed);
                 self.process_block(block, immix_space)
             }
         }
