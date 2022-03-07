@@ -279,12 +279,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    fn select_mature_evacuation_candidates(&self, _pause: Pause) {
+    fn select_mature_evacuation_candidates(&self, _pause: Pause, total_pages: usize) {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
-        let defrag_bytes = *crate::args::MAX_MATURE_DEFRAG_MB << 20;
+        let total_bytes = total_pages << 12;
+        let defrag_bytes = total_bytes * *crate::args::MAX_MATURE_DEFRAG_PERCENT / 100;
+        let defrag_blocks = defrag_bytes >> Block::LOG_BYTES;
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
             blocks.append(&mut x);
@@ -1192,7 +1193,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             immix
                 .immix_space
-                .select_mature_evacuation_candidates(immix.current_pause().unwrap())
+                .select_mature_evacuation_candidates(immix.current_pause().unwrap(), mmtk.plan.get_total_pages())
         }
     }
 }
