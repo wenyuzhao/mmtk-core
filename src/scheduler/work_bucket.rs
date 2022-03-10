@@ -212,6 +212,8 @@ pub enum WorkBucketStage {
     Closure,
     RefClosure,
     RefForwarding,
+    #[cfg(feature = "instrumentation")]
+    Compact,
     Release,
     Final,
 }

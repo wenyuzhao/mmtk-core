@@ -70,6 +70,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone(), false),
+                #[cfg(feature = "instrumentation")]
+                WorkBucketStage::Compact => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone(), false),
                 WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone(), false),
             },
