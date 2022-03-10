@@ -789,11 +789,18 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     #[cold]
     fn process_dead_object(&mut self, o: ObjectReference, immix: &Immix<VM>) {
         crate::stat(|s| {
-            s.dead_objects += 1;
-            s.dead_volume += o.get_size::<VM>();
+            s.dead_mature_objects += 1;
+            s.dead_mature_volume += o.get_size::<VM>();
+
+            s.dead_mature_rc_objects += 1;
+            s.dead_mature_rc_volume += o.get_size::<VM>();
+
             if !immix.immix_space.in_space(o) {
-                s.dead_los_objects += 1;
-                s.dead_los_volume += o.get_size::<VM>();
+                s.dead_mature_los_objects += 1;
+                s.dead_mature_los_volume += o.get_size::<VM>();
+
+                s.dead_mature_rc_los_objects += 1;
+                s.dead_mature_rc_los_volume += o.get_size::<VM>();
             }
         });
         let not_marked = immix.mark(o);
