@@ -393,10 +393,16 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
         crate::stat(|s| {
-            s.dead_objects += 1;
-            s.dead_volume += o.get_size::<VM>();
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
+
+            s.dead_mature_tracing_objects += 1;
+            s.dead_mature_tracing_volume += o.get_size::<VM>();
+
+            if rc::rc_stick(o) {
+                s.dead_mature_tracing_stuck_objects += 1;
+                s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
+            }
         });
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);

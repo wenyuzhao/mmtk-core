@@ -447,14 +447,22 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         for o in mature_objects.iter() {
             if !los.is_marked(*o) && rc::count(*o) != 0 {
                 crate::stat(|s| {
-                    s.dead_objects += 1;
-                    s.dead_volume += o.get_size::<VM>();
-                    s.dead_los_objects += 1;
-                    s.dead_los_volume += o.get_size::<VM>();
                     s.dead_mature_objects += 1;
                     s.dead_mature_volume += o.get_size::<VM>();
                     s.dead_mature_los_objects += 1;
                     s.dead_mature_los_volume += o.get_size::<VM>();
+
+                    s.dead_mature_tracing_objects += 1;
+                    s.dead_mature_tracing_volume += o.get_size::<VM>();
+                    s.dead_mature_tracing_los_objects += 1;
+                    s.dead_mature_tracing_los_volume += o.get_size::<VM>();
+
+                    if rc::rc_stick(*o) {
+                        s.dead_mature_tracing_stuck_objects += 1;
+                        s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
+                        s.dead_mature_tracing_stuck_los_objects += 1;
+                        s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
+                    }
                 });
                 rc::set(*o, 0);
                 // println!("dead los 2 {:?}", o);
