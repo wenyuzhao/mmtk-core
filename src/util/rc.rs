@@ -654,9 +654,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .elapsed()
                     .unwrap()
                     .as_millis();
-                if pause_time >= 30 {
+                if pause_time >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128 {
                     self.no_evac = true;
                     crate::NO_EVAC.store(true, Ordering::SeqCst);
+                    if crate::args::LOG_PER_GC_STATE {
+                        println!(" - no evac");
+                    }
                 }
             }
         }

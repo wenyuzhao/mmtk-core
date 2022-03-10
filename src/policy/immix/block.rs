@@ -585,17 +585,55 @@ impl Block {
             debug_assert!(self.rc_dead(), "{:?} has live rc counts", self);
             space.deinit_block(*self, true);
             true
-        } else {
-            if self.rc_dead() {
-                if self.attempt_dealloc(false) {
-                    space.deinit_block(*self, true);
+        } else if self.rc_dead() {
+            if self.attempt_dealloc(false) {
+                space.deinit_block(*self, true);
+                true
+            } else {
+                false
+            }
+        } else if !crate::args::BLOCK_ONLY {
+            // See the caller of this function.
+            // At least one object is dead in the block.
+            let add_as_reusable = if !*crate::args::IGNORE_REUSING_BLOCKS {
+                if !self.get_state().is_reusable() && self.has_holes() {
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: 1 as _,
+                    });
                     true
                 } else {
                     false
                 }
             } else {
-                false
+                let holes = if crate::args::HOLE_COUNTING {
+                    self.calc_holes()
+                } else {
+                    1
+                };
+                let has_holes = self.has_holes();
+                self.fetch_update_state(|s| {
+                    if s == BlockState::Reusing
+                        || s == BlockState::Unallocated
+                        || s.is_reusable()
+                        || !has_holes
+                    {
+                        None
+                    } else {
+                        Some(BlockState::Reusable {
+                            unavailable_lines: holes as _,
+                        })
+                    }
+                })
+                .is_ok()
+            };
+            if add_as_reusable {
+                debug_assert!(self.get_state().is_reusable());
+                // println!("reuse N {:?}", self);
+                space.reusable_blocks.push(*self)
             }
+            false
+        } else {
+            false
         }
     }
 
