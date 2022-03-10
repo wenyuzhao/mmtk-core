@@ -458,3 +458,7 @@ fn stat(f: impl Fn(&mut GCStat)) {
     }
     f(&mut STAT.lock())
 }
+
+
+static NO_EVAC: AtomicBool = AtomicBool::new(false);
+

@@ -322,6 +322,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
+        crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
         if crate::args::REF_COUNT {
             let me = unsafe { &mut *(self as *const _ as *mut Self) };

@@ -204,6 +204,7 @@ pub struct ProcessIncs<VM: VMBinding> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     current_pause_should_do_mature_evac: bool,
+    no_evac: bool,
 }
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -259,6 +260,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             current_pause_should_do_mature_evac: false,
+            no_evac: false,
         }
     }
 
@@ -437,6 +439,22 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             let _ = self::inc(new);
             return new;
         }
+        // if self.no_evac {
+        //     let mature_defrag =
+        //         self.should_do_mature_evac() && Block::containing::<VM>(o).is_defrag_source();
+        //     if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
+        //         let forwarding_status = object_forwarding::get_forwarding_status::<VM>(o);
+        //         let new =
+        //             object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
+        //         let _ = self::inc(new);
+        //         return new;
+        //     } else {
+        //         if let Ok(0) = self::inc(o) {
+        //             self.promote(o, false, los);
+        //         }
+        //         return o;
+        //     }
+        // }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
@@ -476,6 +494,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         self.immix().immix_space.unmark(o);
                     }
                     new
+                } else if self.no_evac {
+                    // Object is not moved.
+                    if let Ok(0) = self::inc(o) {
+                        self.promote(o, false, los);
+                    }
+                    object_forwarding::clear_forwarding_bits::<VM>(o);
+                    o
                 } else {
                     let new = object_forwarding::forward_object::<VM, _>(
                         o,
@@ -488,8 +513,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 }
             } else {
                 // Object is not moved.
+                if let Ok(0) = self::inc(o) {
+                    self.promote(o, false, los);
+                }
                 object_forwarding::clear_forwarding_bits::<VM>(o);
-                let _ = self::inc(o);
                 o
             }
         }
@@ -618,6 +645,21 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 || self.current_pause == Pause::FinalMark);
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
+        if *crate::args::OPPORTUNISTIC_EVAC {
+            if crate::NO_EVAC.load(Ordering::Relaxed) {
+                self.no_evac = true;
+            } else {
+                let pause_time = crate::GC_START_TIME
+                    .load(Ordering::SeqCst)
+                    .elapsed()
+                    .unwrap()
+                    .as_millis();
+                if pause_time >= 30 {
+                    self.no_evac = true;
+                    crate::NO_EVAC.store(true, Ordering::SeqCst);
+                }
+            }
+        }
         // Process main buffer
         let root_edges = if self.kind == EdgeKind::Root
             && (self.current_pause == Pause::FinalMark

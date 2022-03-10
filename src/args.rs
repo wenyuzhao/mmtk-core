@@ -8,13 +8,13 @@ use crate::{
 
 pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
-pub const NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
+pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
     env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
 });
 pub const HOLE_COUNTING: bool = cfg!(feature = "lxr_hole_counting");
 pub const NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY: bool = false;
 
-pub const INC_BUFFER_LIMIT: Lazy<Option<usize>> =
+pub static INC_BUFFER_LIMIT: Lazy<Option<usize>> =
     Lazy::new(|| env::var("INCS_LIMIT").map(|x| x.parse().unwrap()).ok());
 
 // ---------- Immix flags ---------- //
@@ -118,6 +118,11 @@ pub static MAX_MATURE_DEFRAG_MB: Lazy<usize> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(4)
 });
+pub static OPPORTUNISTIC_EVAC: Lazy<bool> = Lazy::new(|| {
+    env::var("OPPORTUNISTIC_EVAC")
+        .map(|_| true)
+        .unwrap_or(false)
+});
 
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
@@ -193,6 +198,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
     dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
     dump_feature!("rc_immix", cfg!(feature = "rc_immix"));
+    dump_feature!("opportunistic_evac", *OPPORTUNISTIC_EVAC);
 
     println!("----------------------------------------------------");
 }
