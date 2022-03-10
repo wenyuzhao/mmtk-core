@@ -77,6 +77,7 @@ lxr_lock_8 = []
 lxr_lock_9 = []
 lxr_hole_counting = []
 lxr_no_rc_in_cm = []
+rc_immix = ["lxr_evac"]
 # LXR Features
 ix_ref_count = ["ix_lock_free_block_allocation"]
 lxr_heap_health_guided_gc = ["ix_ref_count"]

@@ -192,6 +192,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
     dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
+    dump_feature!("rc_immix", cfg!(feature = "rc_immix"));
 
     println!("----------------------------------------------------");
 }
