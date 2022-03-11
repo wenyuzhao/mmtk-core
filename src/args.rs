@@ -6,6 +6,7 @@ use crate::{
     BarrierSelector,
 };
 
+pub const RC_IMMIX: bool = cfg!(feature = "rc_immix");
 pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
 pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
