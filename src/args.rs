@@ -102,10 +102,11 @@ pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(70)
 });
+// Do a tracing GC if the previous pause cannot yield more tnan 20% of clean blocks.
 pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
     env::var("TRACE_THRESHOLD")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(10f32)
+        .unwrap_or(20f32)
 });
 pub const COUNT_BYTES_FOR_MATURE_EVAC: bool = cfg!(feature = "lxr_count_bytes_for_mature_evac");
 
@@ -120,6 +121,7 @@ pub static OPPORTUNISTIC_EVAC: Lazy<bool> = Lazy::new(|| {
         .map(|_| true)
         .unwrap_or(false)
 });
+// Do not perform evacuation if the pause time (in millis) reaches this limit
 pub static OPPORTUNISTIC_EVAC_THRESHOLD: Lazy<usize> = Lazy::new(|| {
     env::var("OPPORTUNISTIC_EVAC_THRESHOLD")
         .map(|x| x.parse().unwrap())

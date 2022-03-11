@@ -108,12 +108,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             }
             return true;
         }
-        // if crate::args::HEAP_HEALTH_GUIDED_GC && self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false) {
-        //     println!("incs {}", rc::inc_buffer_size());
-        //     return true;
-        // }
+        // inc limits
+        if crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args::REF_COUNT
+            && self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false)
+        {
+            return true;
+        }
         // Concurrent tracing finished
-        if crate::args::CONCURRENT_MARKING
+        if !crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
         {
@@ -191,7 +195,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         me.get_pages_reserved() / 256
                     );
                 }
-                me.decide_next_gc_may_perform_cycle_collection();
+                // me.decide_next_gc_may_perform_cycle_collection();
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -398,7 +402,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
         self.avail_pages_at_end_of_last_gc.store(self.get_pages_avail(), Ordering::SeqCst);
         if crate::args::REF_COUNT {
-            self.decide_next_gc_may_perform_cycle_collection();
+            // self.decide_next_gc_may_perform_cycle_collection();
         }
     }
 
@@ -487,12 +491,6 @@ impl<VM: VMBinding> Immix<VM> {
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-        } else if crate::args::CONCURRENT_MARKING && avail_pages * 100 < self.cm_threshold * self.get_total_pages() && !crate::concurrent_marking_in_progress() {
-            if crate::args::LOG_PER_GC_STATE {
-                println!("next trace ({} / {}) 2", last_freed_blocks, total_blocks);
-            }
-            self.next_gc_may_perform_cycle_collection
-                .store(true, Ordering::SeqCst);
         } else {
             if crate::args::LOG_PER_GC_STATE {
                 println!("next rc ({} / {})", last_freed_blocks, total_blocks);
@@ -513,12 +511,14 @@ impl<VM: VMBinding> Immix<VM> {
                     .load(Ordering::Relaxed)
             );
         }
+        // If CM is finished, do a final mark pause
         if crate::args::CONCURRENT_MARKING
             && concurrent_marking_in_progress
             && concurrent_marking_packets_drained
         {
             return Pause::FinalMark;
         }
+        // Either final mark pause or full pause for emergency GC
         if emergency {
             return if crate::args::CONCURRENT_MARKING && concurrent_marking_in_progress {
                 Pause::FinalMark
@@ -526,6 +526,7 @@ impl<VM: VMBinding> Immix<VM> {
                 Pause::FullTraceFast
             };
         }
+        // Should trigger CM?
         if self
             .next_gc_may_perform_cycle_collection
             .load(Ordering::Relaxed)
@@ -595,6 +596,9 @@ impl<VM: VMBinding> Immix<VM> {
             }
         };
         if crate::inside_harness() {
+            if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
+                crate::PAUSES.cm_early_quit.fetch_add(1, Ordering::Relaxed);
+            }
             match pause {
                 Pause::RefCount => crate::PAUSES.rc.fetch_add(1, Ordering::Relaxed),
                 Pause::InitialMark => crate::PAUSES.initial_mark.fetch_add(1, Ordering::Relaxed),

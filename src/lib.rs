@@ -281,6 +281,7 @@ struct Pauses {
     pub rc: AtomicUsize,
     pub initial_mark: AtomicUsize,
     pub final_mark: AtomicUsize,
+    pub cm_early_quit: AtomicUsize,
     pub full: AtomicUsize,
     pub emergency: AtomicUsize,
     pub yield_nanos: Atomic<u128>,
@@ -295,6 +296,7 @@ impl Pauses {
         print!("gc.final_satb\t");
         print!("gc.full\t");
         print!("gc.emergency\t");
+        print!("cm_early_quit\t");
         if cfg!(feature = "yield_and_roots_timer") {
             print!("time.yield\t");
             print!("time.roots\t");
@@ -309,6 +311,7 @@ impl Pauses {
         print!("{}\t", self.final_mark.load(Ordering::SeqCst));
         print!("{}\t", self.full.load(Ordering::SeqCst));
         print!("{}\t", self.emergency.load(Ordering::SeqCst));
+        print!("{}\t", self.cm_early_quit.load(Ordering::SeqCst));
         if cfg!(feature = "yield_and_roots_timer") {
             print!(
                 "{}\t",
@@ -334,6 +337,7 @@ static PAUSES: Pauses = Pauses {
     final_mark: AtomicUsize::new(0),
     full: AtomicUsize::new(0),
     emergency: AtomicUsize::new(0),
+    cm_early_quit: AtomicUsize::new(0),
     yield_nanos: Atomic::new(0),
     roots_nanos: Atomic::new(0),
     satb_nanos: Atomic::new(0),
