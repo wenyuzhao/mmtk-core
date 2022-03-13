@@ -279,13 +279,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    fn select_mature_evacuation_candidates(&self, _pause: Pause, total_pages: usize) {
+    fn select_mature_evacuation_candidates(&self, _pause: Pause, _total_pages: usize) {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let total_bytes = total_pages << 12;
-        let defrag_bytes = total_bytes * *crate::args::MAX_MATURE_DEFRAG_PERCENT / 100;
-        let defrag_blocks = defrag_bytes >> Block::LOG_BYTES;
+        // let total_bytes = total_pages << 12;
+        let defrag_bytes = self.defrag_headroom_pages() << 12;
+        // let defrag_blocks = defrag_bytes >> Block::LOG_BYTES;
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
             blocks.append(&mut x);
@@ -311,14 +311,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     block.dead_bytes()
             // );
             me.defrag_blocks.push(block);
-            live_bytes += Block::BYTES - dead_bytes;
+            live_bytes += (Block::BYTES - dead_bytes) * 30 / 100;
             num_blocks += 1;
             if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
                 if live_bytes >= defrag_bytes {
                     break;
                 }
-            } else if num_blocks >= defrag_blocks {
-                break;
+            } else {
+                unreachable!();
             }
         }
         if crate::args::LOG_PER_GC_STATE {
@@ -1172,13 +1172,16 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             {
                 continue;
             }
-            let score = if !crate::args::HOLE_COUNTING {
-                match state {
-                    BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
-                    _ => block.calc_holes(),
-                }
+            let score = if crate::args::HOLE_COUNTING {
+                unreachable!();
+                // match state {
+                //     BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
+                //     _ => block.calc_holes(),
+                // }
             } else {
-                block.dead_bytes()
+                // block.dead_bytes()
+                // block.calc_dead_bytes::<VM>()
+                block.calc_dead_lines() << Line::LOG_BYTES
             };
             if score >= self.defrag_threshold {
                 blocks.push((block, score));

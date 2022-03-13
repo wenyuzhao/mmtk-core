@@ -2,7 +2,7 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
-use crate::util::constants::*;
+use crate::util::{constants::*, rc};
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
@@ -154,10 +154,57 @@ impl Block {
         block.inc_dead_bytes_sloppy(o.get_size::<VM>());
     }
 
+    // #[inline(always)]
+    // pub fn dec_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
+    //     let block = Block::containing::<VM>(o);
+    //     block.dec_dead_bytes_sloppy(o.get_size::<VM>());
+    // }
+
+
     #[inline(always)]
-    pub fn dec_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
-        let block = Block::containing::<VM>(o);
-        block.dec_dead_bytes_sloppy(o.get_size::<VM>());
+    pub fn calc_dead_lines(&self) -> usize {
+        let mut dead_lines = 0;
+        let rc_array = RCArray::of(*self);
+        // let mut skip_next_dead = false;
+        for i in 0..Self::LINES {
+            if rc_array.is_dead(i) {
+                // if i == 0 {
+                //     dead_lines += 1;
+                // } else if skip_next_dead {
+                //     skip_next_dead = false;
+                // } else {
+                //     dead_lines += 1;
+                // }
+                dead_lines += 1;
+            } else {
+                // skip_next_dead = true;
+            }
+        }
+        dead_lines
+    }
+
+    #[inline(always)]
+    pub fn calc_dead_bytes<VM: VMBinding>(&self) -> usize {
+        let mut live = 0usize;
+        for o in (self.start()..self.end())
+            .step_by(rc::MIN_OBJECT_SIZE)
+            .map(|a| unsafe { a.to_object_reference() })
+        {
+            let c = rc::count(o);
+            if c != 0 {
+                if Line::is_aligned(o.to_address()) {
+                    if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
+                        continue;
+                    }
+                }
+                let o = o.fix_start_address::<VM>();
+                live += o.get_size::<VM>();
+            }
+        }
+        if live > Self::BYTES {
+            return 0;
+        }
+        Self::BYTES - live
     }
 
     #[inline(always)]
