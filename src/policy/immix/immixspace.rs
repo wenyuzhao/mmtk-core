@@ -27,7 +27,7 @@ use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam_queue::{ArrayQueue, SegQueue};
 use spin::Mutex;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, AtomicBool};
 use std::{
     iter::Step,
     ops::Range,
@@ -67,6 +67,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     defrag_chunk_cursor: AtomicUsize,
     fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
     fragmented_blocks_size: AtomicUsize,
+    disable_defrag: AtomicBool,
     pub num_clean_blocks_released: AtomicUsize,
 }
 
@@ -224,6 +225,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             fragmented_blocks: Default::default(),
             fragmented_blocks_size: Default::default(),
             num_clean_blocks_released: Default::default(),
+            disable_defrag: Default::default(),
         }
     }
 
@@ -257,6 +259,37 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         self.defrag.in_defrag()
     }
+    pub fn decide_whether_to_defrag2(
+        &self,
+        emergency_collection: bool,
+        collect_whole_heap: bool,
+        collection_attempts: usize,
+        user_triggered_collection: bool,
+        full_heap_system_gc: bool,
+    ) -> bool {
+        if !crate::args::RC_IMMIX {
+            return false;
+        }
+        let in_defrag = self.defrag.decide_whether_to_defrag2(
+            emergency_collection,
+            collect_whole_heap,
+            collection_attempts,
+            user_triggered_collection,
+            self.reusable_blocks.len() == 0,
+            full_heap_system_gc,
+        );
+        if in_defrag {
+            self.disable_defrag.store(false, Ordering::SeqCst);
+            crate::NO_EVAC.store(false, Ordering::SeqCst);
+        } else {
+            self.disable_defrag.store(true, Ordering::SeqCst);
+            crate::NO_EVAC.store(false, Ordering::SeqCst);
+        }
+        if crate::args::LOG_PER_GC_STATE {
+            println!(" - in_defrag {}", in_defrag);
+        }
+        in_defrag
+    }
 
     /// Get work packet scheduler
     #[inline(always)]
@@ -268,8 +301,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
-        let defrag_bytes = *crate::args::MAX_MATURE_DEFRAG_MB << 20;
+        // let defrag_blocks = *crate::args::MAX_MATURE_DEFRAG_BLOCKS;
+        let defrag_bytes = if crate::args::RC_IMMIX { self.defrag_headroom_pages() << 12 } else { *crate::args::MAX_MATURE_DEFRAG_MB << 20 };
+        if crate::args::LOG_PER_GC_STATE {
+            println!(" - max_defrag_bytes {}", defrag_bytes);
+        }
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
             blocks.append(&mut x);
@@ -295,16 +331,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     block.dead_bytes()
             // );
             me.defrag_blocks.push(block);
-            live_bytes += Block::BYTES - dead_bytes;
+            live_bytes += (Block::BYTES - dead_bytes) * 30 / 100;
             num_blocks += 1;
             if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
                 if live_bytes >= defrag_bytes {
                     break;
                 }
             } else {
-                if num_blocks >= defrag_blocks {
-                    break;
-                }
+                unreachable!()
+                // if num_blocks >= defrag_blocks {
+                //     break;
+                // }
             }
         }
         if crate::args::LOG_PER_GC_STATE {
@@ -317,6 +354,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
+        if self.disable_defrag.load(Ordering::SeqCst) {
+            self.fragmented_blocks_size.store(0, Ordering::SeqCst);
+            SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(0, Ordering::SeqCst);
+            return;
+        }
         let tasks = self
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
@@ -1140,13 +1182,15 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             {
                 continue;
             }
-            let score = if !crate::args::HOLE_COUNTING {
+            let score = if crate::args::HOLE_COUNTING {
                 match state {
                     BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
                     _ => block.calc_holes(),
                 }
             } else {
-                block.dead_bytes()
+                // block.dead_bytes()
+                // block.calc_dead_bytes::<VM>()
+                block.calc_dead_lines() << Line::LOG_BYTES
             };
             if score >= self.defrag_threshold {
                 blocks.push((block, score));

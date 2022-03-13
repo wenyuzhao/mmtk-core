@@ -455,7 +455,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 continue;
             } else {
                 let state = block.get_state();
-                if state == BlockState::Nursery || state == BlockState::Reusing {
+                if state == BlockState::Nursery || (!crate::args::RC_IMMIX && state == BlockState::Reusing) {
                     continue;
                 }
                 self.process_block(block, immix_space)

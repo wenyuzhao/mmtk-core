@@ -71,6 +71,26 @@ impl Defrag {
             .store(in_defrag, Ordering::Release)
     }
 
+    pub fn decide_whether_to_defrag2(
+        &self,
+        emergency_collection: bool,
+        collect_whole_heap: bool,
+        collection_attempts: usize,
+        user_triggered: bool,
+        exhausted_reusable_space: bool,
+        full_heap_system_gc: bool,
+    ) -> bool {
+        if !crate::args::RC_IMMIX {
+            false
+        } else {
+            emergency_collection
+                || (collection_attempts > 1)
+                || !exhausted_reusable_space
+                || Self::DEFRAG_STRESS
+                || (collect_whole_heap && user_triggered && full_heap_system_gc)
+        }
+    }
+
     /// Get the number of defrag headroom pages.
     pub fn defrag_headroom_pages<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> usize {
         space.get_page_resource().reserved_pages() * Self::DEFRAG_HEADROOM_PERCENT / 100

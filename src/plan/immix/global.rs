@@ -183,7 +183,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         me.get_pages_reserved() / 256
                     );
                 }
-                me.decide_next_gc_may_perform_cycle_collection();
+                // me.decide_next_gc_may_perform_cycle_collection();
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -322,7 +322,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
-        crate::NO_EVAC.store(false, Ordering::SeqCst);
+        if !crate::args::RC_IMMIX {
+            crate::NO_EVAC.store(false, Ordering::SeqCst);
+        }
         let pause = self.current_pause().unwrap();
         if crate::args::REF_COUNT {
             let me = unsafe { &mut *(self as *const _ as *mut Self) };
@@ -385,7 +387,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .store(perform_cycle_collection, Ordering::SeqCst);
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
         if crate::args::REF_COUNT {
-            self.decide_next_gc_may_perform_cycle_collection();
+            // self.decide_next_gc_may_perform_cycle_collection();
         }
     }
 
@@ -457,6 +459,10 @@ impl<VM: VMBinding> Immix<VM> {
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
             return;
         }
+        if crate::args::RC_IMMIX {
+            self.next_gc_may_perform_cycle_collection.store(true, Ordering::SeqCst);
+            return;
+        }
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
         let threshold = *crate::args::TRACE_THRESHOLD;
         let last_freed_blocks = self
@@ -526,6 +532,17 @@ impl<VM: VMBinding> Immix<VM> {
             self.base().is_user_triggered_collection(),
             self.base().options.full_heap_system_gc,
         );
+        let x = self.immix_space.decide_whether_to_defrag2(
+            self.is_emergency_collection(),
+            true,
+            self.base().cur_collection_attempts.load(Ordering::SeqCst),
+            self.base().is_user_triggered_collection(),
+            self.base().options.full_heap_system_gc,
+        );
+        if crate::args::LOG_PER_GC_STATE {
+            println!("defrag: {:?}", x);
+        }
+        self.decide_next_gc_may_perform_cycle_collection();
         let full_trace = || {
             if in_defrag {
                 Pause::FullTraceDefrag
