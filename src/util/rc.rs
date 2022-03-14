@@ -27,7 +27,17 @@ use std::iter::Step;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 
-pub const LOG_REF_COUNT_BITS: usize = 1;
+pub const LOG_REF_COUNT_BITS: usize = {
+    if cfg!(feature = "lxr_rc_bits_2") {
+        1
+    } else if cfg!(feature = "lxr_rc_bits_4") {
+        2
+    } else if cfg!(feature = "lxr_rc_bits_8") {
+        3
+    } else {
+        1
+    }
+};
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
 pub const REF_COUNT_MASK: usize = (1 << REF_COUNT_BITS) - 1;
 const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;
