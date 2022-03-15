@@ -1,9 +1,11 @@
 pub mod block;
 pub mod block_allocation;
 pub mod chunk;
+pub mod cset;
 pub mod defrag;
 pub mod immixspace;
 pub mod line;
+pub mod region;
 
 pub use crate::plan::immix::{CONCURRENT_MARKING, REF_COUNT};
 pub use immixspace::*;

@@ -1,5 +1,6 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
+use super::region::Region;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
@@ -155,6 +156,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
+                MetadataSpec::OnSide(Region::MARK_TABLE),
+                MetadataSpec::OnSide(Region::REMSET),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -397,7 +400,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare_rc(&mut self, pause: Pause) {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
-        self.num_clean_blocks_released_lazy.store(0, Ordering::SeqCst);
+        self.num_clean_blocks_released_lazy
+            .store(0, Ordering::SeqCst);
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -1194,9 +1198,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             .fetch_add(blocks.len(), Ordering::SeqCst);
         immix.immix_space.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix
-                .immix_space
-                .select_mature_evacuation_candidates(immix.current_pause().unwrap(), mmtk.plan.get_total_pages())
+            immix.immix_space.select_mature_evacuation_candidates(
+                immix.current_pause().unwrap(),
+                mmtk.plan.get_total_pages(),
+            )
         }
     }
 }
