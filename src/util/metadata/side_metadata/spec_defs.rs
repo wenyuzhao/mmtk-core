@@ -84,6 +84,7 @@ define_side_metadata_specs!(
     // LXR Block logging bits
     IX_BLOCK_LOG   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     IX_BLOCK_DEAD_WORDS = (global: false, log_num_of_bits: (Block::LOG_BYTES - 3).next_power_of_two().trailing_zeros() as _, log_bytes_in_region: Block::LOG_BYTES),
+    IX_LINE_RECYCLE    = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
 );
 
 #[cfg(test)]

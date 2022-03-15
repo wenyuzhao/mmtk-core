@@ -308,6 +308,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             if state == BlockState::Unallocated {
                 continue;
             }
+            block.clear_recycling_states();
             // FIXME: Don't need this when doing RC
             if crate::args::BARRIER_MEASUREMENT
                 || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)

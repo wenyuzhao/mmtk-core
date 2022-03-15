@@ -2,8 +2,8 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
-use crate::util::{constants::*, rc};
 use crate::util::metadata::side_metadata::{self, *};
+use crate::util::{constants::*, rc};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use spin::{Mutex, MutexGuard};
@@ -159,7 +159,6 @@ impl Block {
     //     let block = Block::containing::<VM>(o);
     //     block.dec_dead_bytes_sloppy(o.get_size::<VM>());
     // }
-
 
     #[inline(always)]
     pub fn calc_dead_lines(&self) -> usize {
@@ -444,6 +443,11 @@ impl Block {
     // pub fn clear_mark_table(&self) {
     //     side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
     // }
+
+    #[inline(always)]
+    pub fn clear_recycling_states(&self) {
+        side_metadata::bzero_x(&Line::RECYCLING_STATE, self.start(), Block::BYTES);
+    }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {

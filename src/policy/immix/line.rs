@@ -31,6 +31,9 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
+    pub const RECYCLING_STATE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_LINE_RECYCLE;
+
     /// Align the give address to the line boundary.
     #[inline(always)]
     pub fn align(address: Address) -> Address {
@@ -121,6 +124,25 @@ impl Line {
             line.mark(state)
         }
         marked_lines
+    }
+
+    #[inline]
+    pub fn set_as_recycled(&self) {
+        unsafe {
+            side_metadata::store(&Self::RECYCLING_STATE, self.start(), 1);
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_recycled(&self) -> bool {
+        unsafe { side_metadata::load(&Self::RECYCLING_STATE, self.start()) == 1 }
+    }
+
+    #[inline(always)]
+    pub fn set_all_as_recycled(lines: Range<Line>) {
+        for line in lines {
+            line.set_as_recycled()
+        }
     }
 
     #[inline(always)]
