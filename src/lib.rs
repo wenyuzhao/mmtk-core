@@ -87,6 +87,7 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
+use crossbeam::queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
@@ -459,6 +460,11 @@ fn stat(f: impl Fn(&mut GCStat)) {
     f(&mut STAT.lock())
 }
 
-
 static NO_EVAC: AtomicBool = AtomicBool::new(false);
 
+struct PauseTime {
+    pub kind: String,
+    pub nanos: usize,
+}
+
+static PAUSE_TIMES: SegQueue<PauseTime> = SegQueue::new();

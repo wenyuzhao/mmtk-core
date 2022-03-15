@@ -212,7 +212,18 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
-        println!("------------------------------ End MMTk Statistics -----------------------------")
+        println!(
+            "------------------------------ End MMTk Statistics -----------------------------"
+        );
+        // Outout pause time csv
+        if crate::args::LOG_PAUSE_TIME {
+            let mut s = "pause,nanos\n".to_owned();
+            while let Ok(x) = crate::PAUSE_TIMES.pop() {
+                s += format!("{},{}\n", x.kind, x.nanos);
+            }
+            let mut f = File::create("_pauses.csv")?;
+            f.write_all(s).unwrap();
+        }
     }
 
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
