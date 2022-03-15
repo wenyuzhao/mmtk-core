@@ -269,7 +269,7 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
-        if crate::arg::LOG_PAUSE_TIME {
+        if crate::args::LOG_PAUSE_TIME {
             let pause = if let Some(immix) = mmtk.plan.downcast_ref::<Immix<VM>>() {
                 match immix.current_pause().unwrap() {
                     Pause::RefCount => "RC",
@@ -285,10 +285,12 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 .elapsed()
                 .unwrap()
                 .as_nanos() as usize;
-            crate::PAUSE_TIMES.push(crate::PauseTime {
-                kind: pause.to_owned(),
-                nanos: pause_nanos,
-            });
+            if crate::inside_harness() {
+                crate::PAUSE_TIMES.push(crate::PauseTime {
+                    kind: pause.to_owned(),
+                    nanos: pause_nanos,
+                });
+            }
         }
         if crate::args::LOG_PER_GC_STATE {
             let _released_n =

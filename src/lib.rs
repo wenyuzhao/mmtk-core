@@ -87,7 +87,7 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
-use crossbeam::queue::SegQueue;
+use crossbeam_queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;

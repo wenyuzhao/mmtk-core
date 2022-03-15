@@ -7,6 +7,8 @@ use crate::vm::VMBinding;
 #[cfg(feature = "perf_counter")]
 use pfm::Perfmon;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -218,11 +220,11 @@ impl Stats {
         // Outout pause time csv
         if crate::args::LOG_PAUSE_TIME {
             let mut s = "pause,nanos\n".to_owned();
-            while let Ok(x) = crate::PAUSE_TIMES.pop() {
-                s += format!("{},{}\n", x.kind, x.nanos);
+            while let Some(x) = crate::PAUSE_TIMES.pop() {
+                s += &format!("{},{}\n", x.kind, x.nanos);
             }
-            let mut f = File::create("_pauses.csv")?;
-            f.write_all(s).unwrap();
+            let mut f = File::create("_pauses.csv").unwrap();
+            f.write_all(s.as_bytes()).unwrap();
         }
     }
 
