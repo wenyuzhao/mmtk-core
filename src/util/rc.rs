@@ -295,11 +295,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             return;
         }
         if force || (!self.immix().address_in_defrag(e) && self.immix().in_defrag(o)) {
-            unsafe {
-                self.worker()
-                    .local::<ImmixCopyContext<VM>>()
-                    .add_mature_evac_remset(e)
-            }
+            // unsafe {
+            //     self.worker()
+            //         .local::<ImmixCopyContext<VM>>()
+            //         .add_mature_evac_remset(e)
+            // }
+            Region::containing::<VM>(t).remset().unwrap().add(e);
         }
     }
 

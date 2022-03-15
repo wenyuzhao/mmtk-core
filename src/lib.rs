@@ -26,6 +26,7 @@
 #![feature(hash_drain_filter)]
 #![feature(const_for)]
 #![feature(const_ptr_offset)]
+#![feature(thread_local)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 
@@ -588,3 +589,12 @@ fn output_pause_time() {
 }
 
 static NO_EVAC: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+pub fn gc_worker_id() -> Option<usize> {
+    if !crate::scheduler::IS_WORKER.load(Ordering::Relaxed) {
+        return None;
+    }
+    let id = crate::scheduler::WORKER_ID.load(Ordering::SeqCst);
+    Some(id)
+}

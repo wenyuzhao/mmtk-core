@@ -1,5 +1,6 @@
 use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
+use crate::policy::immix::region::Region;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::{
@@ -109,6 +110,7 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                         .local::<ImmixCopyContext<VM>>()
                         .add_mature_evac_remset(e)
                 }
+                // Region::containing::<VM>(t).remset().unwrap().add(e);
             }
             if !t.is_null() {
                 self.next_objects.push(t);

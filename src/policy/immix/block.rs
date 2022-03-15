@@ -1,9 +1,10 @@
 use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
+use super::region::Region;
 use super::ImmixSpace;
-use crate::util::{constants::*, rc};
 use crate::util::metadata::side_metadata::{self, *};
+use crate::util::{constants::*, rc};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use spin::{Mutex, MutexGuard};
@@ -160,7 +161,6 @@ impl Block {
     //     block.dec_dead_bytes_sloppy(o.get_size::<VM>());
     // }
 
-
     #[inline(always)]
     pub fn calc_dead_lines(&self) -> usize {
         let mut dead_lines = 0;
@@ -263,6 +263,11 @@ impl Block {
     #[inline(always)]
     pub fn chunk(&self) -> Chunk {
         Chunk::from(Chunk::align(self.0))
+    }
+
+    #[inline(always)]
+    pub fn region(&self) -> Region {
+        Region::from(Region::align(self.0))
     }
 
     /// Get the address range of the block's line mark table.

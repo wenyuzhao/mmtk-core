@@ -1,10 +1,13 @@
-use super::block::Block;
+use super::block::{Block, BlockState};
 use super::chunk::Chunk;
 use super::cset::PerRegionRemSet;
+use super::ImmixSpace;
+use crate::policy::space::Space;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
+use std::ops::Range;
 use std::{iter::Step, sync::atomic::Ordering};
 
 /// The block allocation state.
@@ -38,6 +41,7 @@ pub struct Region(Address);
 
 impl Region {
     pub const LOG_BLOCKS: usize = 5;
+    pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
     /// Log bytes in block
     pub const LOG_BYTES: usize = Self::LOG_BLOCKS + Block::LOG_BYTES;
     /// Bytes in block
@@ -126,9 +130,9 @@ impl Region {
     }
 
     #[inline(always)]
-    pub fn init_remset(&self) {
+    pub fn init_remset(&self, gc_workers: usize) {
         debug_assert!(self.remset().is_none());
-        let remset = Box::leak(box PerRegionRemSet::default());
+        let remset = Box::leak(box PerRegionRemSet::new(gc_workers));
         side_metadata::store_atomic(
             &Self::MARK_TABLE,
             self.start(),
@@ -184,50 +188,58 @@ impl Region {
     #[inline]
     pub fn record_remset(&self, region: Region, e: Address) {}
 
-    // pub fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
-    //     self.fetch_update_state(|s| {
-    //         if (ignore_reusing_blocks && s == BlockState::Reusing) || s == BlockState::Unallocated {
-    //             None
-    //         } else {
-    //             Some(BlockState::Unallocated)
-    //         }
-    //     })
-    //     .is_ok()
-    // }
+    /// Get a range of blocks within this chunk.
+    #[inline(always)]
+    pub fn blocks(&self) -> Range<Block> {
+        let start = Block::from(Block::align(self.0));
+        let end = Block::from(start.start() + (Self::BLOCKS << Block::LOG_BYTES));
+        start..end
+    }
 
-    // // Defrag byte
+    #[inline(always)]
+    pub fn committed_blocks(&self) -> impl Iterator<Item = Block> {
+        self.blocks()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+    }
 
-    // const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
+    #[inline(always)]
+    pub fn cross_region_ref<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        e: Address,
+        o: ObjectReference,
+    ) -> bool {
+        let a = e.as_usize();
+        let b = o.to_address().as_usize();
+        ((a ^ b) >> Region::LOG_BYTES) == 0
+        //  {
+        //     return false;
+        // }
+        // space.in_space(o)
+        //     && Chunk::containing::<VM>(o).is_committed()
+        //     && Region::containing::<VM>(o).is_defrag_source()
+    }
 
-    // /// Test if the block is marked for defragmentation.
+    #[inline(always)]
+    pub fn record<VM: VMBinding>(&self, space: &ImmixSpace<VM>, e: Address, o: ObjectReference) {
+        if self.cross_region_ref(space, e, o) {
+            if space.in_space(o) && Region::containing::<VM>(o).is_defrag_source() {
+                Region::containing::<VM>(o).remset().unwrap().add(e);
+            }
+        }
+        //  {
+        //     return false;
+        // }
+        // space.in_space(o)
+        //     && Chunk::containing::<VM>(o).is_committed()
+        //     && Region::containing::<VM>(o).is_defrag_source()
+    }
+
     // #[inline(always)]
-    // pub fn is_defrag_source(&self) -> bool {
-    //     let byte =
-    //         side_metadata::load_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), Ordering::SeqCst)
-    //             as u8;
-    //     byte == Self::DEFRAG_SOURCE_STATE
-    // }
-
-    // #[inline(always)]
-    // pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
-    //     Block::containing::<VM>(o).is_defrag_source()
-    // }
-
-    // #[inline(always)]
-    // pub fn address_in_defrag_block(a: Address) -> bool {
-    //     Block::from(Block::align(a)).is_defrag_source()
-    // }
-
-    // /// Mark the block for defragmentation.
-    // #[inline(always)]
-    // pub fn set_as_defrag_source(&self, defrag: bool) {
-    //     let byte = if defrag { Self::DEFRAG_SOURCE_STATE } else { 0 };
-    //     side_metadata::store_atomic(
-    //         &Self::DEFRAG_STATE_TABLE,
-    //         self.start(),
-    //         byte as usize,
-    //         Ordering::SeqCst,
-    //     );
+    // pub fn in_defrag(&self, o: ObjectReference) -> bool {
+    //     self.immix_space.in_space(o)
+    //         && Chunk::containing::<VM>(o).is_committed()
+    //         && Region::containing::<VM>(o).is_defrag_source()
     // }
 }
 

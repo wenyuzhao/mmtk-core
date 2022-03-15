@@ -10,6 +10,8 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::chunk::Chunk;
+use crate::policy::immix::region::Region;
 use crate::policy::immix::MatureSweeping;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -111,7 +113,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // inc limits
         if crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
-            && self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false)
+            && self
+                .inc_buffer_limit
+                .map(|x| rc::inc_buffer_size() >= x)
+                .unwrap_or(false)
         {
             return true;
         }
@@ -130,7 +135,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !(crate::concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
             && (self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
-                || self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false))
+                || self
+                    .inc_buffer_limit
+                    .map(|x| rc::inc_buffer_size() >= x)
+                    .unwrap_or(false))
         {
             return true;
         }
@@ -400,7 +408,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
-        self.avail_pages_at_end_of_last_gc.store(self.get_pages_avail(), Ordering::SeqCst);
+        self.avail_pages_at_end_of_last_gc
+            .store(self.get_pages_avail(), Ordering::SeqCst);
         if crate::args::REF_COUNT {
             // self.decide_next_gc_may_perform_cycle_collection();
         }
@@ -478,7 +487,11 @@ impl<VM: VMBinding> Immix<VM> {
             return;
         }
         let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
-        avail_pages += self.immix_space.num_clean_blocks_released_lazy.load(Ordering::SeqCst) << Block::LOG_PAGES;
+        avail_pages += self
+            .immix_space
+            .num_clean_blocks_released_lazy
+            .load(Ordering::SeqCst)
+            << Block::LOG_PAGES;
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
         let threshold = *crate::args::TRACE_THRESHOLD;
         let last_freed_blocks = self
@@ -727,15 +740,28 @@ impl<VM: VMBinding> Immix<VM> {
         self.previous_pause.load(Ordering::SeqCst)
     }
 
-    #[inline(always)]
-    pub fn in_defrag(&self, o: ObjectReference) -> bool {
-        self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
-    }
+    // #[inline(always)]
+    // pub fn cross_region_ref(&self, e: ObjectReference) -> bool {
+    //     self.immix_space.in_space(o)
+    //         && Chunk::containing::<VM>(o).is_committed()
+    //         && Region::containing::<VM>(o).is_defrag_source()
+    // }
 
-    #[inline(always)]
-    pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
-    }
+    // #[inline(always)]
+    // pub fn in_defrag(&self, o: ObjectReference) -> bool {
+    //     self.immix_space.in_space(o)
+    //         && Chunk::containing::<VM>(o).is_committed()
+    //         && Region::containing::<VM>(o).is_defrag_source()
+    // }
+
+    // #[inline(always)]
+    // pub fn address_in_defrag(&self, a: Address) -> bool {
+
+    //     self.immix_space.address_in_space(a)
+    //         && Chunk::containing::<VM>(o).is_committed()
+    //         && Region::containing::<VM>(o).is_defrag_source()
+    //     self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
+    // }
 
     #[inline(always)]
     pub fn mark(&self, o: ObjectReference) -> bool {

@@ -144,6 +144,8 @@ impl<VM: VMBinding> GCWorker<VM> {
     pub fn run(&mut self, mmtk: &'static MMTK<VM>) {
         self.mmtk = Some(mmtk);
         self.parked.store(false, Ordering::SeqCst);
+        IS_WORKER.store(true, Ordering::SeqCst);
+        WORKER_ID.store(self.ordinal, Ordering::SeqCst);
         loop {
             let mut work = self.poll();
             debug_assert!(!self.is_parked());
@@ -165,6 +167,12 @@ impl<VM: VMBinding> GCWorker<VM> {
             )
     }
 }
+
+#[thread_local]
+pub static IS_WORKER: AtomicBool = AtomicBool::new(false);
+
+#[thread_local]
+pub static WORKER_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct WorkerGroup<VM: VMBinding> {
     pub workers: Vec<GCWorker<VM>>,

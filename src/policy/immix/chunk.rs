@@ -2,6 +2,7 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
+use super::region::Region;
 use crate::plan::immix::Immix;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::rc::{self};
@@ -32,6 +33,8 @@ impl Chunk {
     pub const LOG_BLOCKS: usize = Self::LOG_BYTES - Block::LOG_BYTES;
     /// Blocks in chunk
     pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
+    pub const LOG_REGIONS: usize = Self::LOG_BYTES - Region::LOG_BYTES;
+    pub const REGIONS: usize = 1 << Self::LOG_REGIONS;
 
     /// Align the give address to the chunk boundary.
     pub const fn align(address: Address) -> Address {
@@ -63,6 +66,18 @@ impl Chunk {
     pub fn committed_blocks(&self) -> impl Iterator<Item = Block> {
         self.blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
+    }
+
+    #[inline(always)]
+    pub fn regions(&self) -> Range<Region> {
+        let start = Region::from(Region::align(self.0));
+        let end = Region::from(start.start() + (Self::REGIONS << Region::LOG_BYTES));
+        start..end
+    }
+
+    #[inline(always)]
+    pub fn containing<VM: VMBinding>(object: ObjectReference) -> Self {
+        Self(VM::VMObjectModel::ref_to_address(object).align_down(Self::BYTES))
     }
 
     /// Sweep this chunk.
