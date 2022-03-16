@@ -111,7 +111,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // inc limits
         if crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
-            && self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false)
+            && self
+                .inc_buffer_limit
+                .map(|x| rc::inc_buffer_size() >= x)
+                .unwrap_or(false)
         {
             return true;
         }
@@ -130,7 +133,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !(crate::concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
             && (self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
-                || self.inc_buffer_limit.map(|x| rc::inc_buffer_size() >= x).unwrap_or(false))
+                || self
+                    .inc_buffer_limit
+                    .map(|x| rc::inc_buffer_size() >= x)
+                    .unwrap_or(false))
         {
             return true;
         }
@@ -400,10 +406,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.next_gc_may_perform_cycle_collection
             .store(perform_cycle_collection, Ordering::SeqCst);
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
-        self.avail_pages_at_end_of_last_gc.store(self.get_pages_avail(), Ordering::SeqCst);
-        if crate::args::REF_COUNT {
-            // self.decide_next_gc_may_perform_cycle_collection();
-        }
+        self.avail_pages_at_end_of_last_gc
+            .store(self.get_pages_avail(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -477,8 +481,12 @@ impl<VM: VMBinding> Immix<VM> {
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
             return;
         }
-        let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
-        avail_pages += self.immix_space.num_clean_blocks_released_lazy.load(Ordering::SeqCst) << Block::LOG_PAGES;
+        // let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
+        // avail_pages += self
+        //     .immix_space
+        //     .num_clean_blocks_released_lazy
+        //     .load(Ordering::SeqCst)
+        //     << Block::LOG_PAGES;
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
         let threshold = *crate::args::TRACE_THRESHOLD;
         let last_freed_blocks = self
