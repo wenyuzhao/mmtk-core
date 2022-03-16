@@ -99,7 +99,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         // Don't do a GC until we finished the lazy reclaimation.
-        if *crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
+        // if *crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
+        //     return false;
+        // }
+        if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
             return false;
         }
         // Spaces or heap full
