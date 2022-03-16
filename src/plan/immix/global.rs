@@ -37,7 +37,7 @@ use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorke
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
@@ -60,6 +60,7 @@ pub struct Immix<VM: VMBinding> {
     inc_buffer_limit: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
+    next_gc_selected: (Mutex<bool>, Condvar),
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -201,7 +202,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         me.get_pages_reserved() / 256
                     );
                 }
-                // me.decide_next_gc_may_perform_cycle_collection();
+                me.decide_next_gc_may_perform_cycle_collection();
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -462,6 +463,7 @@ impl<VM: VMBinding> Immix<VM> {
             inc_buffer_limit: None,
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
+            next_gc_selected: (Mutex::new(true), Condvar::new()),
         };
 
         {
@@ -478,7 +480,14 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn decide_next_gc_may_perform_cycle_collection(&self) {
+        let (lock, cvar) = &self.next_gc_selected;
+        let notify = || {
+            let mut gc_selection_done = lock.lock().unwrap();
+            *gc_selection_done = true;
+            cvar.notify_one();
+        };
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
+            notify();
             return;
         }
         // let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
@@ -506,10 +515,18 @@ impl<VM: VMBinding> Immix<VM> {
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);
         }
+        notify();
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
-        self.decide_next_gc_may_perform_cycle_collection();
+        {
+            let (lock, cvar) = &self.next_gc_selected;
+            let mut gc_selection_done = lock.lock().unwrap();
+            while !*gc_selection_done {
+                gc_selection_done = cvar.wait(gc_selection_done).unwrap();
+            }
+            *gc_selection_done = false;
+        }
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
@@ -711,6 +728,12 @@ impl<VM: VMBinding> Immix<VM> {
         while let Some(decs) = prev_roots.pop() {
             let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
             work_packets.push(box w);
+        }
+        if work_packets.is_empty() {
+            work_packets.push(box ProcessDecs::new(
+                vec![],
+                LazySweepingJobsCounter::new_desc(),
+            ));
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
