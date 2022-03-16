@@ -487,9 +487,9 @@ impl<VM: VMBinding> Immix<VM> {
     fn decide_next_gc_may_perform_cycle_collection(&self) {
         let (lock, cvar) = &self.next_gc_selected;
         let notify = || {
-            let mut gc_selection_done = lock.lock().unwrap();
-            *gc_selection_done = true;
-            cvar.notify_one();
+            // let mut gc_selection_done = lock.lock().unwrap();
+            // *gc_selection_done = true;
+            // cvar.notify_one();
         };
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
             notify();
@@ -528,14 +528,14 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
-        {
-            let (lock, cvar) = &self.next_gc_selected;
-            let mut gc_selection_done = lock.lock().unwrap();
-            while !*gc_selection_done {
-                gc_selection_done = cvar.wait(gc_selection_done).unwrap();
-            }
-            *gc_selection_done = false;
-        }
+        // {
+        //     let (lock, cvar) = &self.next_gc_selected;
+        //     let mut gc_selection_done = lock.lock().unwrap();
+        //     while !*gc_selection_done {
+        //         gc_selection_done = cvar.wait(gc_selection_done).unwrap();
+        //     }
+        //     *gc_selection_done = false;
+        // }
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
