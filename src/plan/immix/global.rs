@@ -61,6 +61,7 @@ pub struct Immix<VM: VMBinding> {
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
     next_gc_selected: (Mutex<bool>, Condvar),
+    zeroing_packets_scheduled: AtomicBool,
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -464,6 +465,7 @@ impl<VM: VMBinding> Immix<VM> {
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
             next_gc_selected: (Mutex::new(true), Condvar::new()),
+            zeroing_packets_scheduled: AtomicBool::new(false),
         };
 
         {
@@ -508,6 +510,10 @@ impl<VM: VMBinding> Immix<VM> {
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
+            if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
+                self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
+                self.immix_space.schedule_mark_table_zeroing_tasks();
+            }
         } else {
             if crate::args::LOG_PER_GC_STATE {
                 println!("next rc ({} / {})", last_freed_blocks, total_blocks);
@@ -595,7 +601,15 @@ impl<VM: VMBinding> Immix<VM> {
             .next_gc_may_perform_cycle_collection
             .load(Ordering::SeqCst);
         let pause = if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
-            self.select_lxr_collection_kind(emergency_collection)
+            let pause = self.select_lxr_collection_kind(emergency_collection);
+            if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
+                && self.zeroing_packets_scheduled.load(Ordering::SeqCst)
+            {
+                self.immix_space.schedule_mark_table_zeroing_tasks();
+            }
+            self.zeroing_packets_scheduled
+                .store(false, Ordering::SeqCst);
+            pause
         } else if emergency_collection {
             if crate::inside_harness() {
                 crate::PAUSES.emergency.fetch_add(1, Ordering::Relaxed);

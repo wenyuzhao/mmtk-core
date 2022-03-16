@@ -252,6 +252,17 @@ impl ChunkMap {
         })
     }
 
+    pub fn generate_mark_table_zeroing_tasks<VM: VMBinding>(
+        &self,
+        _space: &'static ImmixSpace<VM>,
+        defrag_threshold: Option<usize>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        self.generate_tasks(|chunk| box ChunkMetadataZeroing {
+            chunk,
+            defrag_threshold,
+        })
+    }
+
     /// Generate chunk sweep work packets.
     pub fn generate_sweep_tasks<VM: VMBinding>(
         &self,
@@ -300,7 +311,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
-        Self::reset_object_mark::<VM>(self.chunk);
+        if !crate::args::HEAP_HEALTH_GUIDED_GC {
+            Self::reset_object_mark::<VM>(self.chunk);
+        }
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
@@ -468,5 +481,31 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
                 self.process_block(block, immix_space)
             }
         }
+    }
+}
+
+struct ChunkMetadataZeroing {
+    chunk: Chunk,
+    defrag_threshold: Option<usize>,
+}
+
+impl ChunkMetadataZeroing {
+    /// Clear object mark table
+    #[inline(always)]
+    #[allow(unused)]
+    fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
+        side_metadata::bzero_x(
+            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+            chunk.start(),
+            Chunk::BYTES,
+        );
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for ChunkMetadataZeroing {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
+        Self::reset_object_mark::<VM>(self.chunk);
     }
 }

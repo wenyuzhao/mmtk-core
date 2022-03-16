@@ -395,9 +395,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    pub fn schedule_mark_table_zeroing_tasks(&self) {
+        assert!(crate::args::HEAP_HEALTH_GUIDED_GC);
+        let space = unsafe { &mut *(self as *const Self as *mut Self) };
+        let work_packets = self
+            .chunk_map
+            .generate_mark_table_zeroing_tasks::<VM>(space, None);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(work_packets);
+    }
+
     pub fn prepare_rc(&mut self, pause: Pause) {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
-        self.num_clean_blocks_released_lazy.store(0, Ordering::SeqCst);
+        self.num_clean_blocks_released_lazy
+            .store(0, Ordering::SeqCst);
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -1194,9 +1204,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             .fetch_add(blocks.len(), Ordering::SeqCst);
         immix.immix_space.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix
-                .immix_space
-                .select_mature_evacuation_candidates(immix.current_pause().unwrap(), mmtk.plan.get_total_pages())
+            immix.immix_space.select_mature_evacuation_candidates(
+                immix.current_pause().unwrap(),
+                mmtk.plan.get_total_pages(),
+            )
         }
     }
 }
