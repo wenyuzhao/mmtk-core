@@ -417,6 +417,9 @@ impl Block {
             self.set_state(BlockState::Nursery);
             self.set_as_defrag_source(false);
         }
+        if !reuse {
+            self.clear_line_validity_states();
+        }
     }
 
     /// Deinitalize a block before releasing.
@@ -445,8 +448,8 @@ impl Block {
     // }
 
     #[inline(always)]
-    pub fn clear_recycling_states(&self) {
-        side_metadata::bzero_x(&Line::RECYCLING_STATE, self.start(), Block::BYTES);
+    pub fn clear_line_validity_states(&self) {
+        side_metadata::bzero_x(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
