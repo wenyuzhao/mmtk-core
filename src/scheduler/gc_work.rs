@@ -736,7 +736,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
-            let _is_valid_slow = || {
+            if cfg!(feature = "slow_edge_check") {
                 let mut cursor = e - 16;
                 while cursor >= block.start() {
                     // Skip straddle lines
@@ -758,11 +758,12 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                     cursor = cursor - rc::MIN_OBJECT_SIZE;
                 }
                 return false;
-            };
-            if Line::of(e).pointer_is_valid(epoch) {
-                return true;
+            } else {
+                if Line::of(e).pointer_is_valid(epoch) {
+                    return true;
+                }
+                false
             }
-            false
         } else {
             true
         }
