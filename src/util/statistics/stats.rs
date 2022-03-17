@@ -1,4 +1,5 @@
 use crate::mmtk::MMTK;
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::options::Options;
 use crate::util::statistics::counter::*;
 use crate::util::statistics::Timer;
@@ -210,6 +211,7 @@ impl Stats {
         crate::STAT.lock().print_values();
         if crate::args::LOG_REMSET_FOOTPRINT {
             print!("{}\t", crate::PEAK_REMSET_FOOTPRINT.load(Ordering::SeqCst));
+            print!("{}\t", mmtk.plan.get_total_pages() << LOG_BYTES_IN_PAGE);
         }
         println!();
         print!("Total time: ");
@@ -237,6 +239,7 @@ impl Stats {
         crate::STAT.lock().print_keys();
         if crate::args::LOG_REMSET_FOOTPRINT {
             print!("remset-peak-footprint\t");
+            print!("heap\t");
         }
         println!();
     }
