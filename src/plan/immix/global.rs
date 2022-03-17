@@ -11,6 +11,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::chunk::Chunk;
+use crate::policy::immix::cset::PerRegionRemSet;
 use crate::policy::immix::region::Region;
 use crate::policy::immix::MatureSweeping;
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -386,6 +387,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn gc_pause_end(&self) {
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
+            PerRegionRemSet::enable_recording();
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
@@ -740,28 +742,15 @@ impl<VM: VMBinding> Immix<VM> {
         self.previous_pause.load(Ordering::SeqCst)
     }
 
-    // #[inline(always)]
-    // pub fn cross_region_ref(&self, e: ObjectReference) -> bool {
-    //     self.immix_space.in_space(o)
-    //         && Chunk::containing::<VM>(o).is_committed()
-    //         && Region::containing::<VM>(o).is_defrag_source()
-    // }
+    #[inline(always)]
+    pub fn in_defrag(&self, o: ObjectReference) -> bool {
+        self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
+    }
 
-    // #[inline(always)]
-    // pub fn in_defrag(&self, o: ObjectReference) -> bool {
-    //     self.immix_space.in_space(o)
-    //         && Chunk::containing::<VM>(o).is_committed()
-    //         && Region::containing::<VM>(o).is_defrag_source()
-    // }
-
-    // #[inline(always)]
-    // pub fn address_in_defrag(&self, a: Address) -> bool {
-
-    //     self.immix_space.address_in_space(a)
-    //         && Chunk::containing::<VM>(o).is_committed()
-    //         && Region::containing::<VM>(o).is_defrag_source()
-    //     self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
-    // }
+    #[inline(always)]
+    pub fn address_in_defrag(&self, a: Address) -> bool {
+        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
+    }
 
     #[inline(always)]
     pub fn mark(&self, o: ObjectReference) -> bool {

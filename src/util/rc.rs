@@ -1,6 +1,7 @@
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::cset::PerRegionRemSet;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::LazySweepingJobsCounter;
 use crate::{
@@ -295,13 +296,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             return;
         }
         if force || (!self.immix().address_in_defrag(e) && self.immix().in_defrag(o)) {
-            // unsafe {
-            //     self.worker()
-            //         .local::<ImmixCopyContext<VM>>()
-            //         .add_mature_evac_remset(e)
-            // }
-            Region::containing::<VM>(t).remset().unwrap().add(e);
+            unsafe {
+                self.worker()
+                    .local::<ImmixCopyContext<VM>>()
+                    .add_mature_evac_remset(e)
+            }
         }
+        PerRegionRemSet::record(e, o, &self.immix().immix_space);
     }
 
     #[inline(always)]

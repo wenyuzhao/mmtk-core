@@ -138,6 +138,7 @@ pub const HARNESS_PRETTY_PRINT: bool = false || cfg!(feature = "log_gc");
 pub const LOG_PER_GC_STATE: bool = cfg!(feature = "log_gc");
 pub const LOG_STAGES: bool = cfg!(feature = "log_stages");
 pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");
+pub const LOG_REMSET_FOOTPRINT: bool = cfg!(feature = "log_remset_footprint");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 
@@ -201,7 +202,10 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
     dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
     dump_feature!("opportunistic_evac", *OPPORTUNISTIC_EVAC);
-    dump_feature!("opportunistic_evac_threshold", *OPPORTUNISTIC_EVAC_THRESHOLD);
+    dump_feature!(
+        "opportunistic_evac_threshold",
+        *OPPORTUNISTIC_EVAC_THRESHOLD
+    );
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
 
     println!("----------------------------------------------------");

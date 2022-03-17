@@ -208,6 +208,9 @@ impl Stats {
         crate::PAUSES.print_values();
         #[cfg(feature = "instrumentation")]
         crate::STAT.lock().print_values();
+        if crate::args::LOG_REMSET_FOOTPRINT {
+            print!("{}\t", crate::PEAK_REMSET_FOOTPRINT.load(Ordering::SeqCst));
+        }
         println!();
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
@@ -232,6 +235,9 @@ impl Stats {
         crate::PAUSES.print_keys();
         #[cfg(feature = "instrumentation")]
         crate::STAT.lock().print_keys();
+        if crate::args::LOG_REMSET_FOOTPRINT {
+            print!("remset-peak-footprint\t");
+        }
         println!();
     }
 

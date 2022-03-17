@@ -108,11 +108,10 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
 
     #[inline(always)]
     pub fn add_mature_evac_remset(&mut self, e: Address) {
-        // self.mature_evac_remset.push(e);
-        // if self.mature_evac_remset.len() >= EvacuateMatureObjects::<VM>::CAPACITY {
-        //     self.flush_mature_evac_remset()
-        // }
-        unreachable!();
+        self.mature_evac_remset.push(e);
+        if self.mature_evac_remset.len() >= EvacuateMatureObjects::<VM>::CAPACITY {
+            self.flush_mature_evac_remset()
+        }
     }
 }
 

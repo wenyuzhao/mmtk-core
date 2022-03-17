@@ -598,3 +598,15 @@ pub fn gc_worker_id() -> Option<usize> {
     let id = crate::scheduler::WORKER_ID.load(Ordering::SeqCst);
     Some(id)
 }
+
+static CALC_WORKERS: spin::Lazy<usize> = spin::Lazy::new(|| {
+    if cfg!(feature = "single_worker") {
+        return 1;
+    }
+    if let Some(n) = option_env!("MMTK_THREADS") {
+        return n.parse().unwrap();
+    }
+    num_cpus::get()
+});
+
+static PEAK_REMSET_FOOTPRINT: AtomicUsize = AtomicUsize::new(0);

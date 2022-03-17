@@ -7,6 +7,7 @@ use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::chunk::Chunk;
+use crate::policy::immix::cset::PerRegionRemSet;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -67,8 +68,10 @@ pub struct ImmixSpace<VM: VMBinding> {
     num_defrag_blocks: AtomicUsize,
     #[allow(dead_code)]
     defrag_chunk_cursor: AtomicUsize,
-    pub fragmented_regions: SegQueue<Vec<(Region, usize)>>,
-    pub fragmented_regions_size: AtomicUsize,
+    fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
+    fragmented_blocks_size: AtomicUsize,
+    // pub fragmented_regions: SegQueue<Vec<(Region, usize)>>,
+    // pub fragmented_regions_size: AtomicUsize,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub collection_set: CollectionSet,
@@ -236,8 +239,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag_chunk_cursor: AtomicUsize::new(0),
             defrag_blocks: Default::default(),
             last_defrag_blocks: Default::default(),
-            fragmented_regions: Default::default(),
-            fragmented_regions_size: Default::default(),
+            fragmented_blocks: Default::default(),
+            fragmented_blocks_size: Default::default(),
+            // fragmented_regions: Default::default(),
+            // fragmented_regions_size: Default::default(),
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
             collection_set: Default::default(),
@@ -285,12 +290,63 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn select_mature_evacuation_candidates(&self, pause: Pause, _total_pages: usize) {
-        self.collection_set
-            .select_mature_evacuation_candidates(self);
-        if pause == Pause::FullTraceFast {
-            self.collection_set.move_to_next_region();
+    fn select_mature_evacuation_candidates(&self, _pause: Pause, _total_pages: usize) {
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        debug_assert!(crate::args::RC_MATURE_EVACUATION);
+        // Select mature defrag blocks
+        // let total_bytes = total_pages << 12;
+        let defrag_bytes = self.defrag_headroom_pages() << 12;
+        // let defrag_blocks = defrag_bytes >> Block::LOG_BYTES;
+        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
+        while let Some(mut x) = self.fragmented_blocks.pop() {
+            blocks.append(&mut x);
         }
+        let mut live_bytes = 0usize;
+        let mut num_blocks = 0usize;
+        blocks.sort_by_key(|x| x.1);
+        while let Some((block, dead_bytes)) = blocks.pop() {
+            if block.is_defrag_source()
+                || block.get_state() == BlockState::Unallocated
+                || block.get_state() == BlockState::Nursery
+            {
+                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
+                continue;
+            }
+            if !block.attempt_to_set_as_defrag_source() {
+                continue;
+            }
+            // println!(
+            //     " - defrag {:?} {:?} {}",
+            //     block,
+            //     block.get_state(),
+            //     block.dead_bytes()
+            // );
+            me.defrag_blocks.push(block);
+            live_bytes += (Block::BYTES - dead_bytes) * 30 / 100;
+            num_blocks += 1;
+            if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
+                if live_bytes >= defrag_bytes {
+                    break;
+                }
+            } else {
+                unreachable!();
+            }
+        }
+        if crate::args::LOG_PER_GC_STATE {
+            println!(
+                " - Defrag {} mature bytes ({} blocks)",
+                live_bytes, num_blocks
+            );
+        }
+        self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
+    }
+
+    pub fn select_mature_evacuation_candidates2(&self, _pause: Pause, _total_pages: usize) {
+        // self.collection_set
+        //     .select_mature_evacuation_candidates(self);
+        // if pause == Pause::FullTraceFast {
+        //     self.collection_set.move_to_next_region();
+        // }
         // let me = unsafe { &mut *(self as *const Self as *mut Self) };
         // debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // // Select mature defrag blocks
@@ -342,30 +398,30 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        self.collection_set.schedule_defrag_selection_packets(self);
-        // let tasks = self
-        //     .chunk_map
-        //     .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
-        //         chunk,
-        //         defrag_threshold: 1,
-        //     });
-        // self.fragmented_blocks_size.store(0, Ordering::SeqCst);
-        // SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        // self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+        // self.collection_set.schedule_defrag_selection_packets(self);
+        let tasks = self
+            .chunk_map
+            .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
+                chunk,
+                defrag_threshold: 1,
+            });
+        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
+        SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
+        self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            self.collection_set.enable_defrag();
-            if pause == Pause::FinalMark {
-                self.collection_set.move_to_next_region();
-            }
-        } else {
-            self.collection_set.move_to_next_region();
-        }
+        // if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        //     self.collection_set.enable_defrag();
+        //     if pause == Pause::FinalMark {
+        //         self.collection_set.move_to_next_region();
+        //     }
+        // } else {
+        //     self.collection_set.move_to_next_region();
+        // }
         let num_workers = self.scheduler().worker_group().worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
@@ -444,6 +500,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             for b in blocks {
                 b.set_state(BlockState::Marked);
             }
+        }
+
+        if pause == Pause::FinalMark {
+            PerRegionRemSet::disable_recording();
+            let mut size = 0usize;
+            for chunk in self.chunk_map.committed_chunks() {
+                for region in chunk.regions() {
+                    if crate::args::LOG_REMSET_FOOTPRINT {
+                        size += region.remset().unwrap().size.load(Ordering::SeqCst);
+                    }
+                    region.remset().unwrap().clear();
+                }
+            }
+            if crate::args::LOG_REMSET_FOOTPRINT {
+                let peak_size = crate::PEAK_REMSET_FOOTPRINT.load(Ordering::SeqCst);
+                if size >= peak_size {
+                    crate::PEAK_REMSET_FOOTPRINT.store(size, Ordering::SeqCst);
+                }
+            }
+            // println!("RemSet {:?} bytes", size);
         }
     }
 
@@ -1208,18 +1284,17 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 blocks.push((block, score));
             }
         }
-        // let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        // immix
-        //     .immix_space
-        //     .fragmented_blocks_size
-        //     .fetch_add(blocks.len(), Ordering::SeqCst);
-        // immix.immix_space.fragmented_blocks.push(blocks);
-        // if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-        //     immix.immix_space.select_mature_evacuation_candidates(
-        //         immix.current_pause().unwrap(),
-        //         mmtk.plan.get_total_pages(),
-        //     )
-        // }
-        unreachable!()
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        immix
+            .immix_space
+            .fragmented_blocks_size
+            .fetch_add(blocks.len(), Ordering::SeqCst);
+        immix.immix_space.fragmented_blocks.push(blocks);
+        if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
+            immix.immix_space.select_mature_evacuation_candidates(
+                immix.current_pause().unwrap(),
+                mmtk.plan.get_total_pages(),
+            )
+        }
     }
 }

@@ -1,6 +1,6 @@
 use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
-use crate::policy::immix::region::Region;
+use crate::policy::immix::cset::PerRegionRemSet;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::{
@@ -100,6 +100,7 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         let should_check_remset = !self.plan.in_defrag(object);
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
+            PerRegionRemSet::record(e, t, &self.plan.immix_space);
             if crate::args::REF_COUNT
                 && crate::args::RC_MATURE_EVACUATION
                 && should_check_remset

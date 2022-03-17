@@ -55,6 +55,7 @@ pause_time = []
 log_gc = []
 log_stages = ["log_gc"]
 log_work_packets = ["log_stages"]
+log_remset_footprint = []
 # IX Features
 ix_concurrent_marking = []
 ix_lock_free_block_allocation = []

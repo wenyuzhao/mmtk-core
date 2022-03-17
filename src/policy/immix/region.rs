@@ -1,8 +1,6 @@
 use super::block::{Block, BlockState};
 use super::chunk::Chunk;
 use super::cset::PerRegionRemSet;
-use super::ImmixSpace;
-use crate::policy::space::Space;
 use crate::util::constants::*;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::{Address, ObjectReference};
@@ -134,7 +132,7 @@ impl Region {
         debug_assert!(self.remset().is_none());
         let remset = Box::leak(box PerRegionRemSet::new(gc_workers));
         side_metadata::store_atomic(
-            &Self::MARK_TABLE,
+            &Self::REMSET,
             self.start(),
             remset as *const PerRegionRemSet as usize,
             Ordering::SeqCst,
@@ -142,9 +140,8 @@ impl Region {
     }
 
     #[inline(always)]
-    pub fn dispose_remset(&self) {
-        let remset = self.remset().unwrap();
-        let _boxed = unsafe { Box::from_raw(remset) };
+    pub fn clear_remset(&self) {
+        self.remset().unwrap().clear()
     }
 
     // /// Set block mark state.
@@ -185,8 +182,8 @@ impl Region {
         self.set_state(RegionState::DefragSource)
     }
 
-    #[inline]
-    pub fn record_remset(&self, region: Region, e: Address) {}
+    // #[inline]
+    // pub fn record_remset(&self, region: Region, e: Address) {}
 
     /// Get a range of blocks within this chunk.
     #[inline(always)]
@@ -202,38 +199,38 @@ impl Region {
             .filter(|block| block.get_state() != BlockState::Unallocated)
     }
 
-    #[inline(always)]
-    pub fn cross_region_ref<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        e: Address,
-        o: ObjectReference,
-    ) -> bool {
-        let a = e.as_usize();
-        let b = o.to_address().as_usize();
-        ((a ^ b) >> Region::LOG_BYTES) == 0
-        //  {
-        //     return false;
-        // }
-        // space.in_space(o)
-        //     && Chunk::containing::<VM>(o).is_committed()
-        //     && Region::containing::<VM>(o).is_defrag_source()
-    }
+    // #[inline(always)]
+    // pub fn cross_region_ref<VM: VMBinding>(
+    //     &self,
+    //     space: &ImmixSpace<VM>,
+    //     e: Address,
+    //     o: ObjectReference,
+    // ) -> bool {
+    //     let a = e.as_usize();
+    //     let b = o.to_address().as_usize();
+    //     ((a ^ b) >> Region::LOG_BYTES) == 0
+    //     //  {
+    //     //     return false;
+    //     // }
+    //     // space.in_space(o)
+    //     //     && Chunk::containing::<VM>(o).is_committed()
+    //     //     && Region::containing::<VM>(o).is_defrag_source()
+    // }
 
-    #[inline(always)]
-    pub fn record<VM: VMBinding>(&self, space: &ImmixSpace<VM>, e: Address, o: ObjectReference) {
-        if self.cross_region_ref(space, e, o) {
-            if space.in_space(o) && Region::containing::<VM>(o).is_defrag_source() {
-                Region::containing::<VM>(o).remset().unwrap().add(e);
-            }
-        }
-        //  {
-        //     return false;
-        // }
-        // space.in_space(o)
-        //     && Chunk::containing::<VM>(o).is_committed()
-        //     && Region::containing::<VM>(o).is_defrag_source()
-    }
+    // #[inline(always)]
+    // pub fn record<VM: VMBinding>(&self, space: &ImmixSpace<VM>, e: Address, o: ObjectReference) {
+    //     if self.cross_region_ref(space, e, o) {
+    //         if space.in_space(o) && Region::containing::<VM>(o).is_defrag_source() {
+    //             Region::containing::<VM>(o).remset().unwrap().add(e);
+    //         }
+    //     }
+    //     //  {
+    //     //     return false;
+    //     // }
+    //     // space.in_space(o)
+    //     //     && Chunk::containing::<VM>(o).is_committed()
+    //     //     && Region::containing::<VM>(o).is_defrag_source()
+    // }
 
     // #[inline(always)]
     // pub fn in_defrag(&self, o: ObjectReference) -> bool {
