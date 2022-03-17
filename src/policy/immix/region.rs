@@ -38,7 +38,21 @@ impl From<RegionState> for u8 {
 pub struct Region(Address);
 
 impl Region {
-    pub const LOG_BLOCKS: usize = 5;
+    pub const LOG_BLOCKS: usize = {
+        if cfg!(feature = "lxr_region_256k") {
+            3
+        } else if cfg!(feature = "lxr_region_512k") {
+            4
+        } else if cfg!(feature = "lxr_region_1m") {
+            5
+        } else if cfg!(feature = "lxr_region_2m") {
+            6
+        } else if cfg!(feature = "lxr_region_4m") {
+            7
+        } else {
+            5
+        }
+    };
     pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
     /// Log bytes in block
     pub const LOG_BYTES: usize = Self::LOG_BLOCKS + Block::LOG_BYTES;

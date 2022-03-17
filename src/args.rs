@@ -2,7 +2,7 @@ use spin::Lazy;
 use std::env;
 
 use crate::{
-    policy::immix::{block::Block, line::Line},
+    policy::immix::{block::Block, line::Line, region::Region},
     BarrierSelector,
 };
 
@@ -192,6 +192,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
+    dump_feature!("log_region_size", Region::LOG_BYTES);
     dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
     dump_feature!("max_mature_defrag_percent", *MAX_MATURE_DEFRAG_PERCENT);
     dump_feature!(
