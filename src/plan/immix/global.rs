@@ -212,6 +212,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 crate::util::rc::inc_buffer_size()
             );
         }
+        if crate::inside_harness() && !crate::LazySweepingJobs::all_finished() {
+            crate::PAUSES.gc_with_unfinished_lazy_jobs.fetch_add(1, Ordering::Relaxed);
+        }
         match pause {
             Pause::FullTraceFast => {
                 if crate::args::REF_COUNT {

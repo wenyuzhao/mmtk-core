@@ -280,6 +280,7 @@ struct Pauses {
     pub yield_nanos: Atomic<u128>,
     pub roots_nanos: Atomic<u128>,
     pub satb_nanos: Atomic<u128>,
+    pub gc_with_unfinished_lazy_jobs: AtomicUsize,
 }
 
 impl Pauses {
@@ -289,6 +290,7 @@ impl Pauses {
         print!("gc.final_satb\t");
         print!("gc.full\t");
         print!("gc.emergency\t");
+        print!("gc_with_unfinished_lazy_jobs\t");
         if cfg!(feature = "yield_and_roots_timer") {
             print!("time.yield\t");
             print!("time.roots\t");
@@ -303,6 +305,7 @@ impl Pauses {
         print!("{}\t", self.final_mark.load(Ordering::SeqCst));
         print!("{}\t", self.full.load(Ordering::SeqCst));
         print!("{}\t", self.emergency.load(Ordering::SeqCst));
+        print!("{}\t", self.gc_with_unfinished_lazy_jobs.load(Ordering::SeqCst));
         if cfg!(feature = "yield_and_roots_timer") {
             print!(
                 "{}\t",
@@ -331,6 +334,7 @@ static PAUSES: Pauses = Pauses {
     yield_nanos: Atomic::new(0),
     roots_nanos: Atomic::new(0),
     satb_nanos: Atomic::new(0),
+    gc_with_unfinished_lazy_jobs: AtomicUsize::new(0),
 };
 
 #[derive(Default)]
@@ -364,7 +368,7 @@ struct GCStat {
     pub dead_mature_tracing_stuck_volume: usize,
     pub dead_mature_tracing_stuck_los_objects: usize,
     pub dead_mature_tracing_stuck_los_volume: usize,
-    // Inc coubnters
+    // Inc counters
     pub inc_objects: usize,
     pub inc_volume: usize,
 }
