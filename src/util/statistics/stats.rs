@@ -219,11 +219,11 @@ impl Stats {
         );
         // Outout pause time csv
         if crate::args::LOG_PAUSE_TIME {
-            let mut s = "pause,nanos\n".to_owned();
+            let mut s = "".to_owned();
             while let Some(x) = crate::PAUSE_TIMES.pop() {
-                s += &format!("{},{}\n", x.kind, x.nanos);
+                s += &format!("{}\n", x.nanos);
             }
-            let mut f = File::create("_pauses.csv").unwrap();
+            let mut f = File::create("scratch/pauses.csv").unwrap();
             f.write_all(s.as_bytes()).unwrap();
         }
     }
