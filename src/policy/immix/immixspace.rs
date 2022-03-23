@@ -79,7 +79,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if super::REF_COUNT {
-            return crate::util::rc::count(object) > 0;
+            return crate::util::rc::count(object) > 0
+                || ForwardingWord::is_forwarded::<VM>(object);
         }
         if self.initial_mark_pause {
             return true;
@@ -397,7 +398,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare_rc(&mut self, pause: Pause) {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
-        self.num_clean_blocks_released_lazy.store(0, Ordering::SeqCst);
+        self.num_clean_blocks_released_lazy
+            .store(0, Ordering::SeqCst);
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -1194,9 +1196,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             .fetch_add(blocks.len(), Ordering::SeqCst);
         immix.immix_space.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix
-                .immix_space
-                .select_mature_evacuation_candidates(immix.current_pause().unwrap(), mmtk.plan.get_total_pages())
+            immix.immix_space.select_mature_evacuation_candidates(
+                immix.current_pause().unwrap(),
+                mmtk.plan.get_total_pages(),
+            )
         }
     }
 }
