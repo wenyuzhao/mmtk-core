@@ -4,6 +4,7 @@ use crate::plan::immix::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
@@ -717,7 +718,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     #[inline(always)]
-    fn address_is_valid_oop_edge(&self, e: Address, immix: &Immix<VM>) -> bool {
+    fn address_is_valid_oop_edge(&self, e: Address, epoch: u8, immix: &Immix<VM>) -> bool {
         // Skip edges not in the mmtk heap
         if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
             return false;
@@ -732,36 +733,46 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // Check if it is a real oop field
         if immix.immix_space.address_in_space(e) {
             let block = Block::of(e);
-            let mut cursor = e - 16;
-            while cursor >= block.start() {
-                // Skip straddle lines
-                if rc::address_is_in_straddle_line(cursor) {
-                    cursor = Line::align(cursor);
-                    cursor = cursor - rc::MIN_OBJECT_SIZE;
-                    continue;
-                }
-                // Check if the edge points to a real oop
-                let mut o = unsafe { cursor.to_object_reference() };
-                if rc::count(o) != 0 {
-                    o = o.fix_start_address::<VM>();
-                    let end = o.to_address() + o.get_size::<VM>();
-                    if end <= e {
-                        return false;
-                    }
-                    return VM::VMScanning::is_oop_field(o, e);
-                }
-                cursor = cursor - rc::MIN_OBJECT_SIZE;
+            if block.get_state() == BlockState::Unallocated {
+                return false;
             }
-            return false;
+            if cfg!(feature = "slow_edge_check") {
+                let mut cursor = e - 16;
+                while cursor >= block.start() {
+                    // Skip straddle lines
+                    if rc::address_is_in_straddle_line(cursor) {
+                        cursor = Line::align(cursor);
+                        cursor = cursor - rc::MIN_OBJECT_SIZE;
+                        continue;
+                    }
+                    // Check if the edge points to a real oop
+                    let mut o = unsafe { cursor.to_object_reference() };
+                    if rc::count(o) != 0 {
+                        o = o.fix_start_address::<VM>();
+                        let end = o.to_address() + o.get_size::<VM>();
+                        if end <= e {
+                            return false;
+                        }
+                        return VM::VMScanning::is_oop_field(o, e);
+                    }
+                    cursor = cursor - rc::MIN_OBJECT_SIZE;
+                }
+                return false;
+            } else {
+                if Line::of(e).pointer_is_valid(epoch) {
+                    return true;
+                }
+                false
+            }
         } else {
             true
         }
     }
 
     #[inline]
-    fn process_edge(&mut self, e: Address, immix: &Immix<VM>) -> bool {
+    fn process_edge(&mut self, e: Address, epoch: u8, immix: &Immix<VM>) -> bool {
         // Skip edges that does not contain a real oop
-        if !self.address_is_valid_oop_edge(e, immix) {
+        if !self.address_is_valid_oop_edge(e, epoch, immix) {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
@@ -789,7 +800,11 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
         let edges = remset
-            .drain_filter(|e| self.process_edge(*e, immix))
+            .drain_filter(|e| {
+                let (e, epoch) = Line::decode_validity_state(*e);
+                self.process_edge(e, epoch, immix)
+            })
+            .map(|e| Line::decode_validity_state(e).0)
             .collect::<Vec<_>>();
         // transitive closure
         let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);

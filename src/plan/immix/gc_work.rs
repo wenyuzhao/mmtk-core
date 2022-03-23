@@ -1,6 +1,7 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
 use crate::scheduler::{gc_work::*, GCWork, GCWorker};
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -108,7 +109,13 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
 
     #[inline(always)]
     pub fn add_mature_evac_remset(&mut self, e: Address) {
-        self.mature_evac_remset.push(e);
+        let v = if self.immix.immix_space().address_in_space(e) {
+            Line::of(e).currrent_validity_state()
+        } else {
+            0
+        };
+        self.mature_evac_remset
+            .push(Line::encode_validity_state(e, v));
         if self.mature_evac_remset.len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush_mature_evac_remset()
         }
