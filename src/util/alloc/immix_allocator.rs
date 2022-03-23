@@ -320,7 +320,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     Address::ZERO
                 }
-            },
+            }
             Some(block) => {
                 trace!("{:?}: Acquired a new block {:?}", self.tls, block);
                 if self.request_for_large {
