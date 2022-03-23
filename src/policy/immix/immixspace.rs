@@ -4,6 +4,7 @@ use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
 use crate::policy::immix::chunk::Chunk;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
@@ -356,7 +357,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         //     };
         let (stw_packets, nursery_blocks) = self
             .block_allocation
-            .reset_and_generate_nursery_sweep_tasks2(num_workers);
+            .reset_and_generate_nursery_sweep_tasks(num_workers);
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
         if crate::args::NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY {
@@ -397,7 +398,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare_rc(&mut self, pause: Pause) {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
-        self.num_clean_blocks_released_lazy.store(0, Ordering::SeqCst);
+        self.num_clean_blocks_released_lazy
+            .store(0, Ordering::SeqCst);
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             debug_assert!(self.last_defrag_blocks.is_empty());
             std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
@@ -419,11 +421,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
+        let space = unsafe { &mut *(self as *mut Self) };
+        let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+        packets.reserve(self.mutator_recycled_blocks.len());
         while let Some(blocks) = self.mutator_recycled_blocks.pop() {
-            for b in blocks {
-                b.set_state(BlockState::Marked);
+            if !blocks.is_empty() {
+                packets.push(box RCSweepNurseryBlocks {
+                    space,
+                    blocks,
+                    mutator_reused_blocks: true,
+                });
             }
         }
+        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
@@ -1194,9 +1204,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             .fetch_add(blocks.len(), Ordering::SeqCst);
         immix.immix_space.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix
-                .immix_space
-                .select_mature_evacuation_candidates(immix.current_pause().unwrap(), mmtk.plan.get_total_pages())
+            immix.immix_space.select_mature_evacuation_candidates(
+                immix.current_pause().unwrap(),
+                mmtk.plan.get_total_pages(),
+            )
         }
     }
 }

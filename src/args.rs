@@ -142,8 +142,7 @@ pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 
 // ---------- Derived flags ---------- //
-pub static IGNORE_REUSING_BLOCKS: Lazy<bool> =
-    Lazy::new(|| REF_COUNT && LAZY_DECREMENTS && !*DISABLE_MUTATOR_LINE_REUSING);
+pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {
@@ -201,7 +200,10 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
     dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
     dump_feature!("opportunistic_evac", *OPPORTUNISTIC_EVAC);
-    dump_feature!("opportunistic_evac_threshold", *OPPORTUNISTIC_EVAC_THRESHOLD);
+    dump_feature!(
+        "opportunistic_evac_threshold",
+        *OPPORTUNISTIC_EVAC_THRESHOLD
+    );
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
 
     println!("----------------------------------------------------");
