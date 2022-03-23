@@ -37,7 +37,7 @@ use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorke
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};

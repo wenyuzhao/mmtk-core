@@ -68,15 +68,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.cursor.store(0, Ordering::SeqCst);
     }
 
-    fn split_bins(&self, workers: usize, jobs: usize) -> (usize, usize, Vec<Vec<Block>>) {
-        let num_bins = workers << 1;
-        let bin_cap = jobs / num_bins + if jobs % num_bins == 0 { 0 } else { 1 };
-        let bins = (0..num_bins)
-            .map(|_| Vec::with_capacity(bin_cap))
-            .collect::<Vec<Vec<Block>>>();
-        (num_bins, bin_cap, bins)
-    }
-
     /// Drain allocated_block_buffer and free everything in clean_block_buffer.
     pub fn reset_and_generate_nursery_sweep_tasks(
         &mut self,

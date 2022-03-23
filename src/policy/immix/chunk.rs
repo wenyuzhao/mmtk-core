@@ -252,15 +252,11 @@ impl ChunkMap {
         })
     }
 
-    pub fn generate_mark_table_zeroing_tasks<VM: VMBinding>(
+    pub fn generate_concurrent_mark_table_zeroing_tasks<VM: VMBinding>(
         &self,
         _space: &'static ImmixSpace<VM>,
-        defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| box ChunkMetadataZeroing {
-            chunk,
-            defrag_threshold,
-        })
+        self.generate_tasks(|chunk| box ConcurrentChunkMetadataZeroing { chunk })
     }
 
     /// Generate chunk sweep work packets.
@@ -485,12 +481,11 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     }
 }
 
-struct ChunkMetadataZeroing {
+struct ConcurrentChunkMetadataZeroing {
     chunk: Chunk,
-    defrag_threshold: Option<usize>,
 }
 
-impl ChunkMetadataZeroing {
+impl ConcurrentChunkMetadataZeroing {
     /// Clear object mark table
     #[inline(always)]
     #[allow(unused)]
@@ -503,10 +498,9 @@ impl ChunkMetadataZeroing {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ChunkMetadataZeroing {
+impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         Self::reset_object_mark::<VM>(self.chunk);
     }
 }

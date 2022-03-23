@@ -403,7 +403,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let space = unsafe { &mut *(self as *const Self as *mut Self) };
         let work_packets = self
             .chunk_map
-            .generate_mark_table_zeroing_tasks::<VM>(space, None);
+            .generate_concurrent_mark_table_zeroing_tasks::<VM>(space);
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(work_packets);
     }
 
