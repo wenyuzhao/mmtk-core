@@ -31,6 +31,9 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
+    pub const VALIDITY_STATE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_LINE_VALIDITY;
+
     /// Align the give address to the line boundary.
     #[inline(always)]
     pub fn align(address: Address) -> Address {
@@ -52,6 +55,11 @@ impl Line {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
+    }
+
+    #[inline(always)]
+    pub fn of(a: Address) -> Self {
+        Self(a.align_down(Self::BYTES))
     }
 
     #[inline(always)]
@@ -121,6 +129,47 @@ impl Line {
             line.mark(state)
         }
         marked_lines
+    }
+
+    #[inline(always)]
+    pub fn encode_validity_state(ptr: Address, valid: u8) -> Address {
+        unsafe { Address::from_usize(ptr.as_usize() | ((valid as usize) << 56)) }
+    }
+
+    #[inline(always)]
+    pub fn decode_validity_state(x: Address) -> (Address, u8) {
+        let v = (x.as_usize() >> 56) as u8;
+        let p = unsafe { Address::from_usize(x.as_usize() & 0x00ff_ffff_ffff_ffff_usize) };
+        (p, v)
+    }
+
+    #[inline(always)]
+    pub fn currrent_validity_state(&self) -> u8 {
+        unsafe { side_metadata::load(&Self::VALIDITY_STATE, self.start()) as _ }
+    }
+
+    #[inline(always)]
+    pub fn pointer_is_valid(&self, pointer_epoch: u8) -> bool {
+        pointer_epoch == self.currrent_validity_state()
+    }
+
+    #[inline(always)]
+    pub fn update_validity(lines: Range<Line>) {
+        for line in lines {
+            let _ = side_metadata::fetch_update(
+                &Self::VALIDITY_STATE,
+                line.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |v| {
+                    if v == 255 {
+                        unimplemented!()
+                    } else {
+                        Some(v + 1)
+                    }
+                },
+            );
+        }
     }
 
     #[inline(always)]

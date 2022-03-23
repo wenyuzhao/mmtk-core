@@ -423,6 +423,9 @@ impl Block {
             self.set_state(BlockState::Nursery);
             self.set_as_defrag_source(false);
         }
+        if !reuse {
+            self.clear_line_validity_states();
+        }
     }
 
     /// Deinitalize a block before releasing.
@@ -449,6 +452,11 @@ impl Block {
     // pub fn clear_mark_table(&self) {
     //     side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
     // }
+
+    #[inline(always)]
+    pub fn clear_line_validity_states(&self) {
+        side_metadata::bzero_x(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
+    }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
@@ -636,20 +644,26 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
+    pub fn rc_sweep_nursery<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mutator_reused_blocks: bool,
+    ) -> bool {
         debug_assert!(crate::args::REF_COUNT);
-        if crate::args::RC_NURSERY_EVACUATION && !*crate::args::OPPORTUNISTIC_EVAC {
-            debug_assert!(self.rc_dead(), "{:?} has live rc counts", self);
-            space.deinit_block(*self, true);
-            true
-        } else if self.rc_dead() {
+        if mutator_reused_blocks {
+            if self.rc_dead() {
+                space.deinit_block(*self, true);
+                return true;
+            }
+        }
+        if !mutator_reused_blocks && self.rc_dead() {
             if self.attempt_dealloc(false) {
                 space.deinit_block(*self, true);
                 true
             } else {
                 false
             }
-        } else if !crate::args::BLOCK_ONLY {
+        } else {
             // See the caller of this function.
             // At least one object is dead in the block.
             let add_as_reusable = if !*crate::args::IGNORE_REUSING_BLOCKS {
@@ -687,9 +701,10 @@ impl Block {
                 debug_assert!(self.get_state().is_reusable());
                 // println!("reuse N {:?}", self);
                 space.reusable_blocks.push(*self)
+            } else if mutator_reused_blocks {
+                // debug_assert_eq!(self.get_state(), BlockState::Reusing);
+                self.set_state(BlockState::Marked);
             }
-            false
-        } else {
             false
         }
     }

@@ -63,6 +63,7 @@ pub struct Immix<VM: VMBinding> {
     inc_buffer_limit: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
+    zeroing_packets_scheduled: AtomicBool,
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -100,7 +101,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         // Don't do a GC until we finished the lazy reclaimation.
-        if *crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
+        if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
             return false;
         }
         // Spaces or heap full
@@ -112,7 +113,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // inc limits
-        if crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::LXR_RC_ONLY
+            && crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
             && self
                 .inc_buffer_limit
@@ -122,7 +124,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // Concurrent tracing finished
-        if !crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::LXR_RC_ONLY
+            && !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
@@ -130,7 +133,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // RC nursery full
-        if !crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::LXR_RC_ONLY
+            && !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(crate::concurrent_marking_in_progress()
@@ -147,7 +151,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn concurrent_collection_required(&self) -> bool {
-        if crate::args::HEAP_HEALTH_GUIDED_GC {
+        if crate::args::HEAP_HEALTH_GUIDED_GC || crate::args::LXR_RC_ONLY {
             return false;
         }
         // Don't do a GC until we finished the lazy reclaimation.
@@ -204,7 +208,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         me.get_pages_reserved() / 256
                     );
                 }
-                // me.decide_next_gc_may_perform_cycle_collection();
+                me.decide_next_gc_may_perform_cycle_collection();
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -412,9 +416,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
         self.avail_pages_at_end_of_last_gc
             .store(self.get_pages_avail(), Ordering::SeqCst);
-        if crate::args::REF_COUNT {
-            // self.decide_next_gc_may_perform_cycle_collection();
-        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -469,6 +470,7 @@ impl<VM: VMBinding> Immix<VM> {
             inc_buffer_limit: None,
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
+            zeroing_packets_scheduled: AtomicBool::new(false),
         };
 
         {
@@ -488,12 +490,6 @@ impl<VM: VMBinding> Immix<VM> {
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
             return;
         }
-        let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
-        avail_pages += self
-            .immix_space
-            .num_clean_blocks_released_lazy
-            .load(Ordering::SeqCst)
-            << Block::LOG_PAGES;
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
         let threshold = *crate::args::TRACE_THRESHOLD;
         let last_freed_blocks = self
@@ -506,6 +502,10 @@ impl<VM: VMBinding> Immix<VM> {
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
+            if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
+                self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
+                self.immix_space.schedule_mark_table_zeroing_tasks();
+            }
         } else {
             if crate::args::LOG_PER_GC_STATE {
                 println!("next rc ({} / {})", last_freed_blocks, total_blocks);
@@ -516,7 +516,6 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
-        self.decide_next_gc_may_perform_cycle_collection();
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
@@ -584,8 +583,18 @@ impl<VM: VMBinding> Immix<VM> {
         let force_no_rc = self
             .next_gc_may_perform_cycle_collection
             .load(Ordering::SeqCst);
-        let pause = if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
-            self.select_lxr_collection_kind(emergency_collection)
+        let pause = if crate::args::LXR_RC_ONLY {
+            Pause::RefCount
+        } else if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
+            let pause = self.select_lxr_collection_kind(emergency_collection);
+            if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
+                && self.zeroing_packets_scheduled.load(Ordering::SeqCst)
+            {
+                self.immix_space.schedule_mark_table_zeroing_tasks();
+            }
+            self.zeroing_packets_scheduled
+                .store(false, Ordering::SeqCst);
+            pause
         } else if emergency_collection {
             if crate::inside_harness() {
                 crate::PAUSES.emergency.fetch_add(1, Ordering::Relaxed);
@@ -718,6 +727,12 @@ impl<VM: VMBinding> Immix<VM> {
         while let Some(decs) = prev_roots.pop() {
             let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
             work_packets.push(box w);
+        }
+        if work_packets.is_empty() {
+            work_packets.push(box ProcessDecs::new(
+                vec![],
+                LazySweepingJobsCounter::new_desc(),
+            ));
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);

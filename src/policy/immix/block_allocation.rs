@@ -68,102 +68,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.cursor.store(0, Ordering::SeqCst);
     }
 
-    fn split_bins(&self, workers: usize, jobs: usize) -> (usize, usize, Vec<Vec<Block>>) {
-        let num_bins = workers << 1;
-        let bin_cap = jobs / num_bins + if jobs % num_bins == 0 { 0 } else { 1 };
-        let bins = (0..num_bins)
-            .map(|_| Vec::with_capacity(bin_cap))
-            .collect::<Vec<Vec<Block>>>();
-        (num_bins, bin_cap, bins)
-    }
-
     /// Drain allocated_block_buffer and free everything in clean_block_buffer.
     pub fn reset_and_generate_nursery_sweep_tasks(
-        &mut self,
-        num_workers: usize,
-    ) -> (Vec<Box<dyn GCWork<VM>>>, Vec<Box<dyn GCWork<VM>>>, usize) {
-        let _guard = self.refill_lock.lock().unwrap();
-        let blocks = self.cursor.load(Ordering::SeqCst);
-        let high_water = self.high_water.load(Ordering::SeqCst);
-        // Release unallocated blocks in the buffer
-        for i in blocks..high_water {
-            self.space()
-                .pr
-                .release_pages(self.buffer[i].load(Ordering::SeqCst).start())
-        }
-        // Block sweeping packets
-        let mut block_cursor = 0;
-        // 1. STW sweep packages
-        let stw_sweep_bytes: usize = (1 << 20) * num_cpus::get();
-        let stw_sweep_blocks: usize = usize::min(stw_sweep_bytes / Block::BYTES, blocks);
-        println!("stw_sweep_blocks: {} / {}", stw_sweep_blocks, blocks);
-        let (num_bins, bin_cap, mut bins) = self.split_bins(num_workers, stw_sweep_blocks);
-        'out: for i in 0..num_bins {
-            for _ in 0..bin_cap {
-                if block_cursor < blocks {
-                    bins[i].push(self.buffer[block_cursor].load(Ordering::Relaxed));
-                    block_cursor += 1;
-                } else {
-                    break 'out;
-                }
-            }
-        }
-        let space = self.space();
-        let stw_packets = bins
-            .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
-            .collect();
-
-        // 2. Conc sweep packets
-        let delayed_sweep_blocks: usize = blocks - stw_sweep_blocks;
-        let (num_bins, bin_cap, mut bins) = self.split_bins(num_workers, delayed_sweep_blocks);
-        'out2: for i in 0..num_bins {
-            for _ in 0..bin_cap {
-                if block_cursor < blocks {
-                    bins[i].push(self.buffer[block_cursor].load(Ordering::Relaxed));
-                    block_cursor += 1;
-                } else {
-                    break 'out2;
-                }
-            }
-        }
-        let delayed_packets = bins
-            .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
-            .collect();
-        // Reset cursor and high_water
-        self.high_water.store(0, Ordering::SeqCst);
-        self.cursor.store(0, Ordering::SeqCst);
-        (stw_packets, delayed_packets, blocks)
-    }
-
-    pub fn reset_and_generate_nursery_sweep_tasks3(
-        &mut self,
-        _num_workers: usize,
-    ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
-        let _guard = self.refill_lock.lock().unwrap();
-        let blocks = self.cursor.load(Ordering::SeqCst);
-        let high_water = self.high_water.load(Ordering::SeqCst);
-        let mut packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(blocks + 1);
-        let space = self.space();
-        for i in 0..blocks {
-            let block = self.buffer[i].load(Ordering::Relaxed);
-            packets.push(box RCSweepNurseryBlock { space, block })
-        }
-        let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
-        for i in blocks..high_water {
-            unallocated_nursery_blocks.push(self.buffer[i].load(Ordering::Relaxed));
-        }
-        packets.push(box RCReleaseUnallocatedNurseryBlocks {
-            space,
-            blocks: unallocated_nursery_blocks,
-        });
-        self.high_water.store(0, Ordering::SeqCst);
-        self.cursor.store(0, Ordering::SeqCst);
-        (packets, blocks)
-    }
-
-    pub fn reset_and_generate_nursery_sweep_tasks2(
         &mut self,
         num_workers: usize,
     ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
@@ -188,7 +94,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let space = self.space();
         let mut packets: Vec<Box<dyn GCWork<VM>>> = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks { space, blocks })
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks {
+                space,
+                blocks,
+                mutator_reused_blocks: false,
+            })
             .collect();
         let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
         for i in blocks..high_water {
@@ -371,9 +281,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 }
 
-struct RCSweepNurseryBlocks<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
-    blocks: Vec<Block>,
+pub struct RCSweepNurseryBlocks<VM: VMBinding> {
+    pub space: &'static ImmixSpace<VM>,
+    pub blocks: Vec<Block>,
+    pub mutator_reused_blocks: bool,
 }
 
 impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
@@ -385,27 +296,12 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
         let mut count = 0;
         let queue = ArrayQueue::new(self.blocks.len());
         for block in &self.blocks {
-            if block.rc_sweep_nursery(self.space) {
+            if block.rc_sweep_nursery(self.space, self.mutator_reused_blocks) {
                 count += 1;
                 queue.push(block.start()).unwrap();
             }
         }
         self.space.pr.release_bulk(count, queue)
-    }
-}
-
-struct RCSweepNurseryBlock<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
-    block: Block,
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlock<VM> {
-    #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        if self.block.rc_sweep_nursery(self.space) {
-            // Push to a queue
-            unimplemented!()
-        }
     }
 }
 

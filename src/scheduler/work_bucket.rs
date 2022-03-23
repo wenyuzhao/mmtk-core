@@ -232,7 +232,6 @@ impl WorkBucketStage {
     #[cfg(not(feature = "instrumentation"))]
     pub const RCProcessDecs: Self = Self::Release;
 
-
     #[cfg(feature = "instrumentation")]
     pub const RCFullHeapRelease: Self = Self::Compact;
     #[cfg(feature = "instrumentation")]

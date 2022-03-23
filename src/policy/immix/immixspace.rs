@@ -6,6 +6,7 @@ use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
 use crate::policy::immix::chunk::Chunk;
 use crate::policy::immix::cset::PerRegionRemSet;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
@@ -85,7 +86,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if super::REF_COUNT {
-            return crate::util::rc::count(object) > 0;
+            return crate::util::rc::count(object) > 0
+                || ForwardingWord::is_forwarded::<VM>(object);
         }
         if self.initial_mark_pause {
             return true;
@@ -161,6 +163,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
+                MetadataSpec::OnSide(Line::VALIDITY_STATE),
                 MetadataSpec::OnSide(Region::MARK_TABLE),
                 MetadataSpec::OnSide(Region::REMSET),
             ]);
@@ -432,7 +435,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         //     };
         let (stw_packets, nursery_blocks) = self
             .block_allocation
-            .reset_and_generate_nursery_sweep_tasks2(num_workers);
+            .reset_and_generate_nursery_sweep_tasks(num_workers);
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
         if crate::args::NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY {
@@ -471,6 +474,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    pub fn schedule_mark_table_zeroing_tasks(&self) {
+        assert!(crate::args::HEAP_HEALTH_GUIDED_GC);
+        let space = unsafe { &mut *(self as *const Self as *mut Self) };
+        let work_packets = self
+            .chunk_map
+            .generate_concurrent_mark_table_zeroing_tasks::<VM>(space);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(work_packets);
+    }
+
     pub fn prepare_rc(&mut self, pause: Pause) {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
@@ -496,11 +508,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
+        let space = unsafe { &mut *(self as *mut Self) };
+        let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+        packets.reserve(self.mutator_recycled_blocks.len());
         while let Some(blocks) = self.mutator_recycled_blocks.pop() {
-            for b in blocks {
-                b.set_state(BlockState::Marked);
+            if !blocks.is_empty() {
+                packets.push(box RCSweepNurseryBlocks {
+                    space,
+                    blocks,
+                    mutator_reused_blocks: true,
+                });
             }
         }
+        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
 
         if pause == Pause::FinalMark {
             PerRegionRemSet::disable_recording();
@@ -1047,6 +1067,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
+            Line::update_validity(start..end);
         }
         block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
         // Line::clear_mark_table::<VM>(start..end);
