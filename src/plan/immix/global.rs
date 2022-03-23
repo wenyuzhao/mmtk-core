@@ -110,7 +110,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // inc limits
-        if crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::LXR_RC_ONLY
+            && crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
             && self
                 .inc_buffer_limit
@@ -120,7 +121,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // Concurrent tracing finished
-        if !crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::LXR_RC_ONLY
+            && !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
@@ -128,7 +130,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return true;
         }
         // RC nursery full
-        if !crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::LXR_RC_ONLY
+            && !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(crate::concurrent_marking_in_progress()
@@ -145,7 +148,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn concurrent_collection_required(&self) -> bool {
-        if crate::args::HEAP_HEALTH_GUIDED_GC {
+        if crate::args::HEAP_HEALTH_GUIDED_GC || crate::args::LXR_RC_ONLY {
             return false;
         }
         // Don't do a GC until we finished the lazy reclaimation.
@@ -576,7 +579,9 @@ impl<VM: VMBinding> Immix<VM> {
         let force_no_rc = self
             .next_gc_may_perform_cycle_collection
             .load(Ordering::SeqCst);
-        let pause = if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
+        let pause = if crate::args::LXR_RC_ONLY {
+            Pause::RefCount
+        } else if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
             let pause = self.select_lxr_collection_kind(emergency_collection);
             if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
                 && self.zeroing_packets_scheduled.load(Ordering::SeqCst)

@@ -140,6 +140,7 @@ pub const LOG_STAGES: bool = cfg!(feature = "log_stages");
 pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;
+pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
@@ -205,6 +206,7 @@ fn dump_features(active_barrier: BarrierSelector) {
         *OPPORTUNISTIC_EVAC_THRESHOLD
     );
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
+    dump_feature!("lxr_rc_only");
 
     println!("----------------------------------------------------");
 }
