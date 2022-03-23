@@ -398,6 +398,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    pub fn schedule_mark_table_zeroing_tasks(&self) {
+        assert!(crate::args::HEAP_HEALTH_GUIDED_GC);
+        let space = unsafe { &mut *(self as *const Self as *mut Self) };
+        let work_packets = self
+            .chunk_map
+            .generate_mark_table_zeroing_tasks::<VM>(space, None);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(work_packets);
+    }
+
     pub fn prepare_rc(&mut self, pause: Pause) {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
