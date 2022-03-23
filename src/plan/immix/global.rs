@@ -60,7 +60,6 @@ pub struct Immix<VM: VMBinding> {
     inc_buffer_limit: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
-    next_gc_selected: (Mutex<bool>, Condvar),
     zeroing_packets_scheduled: AtomicBool,
 }
 
@@ -99,9 +98,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         // Don't do a GC until we finished the lazy reclaimation.
-        // if *crate::args::NO_GC_UNTIL_LAZY_SWEEPING_FINISHED && !LazySweepingJobs::all_finished() {
-        //     return false;
-        // }
         if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
             return false;
         }
@@ -467,7 +463,6 @@ impl<VM: VMBinding> Immix<VM> {
             inc_buffer_limit: None,
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
-            next_gc_selected: (Mutex::new(true), Condvar::new()),
             zeroing_packets_scheduled: AtomicBool::new(false),
         };
 
@@ -485,22 +480,9 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn decide_next_gc_may_perform_cycle_collection(&self) {
-        let (lock, cvar) = &self.next_gc_selected;
-        let notify = || {
-            // let mut gc_selection_done = lock.lock().unwrap();
-            // *gc_selection_done = true;
-            // cvar.notify_one();
-        };
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
-            notify();
             return;
         }
-        // let mut avail_pages = self.avail_pages_at_end_of_last_gc.load(Ordering::SeqCst);
-        // avail_pages += self
-        //     .immix_space
-        //     .num_clean_blocks_released_lazy
-        //     .load(Ordering::SeqCst)
-        //     << Block::LOG_PAGES;
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
         let threshold = *crate::args::TRACE_THRESHOLD;
         let last_freed_blocks = self
@@ -524,18 +506,9 @@ impl<VM: VMBinding> Immix<VM> {
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);
         }
-        notify();
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
-        // {
-        //     let (lock, cvar) = &self.next_gc_selected;
-        //     let mut gc_selection_done = lock.lock().unwrap();
-        //     while !*gc_selection_done {
-        //         gc_selection_done = cvar.wait(gc_selection_done).unwrap();
-        //     }
-        //     *gc_selection_done = false;
-        // }
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
