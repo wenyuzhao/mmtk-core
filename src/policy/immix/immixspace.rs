@@ -16,7 +16,7 @@ use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
-use crate::util::metadata::side_metadata::*;
+use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
 use crate::util::rc::SweepBlocksAfterDecs;
 use crate::util::{object_forwarding as ForwardingWord, rc};
@@ -166,6 +166,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Line::VALIDITY_STATE),
                 MetadataSpec::OnSide(Region::MARK_TABLE),
                 MetadataSpec::OnSide(Region::REMSET),
+                MetadataSpec::OnSide(Region::EVAC_MARK),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -308,7 +309,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             num_regions += 1;
             region.set_defrag_source();
             region.set_active();
+            for block in region.committed_blocks() {
+                if block.get_state() != BlockState::Nursery {
+                    block.set_as_defrag_source(true)
+                }
+            }
             cset.push(region);
+            side_metadata::bzero_x(&Region::EVAC_MARK, region.start(), Region::BYTES);
             if crate::args::LOG_PER_GC_STATE {
                 println!(
                     " - Defrag {:?} live_bytes={:?}",
@@ -320,6 +327,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 break;
             }
         }
+        self.collection_set.set_reigons(cset.clone());
         me.defrag_regions = cset;
         // self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
     }
@@ -447,6 +455,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
 
+        if pause == Pause::InitialMark {
+            for chunk in self.chunk_map.committed_chunks() {
+                for region in chunk.regions() {
+                    region.remset().unwrap().clear();
+                }
+            }
+        }
         if pause == Pause::FinalMark {
             PerRegionRemSet::disable_recording();
             let mut size = 0usize;
@@ -455,7 +470,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     if crate::args::LOG_REMSET_FOOTPRINT {
                         size += region.remset().unwrap().size.load(Ordering::SeqCst);
                     }
-                    region.remset().unwrap().clear();
                 }
             }
             if crate::args::LOG_REMSET_FOOTPRINT {
@@ -484,15 +498,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let queue = ArrayQueue::new(self.last_defrag_regions.len() << Region::LOG_BLOCKS);
                 while let Some(region) = self.last_defrag_regions.pop() {
                     for block in region.committed_blocks() {
-                        block.clear_rc_table::<VM>();
-                        block.clear_striddle_table::<VM>();
-                        if block.rc_sweep_mature::<VM>(self, true) {
-                            queue.push(block.start()).unwrap();
-                        } else {
-                            unreachable!("block still alive")
+                        if block.is_defrag_source() {
+                            block.clear_rc_table::<VM>();
+                            block.clear_striddle_table::<VM>();
+                            if block.rc_sweep_mature::<VM>(self, true) {
+                                queue.push(block.start()).unwrap();
+                            } else {
+                                // unreachable!("block still alive")
+                            }
                         }
-                        assert!(!block.is_defrag_source());
-                        assert_eq!(block.get_state(), BlockState::Unallocated);
+                        // assert!(!block.is_defrag_source());
+                        // assert_eq!(block.get_state(), BlockState::Unallocated);
                     }
                     region.set_state(RegionState::Allocated);
                 }
@@ -638,9 +654,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Trace and mark objects without evacuation.
     #[inline(always)]
     pub fn process_mature_evacuation_remset(&self) {
-        let mut remsets = vec![];
-        mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
-        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
+        // println!("process_mature_evacuation_remset");
+        self.collection_set
+            .schedule_mature_remset_scanning_packets(self);
     }
 
     /// Trace and mark objects without evacuation.
@@ -759,9 +775,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         pause: Pause,
     ) -> ObjectReference {
         debug_assert!(crate::args::REF_COUNT);
-        if crate::args::RC_MATURE_EVACUATION
-            && Region::containing::<VM>(object).is_defrag_source_active()
-        {
+        if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
             self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
         } else if crate::args::RC_MATURE_EVACUATION {
             self.trace_mark_rc_mature_object(trace, object, pause)
@@ -780,7 +794,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
-        if self.attempt_mark(object) {
+        let in_defrag_region = Region::containing::<VM>(object).is_defrag_source_active();
+        let a = self.attempt_mark(object);
+        let b = in_defrag_region && self.attempt_emark(object);
+        if a || b {
             trace.process_node(object);
         }
         object
@@ -820,8 +837,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             rc::set(new, rc::count(object));
             self.attempt_mark(new);
+            self.attempt_emark(object);
             self.unmark(object);
             trace.process_node(new);
+            // println!("M {:?} ~> {:?} rc={}", object, new, rc::count(new));
             new
         }
     }
@@ -853,6 +872,35 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             if compare_exchange_metadata::<VM>(
                 &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                object,
+                old_value as usize,
+                self.mark_state as usize,
+                None,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                break;
+            }
+        }
+        true
+    }
+
+    /// Atomically mark an object.
+    #[inline(always)]
+    pub fn attempt_emark(&self, object: ObjectReference) -> bool {
+        loop {
+            let old_value = load_metadata::<VM>(
+                &MetadataSpec::OnSide(Region::EVAC_MARK),
+                object,
+                None,
+                Some(Ordering::SeqCst),
+            ) as u8;
+            if old_value == self.mark_state {
+                return false;
+            }
+
+            if compare_exchange_metadata::<VM>(
+                &MetadataSpec::OnSide(Region::EVAC_MARK),
                 object,
                 old_value as usize,
                 self.mark_state as usize,
@@ -1214,6 +1262,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
         let mut regions = vec![];
         // Iterate over all blocks in this chunk
         for region in self.chunk.regions() {
+            region.set_state(RegionState::Allocated);
             let mut dead_bytes = 0usize;
             let mut has_live_mature_blocks = false;
             for block in region.blocks() {
@@ -1226,9 +1275,9 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
                     dead_bytes += block.calc_dead_lines() << Line::LOG_BYTES
                 }
             }
-            if has_live_mature_blocks && dead_bytes >= Region::BYTES / 2 {
+            if has_live_mature_blocks {
                 if crate::args::LOG_PER_GC_STATE {
-                    println!(" - candidate {:?} dead_bytes={:?}", region, dead_bytes);
+                    // println!(" - candidate {:?} dead_bytes={:?}", region, dead_bytes);
                 }
                 regions.push((region, dead_bytes));
             }

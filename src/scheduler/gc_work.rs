@@ -6,6 +6,7 @@ use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
+use crate::policy::immix::region::Region;
 use crate::policy::space::Space;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::util::metadata::side_metadata::address_to_meta_address;
@@ -760,8 +761,19 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 return false;
             } else {
                 if Line::of(e).pointer_is_valid(epoch) {
+                    // println!(
+                    //     " - {:?} is valid, epoch = {}",
+                    //     e,
+                    //     Line::of(e).currrent_validity_state()
+                    // );
                     return true;
                 }
+
+                // println!(
+                //     " - {:?} is invalid, epoch = {}",
+                //     e,
+                //     Line::of(e).currrent_validity_state()
+                // );
                 false
             }
         } else {
@@ -778,13 +790,14 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
         if !immix.immix_space.in_space(o) {
+            // println!(" - {:?} is invalid, obj {:?} not in ix space", e, o);
             return false;
         }
         // Maybe a forwarded nursery or mature object from inc processing.
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             return true;
         }
-        rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
+        rc::count(o) != 0 && Block::containing::<VM>(o).is_defrag_source()
     }
 }
 

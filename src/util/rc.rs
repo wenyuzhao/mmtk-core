@@ -2,6 +2,7 @@ use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::cset::PerRegionRemSet;
+use crate::policy::immix::region::Region;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::LazySweepingJobsCounter;
 use crate::{
@@ -322,7 +323,12 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if x {
                 edge.unlog::<VM>();
             }
-            if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
+            let in_defrag_region = self.current_pause == Pause::FinalMark
+                && self.immix().immix_space.in_space(target)
+                && Region::containing::<VM>(target).is_defrag_source_active();
+            if !target.is_null()
+                && (!self::rc_stick(target) || self.immix().in_defrag(target) || in_defrag_region)
+            {
                 self.new_incs.push(edge);
             }
         });
@@ -412,11 +418,13 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if let Ok(0) = self::inc(o) {
                 self.promote(o, false, los);
             }
+            // println!("inplace {:?}", o);
             return o;
         }
         if object_forwarding::is_forwarded::<VM>(o) {
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
             let _ = self::inc(new);
+            // println!("is_forwarded {:?} -> {:?}", o, new);
             return new;
         }
         // if self.no_evac {
@@ -440,6 +448,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             // Object is moved to a new location.
             let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
             let _ = self::inc(new);
+            // println!("state_is_forwarded_or_being_forwarded {:?} -> {:?}", o, new);
             new
         } else {
             let mature_defrag =
@@ -463,19 +472,23 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                     self::set(new, self::count(o));
                     let _ = self::inc(new);
                     object_forwarding::set_forwarding_pointer::<VM>(o, new);
+                    // println!("N {:?} ~> {:?}", o, new);
                     self::promote::<VM>(new);
                     if self.current_pause == Pause::FinalMark {
                         if self.immix().immix_space.is_marked(o) {
                             self.immix().immix_space.attempt_mark(new);
-                            EdgeIterator::<VM>::iterate(new, |e| {
-                                let t = unsafe { e.load() };
-                                PerRegionRemSet::record(e, t, &self.immix().immix_space);
-                            })
+                            // EdgeIterator::<VM>::iterate(new, |e| {
+                            //     let t = unsafe { e.load() };
+                            //     PerRegionRemSet::record(e, t, &self.immix().immix_space);
+                            // })
                         }
                         self.immix().immix_space.unmark(o);
                     }
+
+                    self.scan_nursery_object(new, false, false);
                     new
                 } else if self.no_evac {
+                    // println!("no_evac {:?} ~> {:?}", o, o);
                     // Object is not moved.
                     if let Ok(0) = self::inc(o) {
                         self.promote(o, false, los);
@@ -488,6 +501,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                         AllocationSemantics::Default,
                         copy_context,
                     );
+                    // println!("N2 {:?} ~> {:?}", o, new);
                     if crate::should_record_copy_bytes() {
                         unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
                     }
@@ -500,6 +514,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                 if let Ok(0) = self::inc(o) {
                     self.promote(o, false, los);
                 }
+                // println!("not moved {:?}", o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 o
             }
@@ -533,15 +548,16 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             Some(o) => o,
             _ => return None,
         };
-        // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
+        // println!(" - inc {:?} -> {:?} rc={}", e, o, count(o));
         o.verify();
         let new = if !crate::args::RC_NURSERY_EVACUATION || Self::DELAYED_EVACUATION {
             self.process_inc(o)
         } else {
             self.process_inc_and_evacuate(o, cc)
         };
-        if kind != EdgeKind::Root {
-            PerRegionRemSet::record(e, o, &self.immix().immix_space);
+        // println!(" + inc {:?} -> {:?} rc={}", e, new, count(new));
+        if kind != EdgeKind::Root && crate::concurrent_marking_in_progress() {
+            PerRegionRemSet::record(e, new, &self.immix().immix_space);
         }
         if new != o {
             // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));

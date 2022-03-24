@@ -334,16 +334,6 @@ impl Block {
         byte == Self::DEFRAG_SOURCE_STATE
     }
 
-    #[inline(always)]
-    pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
-        Block::containing::<VM>(o).is_defrag_source()
-    }
-
-    #[inline(always)]
-    pub fn address_in_defrag_block(a: Address) -> bool {
-        Block::from(Block::align(a)).is_defrag_source()
-    }
-
     /// Mark the block for defragmentation.
     #[inline(always)]
     pub fn set_as_defrag_source(&self, defrag: bool) {
@@ -653,12 +643,14 @@ impl Block {
         if mutator_reused_blocks {
             if self.rc_dead() {
                 space.deinit_block(*self, true);
+                // println!(" n sweep 1 {:?}", self);
                 return true;
             }
         }
         if !mutator_reused_blocks && self.rc_dead() {
             if self.attempt_dealloc(false) {
                 space.deinit_block(*self, true);
+                // println!(" n sweep 2 {:?}", self);
                 true
             } else {
                 false
@@ -730,6 +722,7 @@ impl Block {
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(*crate::args::IGNORE_REUSING_BLOCKS) {
                 space.deinit_block(*self, false);
+                // println!(" m sweep 1 {:?}", self);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {

@@ -6,13 +6,13 @@ use std::{
     },
 };
 
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 use crossbeam_queue::SegQueue;
 
 use crate::{
     plan::immix::{Immix, Pause},
     policy::space::Space,
-    scheduler::{GCWork, GCWorker, WorkBucketStage},
+    scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker, WorkBucketStage},
     util::{Address, ObjectReference},
     vm::VMBinding,
     MMTK,
@@ -30,15 +30,22 @@ static RECORD: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Default)]
 pub struct PerRegionRemSet {
-    pub gc_buffers: Vec<Vec<Address>>,
+    pub gc_buffers: Vec<Atomic<*mut Vec<Address>>>,
     pub size: AtomicUsize,
 }
 
 impl PerRegionRemSet {
     pub fn new(gc_threads: usize) -> Self {
         let mut rs = Self::default();
-        rs.gc_buffers.resize_with(gc_threads, Default::default);
+        rs.gc_buffers
+            .resize_with(gc_threads, || Atomic::new(Box::leak(box vec![])));
         rs
+    }
+
+    #[inline]
+    fn gc_buffer(&self, id: usize) -> &mut Vec<Address> {
+        let ptr = self.gc_buffers[id].load(Ordering::SeqCst);
+        unsafe { &mut *ptr }
     }
 
     #[inline]
@@ -58,8 +65,9 @@ impl PerRegionRemSet {
 
     #[inline]
     pub fn clear(&mut self) {
-        for x in &mut self.gc_buffers {
-            x.clear()
+        // println!("Clear remset@{:?}", self as *const Self);
+        for i in 0..self.gc_buffers.len() {
+            self.gc_buffer(i).clear()
         }
         if crate::args::LOG_REMSET_FOOTPRINT {
             self.size.store(0, Ordering::SeqCst);
@@ -67,22 +75,45 @@ impl PerRegionRemSet {
     }
 
     #[inline]
-    fn add<VM: VMBinding>(&mut self, e: Address, space: &ImmixSpace<VM>) {
+    fn add<VM: VMBinding>(&mut self, e: Address, t: ObjectReference, space: &ImmixSpace<VM>) {
         let v = if space.address_in_space(e) {
             Line::of(e).currrent_validity_state()
         } else {
             0
         };
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffers[id].push(Line::encode_validity_state(e, v));
+        self.gc_buffer(id).push(Line::encode_validity_state(e, v));
+        // println!(
+        //     "! record {:?} -> {:?} epoch={:?} remset@{:?} {:?} is-defrag={:?}",
+        //     e,
+        //     t,
+        //     v,
+        //     self as *const Self,
+        //     Region::containing::<VM>(t),
+        //     Region::containing::<VM>(t).is_defrag_source_active()
+        // );
+        // if Region::containing::<VM>(t).is_defrag_source_active() {
+        //     for i in 0..self.gc_buffers.len() {
+        //         println!(
+        //             " - add remset@{:?} {:?} {:?}",
+        //             self as *const Self,
+        //             i,
+        //             self.gc_buffer(i)
+        //         );
+        //     }
+        // }
         if crate::args::LOG_REMSET_FOOTPRINT {
             self.size.fetch_add(8, Ordering::SeqCst);
         }
     }
 
     #[inline]
-    pub fn record<VM: VMBinding>(e: Address, t: ObjectReference, space: &ImmixSpace<VM>) {
-        if !Self::recording() {
+    pub fn record_unconditional<VM: VMBinding>(
+        e: Address,
+        t: ObjectReference,
+        space: &ImmixSpace<VM>,
+    ) {
+        if t.is_null() {
             return;
         }
         let a = e.as_usize();
@@ -91,8 +122,40 @@ impl PerRegionRemSet {
             if Region::containing::<VM>(t).remset().is_none() {
                 println!("Invalid chunk {:?}", Chunk::containing::<VM>(t));
             }
-            Region::containing::<VM>(t).remset().unwrap().add(e, space);
+            Region::containing::<VM>(t)
+                .remset()
+                .unwrap()
+                .add(e, t, space);
         }
+    }
+
+    #[inline]
+    pub fn record<VM: VMBinding>(e: Address, t: ObjectReference, space: &ImmixSpace<VM>) {
+        if !Self::recording() {
+            return;
+        }
+        Self::record_unconditional(e, t, space)
+    }
+
+    #[inline]
+    pub fn dispatch<VM: VMBinding>(&mut self) -> Vec<Box<dyn GCWork<VM>>> {
+        // let mut buffers = vec![];
+        // std::mem::swap(&mut buffers, &mut self.gc_buffers);
+        // println!("dispatch remset@{:?}", self as *const Self);
+        // for i in 0..self.gc_buffers.len() {
+        //     println!(
+        //         " - dispatch remset@{:?} {:?} {:?}",
+        //         self as *const Self,
+        //         i,
+        //         self.gc_buffer(i)
+        //     );
+        // }
+        // TODO: Optimize this
+        (0..self.gc_buffers.len())
+            .map(|i| self.gc_buffer(i))
+            .filter(|buf| !buf.is_empty())
+            .map(|buf| box EvacuateMatureObjects::new(buf.to_vec()) as Box<dyn GCWork<VM>>)
+            .collect()
     }
 }
 
@@ -122,6 +185,26 @@ impl CollectionSet {
         } else {
             self.in_defrag.store(false, Ordering::SeqCst);
         }
+    }
+
+    pub fn schedule_mature_remset_scanning_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        // println!(
+        //     "schedule_mature_remset_scanning_packets {:?} regions",
+        //     self.regions.lock().unwrap().len()
+        // );
+        let mut x = 0;
+        for region in &*self.regions.lock().unwrap() {
+            let remset = region.remset().unwrap();
+            let packets = remset.dispatch();
+            x += packets.len();
+            if !packets.is_empty() {
+                space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
+            }
+        }
+        // println!(
+        //     "schedule_mature_remset_scanning_packets {:?} remset packets",
+        //     x
+        // );
     }
 
     // pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {

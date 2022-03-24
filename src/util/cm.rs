@@ -65,7 +65,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
 
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
+        if object.is_null() || !object.is_mapped() {
             return object;
         }
         let no_trace = crate::args::REF_COUNT && crate::util::rc::count(object) == 0;
@@ -97,7 +97,6 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         {
             self.plan.immix_space.mark_lines(object);
         }
-        let should_check_remset = !self.plan.in_defrag(object);
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
             PerRegionRemSet::record(e, t, &self.plan.immix_space);

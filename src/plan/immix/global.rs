@@ -297,7 +297,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 && crate::args::RC_MATURE_EVACUATION
                 && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
             {
-                self.immix_space.process_mature_evacuation_remset();
                 self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
                     .add(FlushMatureEvacRemsets);
             }
@@ -366,6 +365,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
         }
         if pause == Pause::FinalMark {
+            // PerRegionRemSet::disable_recording();
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START
@@ -759,12 +759,12 @@ impl<VM: VMBinding> Immix<VM> {
 
     #[inline(always)]
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
-        self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
+        self.immix_space.in_space(o) && Block::containing::<VM>(o).is_defrag_source()
     }
 
     #[inline(always)]
     pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
+        self.immix_space.address_in_space(a) && Region::of(a).is_defrag_source()
     }
 
     #[inline(always)]
