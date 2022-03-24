@@ -334,6 +334,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         for block in self.chunk.blocks() {
             let state = block.get_state();
             // Skip unallocated blocks.
+            block.clear_line_validity_states();
             if state == BlockState::Unallocated {
                 continue;
             }

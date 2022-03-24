@@ -413,14 +413,12 @@ impl Block {
             self.set_state(BlockState::Nursery);
             self.set_as_defrag_source(false);
         }
-        if !reuse {
-            self.clear_line_validity_states();
-        }
     }
 
     /// Deinitalize a block before releasing.
     #[inline]
     pub fn deinit(&self) {
+        Line::update_validity(self.lines());
         if !crate::args::HOLE_COUNTING && crate::args::REF_COUNT {
             self.reset_dead_bytes();
         }

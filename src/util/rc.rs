@@ -323,13 +323,16 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if x {
                 edge.unlog::<VM>();
             }
-            let in_defrag_region = self.current_pause == Pause::FinalMark
-                && self.immix().immix_space.in_space(target)
-                && Region::containing::<VM>(target).is_defrag_source_active();
-            if !target.is_null()
-                && (!self::rc_stick(target) || self.immix().in_defrag(target) || in_defrag_region)
-            {
+            if target.is_null() {
+                return;
+            }
+            // let in_defrag_region = self.current_pause == Pause::FinalMark
+            //     && self.immix().immix_space.in_space(target)
+            //     && Region::containing::<VM>(target).is_defrag_source_active();
+            if !self::rc_stick(target) {
                 self.new_incs.push(edge);
+            } else {
+                PerRegionRemSet::record(edge, target, &self.immix().immix_space)
             }
         });
         if self.new_incs.len() >= Self::CAPACITY {
@@ -386,9 +389,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         let b = Block::containing::<VM>(o);
         let state = b.get_state();
         // Evacuate objects in defrag blocks
-        if self.should_do_mature_evac() && b.is_defrag_source() {
-            return false;
-        }
+        // if self.should_do_mature_evac() && b.is_defrag_source() {
+        //     return true;
+        // }
         // Skip mature object
         if self::count(o) != 0 {
             return true;
@@ -451,8 +454,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             // println!("state_is_forwarded_or_being_forwarded {:?} -> {:?}", o, new);
             new
         } else {
-            let mature_defrag =
-                self.should_do_mature_evac() && Block::containing::<VM>(o).is_defrag_source();
+            let mature_defrag = false; //
+                                       // self.should_do_mature_evac() && Block::containing::<VM>(o).is_defrag_source();
             let is_nursery = self::count(o) == 0;
             if is_nursery || mature_defrag {
                 // Evacuate the object
@@ -555,8 +558,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         } else {
             self.process_inc_and_evacuate(o, cc)
         };
-        // println!(" + inc {:?} -> {:?} rc={}", e, new, count(new));
-        if kind != EdgeKind::Root && crate::concurrent_marking_in_progress() {
+        // println!(" - inc {:?} : {:?} -> {:?} rc={}", e, o, new, count(new));
+        if kind != EdgeKind::Root {
             PerRegionRemSet::record(e, new, &self.immix().immix_space);
         }
         if new != o {
@@ -687,9 +690,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     WorkBucketStage::Closure,
                     LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
                 )
-            }
-            unsafe {
-                crate::plan::immix::CURR_ROOTS.push(roots);
+            } else {
+                unsafe {
+                    crate::plan::immix::CURR_ROOTS.push(roots);
+                }
             }
         }
         // Process recursively generated buffer
