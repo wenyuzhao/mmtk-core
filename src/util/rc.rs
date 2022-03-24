@@ -289,23 +289,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn record_mature_evac_remset(&mut self, e: Address, o: ObjectReference, force: bool) {
-        if !(crate::args::RC_MATURE_EVACUATION
-            && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
-        {
-            return;
-        }
-        if force || (!self.immix().address_in_defrag(e) && self.immix().in_defrag(o)) {
-            unsafe {
-                self.worker()
-                    .local::<ImmixCopyContext<VM>>()
-                    .add_mature_evac_remset(e)
-            }
-        }
-        PerRegionRemSet::record(e, o, &self.immix().immix_space);
-    }
-
-    #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
         if los {
             let start = side_metadata::address_to_meta_address(
@@ -486,9 +469,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
                             self.immix().immix_space.attempt_mark(new);
                             EdgeIterator::<VM>::iterate(new, |e| {
                                 let t = unsafe { e.load() };
-                                if self.immix().immix_space.in_space(t) {
-                                    self.record_mature_evac_remset(e, t, true);
-                                }
+                                PerRegionRemSet::record(e, t, &self.immix().immix_space);
                             })
                         }
                         self.immix().immix_space.unmark(o);
@@ -560,7 +541,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             self.process_inc_and_evacuate(o, cc)
         };
         if kind != EdgeKind::Root {
-            self.record_mature_evac_remset(e, o, false);
+            PerRegionRemSet::record(e, o, &self.immix().immix_space);
         }
         if new != o {
             // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));

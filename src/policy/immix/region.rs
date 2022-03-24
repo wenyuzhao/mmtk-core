@@ -143,14 +143,27 @@ impl Region {
 
     #[inline(always)]
     pub fn init_remset(&self, gc_workers: usize) {
-        debug_assert!(self.remset().is_none());
+        if self.remset().is_some() {
+            return;
+        }
         let remset = Box::leak(box PerRegionRemSet::new(gc_workers));
-        side_metadata::store_atomic(
+        let ptr = remset as *const PerRegionRemSet as usize;
+        let result = side_metadata::fetch_update(
             &Self::REMSET,
             self.start(),
-            remset as *const PerRegionRemSet as usize,
             Ordering::SeqCst,
+            Ordering::SeqCst,
+            |x| {
+                if x == 0 {
+                    Some(ptr)
+                } else {
+                    None
+                }
+            },
         );
+        if result.is_err() {
+            let _boxed = unsafe { Box::from_raw(remset) };
+        }
     }
 
     #[inline(always)]
@@ -178,7 +191,6 @@ impl Region {
     #[inline(always)]
     pub fn is_defrag_source(&self) -> bool {
         self.get_state() == RegionState::DefragSource
-            || self.get_state() == RegionState::DefragSourceActive
     }
 
     #[inline(always)]

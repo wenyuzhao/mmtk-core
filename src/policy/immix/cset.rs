@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize},
-    Mutex,
+use std::{
+    intrinsics::unlikely,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Mutex,
+    },
 };
 
 use atomic::Ordering;
@@ -64,9 +67,14 @@ impl PerRegionRemSet {
     }
 
     #[inline]
-    fn add(&mut self, e: Address) {
+    fn add<VM: VMBinding>(&mut self, e: Address, space: &ImmixSpace<VM>) {
+        let v = if space.address_in_space(e) {
+            Line::of(e).currrent_validity_state()
+        } else {
+            0
+        };
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffers[id].push(e);
+        self.gc_buffers[id].push(Line::encode_validity_state(e, v));
         if crate::args::LOG_REMSET_FOOTPRINT {
             self.size.fetch_add(8, Ordering::SeqCst);
         }
@@ -77,17 +85,13 @@ impl PerRegionRemSet {
         if !Self::recording() {
             return;
         }
-        // let id = crate::gc_worker_id().unwrap();
-        // self.gc_buffers[id].push(e);
         let a = e.as_usize();
         let b = t.to_address().as_usize();
-        if ((a ^ b) >> Region::LOG_BYTES) != 0 {
-            if space.in_space(t) {
-                if Region::containing::<VM>(t).remset().is_none() {
-                    println!("Invalid chunk {:?}", Chunk::containing::<VM>(t));
-                }
-                Region::containing::<VM>(t).remset().unwrap().add(e);
+        if unlikely(((a ^ b) >> Region::LOG_BYTES) != 0 && space.in_space(t)) {
+            if Region::containing::<VM>(t).remset().is_none() {
+                println!("Invalid chunk {:?}", Chunk::containing::<VM>(t));
             }
+            Region::containing::<VM>(t).remset().unwrap().add(e, space);
         }
     }
 }
@@ -102,6 +106,10 @@ impl CollectionSet {
     pub fn enable_defrag(&self) {
         debug_assert!(!self.in_defrag.load(Ordering::SeqCst));
         self.in_defrag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn set_reigons(&self, regions: Vec<Region>) {
+        *self.regions.lock().unwrap() = regions;
     }
 
     pub fn move_to_next_region(&self) {

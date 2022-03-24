@@ -106,20 +106,6 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 .add(w);
         }
     }
-
-    #[inline(always)]
-    pub fn add_mature_evac_remset(&mut self, e: Address) {
-        let v = if self.immix.immix_space().address_in_space(e) {
-            Line::of(e).currrent_validity_state()
-        } else {
-            0
-        };
-        self.mature_evac_remset
-            .push(Line::encode_validity_state(e, v));
-        if self.mature_evac_remset.len() >= EvacuateMatureObjects::<VM>::CAPACITY {
-            self.flush_mature_evac_remset()
-        }
-    }
 }
 
 impl<VM: VMBinding> GCWorkerLocal for ImmixCopyContext<VM> {

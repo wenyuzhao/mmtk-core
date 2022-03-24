@@ -101,18 +101,6 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
             PerRegionRemSet::record(e, t, &self.plan.immix_space);
-            if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && should_check_remset
-                && self.plan.in_defrag(t)
-            {
-                unsafe {
-                    self.worker()
-                        .local::<ImmixCopyContext<VM>>()
-                        .add_mature_evac_remset(e)
-                }
-                // Region::containing::<VM>(t).remset().unwrap().add(e);
-            }
             if !t.is_null() {
                 self.next_objects.push(t);
                 if self.next_objects.len() >= Self::CAPACITY {
