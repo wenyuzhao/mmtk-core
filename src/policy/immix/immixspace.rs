@@ -301,14 +301,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let mut num_regions = 0usize;
         regions.sort_by_key(|x| x.1);
         let mut cset = vec![];
-        println!("Candidate regions: {:?}", regions.len());
         while let Some((region, dead_bytes)) = regions.pop() {
             live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
             num_regions += 1;
-            region.set_defrag_source();
             region.set_active();
             for block in region.committed_blocks() {
                 if block.get_state() != BlockState::Nursery {
+                    // println!(" ... defrag {:?} {:?}", block, block.get_state());
                     block.set_as_defrag_source(true)
                 }
             }
@@ -316,9 +315,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             side_metadata::bzero_x(&Region::EVAC_MARK, region.start(), Region::BYTES);
             if crate::args::LOG_PER_GC_STATE {
                 println!(
-                    " - Defrag {:?} live_bytes={:?}",
+                    " - Defrag {:?} live_bytes={:?} {:?}",
                     region,
-                    Region::BYTES - dead_bytes
+                    Region::BYTES - dead_bytes,
+                    region.get_state()
                 );
             }
             if live_bytes >= defrag_bytes {
@@ -454,6 +454,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         if pause == Pause::FinalMark {
             PerRegionRemSet::disable_recording();
+            self.collection_set.move_to_next_region::<VM>();
             let mut size = 0usize;
             for chunk in self.chunk_map.committed_chunks() {
                 for region in chunk.regions() {
@@ -779,15 +780,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
         if !Region::containing::<VM>(object).is_defrag_source_active() {
-            //     if self.attempt_mark(object) {
-            //         trace.process_node(object);
-            //     }
             return object;
         }
         // println!("evac trace {:?}", object);
-        // let a = self.attempt_mark(object);
-        let b = self.attempt_emark(object);
-        if b {
+        if self.attempt_mark(object) {
             // println!("evac trace {:?} marked", object);
             trace.process_node(object);
         }
@@ -825,7 +821,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             rc::set(new, rc::count(object));
             self.attempt_mark(new);
-            self.attempt_emark(new);
             self.unmark(object);
             trace.process_node(new);
             // println!("M {:?} ==> {:?} rc={}", object, new, rc::count(new));

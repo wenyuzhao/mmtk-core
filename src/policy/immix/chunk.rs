@@ -515,7 +515,6 @@ impl ConcurrentChunkMetadataZeroing {
             chunk.start(),
             Chunk::BYTES,
         );
-        side_metadata::bzero_x(&Region::MARK_TABLE, chunk.start(), Chunk::BYTES);
     }
 }
 

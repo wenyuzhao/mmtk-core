@@ -9,6 +9,13 @@ use std::{
 use atomic::{Atomic, Ordering};
 use crossbeam_queue::SegQueue;
 
+use super::{
+    block::{Block, BlockState},
+    chunk::Chunk,
+    line::Line,
+    region::Region,
+    ImmixSpace,
+};
 use crate::{
     plan::immix::{Immix, Pause},
     policy::space::Space,
@@ -17,14 +24,7 @@ use crate::{
     vm::VMBinding,
     MMTK,
 };
-
-use super::{
-    block::{Block, BlockState},
-    chunk::Chunk,
-    line::Line,
-    region::Region,
-    ImmixSpace,
-};
+use crate::{util::metadata::side_metadata, vm::ObjectModel};
 
 static RECORD: AtomicBool = AtomicBool::new(false);
 
@@ -175,15 +175,22 @@ impl CollectionSet {
         *self.regions.lock().unwrap() = regions;
     }
 
-    pub fn move_to_next_region(&self) {
-        if !self.in_defrag.load(Ordering::SeqCst) {
-            return;
-        }
-        if let Some(region) = self.regions.lock().unwrap().pop() {
-            debug_assert!(region.is_defrag_source());
-            region.set_active();
-        } else {
-            self.in_defrag.store(false, Ordering::SeqCst);
+    pub fn move_to_next_region<VM: VMBinding>(&self) {
+        // if !self.in_defrag.load(Ordering::SeqCst) {
+        //     return;
+        // }
+        // if let Some(region) = self.regions.lock().unwrap().pop() {
+        //     debug_assert!(region.is_defrag_source());
+        //     region.set_active();
+        // } else {
+        //     self.in_defrag.store(false, Ordering::SeqCst);
+        // }
+        for region in &*self.regions.lock().unwrap() {
+            side_metadata::bzero_x(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+                region.start(),
+                Region::BYTES,
+            );
         }
     }
 

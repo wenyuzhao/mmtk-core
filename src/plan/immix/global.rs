@@ -814,16 +814,6 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     #[inline(always)]
-    pub fn in_defrag(&self, o: ObjectReference) -> bool {
-        self.immix_space.in_space(o) && Block::containing::<VM>(o).is_defrag_source()
-    }
-
-    #[inline(always)]
-    pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space(a) && Block::of(a).is_defrag_source()
-    }
-
-    #[inline(always)]
     pub fn mark(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
         if self.immix_space.in_space(o) {

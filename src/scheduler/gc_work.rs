@@ -724,10 +724,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
             return false;
         }
-        // Skip edges in collection set
-        if immix.address_in_defrag(e) {
-            return false;
-        }
         if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             return true;
         }
@@ -785,7 +781,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             return true;
         }
-        rc::count(o) != 0 && Block::containing::<VM>(o).is_defrag_source()
+        rc::count(o) != 0 && Region::containing::<VM>(o).is_defrag_source_active()
     }
 }
 
