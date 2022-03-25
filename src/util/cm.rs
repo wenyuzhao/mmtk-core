@@ -222,31 +222,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 }
             }
         }
-        if crate::concurrent_marking_in_progress() {
-            GCWork::do_work(
-                &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
-                worker,
-                mmtk,
-            );
-        } else {
-            GCWork::do_work(
-                &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
-                worker,
-                mmtk,
-            );
-            // let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-            // if immix.current_pause() == Some(Pause::FinalMark) {
-            //     let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-            //     let mut w = LXRStopTheWorldProcessEdges::<E::VM>::new(edges, false, mmtk);
-            //     // GCWork::do_work(&mut w, worker, mmtk);
-            //     mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
-            // } else {
-            //     unreachable!();
-            //     let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-            //     let mut w = E::new(edges, false, mmtk);
-            //     GCWork::do_work(&mut w, worker, mmtk);
-            // }
-        }
+        GCWork::do_work(
+            &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
+            worker,
+            mmtk,
+        );
     }
 }
 
@@ -294,9 +274,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 self.pause,
             )
         } else {
-            // self.immix
-            //     .common
-            //     .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
             object
         };
         if self.roots {

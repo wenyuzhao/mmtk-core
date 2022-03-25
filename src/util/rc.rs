@@ -387,18 +387,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         if los {
             return true;
         }
-        let b = Block::containing::<VM>(o);
-        let state = b.get_state();
-        // Evacuate objects in defrag blocks
-        // if self.should_do_mature_evac() && b.is_defrag_source() {
-        //     return true;
-        // }
         // Skip mature object
         if self::count(o) != 0 {
             return true;
         }
         // Skip recycled lines
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && state == BlockState::Reusing {
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+            && Block::containing::<VM>(o).get_state() == BlockState::Reusing
+        {
             return true;
         }
         false
@@ -431,22 +427,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             // println!("is_forwarded {:?} -> {:?}", o, new);
             return new;
         }
-        // if self.no_evac {
-        //     let mature_defrag =
-        //         self.should_do_mature_evac() && Block::containing::<VM>(o).is_defrag_source();
-        //     if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
-        //         let forwarding_status = object_forwarding::get_forwarding_status::<VM>(o);
-        //         let new =
-        //             object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-        //         let _ = self::inc(new);
-        //         return new;
-        //     } else {
-        //         if let Ok(0) = self::inc(o) {
-        //             self.promote(o, false, los);
-        //         }
-        //         return o;
-        //     }
-        // }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
@@ -455,44 +435,10 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             // println!("state_is_forwarded_or_being_forwarded {:?} -> {:?}", o, new);
             new
         } else {
-            let mature_defrag = false; //
-                                       // self.should_do_mature_evac() && Block::containing::<VM>(o).is_defrag_source();
             let is_nursery = self::count(o) == 0;
-            if is_nursery || mature_defrag {
+            if is_nursery {
                 // Evacuate the object
-                if !is_nursery && mature_defrag {
-                    debug_assert!(
-                        self.current_pause == Pause::FullTraceFast
-                            || self.current_pause == Pause::FinalMark
-                    );
-                    let new = object_forwarding::copy_object::<VM, _>(
-                        o,
-                        AllocationSemantics::Default,
-                        copy_context,
-                    );
-                    if crate::should_record_copy_bytes() {
-                        unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
-                    }
-                    self::set(new, self::count(o));
-                    let _ = self::inc(new);
-                    object_forwarding::set_forwarding_pointer::<VM>(o, new);
-                    // println!("N {:?} ~> {:?}", o, new);
-                    self::promote::<VM>(new);
-                    if self.current_pause == Pause::FinalMark {
-                        if self.immix().immix_space.is_marked(o) {
-                            self.immix().immix_space.attempt_mark(new);
-                            // EdgeIterator::<VM>::iterate(new, |e| {
-                            //     let t = unsafe { e.load() };
-                            //     PerRegionRemSet::record(e, t, &self.immix().immix_space);
-                            // })
-                        }
-                        self.immix().immix_space.unmark(o);
-                    }
-
-                    self.scan_nursery_object(new, false, false);
-                    new
-                } else if self.no_evac {
-                    // println!("no_evac {:?} ~> {:?}", o, o);
+                if self.no_evac {
                     // Object is not moved.
                     if let Ok(0) = self::inc(o) {
                         self.promote(o, false, los);
