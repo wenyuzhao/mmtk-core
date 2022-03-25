@@ -284,7 +284,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-            // println!("incmark {:?}", o);
             self.immix().mark2(o, los);
         }
         self.scan_nursery_object(o, los, !copied);
@@ -327,9 +326,6 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if target.is_null() {
                 return;
             }
-            // let in_defrag_region = self.current_pause == Pause::FinalMark
-            //     && self.immix().immix_space.in_space(target)
-            //     && Region::containing::<VM>(target).is_defrag_source_active();
             if !self::rc_stick(target) {
                 self.new_incs.push(edge);
             } else {

@@ -405,7 +405,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
         }
         if pause == Pause::FinalMark {
-            // PerRegionRemSet::disable_recording();
             crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START

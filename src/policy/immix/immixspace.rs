@@ -71,8 +71,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     defrag_chunk_cursor: AtomicUsize,
     fragmented_regions: SegQueue<Vec<(Region, usize)>>,
     fragmented_regions_size: AtomicUsize,
-    // pub fragmented_regions: SegQueue<Vec<(Region, usize)>>,
-    // pub fragmented_regions_size: AtomicUsize,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub collection_set: CollectionSet,
@@ -349,14 +347,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
-        // if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-        //     self.collection_set.enable_defrag();
-        //     if pause == Pause::FinalMark {
-        //         self.collection_set.move_to_next_region();
-        //     }
-        // } else {
-        //     self.collection_set.move_to_next_region();
-        // }
         let num_workers = self.scheduler().worker_group().worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
@@ -478,7 +468,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     crate::PEAK_REMSET_FOOTPRINT.store(size, Ordering::SeqCst);
                 }
             }
-            // println!("RemSet {:?} bytes", size);
         }
     }
 
@@ -504,11 +493,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             if block.rc_sweep_mature::<VM>(self, true) {
                                 queue.push(block.start()).unwrap();
                             } else {
-                                // unreachable!("block still alive")
+                                unreachable!("block still alive")
                             }
                         }
-                        // assert!(!block.is_defrag_source());
-                        // assert_eq!(block.get_state(), BlockState::Unallocated);
                     }
                     region.set_state(RegionState::Allocated);
                 }
@@ -652,7 +639,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Trace and mark objects without evacuation.
     #[inline(always)]
     pub fn process_mature_evacuation_remset(&self) {
-        // println!("process_mature_evacuation_remset");
         self.collection_set
             .schedule_mature_remset_scanning_packets(self);
     }
@@ -821,7 +807,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =
                 ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
-            // println!("M {:?} ~> {:?} rc={}", object, new, rc::count(new));
             new
         } else {
             // Evacuate the mature object
@@ -885,7 +870,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 break;
             }
         }
-        // println!("mark {:?}", object);
         true
     }
 

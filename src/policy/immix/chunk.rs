@@ -338,7 +338,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             if state == BlockState::Unallocated {
                 continue;
             }
-            block.clear_line_validity_states();
             // FIXME: Don't need this when doing RC
             if crate::args::BARRIER_MEASUREMENT
                 || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)
@@ -425,7 +424,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline(always)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
-        // println!(" - dead2 {:?}", o);
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();

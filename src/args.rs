@@ -166,6 +166,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_mature_evacuation");
     dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
     dump_feature!("lxr_delayed_nursery_evacuation");
+    dump_feature!("log_remset_footprint");
 
     dump_feature!(
         "disable_mutator_line_reusing",
