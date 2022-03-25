@@ -561,11 +561,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool) {
         debug_assert!(!crate::args::REF_COUNT);
-        self.deinit_block(block, nursery);
+        self.deinit_block(block, nursery, false);
         self.pr.release_pages(block.start());
     }
 
-    pub fn deinit_block(&self, block: Block, nursery: bool) {
+    pub fn deinit_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
         // println!(
         //     "Release {:?} nursery={} defrag={}",
         //     block,
@@ -578,9 +578,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
-        if crate::args::BARRIER_MEASUREMENT
-            || (!(crate::args::RC_NURSERY_EVACUATION && nursery) && self.common().needs_log_bit)
-        {
+        if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
             block.clear_log_table::<VM>();
         }
         self.num_clean_blocks_released

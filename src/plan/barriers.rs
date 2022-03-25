@@ -310,6 +310,12 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn slow(&mut self, _src: ObjectReference, edge: Address, old: ObjectReference) {
+        #[cfg(feature = "sanity")]
+        assert!(
+            !_src.is_null() && rc::count(_src) != 0,
+            "zero rc count {:?}",
+            _src
+        );
         // Concurrent Marking
         if !crate::args::REF_COUNT
             && crate::args::CONCURRENT_MARKING
@@ -471,6 +477,9 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 //     }
                 // }
 
+                if dst.is_null() {
+                    return;
+                }
                 let dst_base = dst.to_address() + dst_offset;
                 for i in 0..len {
                     self.enqueue_node(dst, dst_base + (i << 3), None);
