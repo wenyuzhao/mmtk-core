@@ -317,11 +317,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             cset.push(region);
             side_metadata::bzero_x(&Region::EVAC_MARK, region.start(), Region::BYTES);
             if crate::args::LOG_PER_GC_STATE {
-                // println!(
-                //     " - Defrag {:?} live_bytes={:?}",
-                //     region,
-                //     Region::BYTES - dead_bytes
-                // );
+                println!(
+                    " - Defrag {:?} live_bytes={:?}",
+                    region,
+                    Region::BYTES - dead_bytes
+                );
             }
             if live_bytes >= defrag_bytes {
                 break;
@@ -791,13 +791,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         mut object: ObjectReference,
         _pause: Pause,
     ) -> ObjectReference {
-        assert!(!ForwardingWord::is_forwarded::<VM>(object));
+        if ForwardingWord::is_forwarded::<VM>(object) {
+            object = ForwardingWord::read_forwarding_pointer::<VM>(object);
+        }
         if !Region::containing::<VM>(object).is_defrag_source_active() {
+            //     if self.attempt_mark(object) {
+            //         trace.process_node(object);
+            //     }
             return object;
         }
-        let a = self.attempt_mark(object);
+        // println!("evac trace {:?}", object);
+        // let a = self.attempt_mark(object);
         let b = self.attempt_emark(object);
-        if a || b {
+        if b {
+            // println!("evac trace {:?} marked", object);
             trace.process_node(object);
         }
         object
@@ -816,6 +823,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =
                 ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
+            // println!("M {:?} ~> {:?} rc={}", object, new, rc::count(new));
             new
         } else {
             // Evacuate the mature object
@@ -837,7 +845,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.attempt_emark(new);
             self.unmark(object);
             trace.process_node(new);
-            // println!("M {:?} ~> {:?} rc={}", object, new, rc::count(new));
+            // println!("M {:?} ==> {:?} rc={}", object, new, rc::count(new));
             new
         }
     }
@@ -879,6 +887,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 break;
             }
         }
+        // println!("mark {:?}", object);
         true
     }
 

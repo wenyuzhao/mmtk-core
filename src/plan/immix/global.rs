@@ -764,7 +764,7 @@ impl<VM: VMBinding> Immix<VM> {
 
     #[inline(always)]
     pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space(a) && Region::of(a).is_defrag_source()
+        self.immix_space.address_in_space(a) && Block::of(a).is_defrag_source()
     }
 
     #[inline(always)]

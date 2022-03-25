@@ -258,7 +258,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 if copy && block.is_defrag_source() {
                     continue;
                 }
-                if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
+                if crate::args::RC_MATURE_EVACUATION
+                    && (block.is_defrag_source() || block.region().is_defrag_source_active())
+                {
                     continue;
                 }
                 if crate::args::REF_COUNT {

@@ -425,6 +425,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     #[inline(always)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
+        // println!(" - dead2 {:?}", o);
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -516,6 +517,7 @@ impl ConcurrentChunkMetadataZeroing {
             chunk.start(),
             Chunk::BYTES,
         );
+        side_metadata::bzero_x(&Region::MARK_TABLE, chunk.start(), Chunk::BYTES);
     }
 }
 

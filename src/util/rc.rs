@@ -284,6 +284,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
+            // println!("incmark {:?}", o);
             self.immix().mark2(o, los);
         }
         self.scan_nursery_object(o, los, !copied);
@@ -558,7 +559,24 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         } else {
             self.process_inc_and_evacuate(o, cc)
         };
-        // println!(" - inc {:?} : {:?} -> {:?} rc={}", e, o, new, count(new));
+        // if o == new {
+        //     println!(
+        //         " - inc {:?} : {:?} rc={} live={}",
+        //         e,
+        //         o,
+        //         count(new),
+        //         new.is_live()
+        //     );
+        // } else {
+        //     println!(
+        //         " - inc {:?} : {:?} -> {:?} rc={} live={}",
+        //         e,
+        //         o,
+        //         new,
+        //         count(new),
+        //         new.is_live()
+        //     );
+        // }
         if kind != EdgeKind::Root {
             PerRegionRemSet::record(e, new, &self.immix().immix_space);
         }
@@ -684,6 +702,15 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .scheduler()
                     .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
+            // if crate::concurrent_marking_in_progress() || self.current_pause == Pause::FinalMark {
+            //     // let w = unsafe { &mut (worker as *mut GCWorker<VM>) };
+            //     // w.do_work();
+            //     GCWork::do_work(
+            //         &mut ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk),
+            //         self.worker(),
+            //         mmtk,
+            //     )
+            // }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
                 worker.add_work(
@@ -807,12 +834,13 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         let not_marked = immix.mark(o);
-        // println!(" - dead {:?}", o);
+        // println!(" - dead {:?}", o.range::<VM>());
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         EdgeIterator::<VM>::iterate(o, |edge| {
             let x = unsafe { edge.load::<ObjectReference>() };
             if !x.is_null() {
+                // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);
                 let rc = self::count(x);
                 if rc != MAX_REF_COUNT && rc != 0 {
                     self.recursive_dec(x);
@@ -885,6 +913,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let mut decs = vec![];
         std::mem::swap(&mut decs, &mut self.decs);
+        // println!("DECS {:?}", decs);
         self.process_decs(&decs, immix);
         while !self.new_decs.is_empty() {
             decs.clear();

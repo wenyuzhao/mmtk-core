@@ -99,6 +99,7 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         }
         EdgeIterator::<VM>::iterate(object, |e| {
             let t = unsafe { e.load() };
+            // println!("mk {:?}.{:?} -> {:?}", object, e, t);
             PerRegionRemSet::record(e, t, &self.plan.immix_space);
             if !t.is_null() {
                 self.next_objects.push(t);
@@ -206,6 +207,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+        // println!("ProcessModBufSATB");
         if self.edges.is_empty() && self.nodes.is_empty() {
             return;
         }
@@ -227,16 +229,23 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 mmtk,
             );
         } else {
-            let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-            if immix.current_pause() == Some(Pause::FinalMark) {
-                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = LXRStopTheWorldProcessEdges::<E::VM>::new(edges, false, mmtk);
-                GCWork::do_work(&mut w, worker, mmtk);
-            } else {
-                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = E::new(edges, false, mmtk);
-                GCWork::do_work(&mut w, worker, mmtk);
-            }
+            GCWork::do_work(
+                &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
+                worker,
+                mmtk,
+            );
+            // let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
+            // if immix.current_pause() == Some(Pause::FinalMark) {
+            //     let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+            //     let mut w = LXRStopTheWorldProcessEdges::<E::VM>::new(edges, false, mmtk);
+            //     // GCWork::do_work(&mut w, worker, mmtk);
+            //     mmtk.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].add(w);
+            // } else {
+            //     unreachable!();
+            //     let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
+            //     let mut w = E::new(edges, false, mmtk);
+            //     GCWork::do_work(&mut w, worker, mmtk);
+            // }
         }
     }
 }
@@ -300,6 +309,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     fn process_edges(&mut self) {
         self.pause = self.immix.current_pause().unwrap();
         for i in 0..self.edges.len() {
+            // println!("evac {:?} -> {:?}", self.edges[i], unsafe {
+            //     if self.edges[i].is_zero() {
+            //         ObjectReference::NULL
+            //     } else {
+            //         self.edges[i].load::<ObjectReference>()
+            //     }
+            // });
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
         self.flush();
