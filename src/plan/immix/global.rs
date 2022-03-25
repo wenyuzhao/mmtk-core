@@ -259,6 +259,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if true {
             unreachable!();
         }
+        if crate::inside_harness() && !crate::LazySweepingJobs::all_finished() {
+            crate::PAUSES
+                .gc_with_unfinished_lazy_jobs
+                .fetch_add(1, Ordering::Relaxed);
+        }
         let pause = self.select_collection_kind(
             self.base()
                 .control_collector_context

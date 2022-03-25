@@ -290,6 +290,7 @@ struct Pauses {
     pub total_used_pages: AtomicUsize,
     pub min_used_pages: AtomicUsize,
     pub max_used_pages: AtomicUsize,
+    pub gc_with_unfinished_lazy_jobs: AtomicUsize,
 }
 
 impl Pauses {
@@ -300,6 +301,7 @@ impl Pauses {
         print!("gc.full\t");
         print!("gc.emergency\t");
         print!("cm_early_quit\t");
+        print!("gc_with_unfinished_lazy_jobs\t");
         if cfg!(feature = "yield_and_roots_timer") {
             print!("time.yield\t");
             print!("time.roots\t");
@@ -318,6 +320,10 @@ impl Pauses {
         print!("{}\t", self.full.load(Ordering::SeqCst));
         print!("{}\t", self.emergency.load(Ordering::SeqCst));
         print!("{}\t", self.cm_early_quit.load(Ordering::SeqCst));
+        print!(
+            "{}\t",
+            self.gc_with_unfinished_lazy_jobs.load(Ordering::SeqCst)
+        );
         if cfg!(feature = "yield_and_roots_timer") {
             print!(
                 "{}\t",
@@ -353,6 +359,7 @@ static PAUSES: Pauses = Pauses {
     total_used_pages: AtomicUsize::new(0),
     min_used_pages: AtomicUsize::new(usize::MAX),
     max_used_pages: AtomicUsize::new(0),
+    gc_with_unfinished_lazy_jobs: AtomicUsize::new(0),
 };
 
 #[derive(Default)]
@@ -386,7 +393,7 @@ struct GCStat {
     pub dead_mature_tracing_stuck_volume: usize,
     pub dead_mature_tracing_stuck_los_objects: usize,
     pub dead_mature_tracing_stuck_los_volume: usize,
-    // Inc coubnters
+    // Inc counters
     pub inc_objects: usize,
     pub inc_volume: usize,
 }
