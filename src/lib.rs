@@ -288,6 +288,10 @@ struct Pauses {
     pub yield_nanos: Atomic<u128>,
     pub roots_nanos: Atomic<u128>,
     pub satb_nanos: Atomic<u128>,
+    pub total_used_pages: AtomicUsize,
+    pub min_used_pages: AtomicUsize,
+    pub max_used_pages: AtomicUsize,
+    pub gc_with_unfinished_lazy_jobs: AtomicUsize,
 }
 
 impl Pauses {
@@ -298,6 +302,7 @@ impl Pauses {
         print!("gc.full\t");
         print!("gc.emergency\t");
         print!("cm_early_quit\t");
+        print!("gc_with_unfinished_lazy_jobs\t");
         if cfg!(feature = "yield_and_roots_timer") {
             print!("time.yield\t");
             print!("time.roots\t");
@@ -305,6 +310,9 @@ impl Pauses {
         if cfg!(feature = "satb_timer") {
             print!("time.satb\t");
         }
+        print!("total_used_pages\t");
+        print!("min_used_pages\t");
+        print!("max_used_pages\t");
     }
     pub fn print_values(&self) {
         print!("{}\t", self.rc.load(Ordering::SeqCst));
@@ -313,6 +321,10 @@ impl Pauses {
         print!("{}\t", self.full.load(Ordering::SeqCst));
         print!("{}\t", self.emergency.load(Ordering::SeqCst));
         print!("{}\t", self.cm_early_quit.load(Ordering::SeqCst));
+        print!(
+            "{}\t",
+            self.gc_with_unfinished_lazy_jobs.load(Ordering::SeqCst)
+        );
         if cfg!(feature = "yield_and_roots_timer") {
             print!(
                 "{}\t",
@@ -329,6 +341,9 @@ impl Pauses {
                 self.satb_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
             );
         }
+        print!("{}\t", self.total_used_pages.load(Ordering::SeqCst));
+        print!("{}\t", self.min_used_pages.load(Ordering::SeqCst));
+        print!("{}\t", self.max_used_pages.load(Ordering::SeqCst));
     }
 }
 
@@ -342,6 +357,10 @@ static PAUSES: Pauses = Pauses {
     yield_nanos: Atomic::new(0),
     roots_nanos: Atomic::new(0),
     satb_nanos: Atomic::new(0),
+    total_used_pages: AtomicUsize::new(0),
+    min_used_pages: AtomicUsize::new(usize::MAX),
+    max_used_pages: AtomicUsize::new(0),
+    gc_with_unfinished_lazy_jobs: AtomicUsize::new(0),
 };
 
 #[derive(Default)]
@@ -375,7 +394,7 @@ struct GCStat {
     pub dead_mature_tracing_stuck_volume: usize,
     pub dead_mature_tracing_stuck_los_objects: usize,
     pub dead_mature_tracing_stuck_los_volume: usize,
-    // Inc coubnters
+    // Inc counters
     pub inc_objects: usize,
     pub inc_volume: usize,
 }

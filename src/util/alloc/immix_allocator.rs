@@ -314,12 +314,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: isize) -> Address {
         match self.immix_space().get_clean_block(self.tls, self.copy) {
             None => {
-                if !self.immix_space().reusable_blocks_drained() {
-                    self.request_for_large = false;
-                    self.alloc(size, align, offset)
-                } else {
-                    Address::ZERO
-                }
+                // if !self.immix_space().reusable_blocks_drained() {
+                //     self.request_for_large = false;
+                //     self.alloc(size, align, offset)
+                // } else {
+                //     Address::ZERO
+                // }
+                Address::ZERO
             }
             Some(block) => {
                 trace!("{:?}: Acquired a new block {:?}", self.tls, block);

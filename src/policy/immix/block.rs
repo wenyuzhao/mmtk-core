@@ -396,6 +396,12 @@ impl Block {
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, _space: &ImmixSpace<VM>) {
+        #[cfg(feature = "sanity")]
+        if !copy && !reuse {
+            self.assert_log_table_cleared::<VM>(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+            );
+        }
         if !copy && reuse {
             self.set_state(BlockState::Reusing);
             debug_assert!(!self.is_defrag_source());
@@ -504,7 +510,7 @@ impl Block {
 
     #[inline(always)]
     pub fn assert_log_table_cleared<VM: VMBinding>(&self, meta: &SideMetadataSpec) {
-        assert!(cfg!(debug_assertions));
+        assert!(cfg!(debug_assertions) || cfg!(feature = "sanity"));
         let start = address_to_meta_address(meta, self.start()).to_ptr::<u128>();
         let limit = address_to_meta_address(meta, self.end()).to_ptr::<u128>();
         let table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
@@ -640,15 +646,13 @@ impl Block {
         debug_assert!(crate::args::REF_COUNT);
         if mutator_reused_blocks {
             if self.rc_dead() {
-                space.deinit_block(*self, true);
-                // println!(" n sweep 1 {:?}", self);
+                space.deinit_block(*self, true, true);
                 return true;
             }
         }
         if !mutator_reused_blocks && self.rc_dead() {
             if self.attempt_dealloc(false) {
-                space.deinit_block(*self, true);
-                // println!(" n sweep 2 {:?}", self);
+                space.deinit_block(*self, true, false);
                 true
             } else {
                 false
@@ -719,8 +723,7 @@ impl Block {
         }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(*crate::args::IGNORE_REUSING_BLOCKS) {
-                space.deinit_block(*self, false);
-                // println!(" m sweep 1 {:?}", self);
+                space.deinit_block(*self, false, true);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {
