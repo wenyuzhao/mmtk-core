@@ -230,24 +230,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
                 }
             }
         }
-        if crate::concurrent_marking_in_progress() {
-            GCWork::do_work(
-                &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
-                worker,
-                mmtk,
-            );
-        } else {
-            let immix = mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap();
-            if immix.current_pause() == Some(Pause::FinalMark) {
-                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = LXRStopTheWorldProcessEdges::<E::VM>::new(edges, false, mmtk);
-                GCWork::do_work(&mut w, worker, mmtk);
-            } else {
-                let edges = self.nodes.iter().map(|e| Address::from_ptr(e)).collect();
-                let mut w = E::new(edges, false, mmtk);
-                GCWork::do_work(&mut w, worker, mmtk);
-            }
-        }
+        GCWork::do_work(
+            &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
+            worker,
+            mmtk,
+        );
     }
 }
 
@@ -255,6 +242,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     immix: &'static Immix<VM>,
     pause: Pause,
     base: ProcessEdgesBase<Self>,
+    forwarded_roots: Vec<ObjectReference>,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
@@ -268,6 +256,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             immix,
             base,
             pause: Pause::RefCount,
+            forwarded_roots: vec![],
         }
     }
 
@@ -285,7 +274,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        if self.immix.immix_space.in_space(object) {
+        let x = if self.immix.immix_space.in_space(object) {
             self.immix.immix_space.rc_trace_object(
                 self,
                 object,
@@ -293,10 +282,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 self.pause,
             )
         } else {
-            self.immix
-                .common
-                .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
+            object
+        };
+        if self.roots {
+            self.forwarded_roots.push(x)
         }
+        x
     }
 
     #[inline]
@@ -306,6 +297,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
         self.flush();
+        if self.roots {
+            let mut roots = vec![];
+            std::mem::swap(&mut roots, &mut self.forwarded_roots);
+            unsafe {
+                crate::plan::immix::CURR_ROOTS.push(roots);
+            }
+        }
     }
 }
 

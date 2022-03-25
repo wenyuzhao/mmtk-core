@@ -743,15 +743,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn trace_mark_rc_mature_object(
         &self,
-        trace: &mut impl TransitiveClosure,
+        _trace: &mut impl TransitiveClosure,
         mut object: ObjectReference,
         _pause: Pause,
     ) -> ObjectReference {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
-        }
-        if self.attempt_mark(object) {
-            trace.process_node(object);
         }
         object
     }
@@ -769,9 +766,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =
                 ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
-            if self.attempt_mark(new) {
-                trace.process_node(new)
-            }
             new
         } else {
             // Evacuate the mature object

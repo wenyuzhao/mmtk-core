@@ -395,7 +395,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 } else {
                     nodes = self.decs.clone();
                 }
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
                     .add(ProcessModBufSATB::<E>::new(edges, nodes));
             }
         }
