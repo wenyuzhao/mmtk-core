@@ -56,7 +56,7 @@ pub struct Immix<VM: VMBinding> {
     previous_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
     last_gc_was_defrag: AtomicBool,
-    nursery_blocks: usize,
+    nursery_blocks: Option<usize>,
     inc_buffer_limit: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
@@ -109,6 +109,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             }
             return true;
         }
+        if crate::args::LXR_RC_ONLY {
+            let inc_overflow = self
+                .inc_buffer_limit
+                .map(|x| rc::inc_buffer_size() >= x)
+                .unwrap_or(false);
+            let alloc_overflow = self
+                .nursery_blocks
+                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                .unwrap_or(false);
+            if alloc_overflow || inc_overflow {
+                return true;
+            }
+        }
         // inc limits
         if !crate::args::LXR_RC_ONLY
             && crate::args::HEAP_HEALTH_GUIDED_GC
@@ -136,7 +149,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(crate::concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
-            && (self.immix_space.block_allocation.nursery_blocks() >= self.nursery_blocks
+            && (self
+                .nursery_blocks
+                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                .unwrap_or(false)
                 || self
                     .inc_buffer_limit
                     .map(|x| rc::inc_buffer_size() >= x)
@@ -164,6 +180,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
+        if crate::args::LXR_RC_ONLY {
+            return true;
+        }
         let x = self.previous_pause.load(Ordering::SeqCst);
         x == Some(Pause::FullTraceFast) || x == Some(Pause::FullTraceDefrag)
     }
@@ -211,7 +230,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
             let total_blocks = heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
-            self.nursery_blocks = nursery_blocks;
+            self.nursery_blocks = Some(nursery_blocks);
         }
         if let Some(inc_buffer_limit) = *crate::args::INC_BUFFER_LIMIT {
             self.inc_buffer_limit = Some(inc_buffer_limit);
@@ -462,7 +481,7 @@ impl<VM: VMBinding> Immix<VM> {
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
-            nursery_blocks: *crate::args::NURSERY_BLOCKS.as_ref().unwrap(),
+            nursery_blocks: *crate::args::NURSERY_BLOCKS,
             inc_buffer_limit: None,
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
