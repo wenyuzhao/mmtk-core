@@ -37,7 +37,7 @@ use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorke
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
@@ -61,6 +61,7 @@ pub struct Immix<VM: VMBinding> {
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
     zeroing_packets_scheduled: AtomicBool,
+    next_gc_selected: (Mutex<bool>, Condvar),
 }
 
 pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
@@ -98,9 +99,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         // Don't do a GC until we finished the lazy reclaimation.
-        if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
-            return false;
-        }
+        // if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
+        //     return false;
+        // }
         // Spaces or heap full
         if self.base().collection_required(self, space_full, space) {
             if !crate::args::HEAP_HEALTH_GUIDED_GC {
@@ -486,6 +487,7 @@ impl<VM: VMBinding> Immix<VM> {
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
             zeroing_packets_scheduled: AtomicBool::new(false),
+            next_gc_selected: (Mutex::new(true), Condvar::new()),
         };
 
         {
@@ -502,7 +504,14 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn decide_next_gc_may_perform_cycle_collection(&self) {
+        let (lock, cvar) = &self.next_gc_selected;
+        let notify = || {
+            let mut gc_selection_done = lock.lock().unwrap();
+            *gc_selection_done = true;
+            cvar.notify_one();
+        };
         if !crate::args::HEAP_HEALTH_GUIDED_GC {
+            notify();
             return;
         }
         let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
@@ -528,9 +537,18 @@ impl<VM: VMBinding> Immix<VM> {
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);
         }
+        notify();
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
+        {
+            let (lock, cvar) = &self.next_gc_selected;
+            let mut gc_selection_done = lock.lock().unwrap();
+            while !*gc_selection_done {
+                gc_selection_done = cvar.wait(gc_selection_done).unwrap();
+            }
+            *gc_selection_done = false;
+        }
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
