@@ -225,6 +225,21 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         me.get_pages_reserved() / 256
                     );
                 }
+                if crate::inside_harness() {
+                    let x = me.get_pages_reserved();
+                    crate::PAUSES.total_used_pages.store(
+                        crate::PAUSES.total_used_pages.load(Ordering::Relaxed) + x,
+                        Ordering::Relaxed,
+                    );
+                    let min = crate::PAUSES.min_used_pages.load(Ordering::Relaxed);
+                    if min > x {
+                        crate::PAUSES.min_used_pages.store(x, Ordering::Relaxed);
+                    }
+                    let max = crate::PAUSES.max_used_pages.load(Ordering::Relaxed);
+                    if max < x {
+                        crate::PAUSES.max_used_pages.store(x, Ordering::Relaxed);
+                    }
+                }
                 me.decide_next_gc_may_perform_cycle_collection();
             });
         }

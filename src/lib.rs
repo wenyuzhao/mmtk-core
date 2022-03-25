@@ -287,6 +287,9 @@ struct Pauses {
     pub yield_nanos: Atomic<u128>,
     pub roots_nanos: Atomic<u128>,
     pub satb_nanos: Atomic<u128>,
+    pub total_used_pages: AtomicUsize,
+    pub min_used_pages: AtomicUsize,
+    pub max_used_pages: AtomicUsize,
 }
 
 impl Pauses {
@@ -304,6 +307,9 @@ impl Pauses {
         if cfg!(feature = "satb_timer") {
             print!("time.satb\t");
         }
+        print!("total_used_pages\t");
+        print!("min_used_pages\t");
+        print!("max_used_pages\t");
     }
     pub fn print_values(&self) {
         print!("{}\t", self.rc.load(Ordering::SeqCst));
@@ -328,6 +334,9 @@ impl Pauses {
                 self.satb_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
             );
         }
+        print!("{}\t", self.total_used_pages.load(Ordering::SeqCst));
+        print!("{}\t", self.min_used_pages.load(Ordering::SeqCst));
+        print!("{}\t", self.max_used_pages.load(Ordering::SeqCst));
     }
 }
 
@@ -341,6 +350,9 @@ static PAUSES: Pauses = Pauses {
     yield_nanos: Atomic::new(0),
     roots_nanos: Atomic::new(0),
     satb_nanos: Atomic::new(0),
+    total_used_pages: AtomicUsize::new(0),
+    min_used_pages: AtomicUsize::new(usize::MAX),
+    max_used_pages: AtomicUsize::new(0),
 };
 
 #[derive(Default)]
