@@ -46,6 +46,8 @@ use spin::Lazy;
 
 pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 
+static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
 pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
     pub common: CommonPlan<VM>,
@@ -121,6 +123,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .unwrap_or(false);
             if alloc_overflow || inc_overflow {
                 return true;
+            }
+
+            if crate::args::ENABLE_INITIAL_ALLOC_LIMIT
+                && !INITIAL_GC_TRIGGERED.load(Ordering::SeqCst)
+            {
+                if self.immix_space.block_allocation.nursery_blocks() >= 1024 {
+                    return true;
+                }
             }
         }
         // inc limits
@@ -611,6 +621,9 @@ impl<VM: VMBinding> Immix<VM> {
 
     #[allow(clippy::collapsible_else_if)]
     fn select_collection_kind(&self, concurrent: bool) -> Pause {
+        if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
+            INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
+        }
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         let in_defrag = self.immix_space.decide_whether_to_defrag(
