@@ -1,6 +1,7 @@
 use atomic::Ordering;
 
 use super::block::Block;
+use super::cset::PerRegionRemSet;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
@@ -155,20 +156,20 @@ impl Line {
 
     #[inline(always)]
     pub fn update_validity(lines: Range<Line>) {
-        for line in lines {
-            let _ = side_metadata::fetch_update(
+        if !PerRegionRemSet::recording() {
+            side_metadata::bzero_x(
                 &Self::VALIDITY_STATE,
-                line.start(),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                |v| {
-                    if v == 255 {
-                        unimplemented!()
-                    } else {
-                        Some(v + 1)
-                    }
-                },
+                lines.start.start(),
+                lines.end.start() - lines.start.start(),
             );
+            return;
+        }
+        for line in lines {
+            unsafe {
+                let old = side_metadata::load(&Self::VALIDITY_STATE, line.start());
+                assert_ne!(old, 255);
+                side_metadata::store(&Self::VALIDITY_STATE, line.start(), old + 1);
+            }
         }
     }
 
