@@ -263,8 +263,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
 
     /// Trace  and evacuate objects.
     #[inline(always)]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
+    fn trace_object(&mut self, mut object: ObjectReference) -> ObjectReference {
+        if object.is_null() || !object.to_address().is_mapped() {
             return object;
         }
         // NOTE: For defrag regions, we zero it's mark table before evacuation. The closure blindly traverses
@@ -294,6 +294,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
+        if !slot.is_mapped() {
+            return;
+        }
         let object = unsafe { slot.load::<ObjectReference>() };
         let new_object = self.trace_object(object);
         PerRegionRemSet::record(slot, new_object, &self.immix.immix_space);
