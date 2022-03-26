@@ -444,16 +444,6 @@ impl Block {
         Line::from(self.start())..Line::from(self.end())
     }
 
-    // #[inline(always)]
-    // pub fn clear_mark_table(&self) {
-    //     side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
-    // }
-
-    #[inline(always)]
-    pub fn clear_line_validity_states(&self) {
-        side_metadata::bzero_x(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
-    }
-
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
         side_metadata::bzero_x(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
