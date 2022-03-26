@@ -156,19 +156,11 @@ impl Line {
     #[inline(always)]
     pub fn update_validity(lines: Range<Line>) {
         for line in lines {
-            let _ = side_metadata::fetch_update(
-                &Self::VALIDITY_STATE,
-                line.start(),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-                |v| {
-                    if v == 255 {
-                        unimplemented!()
-                    } else {
-                        Some(v + 1)
-                    }
-                },
-            );
+            unsafe {
+                let old = side_metadata::load(&Self::VALIDITY_STATE, line.start());
+                assert_ne!(old, 255);
+                side_metadata::store(&Self::VALIDITY_STATE, line.start(), old + 1);
+            }
         }
     }
 
