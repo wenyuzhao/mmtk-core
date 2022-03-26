@@ -772,6 +772,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     #[inline]
     fn process_edge(&mut self, e: Address, epoch: u8, immix: &Immix<VM>) -> bool {
+        debug_assert!(e.is_mapped());
         // Skip edges that does not contain a real oop
         if !self.address_is_valid_oop_edge(e, epoch, immix) {
             return false;

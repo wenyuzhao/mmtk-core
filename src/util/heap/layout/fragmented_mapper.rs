@@ -150,6 +150,7 @@ impl Mmapper for FragmentedMapper {
      * @param addr The address in question.
      * @return {@code true} if the given address has been mmapped
      */
+    #[inline(always)]
     fn is_mapped_address(&self, addr: Address) -> bool {
         let mapped = self.slab_table(addr);
         match mapped {

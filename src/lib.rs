@@ -292,6 +292,9 @@ struct Pauses {
     pub min_used_pages: AtomicUsize,
     pub max_used_pages: AtomicUsize,
     pub gc_with_unfinished_lazy_jobs: AtomicUsize,
+    pub incs_triggerd: AtomicUsize,
+    pub alloc_triggerd: AtomicUsize,
+    pub overflow_triggerd: AtomicUsize,
 }
 
 impl Pauses {
@@ -313,6 +316,9 @@ impl Pauses {
         print!("total_used_pages\t");
         print!("min_used_pages\t");
         print!("max_used_pages\t");
+        print!("incs_triggerd\t");
+        print!("alloc_triggerd\t");
+        print!("overflow_triggerd\t");
     }
     pub fn print_values(&self) {
         print!("{}\t", self.rc.load(Ordering::SeqCst));
@@ -344,6 +350,9 @@ impl Pauses {
         print!("{}\t", self.total_used_pages.load(Ordering::SeqCst));
         print!("{}\t", self.min_used_pages.load(Ordering::SeqCst));
         print!("{}\t", self.max_used_pages.load(Ordering::SeqCst));
+        print!("{}\t", self.incs_triggerd.load(Ordering::SeqCst));
+        print!("{}\t", self.alloc_triggerd.load(Ordering::SeqCst));
+        print!("{}\t", self.overflow_triggerd.load(Ordering::SeqCst));
     }
 }
 
@@ -361,6 +370,9 @@ static PAUSES: Pauses = Pauses {
     min_used_pages: AtomicUsize::new(usize::MAX),
     max_used_pages: AtomicUsize::new(0),
     gc_with_unfinished_lazy_jobs: AtomicUsize::new(0),
+    incs_triggerd: AtomicUsize::new(0),
+    alloc_triggerd: AtomicUsize::new(0),
+    overflow_triggerd: AtomicUsize::new(0),
 };
 
 #[derive(Default)]

@@ -48,6 +48,8 @@ use spin::Lazy;
 pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 
 static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
+static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
+static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
 pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
@@ -123,6 +125,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
                 .unwrap_or(false);
             if alloc_overflow || inc_overflow {
+                if inc_overflow {
+                    INCS_TRIGGERED.store(true, Ordering::SeqCst);
+                }
+                if alloc_overflow {
+                    ALLOC_TRIGGERED.store(true, Ordering::SeqCst);
+                }
                 return true;
             }
 
@@ -617,6 +625,17 @@ impl<VM: VMBinding> Immix<VM> {
     fn select_collection_kind(&self, concurrent: bool) -> Pause {
         if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
             INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
+        }
+        if crate::args::LXR_RC_ONLY && crate::inside_harness() {
+            if INCS_TRIGGERED.load(Ordering::SeqCst) {
+                crate::PAUSES.incs_triggerd.fetch_add(1, Ordering::SeqCst);
+            } else if INCS_TRIGGERED.load(Ordering::SeqCst) {
+                crate::PAUSES.alloc_triggerd.fetch_add(1, Ordering::SeqCst);
+            } else {
+                crate::PAUSES
+                    .overflow_triggerd
+                    .fetch_add(1, Ordering::SeqCst);
+            }
         }
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);

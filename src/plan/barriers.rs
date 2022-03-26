@@ -310,11 +310,11 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn slow(&mut self, _src: ObjectReference, edge: Address, old: ObjectReference) {
-        #[cfg(feature = "sanity")]
+        #[cfg(any(feature = "sanity", debug_assertions))]
         assert!(
-            !_src.is_null() && rc::count(_src) != 0,
+            old.is_null() || rc::count(old) != 0,
             "zero rc count {:?}",
-            _src
+            old
         );
         // Concurrent Marking
         if !crate::args::REF_COUNT
