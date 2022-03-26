@@ -3,7 +3,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::cset::PerRegionRemSet;
 use crate::policy::immix::region::Region;
-use crate::util::cm::LXRStopTheWorldProcessEdges;
+use crate::util::cm::LXRMatureEvacProcessEdges;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
@@ -644,21 +644,13 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .scheduler()
                     .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
-            // if crate::concurrent_marking_in_progress() || self.current_pause == Pause::FinalMark {
-            //     // let w = unsafe { &mut (worker as *mut GCWorker<VM>) };
-            //     // w.do_work();
-            //     GCWork::do_work(
-            //         &mut ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk),
-            //         self.worker(),
-            //         mmtk,
-            //     )
-            // }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
-                worker.add_work(
-                    WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
-                )
+                // Mature evacuation will push updated roots to `crate::plan::immix::CURR_ROOTS`.
+                self.immix()
+                    .immix_space
+                    .collection_set
+                    .add_cached_roots(root_edges)
             } else {
                 unsafe {
                     crate::plan::immix::CURR_ROOTS.push(roots);

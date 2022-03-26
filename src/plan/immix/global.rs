@@ -1,6 +1,4 @@
-use super::gc_work::{
-    FlushMatureEvacRemsets, ImmixCopyContext, ImmixGCWorkContext, ImmixProcessEdges, TraceKind,
-};
+use super::gc_work::{ImmixCopyContext, ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::Pause;
 use crate::plan::global::BasePlan;
@@ -343,13 +341,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 tls,
                 pause == Pause::FullTraceFast || pause == Pause::InitialMark,
             );
-            if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
-            {
-                self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                    .add(FlushMatureEvacRemsets);
-            }
             self.immix_space.prepare_rc(pause);
         }
     }

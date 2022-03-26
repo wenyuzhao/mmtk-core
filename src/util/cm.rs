@@ -1,6 +1,7 @@
-use super::{Address, ObjectReference};
+use super::{rc, Address, ObjectReference};
 use crate::plan::immix::Pause;
-use crate::policy::immix::cset::PerRegionRemSet;
+use crate::policy::immix::cset::{MatureEvacJobsCounter, PerRegionRemSet};
+use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::{
@@ -228,14 +229,15 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
     }
 }
 
-pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
+pub struct LXRMatureEvacProcessEdges<VM: VMBinding> {
     immix: &'static Immix<VM>,
     pause: Pause,
     base: ProcessEdgesBase<Self>,
     forwarded_roots: Vec<ObjectReference>,
+    _counter: MatureEvacJobsCounter<VM>,
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
@@ -247,6 +249,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             base,
             pause: Pause::RefCount,
             forwarded_roots: vec![],
+            _counter: MatureEvacJobsCounter::new(&immix.immix_space),
         }
     }
 
@@ -270,7 +273,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         // can cause segfault, because the fields may no longer points to valid objects.
         // Currently, we use `object.class_is_valid()` below to filter out the invalid fields.
         // FIXME: Find a better way to do the filtering.
-        let x = if self.immix.immix_space.in_space(object) && object.class_is_valid() {
+        let x = if self.immix.immix_space.in_space(object)
+            && object.class_is_valid()
+            && !rc::is_dead(object)
+        {
             self.immix.immix_space.rc_trace_object(
                 self,
                 object,
@@ -284,6 +290,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             self.forwarded_roots.push(x)
         }
         x
+    }
+
+    #[inline]
+    fn process_edge(&mut self, slot: Address) {
+        let object = unsafe { slot.load::<ObjectReference>() };
+        let new_object = self.trace_object(object);
+        PerRegionRemSet::record(slot, new_object, &self.immix.immix_space);
+        if Self::OVERWRITE_REFERENCE {
+            unsafe { slot.store(new_object) };
+        }
     }
 
     #[inline]
@@ -303,7 +319,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding> Deref for LXRMatureEvacProcessEdges<VM> {
     type Target = ProcessEdgesBase<Self>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -311,9 +327,34 @@ impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> DerefMut for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding> DerefMut for LXRMatureEvacProcessEdges<VM> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
+    }
+}
+
+pub struct LXRMatureEvacRoots<VM: VMBinding> {
+    roots: Vec<Address>,
+    _counter: MatureEvacJobsCounter<VM>,
+}
+
+impl<VM: VMBinding> LXRMatureEvacRoots<VM> {
+    #[inline(always)]
+    pub fn new(roots: Vec<Address>, space: &'static ImmixSpace<VM>) -> Self {
+        Self {
+            roots,
+            _counter: MatureEvacJobsCounter::new(space),
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for LXRMatureEvacRoots<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let mut edges = vec![];
+        std::mem::swap(&mut edges, &mut self.roots);
+        let w = unsafe { &mut *(worker as *mut GCWorker<VM>) };
+        w.do_work(LXRMatureEvacProcessEdges::new(edges, true, mmtk))
     }
 }

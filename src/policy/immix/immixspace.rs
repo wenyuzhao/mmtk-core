@@ -64,7 +64,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub mutator_recycled_blocks: SegQueue<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    last_defrag_regions: Vec<Region>,
+    pub last_defrag_regions: SegQueue<Region>,
     defrag_regions: Vec<Region>,
     num_defrag_blocks: AtomicUsize,
     #[allow(dead_code)]
@@ -303,7 +303,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         while let Some((region, dead_bytes)) = regions.pop() {
             live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
             num_regions += 1;
-            region.set_active();
+            region.set_defrag_source();
             for block in region.committed_blocks() {
                 if block.get_state() != BlockState::Nursery {
                     // println!(" ... defrag {:?} {:?}", block, block.get_state());
@@ -408,10 +408,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            debug_assert!(self.last_defrag_regions.is_empty());
-            std::mem::swap(&mut self.defrag_regions, &mut self.last_defrag_regions);
-        }
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Tracing GC preparation work
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
@@ -451,8 +447,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         }
         if pause == Pause::FinalMark {
-            PerRegionRemSet::disable_recording();
-            self.collection_set.move_to_next_region::<VM>();
+            self.collection_set.move_to_next_region::<VM>(self);
             let mut size = 0usize;
             for chunk in self.chunk_map.committed_chunks() {
                 for region in chunk.regions() {
@@ -478,6 +473,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.scheduler().process_lazy_decrement_packets();
         }
         rc::reset_inc_buffer_size();
+        if pause == Pause::FinalMark {
+            PerRegionRemSet::disable_recording();
+        }
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
@@ -637,13 +635,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Trace and mark objects without evacuation.
     #[inline(always)]
-    pub fn process_mature_evacuation_remset(&self) {
-        self.collection_set
-            .schedule_mature_remset_scanning_packets(self);
-    }
-
-    /// Trace and mark objects without evacuation.
-    #[inline(always)]
     pub fn fast_trace_object(
         &self,
         trace: &mut impl TransitiveClosure,
@@ -758,7 +749,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         pause: Pause,
     ) -> ObjectReference {
         debug_assert!(crate::args::REF_COUNT);
-        if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
+        if crate::args::RC_MATURE_EVACUATION
+            && Region::containing::<VM>(object).is_defrag_source_active()
+            && Block::containing::<VM>(object).is_defrag_source()
+        {
             self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
         } else if crate::args::RC_MATURE_EVACUATION {
             self.trace_mark_rc_mature_object(trace, object, pause)

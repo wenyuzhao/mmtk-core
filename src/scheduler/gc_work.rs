@@ -5,10 +5,12 @@ use crate::plan::immix::Pause;
 use crate::plan::GcStatus;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::cset::MatureEvacJobsCounter;
 use crate::policy::immix::line::Line;
 use crate::policy::immix::region::Region;
+use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
-use crate::util::cm::LXRStopTheWorldProcessEdges;
+use crate::util::cm::LXRMatureEvacProcessEdges;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -701,6 +703,7 @@ impl<VM: VMBinding> GCWork<VM> for UnlogEdges {
 pub struct EvacuateMatureObjects<VM: VMBinding> {
     remset: Vec<Address>,
     _p: PhantomData<VM>,
+    _counter: MatureEvacJobsCounter<VM>,
 }
 
 unsafe impl<VM: VMBinding> Send for EvacuateMatureObjects<VM> {}
@@ -709,12 +712,13 @@ unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     pub const CAPACITY: usize = 128;
 
-    pub fn new(remset: Vec<Address>) -> Self {
+    pub fn new(remset: Vec<Address>, space: &ImmixSpace<VM>) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         Self {
             remset,
             _p: PhantomData,
+            _counter: MatureEvacJobsCounter::new(unsafe { &*(space as *const _) }),
         }
     }
 
@@ -804,7 +808,7 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             .map(|e| Line::decode_validity_state(e).0)
             .collect::<Vec<_>>();
         // transitive closure
-        let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);
+        let w = LXRMatureEvacProcessEdges::new(edges, false, mmtk);
         worker.add_work(WorkBucketStage::Closure, w);
     }
 }

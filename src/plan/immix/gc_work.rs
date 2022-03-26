@@ -91,18 +91,6 @@ impl<VM: VMBinding> GCWorkerLocal for ImmixCopyContext<VM> {
     }
 }
 
-pub struct FlushMatureEvacRemsets;
-
-impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
-    fn do_work(&mut self, worker: &mut crate::scheduler::GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        mmtk.plan
-            .downcast_ref::<Immix<VM>>()
-            .unwrap()
-            .immix_space
-            .process_mature_evacuation_remset();
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum TraceKind {
     Fast,

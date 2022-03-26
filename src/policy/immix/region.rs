@@ -224,46 +224,6 @@ impl Region {
         self.blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
     }
-
-    // #[inline(always)]
-    // pub fn cross_region_ref<VM: VMBinding>(
-    //     &self,
-    //     space: &ImmixSpace<VM>,
-    //     e: Address,
-    //     o: ObjectReference,
-    // ) -> bool {
-    //     let a = e.as_usize();
-    //     let b = o.to_address().as_usize();
-    //     ((a ^ b) >> Region::LOG_BYTES) == 0
-    //     //  {
-    //     //     return false;
-    //     // }
-    //     // space.in_space(o)
-    //     //     && Chunk::containing::<VM>(o).is_committed()
-    //     //     && Region::containing::<VM>(o).is_defrag_source()
-    // }
-
-    // #[inline(always)]
-    // pub fn record<VM: VMBinding>(&self, space: &ImmixSpace<VM>, e: Address, o: ObjectReference) {
-    //     if self.cross_region_ref(space, e, o) {
-    //         if space.in_space(o) && Region::containing::<VM>(o).is_defrag_source() {
-    //             Region::containing::<VM>(o).remset().unwrap().add(e);
-    //         }
-    //     }
-    //     //  {
-    //     //     return false;
-    //     // }
-    //     // space.in_space(o)
-    //     //     && Chunk::containing::<VM>(o).is_committed()
-    //     //     && Region::containing::<VM>(o).is_defrag_source()
-    // }
-
-    // #[inline(always)]
-    // pub fn in_defrag(&self, o: ObjectReference) -> bool {
-    //     self.immix_space.in_space(o)
-    //         && Chunk::containing::<VM>(o).is_committed()
-    //         && Region::containing::<VM>(o).is_defrag_source()
-    // }
 }
 
 impl Step for Region {

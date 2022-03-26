@@ -2,7 +2,7 @@ use std::{
     intrinsics::unlikely,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
-        Mutex,
+        Mutex, MutexGuard,
     },
 };
 
@@ -20,7 +20,10 @@ use crate::{
     plan::immix::{Immix, Pause},
     policy::space::Space,
     scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker, WorkBucketStage},
-    util::{Address, ObjectReference},
+    util::{
+        cm::{LXRMatureEvacProcessEdges, LXRMatureEvacRoots},
+        Address, ObjectReference,
+    },
     vm::VMBinding,
     MMTK,
 };
@@ -138,7 +141,7 @@ impl PerRegionRemSet {
     }
 
     #[inline]
-    pub fn dispatch<VM: VMBinding>(&mut self) -> Vec<Box<dyn GCWork<VM>>> {
+    pub fn dispatch<VM: VMBinding>(&mut self, space: &ImmixSpace<VM>) -> Vec<Box<dyn GCWork<VM>>> {
         // let mut buffers = vec![];
         // std::mem::swap(&mut buffers, &mut self.gc_buffers);
         // println!("dispatch remset@{:?}", self as *const Self);
@@ -154,7 +157,7 @@ impl PerRegionRemSet {
         (0..self.gc_buffers.len())
             .map(|i| self.gc_buffer(i))
             .filter(|buf| !buf.is_empty())
-            .map(|buf| box EvacuateMatureObjects::new(buf.to_vec()) as Box<dyn GCWork<VM>>)
+            .map(|buf| box EvacuateMatureObjects::new(buf.to_vec(), space) as Box<dyn GCWork<VM>>)
             .collect()
     }
 }
@@ -162,6 +165,8 @@ impl PerRegionRemSet {
 #[derive(Debug, Default)]
 pub struct CollectionSet {
     regions: Mutex<Vec<Region>>,
+    retried_regions: Mutex<Vec<Region>>,
+    cached_roots: Mutex<Vec<Vec<Address>>>,
     pub in_defrag: AtomicBool,
 }
 
@@ -175,114 +180,59 @@ impl CollectionSet {
         *self.regions.lock().unwrap() = regions;
     }
 
-    pub fn move_to_next_region<VM: VMBinding>(&self) {
-        // if !self.in_defrag.load(Ordering::SeqCst) {
-        //     return;
-        // }
-        // if let Some(region) = self.regions.lock().unwrap().pop() {
-        //     debug_assert!(region.is_defrag_source());
-        //     region.set_active();
-        // } else {
-        //     self.in_defrag.store(false, Ordering::SeqCst);
-        // }
-        for region in &*self.regions.lock().unwrap() {
+    pub fn add_cached_roots(&self, x: Vec<Address>) {
+        self.cached_roots.lock().unwrap().push(x);
+    }
+
+    pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        let mut regions = self.regions.lock().unwrap();
+        if let Some(region) = regions.pop() {
+            if crate::args::LOG_PER_GC_STATE {
+                println!(" ! Defrag {:?}", region);
+            }
+            debug_assert!(region.is_defrag_source());
+            region.set_active();
             side_metadata::bzero_x(
                 &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
                 region.start(),
                 Region::BYTES,
             );
+            space.last_defrag_regions.push(region);
+            self.schedule_mature_remset_scanning_packets(region, space);
+        } else {
+            self.finish_evacuation();
         }
     }
 
-    pub fn schedule_mature_remset_scanning_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        // println!(
-        //     "schedule_mature_remset_scanning_packets {:?} regions",
-        //     self.regions.lock().unwrap().len()
-        // );
-        let mut x = 0;
-        for region in &*self.regions.lock().unwrap() {
-            let remset = region.remset().unwrap();
-            let packets = remset.dispatch();
-            x += packets.len();
-            if !packets.is_empty() {
-                space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
-            }
+    fn schedule_mature_remset_scanning_packets<VM: VMBinding>(
+        &self,
+        region: Region,
+        space: &ImmixSpace<VM>,
+    ) {
+        // RemSets
+        let mut packets = region.remset().unwrap().dispatch(space);
+        // Roots
+        while let Some(roots) = unsafe { crate::plan::immix::CURR_ROOTS.pop() } {}
+        for roots in &*self.cached_roots.lock().unwrap() {
+            packets.push(
+                (box LXRMatureEvacRoots::new(roots.clone(), unsafe { &*(space as *const _) }))
+                    as Box<dyn GCWork<VM>>,
+            );
         }
-        // println!(
-        //     "schedule_mature_remset_scanning_packets {:?} remset packets",
-        //     x
-        // );
+        // Schedule
+        if !packets.is_empty() {
+            space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
+        } else {
+            self.finish_evacuation();
+        }
     }
 
-    // pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-    //     let tasks = space
-    //         .chunk_map
-    //         .generate_tasks(|chunk| box SelectDefragRegionsInChunk { chunk });
-    //     space.fragmented_regions_size.store(0, Ordering::SeqCst);
-    //     SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-    //     space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
-    // }
-
-    // pub fn select_mature_evacuation_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-    //     // let me = unsafe { &mut *(self as *const Self as *mut Self) };
-    //     debug_assert!(crate::args::RC_MATURE_EVACUATION);
-    //     // Select mature defrag blocks
-    //     // let total_bytes = total_pages << 12;
-    //     let defrag_bytes = space.defrag_headroom_pages() << 12;
-    //     // let defrag_blocks = defrag_bytes >> Block::LOG_BYTES;
-    //     let mut regions = Vec::with_capacity(space.fragmented_regions_size.load(Ordering::SeqCst));
-    //     while let Some(mut x) = space.fragmented_regions.pop() {
-    //         regions.append(&mut x);
-    //     }
-    //     let mut live_bytes = 0usize;
-    //     let mut num_regions = 0usize;
-    //     regions.sort_by_key(|x| x.1);
-    //     let mut cset_regions = self.regions.lock().unwrap();
-    //     while let Some((region, dead_bytes)) = regions.pop() {
-    //         // if region.is_defrag_source()
-    //         //     || region.get_state() == BlockState::Unallocated
-    //         //     || region.get_state() == BlockState::Nursery
-    //         // {
-    //         //     // println!(" - skip defrag {:?} {:?}", block, block.get_state());
-    //         //     continue;
-    //         // }
-
-    //         region.set_defrag_source();
-    //         region.init_remset(space.scheduler().num_workers());
-    //         cset_regions.push(region);
-
-    //         // if !block.attempt_to_set_as_defrag_source() {
-    //         //     continue;
-    //         // }
-    //         // println!(
-    //         //     " - defrag {:?} {:?} {}",
-    //         //     block,
-    //         //     block.get_state(),
-    //         //     block.dead_bytes()
-    //         // );
-    //         // me.defrag_blocks.push(block);
-    //         live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
-    //         num_regions += 1;
-    //         if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
-    //             if live_bytes >= defrag_bytes {
-    //                 break;
-    //             }
-    //         } else {
-    //             unreachable!();
-    //         }
-    //     }
-    //     if crate::args::LOG_PER_GC_STATE {
-    //         println!(
-    //             " - Defrag {} mature bytes ({} blocks)",
-    //             live_bytes, num_regions
-    //         );
-    //     }
-    //     // self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
-    // }
-
-    // pub fn select(&self) {
-    //     debug_assert!(self.regions.lock().unwrap().is_empty());
-    // }
+    fn finish_evacuation(&self) {
+        if crate::args::LOG_PER_GC_STATE {
+            println!(" ! Defrag FINISH");
+        }
+        self.cached_roots.lock().unwrap().clear();
+    }
 }
 
 static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -325,5 +275,25 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
         //         mmtk.plan.get_total_pages(),
         //     )
         // }
+    }
+}
+
+static MATURE_EVAC_JOBS_COUNTER: AtomicUsize = AtomicUsize::new(0);
+pub struct MatureEvacJobsCounter<VM: VMBinding>(&'static ImmixSpace<VM>);
+
+impl<VM: VMBinding> MatureEvacJobsCounter<VM> {
+    #[inline(always)]
+    pub fn new(space: &'static ImmixSpace<VM>) -> Self {
+        MATURE_EVAC_JOBS_COUNTER.fetch_add(1, Ordering::SeqCst);
+        Self(space)
+    }
+}
+
+impl<VM: VMBinding> Drop for MatureEvacJobsCounter<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if MATURE_EVAC_JOBS_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.0.collection_set.move_to_next_region::<VM>(self.0)
+        }
     }
 }
