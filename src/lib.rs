@@ -619,3 +619,4 @@ fn output_pause_time() {
 }
 
 static NO_EVAC: AtomicBool = AtomicBool::new(false);
+static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);

@@ -447,6 +447,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
+            crate::REMSET_RECORDING.store(true, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
             }

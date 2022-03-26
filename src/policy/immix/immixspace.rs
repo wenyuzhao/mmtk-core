@@ -445,6 +445,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
+        if pause == Pause::FinalMark {
+            crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
+        }
     }
 
     pub fn release_rc(&mut self, pause: Pause) {

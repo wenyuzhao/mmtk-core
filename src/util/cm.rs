@@ -271,7 +271,11 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     /// Trace  and evacuate objects.
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
+        if object.is_null()
+            || !object.is_mapped()
+            || !object.to_address().is_aligned_to(8)
+            || !object.class_is_valid()
+        {
             return object;
         }
         let x = if self.immix.immix_space.in_space(object) {

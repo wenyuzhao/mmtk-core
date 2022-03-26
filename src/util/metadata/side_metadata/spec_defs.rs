@@ -85,6 +85,7 @@ define_side_metadata_specs!(
     IX_BLOCK_LOG   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     IX_BLOCK_DEAD_WORDS = (global: false, log_num_of_bits: (Block::LOG_BYTES - 3).next_power_of_two().trailing_zeros() as _, log_bytes_in_region: Block::LOG_BYTES),
     IX_LINE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
+    LOS_PAGE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_PAGE as usize),
 );
 
 #[cfg(test)]

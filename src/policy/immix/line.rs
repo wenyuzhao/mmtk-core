@@ -155,6 +155,14 @@ impl Line {
 
     #[inline(always)]
     pub fn update_validity(lines: Range<Line>) {
+        if crate::REMSET_RECORDING.load(Ordering::SeqCst) {
+            side_metadata::bzero_x(
+                &Self::VALIDITY_STATE,
+                lines.start.start(),
+                lines.end.start() - lines.start.start(),
+            );
+            return;
+        }
         for line in lines {
             unsafe {
                 let old = side_metadata::load(&Self::VALIDITY_STATE, line.start());

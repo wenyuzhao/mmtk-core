@@ -425,7 +425,7 @@ impl Block {
             self.set_as_defrag_source(false);
         }
         if !reuse {
-            self.clear_line_validity_states();
+            Line::update_validity(self.lines());
         }
     }
 

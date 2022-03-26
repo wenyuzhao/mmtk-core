@@ -2,6 +2,7 @@ use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::line::Line;
+use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::{gc_work::*, GCWork, GCWorker};
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
@@ -112,7 +113,7 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
         let v = if self.immix.immix_space().address_in_space(e) {
             Line::of(e).currrent_validity_state()
         } else {
-            0
+            LargeObjectSpace::<VM>::currrent_validity_state(e)
         };
         self.mature_evac_remset
             .push(Line::encode_validity_state(e, v));
