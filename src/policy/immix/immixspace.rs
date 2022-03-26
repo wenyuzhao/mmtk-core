@@ -164,7 +164,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Line::VALIDITY_STATE),
                 MetadataSpec::OnSide(Region::MARK_TABLE),
                 MetadataSpec::OnSide(Region::REMSET),
-                MetadataSpec::OnSide(Region::EVAC_MARK),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -312,7 +311,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
             cset.push(region);
-            side_metadata::bzero_x(&Region::EVAC_MARK, region.start(), Region::BYTES);
             if crate::args::LOG_PER_GC_STATE {
                 println!(
                     " - Defrag {:?} live_bytes={:?} {:?}",
@@ -855,35 +853,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             if compare_exchange_metadata::<VM>(
                 &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                old_value as usize,
-                self.mark_state as usize,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                break;
-            }
-        }
-        true
-    }
-
-    /// Atomically mark an object.
-    #[inline(always)]
-    pub fn attempt_emark(&self, object: ObjectReference) -> bool {
-        loop {
-            let old_value = load_metadata::<VM>(
-                &MetadataSpec::OnSide(Region::EVAC_MARK),
-                object,
-                None,
-                Some(Ordering::SeqCst),
-            ) as u8;
-            if old_value == self.mark_state {
-                return false;
-            }
-
-            if compare_exchange_metadata::<VM>(
-                &MetadataSpec::OnSide(Region::EVAC_MARK),
                 object,
                 old_value as usize,
                 self.mark_state as usize,

@@ -71,9 +71,6 @@ impl Region {
     pub const REMSET: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_REGION_REMSET;
 
-    pub const EVAC_MARK: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_EVAC_MARK;
-
     pub const fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
