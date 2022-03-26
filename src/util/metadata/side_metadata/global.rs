@@ -1030,7 +1030,7 @@ pub fn bzero_metadata_nt(metadata_spec: &SideMetadataSpec, start: Address, size:
 
 #[inline(always)]
 pub fn bzero_x(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
-    if crate::args::ENABLE_NON_TEMPORAL_MEMSET {
+    if !crate::args::ENABLE_NON_TEMPORAL_MEMSET {
         bzero_metadata(metadata_spec, start, size)
     } else {
         bzero_metadata_nt(metadata_spec, start, size)
