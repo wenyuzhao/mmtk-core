@@ -337,7 +337,8 @@ impl<VM: VMBinding> ProcessIncs<VM> {
             if x {
                 edge.unlog::<VM>();
             }
-            if !target.is_null() && (!self::rc_stick(target) || self.immix().in_defrag(target)) {
+            self.record_mature_evac_remset(edge, target, false);
+            if !target.is_null() && !self::rc_stick(target) {
                 self.new_incs.push(edge);
             }
         });
@@ -505,7 +506,7 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         } else {
             self.process_inc_and_evacuate(o, cc)
         };
-        if kind != EdgeKind::Root {
+        if kind == EdgeKind::Mature {
             self.record_mature_evac_remset(e, o, false);
         }
         if new != o {

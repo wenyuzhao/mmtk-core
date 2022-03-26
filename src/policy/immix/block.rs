@@ -400,6 +400,7 @@ impl Block {
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, _space: &ImmixSpace<VM>) {
+        // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         #[cfg(feature = "sanity")]
         if !copy && !reuse {
             self.assert_log_table_cleared::<VM>(

@@ -339,6 +339,7 @@ impl Address {
     }
 
     /// return true if the referenced memory is mapped
+    #[inline(always)]
     pub fn is_mapped(self) -> bool {
         if self.0 == 0 {
             false
@@ -760,7 +761,12 @@ impl ObjectReference {
                 return;
             }
             assert!(self.is_mapped());
-            assert_ne!(unsafe { self.to_address().load::<usize>() }, 0xdead);
+            assert_ne!(
+                unsafe { self.to_address().load::<usize>() },
+                0xdead,
+                "object {:?} is dead",
+                self
+            );
             self.assert_class_is_valid();
         }
     }
