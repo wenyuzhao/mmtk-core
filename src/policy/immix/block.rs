@@ -402,6 +402,9 @@ impl Block {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             );
         }
+        if !reuse {
+            Line::update_validity(self.lines());
+        }
         if !copy && reuse {
             self.set_state(BlockState::Reusing);
             debug_assert!(!self.is_defrag_source());
@@ -424,7 +427,6 @@ impl Block {
     /// Deinitalize a block before releasing.
     #[inline]
     pub fn deinit(&self) {
-        Line::update_validity(self.lines());
         if !crate::args::HOLE_COUNTING && crate::args::REF_COUNT {
             self.reset_dead_bytes();
         }

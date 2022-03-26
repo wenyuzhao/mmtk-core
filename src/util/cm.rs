@@ -264,7 +264,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        let x = if self.immix.immix_space.in_space(object) {
+        // NOTE: For defrag regions, we zero it's mark table before evacuation. The closure blindly traverses
+        // the whole sub-graph starting from roots+remset to evacuate any reachable objects. This will evacuate
+        // some dead objects as well, due to stale but still valid entries in remsets. Scanning these dead objects
+        // can cause segfault, because the fields may no longer points to valid objects.
+        // Currently, we use `object.class_is_valid()` below to filter out the invalid fields.
+        // FIXME: Find a better way to do the filtering.
+        let x = if self.immix.immix_space.in_space(object) && object.class_is_valid() {
             self.immix.immix_space.rc_trace_object(
                 self,
                 object,
