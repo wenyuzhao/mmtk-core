@@ -133,10 +133,17 @@ impl Region {
 
     #[inline(always)]
     pub fn remset(&self) -> &'static mut PerRegionRemSet {
-        let ptr = side_metadata::load_atomic(&Self::REMSET, self.start(), Ordering::Relaxed)
+        let ptr = side_metadata::load_atomic(&Self::REMSET, self.start(), Ordering::SeqCst)
             as *mut PerRegionRemSet;
-        assert!(!ptr.is_null());
+        debug_assert!(!ptr.is_null(), "{:?} is not initialized", self);
         unsafe { &mut *ptr }
+    }
+
+    #[inline(always)]
+    pub fn remset_is_initialized(&self) -> bool {
+        let ptr = side_metadata::load_atomic(&Self::REMSET, self.start(), Ordering::SeqCst)
+            as *mut PerRegionRemSet;
+        !ptr.is_null()
     }
 
     #[inline(always)]

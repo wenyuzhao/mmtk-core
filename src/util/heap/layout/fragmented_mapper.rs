@@ -236,7 +236,9 @@ impl FragmentedMapper {
 
     #[inline(always)]
     fn get_slab_table(&mut self, addr: Address) -> Option<&Slab> {
-        debug_assert!(addr != SENTINEL);
+        if addr == SENTINEL {
+            return None;
+        }
         let base = unsafe { Address::from_usize(addr & !MMAP_SLAB_MASK) };
         let hash = Self::hash(base);
         let mut index = hash; // Use 'index' to iterate over the hash table so that we remember where we started

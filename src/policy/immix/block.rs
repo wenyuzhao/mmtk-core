@@ -395,7 +395,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, _space: &ImmixSpace<VM>) {
+    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         #[cfg(feature = "sanity")]
         if !copy && !reuse {
@@ -421,6 +421,11 @@ impl Block {
             self.set_as_defrag_source(false);
         }
         if !reuse {
+            if !self.region().remset_is_initialized() {
+                let workers = *crate::CALC_WORKERS;
+                debug_assert_ne!(workers, 0);
+                self.region().init_remset(workers);
+            }
             Line::update_validity(self.lines());
         }
     }
@@ -644,8 +649,12 @@ impl Block {
         debug_assert!(crate::args::REF_COUNT);
         if mutator_reused_blocks {
             if self.rc_dead() {
-                space.deinit_block(*self, true, true);
-                return true;
+                if self.attempt_dealloc(false) {
+                    space.deinit_block(*self, true, true);
+                    return true;
+                } else {
+                    return false;
+                }
             }
         }
         if !mutator_reused_blocks && self.rc_dead() {
