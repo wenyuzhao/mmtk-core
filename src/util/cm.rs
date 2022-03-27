@@ -1,6 +1,7 @@
 use super::{rc, Address, ObjectReference};
 use crate::plan::immix::Pause;
 use crate::policy::immix::cset::{MatureEvacJobsCounter, PerRegionRemSet};
+use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
@@ -278,8 +279,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
         // Currently, we use `object.class_is_valid()` below to filter out the invalid fields.
         // FIXME: Find a better way to do the filtering.
         let x = if self.immix.immix_space.in_space(object)
-            && object.class_is_valid()
             && !rc::is_dead(object)
+            && !rc::is_straddle_line(Line::of(object.to_address()))
         {
             self.immix.immix_space.rc_trace_object(
                 self,
@@ -301,7 +302,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
         let new_object = self.trace_object(object);
-        if !self.roots {
+        if !self.roots && slot.is_mapped() && new_object.to_address().is_mapped() {
             PerRegionRemSet::record(slot, new_object, &self.immix.immix_space);
         }
         if Self::OVERWRITE_REFERENCE {

@@ -220,12 +220,14 @@ impl CollectionSet {
                     as Box<dyn GCWork<VM>>,
             );
         }
-        // Schedule
-        if !packets.is_empty() {
-            space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
-        } else {
-            self.finish_evacuation();
+        if packets.is_empty() {
+            packets.push(
+                (box LXRMatureEvacRoots::new(vec![], unsafe { &*(space as *const _) }))
+                    as Box<dyn GCWork<VM>>,
+            );
         }
+        // Schedule
+        space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
     }
 
     fn finish_evacuation(&self) {

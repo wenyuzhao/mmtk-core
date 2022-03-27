@@ -731,7 +731,7 @@ impl ObjectReference {
     #[inline(always)]
     pub fn class_is_valid(self) -> bool {
         let klass = self.class_pointer();
-        klass.as_usize() & 0x700000000000 == 0x700000000000
+        klass.as_usize() & 0x700000000000 == 0x700000000000 && klass.is_aligned_to(8)
     }
 
     #[inline(always)]
