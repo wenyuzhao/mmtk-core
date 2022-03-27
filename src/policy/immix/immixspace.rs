@@ -740,12 +740,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
         copy_context: &mut impl CopyContext,
         pause: Pause,
+        mark: bool,
     ) -> ObjectReference {
         debug_assert!(crate::args::REF_COUNT);
         if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
             self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
         } else if crate::args::RC_MATURE_EVACUATION {
-            self.trace_mark_rc_mature_object(trace, object, pause)
+            self.trace_mark_rc_mature_object(trace, object, pause, mark)
         } else {
             self.trace_object_without_moving(trace, object)
         }
@@ -756,15 +757,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         mut object: ObjectReference,
-        pause: Pause,
+        _pause: Pause,
+        mark: bool,
     ) -> ObjectReference {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
-        if pause == Pause::FullTraceFast {
-            if self.attempt_mark(object) {
-                trace.process_node(object);
-            }
+        if mark && self.attempt_mark(object) {
+            trace.process_node(object);
         }
         object
     }
