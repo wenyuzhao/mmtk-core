@@ -433,18 +433,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
         let space = unsafe { &mut *(self as *mut Self) };
-        let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
-        packets.reserve(self.mutator_recycled_blocks.len());
-        while let Some(blocks) = self.mutator_recycled_blocks.pop() {
-            if !blocks.is_empty() {
-                packets.push(box RCSweepNurseryBlocks {
-                    space,
-                    blocks,
-                    mutator_reused_blocks: true,
-                });
+        if pause == Pause::FullTraceFast {
+            while let Some(blocks) = self.mutator_recycled_blocks.pop() {
+                for b in blocks {
+                    b.set_state(BlockState::Marked);
+                }
             }
+        } else {
+            let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+            packets.reserve(self.mutator_recycled_blocks.len());
+            while let Some(blocks) = self.mutator_recycled_blocks.pop() {
+                if !blocks.is_empty() {
+                    packets.push(box RCSweepNurseryBlocks {
+                        space,
+                        blocks,
+                        mutator_reused_blocks: true,
+                    });
+                }
+            }
+            self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
         }
-        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
         }
@@ -746,12 +754,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn trace_mark_rc_mature_object(
         &self,
-        _trace: &mut impl TransitiveClosure,
+        trace: &mut impl TransitiveClosure,
         mut object: ObjectReference,
-        _pause: Pause,
+        pause: Pause,
     ) -> ObjectReference {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
+        }
+        if pause == Pause::FullTraceFast {
+            if self.attempt_mark(object) {
+                trace.process_node(object);
+            }
         }
         object
     }

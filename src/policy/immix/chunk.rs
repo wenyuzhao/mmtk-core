@@ -313,11 +313,11 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
+            block.clear_line_validity_states();
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;
             }
-            block.clear_line_validity_states();
             // FIXME: Don't need this when doing RC
             if crate::args::BARRIER_MEASUREMENT
                 || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)

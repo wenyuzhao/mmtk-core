@@ -286,7 +286,11 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 self.pause,
             )
         } else {
-            object
+            if self.pause == Pause::FullTraceFast {
+                self.immix.los().trace_object(self, object)
+            } else {
+                object
+            }
         };
         if self.roots {
             self.forwarded_roots.push(x)

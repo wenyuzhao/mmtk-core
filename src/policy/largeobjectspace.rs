@@ -213,7 +213,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     #[inline(always)]
     fn update_validity(&self, start: Address, pages: usize) {
-        if crate::REMSET_RECORDING.load(Ordering::SeqCst) {
+        if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             side_metadata::bzero_x(&LOS_PAGE_VALIDITY, start, pages << LOG_BYTES_IN_PAGE);
             return;
         }
