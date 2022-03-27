@@ -132,18 +132,18 @@ impl Region {
     }
 
     #[inline(always)]
-    pub fn remset(&self) -> Option<&'static mut PerRegionRemSet> {
-        let ptr = side_metadata::load_atomic(&Self::REMSET, self.start(), Ordering::SeqCst)
+    pub fn remset(&self) -> &'static mut PerRegionRemSet {
+        let ptr = side_metadata::load_atomic(&Self::REMSET, self.start(), Ordering::Relaxed)
             as *mut PerRegionRemSet;
-        if ptr.is_null() {
-            return None;
-        }
-        Some(unsafe { &mut *ptr })
+        assert!(!ptr.is_null());
+        unsafe { &mut *ptr }
     }
 
     #[inline(always)]
     pub fn init_remset(&self, gc_workers: usize) {
-        if self.remset().is_some() {
+        let ptr = side_metadata::load_atomic(&Self::REMSET, self.start(), Ordering::SeqCst)
+            as *mut PerRegionRemSet;
+        if !ptr.is_null() {
             return;
         }
         let remset = Box::leak(box PerRegionRemSet::new(gc_workers));
@@ -168,7 +168,7 @@ impl Region {
 
     #[inline(always)]
     pub fn clear_remset(&self) {
-        self.remset().unwrap().clear()
+        self.remset().clear()
     }
 
     // /// Set block mark state.

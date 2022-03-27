@@ -784,7 +784,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
         // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
-        if !immix.immix_space.in_space(o) || !o.is_mapped() {
+        if !immix.immix_space.in_space(o) || !o.is_mapped() || !o.to_address().is_mapped() {
             return false;
         }
         if rc::count(o) != 0 && Region::containing::<VM>(o).is_defrag_source_active() {

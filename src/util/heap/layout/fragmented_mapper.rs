@@ -205,6 +205,7 @@ impl FragmentedMapper {
         mapped
     }
 
+    #[inline(always)]
     fn hash(addr: Address) -> usize {
         let mut initial = (addr & !MMAP_SLAB_MASK) >> LOG_MMAP_SLAB_BYTES;
         let mut hash = 0;
@@ -215,8 +216,9 @@ impl FragmentedMapper {
         hash
     }
 
+    #[inline(always)]
     fn slab_table(&self, addr: Address) -> Option<&Slab> {
-        unsafe { self.mut_self() }.get_or_optionally_allocate_slab_table(addr, false)
+        unsafe { self.mut_self() }.get_slab_table(addr)
     }
 
     fn get_or_allocate_slab_table(&self, addr: Address) -> &Slab {
@@ -227,8 +229,29 @@ impl FragmentedMapper {
 
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
+    #[inline(always)]
     unsafe fn mut_self(&self) -> &mut Self {
         &mut *(self as *const _ as *mut _)
+    }
+
+    #[inline(always)]
+    fn get_slab_table(&mut self, addr: Address) -> Option<&Slab> {
+        debug_assert!(addr != SENTINEL);
+        let base = unsafe { Address::from_usize(addr & !MMAP_SLAB_MASK) };
+        let hash = Self::hash(base);
+        let mut index = hash; // Use 'index' to iterate over the hash table so that we remember where we started
+        loop {
+            let entry = self.slab_map[index];
+            /* Check for a hash-table hit.  Should be the frequent case. */
+            if base == entry {
+                return self.slab_table_for(addr, index);
+            }
+            /* Check for a free slot */
+            if entry == SENTINEL {
+                return None;
+            }
+            index = (index + 1) & (SLAB_TABLE_SIZE - 1);
+        }
     }
 
     fn get_or_optionally_allocate_slab_table(
@@ -270,6 +293,7 @@ impl FragmentedMapper {
         }
     }
 
+    #[inline(always)]
     fn slab_table_for(&self, _addr: Address, index: usize) -> Option<&Slab> {
         debug_assert!(self.slab_table[index].is_some());
         self.slab_table[index].as_ref().map(|x| x as &Slab)
@@ -302,6 +326,7 @@ impl FragmentedMapper {
      * @param addr an address
      * @return the base address of the enclosing slab
      */
+    #[inline(always)]
     fn slab_align_down(addr: Address) -> Address {
         unsafe { Address::from_usize(addr & !MMAP_SLAB_MASK) }
     }
@@ -319,6 +344,7 @@ impl FragmentedMapper {
      * @param addr Address within a chunk (could be in the next slab)
      * @return The index of the chunk within the slab (could be beyond the end of the slab)
      */
+    #[inline(always)]
     fn chunk_index(slab: Address, addr: Address) -> usize {
         let delta = addr - slab;
         delta >> LOG_MMAP_CHUNK_BYTES

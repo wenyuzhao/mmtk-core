@@ -450,7 +450,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::InitialMark {
             for chunk in self.chunk_map.committed_chunks() {
                 for region in chunk.regions() {
-                    region.remset().unwrap().clear();
+                    region.remset().clear();
                 }
             }
         }
@@ -460,7 +460,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             for chunk in self.chunk_map.committed_chunks() {
                 for region in chunk.regions() {
                     if crate::args::LOG_REMSET_FOOTPRINT {
-                        size += region.remset().unwrap().size.load(Ordering::SeqCst);
+                        size += region.remset().size.load(Ordering::SeqCst);
                     }
                 }
             }

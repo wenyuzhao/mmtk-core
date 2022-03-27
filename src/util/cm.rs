@@ -265,19 +265,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
     /// Trace  and evacuate objects.
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null()
-            || !object.is_mapped()
-            || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid()
-        {
-            return object;
-        }
-        // NOTE: For defrag regions, we zero it's mark table before evacuation. The closure blindly traverses
-        // the whole sub-graph starting from roots+remset to evacuate any reachable objects. This will evacuate
-        // some dead objects as well, due to stale but still valid entries in remsets. Scanning these dead objects
-        // can cause segfault, because the fields may no longer points to valid objects.
-        // Currently, we use `object.class_is_valid()` below to filter out the invalid fields.
-        // FIXME: Find a better way to do the filtering.
         let x = if self.immix.immix_space.in_space(object)
             && !rc::is_dead(object)
             && !rc::is_straddle_line(Line::of(object.to_address()))
@@ -298,11 +285,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
         x
     }
 
-    #[inline]
+    #[inline(always)]
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
+        // Skip invalid objects
+        if object.is_null()
+            || !object.to_address().is_mapped()
+            || !object.to_address().is_aligned_to(8)
+            || !object.class_is_valid()
+        {
+            // Object is invalid
+            return;
+        }
         let new_object = self.trace_object(object);
-        if !self.roots && slot.is_mapped() && new_object.to_address().is_mapped() {
+        if !self.roots && slot.is_mapped() {
             PerRegionRemSet::record(slot, new_object, &self.immix.immix_space);
         }
         if Self::OVERWRITE_REFERENCE {
@@ -340,7 +336,7 @@ impl<VM: VMBinding> LXRMatureEvacProcessEdges<VM> {
     #[inline(always)]
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null()
-            || !object.is_mapped()
+            || !object.to_address().is_mapped()
             || !object.to_address().is_aligned_to(8)
             || !object.class_is_valid()
         {

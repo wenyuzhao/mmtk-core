@@ -123,13 +123,7 @@ impl PerRegionRemSet {
         let a = e.as_usize();
         let b = t.to_address().as_usize();
         if unlikely(((a ^ b) >> Region::LOG_BYTES) != 0 && space.in_space(t)) {
-            if Region::containing::<VM>(t).remset().is_none() {
-                println!("Invalid chunk {:?}", Chunk::containing::<VM>(t));
-            }
-            Region::containing::<VM>(t)
-                .remset()
-                .unwrap()
-                .add(e, t, space);
+            Region::containing::<VM>(t).remset().add(e, t, space);
         }
     }
 
@@ -211,7 +205,7 @@ impl CollectionSet {
         space: &ImmixSpace<VM>,
     ) {
         // RemSets
-        let mut packets = region.remset().unwrap().dispatch(space);
+        let mut packets = region.remset().dispatch(space);
         // Roots
         while let Some(roots) = unsafe { crate::plan::immix::CURR_ROOTS.pop() } {}
         for roots in &*self.cached_roots.lock().unwrap() {
