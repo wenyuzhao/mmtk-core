@@ -17,7 +17,7 @@ use super::{
     ImmixSpace,
 };
 use crate::{
-    plan::immix::{Immix, Pause},
+    plan::immix::{Immix, ImmixCopyContext, Pause},
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker, WorkBucketStage},
     util::{
@@ -96,16 +96,6 @@ impl PerRegionRemSet {
         //     Region::containing::<VM>(t),
         //     Region::containing::<VM>(t).is_defrag_source_active()
         // );
-        // if Region::containing::<VM>(t).is_defrag_source_active() {
-        //     for i in 0..self.gc_buffers.len() {
-        //         println!(
-        //             " - add remset@{:?} {:?} {:?}",
-        //             self as *const Self,
-        //             i,
-        //             self.gc_buffer(i)
-        //         );
-        //     }
-        // }
         if crate::args::LOG_REMSET_FOOTPRINT {
             self.size.fetch_add(8, Ordering::SeqCst);
         }
@@ -157,46 +147,69 @@ impl PerRegionRemSet {
     }
 }
 
+static IN_DEFRAG: AtomicBool = AtomicBool::new(false);
+
 #[derive(Debug, Default)]
 pub struct CollectionSet {
     regions: Mutex<Vec<Region>>,
-    retried_regions: Mutex<Vec<Region>>,
+    retired_regions: Mutex<Vec<Region>>,
     cached_roots: Mutex<Vec<Vec<Address>>>,
-    pub in_defrag: AtomicBool,
 }
 
 impl CollectionSet {
-    pub fn enable_defrag(&self) {
-        debug_assert!(!self.in_defrag.load(Ordering::SeqCst));
-        self.in_defrag.store(true, Ordering::SeqCst);
+    pub fn defrag_in_progress() -> bool {
+        IN_DEFRAG.load(Ordering::SeqCst)
     }
 
     pub fn set_reigons(&self, regions: Vec<Region>) {
         *self.regions.lock().unwrap() = regions;
     }
 
+    pub fn clear_cached_roots(&self) {
+        self.cached_roots.lock().unwrap().clear();
+    }
+
     pub fn add_cached_roots(&self, x: Vec<Address>) {
         self.cached_roots.lock().unwrap().push(x);
     }
 
+    fn should_stop<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
+        space.last_defrag_regions.len() >= 3
+    }
+
     pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        IN_DEFRAG.store(true, Ordering::SeqCst);
         let mut regions = self.regions.lock().unwrap();
-        if let Some(region) = regions.pop() {
-            if crate::args::LOG_PER_GC_STATE {
-                println!(" ! Defrag {:?}", region);
-            }
-            debug_assert!(region.is_defrag_source());
-            region.set_active();
-            side_metadata::bzero_x(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
-                region.start(),
-                Region::BYTES,
-            );
-            space.last_defrag_regions.push(region);
-            self.schedule_mature_remset_scanning_packets(region, space);
-        } else {
-            self.finish_evacuation();
+        if regions.is_empty() {
+            return self.finish_evacuation();
         }
+        if crate::args::LXR_INCREMENTAL_MATURE_DEFRAG && self.should_stop(space) {
+            return;
+        }
+        let region = regions.pop().unwrap();
+        if crate::args::LOG_PER_GC_STATE {
+            println!(" ! Defrag {:?}", region);
+        }
+        debug_assert!(region.is_defrag_source());
+        region.set_active();
+        side_metadata::bzero_x(
+            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+            region.start(),
+            Region::BYTES,
+        );
+        space.last_defrag_regions.push(region);
+        if crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
+            for block in region.committed_blocks() {
+                if block.get_state() != BlockState::Nursery {
+                    if block.get_state() == BlockState::Reusing {
+                        block.set_state(BlockState::Marked)
+                    }
+                    // println!(" ... defrag {:?} {:?}", block, block.get_state());
+                    block.set_as_defrag_source(true)
+                }
+            }
+        }
+        self.schedule_mature_remset_scanning_packets(region, space);
     }
 
     fn schedule_mature_remset_scanning_packets<VM: VMBinding>(
@@ -204,6 +217,16 @@ impl CollectionSet {
         region: Region,
         space: &ImmixSpace<VM>,
     ) {
+        // Reset allocators between the evacaution of two regions.
+        // The allocator may reuse some memory in second region when evacuating first region. And when evacuating the second region,
+        // the alloactor may still hold the local alloc buffer that belongs to a defrag block in the second region.
+        // No need to do this for non-incremental defrag. Defrag blocks are all selected ahead of time and they'll never be recycled.
+        if crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
+            for w in &space.scheduler().worker_group().workers {
+                let w = unsafe { &mut *(w as *const _ as *mut GCWorker<VM>) };
+                unsafe { w.local::<ImmixCopyContext<VM>>() }.immix.reset();
+            }
+        }
         // RemSets
         let mut packets = region.remset().dispatch(space);
         // Roots
@@ -229,6 +252,8 @@ impl CollectionSet {
             println!(" ! Defrag FINISH");
         }
         self.cached_roots.lock().unwrap().clear();
+        IN_DEFRAG.store(false, Ordering::SeqCst);
+        PerRegionRemSet::disable_recording();
     }
 }
 

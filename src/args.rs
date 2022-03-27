@@ -36,6 +36,7 @@ pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
 pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
 pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
 pub const ENABLE_INITIAL_ALLOC_LIMIT: bool = cfg!(feature = "lxr_enable_initial_alloc_limit");
+pub const LXR_INCREMENTAL_MATURE_DEFRAG: bool = cfg!(feature = "lxr_incremental_defrag");
 
 /// One more atomic-store per barrier slow-path if this value is smaller than 6.
 pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = {
@@ -170,6 +171,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("log_remset_footprint");
     dump_feature!("lxr_enable_initial_alloc_limit");
+    dump_feature!("lxr_incremental_defrag");
 
     dump_feature!(
         "disable_mutator_line_reusing",

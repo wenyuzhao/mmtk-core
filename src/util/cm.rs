@@ -264,11 +264,15 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
 
     /// Trace  and evacuate objects.
     #[inline(always)]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, mut object: ObjectReference) -> ObjectReference {
         let x = if self.immix.immix_space.in_space(object)
             && !rc::is_dead(object)
             && !rc::is_straddle_line(Line::of(object.to_address()))
         {
+            // object = object.fix_start_address::<VM>();
+            // if !object.class_is_valid() {
+            //     return object;
+            // }
             self.immix.immix_space.rc_trace_object(
                 self,
                 object,

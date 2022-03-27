@@ -1,7 +1,7 @@
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
-use crate::policy::immix::cset::PerRegionRemSet;
+use crate::policy::immix::cset::{CollectionSet, PerRegionRemSet};
 use crate::policy::immix::region::Region;
 use crate::util::cm::LXRMatureEvacProcessEdges;
 use crate::LazySweepingJobsCounter;
@@ -629,7 +629,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
         // Process main buffer
         let root_edges = if self.kind == EdgeKind::Root
             && (self.current_pause == Pause::FinalMark
-                || self.current_pause == Pause::FullTraceFast)
+                || self.current_pause == Pause::FullTraceFast
+                || CollectionSet::defrag_in_progress())
         {
             self.incs.clone()
         } else {
@@ -644,7 +645,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                     .scheduler()
                     .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
-            if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
+            if self.current_pause == Pause::FinalMark
+                || self.current_pause == Pause::FullTraceFast
+                || CollectionSet::defrag_in_progress()
             {
                 // Mature evacuation will push updated roots to `crate::plan::immix::CURR_ROOTS`.
                 self.immix()

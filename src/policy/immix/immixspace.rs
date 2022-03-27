@@ -304,10 +304,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
             num_regions += 1;
             region.set_defrag_source();
-            for block in region.committed_blocks() {
-                if block.get_state() != BlockState::Nursery {
-                    // println!(" ... defrag {:?} {:?}", block, block.get_state());
-                    block.set_as_defrag_source(true)
+            if !crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
+                for block in region.committed_blocks() {
+                    if block.get_state() != BlockState::Nursery {
+                        // println!(" ... defrag {:?} {:?}", block, block.get_state());
+                        block.set_as_defrag_source(true)
+                    }
                 }
             }
             cset.push(region);
@@ -471,6 +473,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
+        if pause == Pause::RefCount && CollectionSet::defrag_in_progress() {
+            self.collection_set.move_to_next_region::<VM>(self);
+        }
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
@@ -481,31 +486,34 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.scheduler().process_lazy_decrement_packets();
         }
         rc::reset_inc_buffer_size();
-        if pause == Pause::FinalMark {
-            PerRegionRemSet::disable_recording();
+        self.collection_set.clear_cached_roots();
+        self.sweep_defrag_regions(pause);
+    }
+
+    fn sweep_defrag_regions(&mut self, pause: Pause) {
+        if !self.last_defrag_regions.is_empty() {
+            let queue = ArrayQueue::new(self.last_defrag_regions.len() << Region::LOG_BLOCKS);
+            while let Some(region) = self.last_defrag_regions.pop() {
+                for block in region.committed_blocks() {
+                    if block.is_defrag_source() {
+                        block.clear_rc_table::<VM>();
+                        block.clear_striddle_table::<VM>();
+                        if block.rc_sweep_mature::<VM>(self, true) {
+                            queue.push(block.start()).unwrap();
+                        } else {
+                            // unreachable!("{:?} still alive {:?}", block, block.get_state())
+                        }
+                    }
+                }
+                region.set_state(RegionState::Allocated);
+            }
+            self.pr.release_bulk(queue.len(), queue);
         }
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            if !self.last_defrag_regions.is_empty() {
-                let queue = ArrayQueue::new(self.last_defrag_regions.len() << Region::LOG_BLOCKS);
-                while let Some(region) = self.last_defrag_regions.pop() {
-                    for block in region.committed_blocks() {
-                        if block.is_defrag_source() {
-                            block.clear_rc_table::<VM>();
-                            block.clear_striddle_table::<VM>();
-                            if block.rc_sweep_mature::<VM>(self, true) {
-                                queue.push(block.start()).unwrap();
-                            } else {
-                                unreachable!("block still alive")
-                            }
-                        }
-                    }
-                    region.set_state(RegionState::Allocated);
-                }
-                self.pr.release_bulk(queue.len(), queue);
-            }
+            self.sweep_defrag_regions(pause);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_desc());
@@ -1230,7 +1238,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
                     dead_bytes += Block::BYTES;
                 } else {
                     has_live_mature_blocks = true;
-                    assert!(!block.is_defrag_source());
+                    assert!(!block.is_defrag_source(), "{:?} is defrag source", block);
                     dead_bytes += block.calc_dead_lines() << Line::LOG_BYTES
                 }
             }

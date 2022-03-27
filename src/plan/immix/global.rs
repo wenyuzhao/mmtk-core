@@ -9,7 +9,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::chunk::Chunk;
-use crate::policy::immix::cset::PerRegionRemSet;
+use crate::policy::immix::cset::{CollectionSet, PerRegionRemSet};
 use crate::policy::immix::region::Region;
 use crate::policy::immix::MatureSweeping;
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -552,7 +552,9 @@ impl<VM: VMBinding> Immix<VM> {
             .immix_space
             .num_clean_blocks_released
             .load(Ordering::SeqCst);
-        if last_freed_blocks * 100 < (threshold * total_blocks as f32) as usize {
+        if !CollectionSet::defrag_in_progress()
+            && last_freed_blocks * 100 < (threshold * total_blocks as f32) as usize
+        {
             if crate::args::LOG_PER_GC_STATE {
                 println!("next trace ({} / {}) 1", last_freed_blocks, total_blocks);
             }
@@ -597,12 +599,18 @@ impl<VM: VMBinding> Immix<VM> {
         {
             return Pause::FinalMark;
         }
+        // Only do RC pauses if we're doing incremental evacuation
+        if CollectionSet::defrag_in_progress() {
+            return Pause::RefCount;
+        }
         // Either final mark pause or full pause for emergency GC
         if emergency {
             return if crate::args::CONCURRENT_MARKING && concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {
-                Pause::FullTraceFast
+                // FIXME: Trigger STW Full GC
+                assert!(crate::args::CONCURRENT_MARKING);
+                Pause::InitialMark
             };
         }
         // Should trigger CM?

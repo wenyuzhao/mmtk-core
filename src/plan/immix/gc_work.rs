@@ -21,7 +21,7 @@ use thread_priority::{self, ThreadPriority};
 
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
-    immix: ImmixAllocator<VM>,
+    pub immix: ImmixAllocator<VM>,
     mature_evac_remset: Vec<Address>,
 }
 

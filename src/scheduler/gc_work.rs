@@ -798,10 +798,6 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        debug_assert!(
-            immix.current_pause() == Some(Pause::FinalMark)
-                || immix.current_pause() == Some(Pause::FullTraceFast)
-        );
         // cleanup edges
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
