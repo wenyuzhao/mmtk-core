@@ -157,11 +157,6 @@ impl Line {
     #[inline(always)]
     pub fn update_validity(lines: Range<Line>) {
         if !PerRegionRemSet::recording() {
-            side_metadata::bzero_x(
-                &Self::VALIDITY_STATE,
-                lines.start.start(),
-                lines.end.start() - lines.start.start(),
-            );
             return;
         }
         for line in lines {

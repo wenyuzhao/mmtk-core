@@ -87,6 +87,7 @@ define_side_metadata_specs!(
     IX_LINE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     IX_REGION_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::region::Region::LOG_BYTES),
     IX_REGION_REMSET   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::policy::immix::region::Region::LOG_BYTES),
+    LOS_PAGE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_PAGE as usize),
 );
 
 #[cfg(test)]

@@ -766,7 +766,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 false
             }
         } else {
-            true
+            if immix.los().pointer_is_valid(e, epoch) {
+                return true;
+            }
+            false
         }
     }
 
@@ -781,14 +784,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
         // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
-        if !immix.immix_space.in_space(o) {
+        if !immix.immix_space.in_space(o) || !o.is_mapped() {
             return false;
         }
-        // Maybe a forwarded nursery or mature object from inc processing.
-        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
+        if rc::count(o) != 0 && Region::containing::<VM>(o).is_defrag_source_active() {
             return true;
         }
-        rc::count(o) != 0 && Region::containing::<VM>(o).is_defrag_source_active()
+        false
     }
 }
 

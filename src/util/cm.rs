@@ -263,8 +263,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
 
     /// Trace  and evacuate objects.
     #[inline(always)]
-    fn trace_object(&mut self, mut object: ObjectReference) -> ObjectReference {
-        if object.is_null() || !object.to_address().is_mapped() {
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if object.is_null()
+            || !object.is_mapped()
+            || !object.to_address().is_aligned_to(8)
+            || !object.class_is_valid()
+        {
             return object;
         }
         // NOTE: For defrag regions, we zero it's mark table before evacuation. The closure blindly traverses
@@ -282,6 +286,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
                 object,
                 unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
                 self.pause,
+                false,
             )
         } else {
             object
@@ -296,7 +301,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
         let new_object = self.trace_object(object);
-        PerRegionRemSet::record(slot, new_object, &self.immix.immix_space);
+        if !self.roots {
+            PerRegionRemSet::record(slot, new_object, &self.immix.immix_space);
+        }
         if Self::OVERWRITE_REFERENCE {
             unsafe { slot.store(new_object) };
         }
@@ -305,8 +312,17 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
     #[inline]
     fn process_edges(&mut self) {
         self.pause = self.immix.current_pause().unwrap();
-        for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge(self, self.edges[i])
+        if self.roots {
+            self.forwarded_roots.reserve(self.edges.len());
+        }
+        if self.pause == Pause::FullTraceFast {
+            for i in 0..self.edges.len() {
+                self.process_mark_edge(self.edges[i])
+            }
+        } else {
+            for i in 0..self.edges.len() {
+                ProcessEdgesWork::process_edge(self, self.edges[i])
+            }
         }
         self.flush();
         if self.roots {
@@ -315,6 +331,43 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
             unsafe {
                 crate::plan::immix::CURR_ROOTS.push(roots);
             }
+        }
+    }
+}
+
+impl<VM: VMBinding> LXRMatureEvacProcessEdges<VM> {
+    #[inline(always)]
+    fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if object.is_null()
+            || !object.is_mapped()
+            || !object.to_address().is_aligned_to(8)
+            || !object.class_is_valid()
+        {
+            return object;
+        }
+        let x = if self.immix.immix_space.in_space(object) {
+            self.immix.immix_space.rc_trace_object(
+                self,
+                object,
+                unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                self.pause,
+                true,
+            )
+        } else {
+            self.immix.los().trace_object(self, object)
+        };
+        if self.roots {
+            self.forwarded_roots.push(x)
+        }
+        x
+    }
+
+    #[inline]
+    fn process_mark_edge(&mut self, slot: Address) {
+        let object = unsafe { slot.load::<ObjectReference>() };
+        let new_object = self.trace_and_mark_object(object);
+        if Self::OVERWRITE_REFERENCE {
+            unsafe { slot.store(new_object) };
         }
     }
 }

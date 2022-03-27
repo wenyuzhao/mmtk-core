@@ -667,7 +667,7 @@ impl<VM: VMBinding> Immix<VM> {
         } else if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
             let pause = self.select_lxr_collection_kind(emergency_collection);
             if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
-                && self.zeroing_packets_scheduled.load(Ordering::SeqCst)
+                && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
             {
                 self.immix_space.schedule_mark_table_zeroing_tasks();
             }

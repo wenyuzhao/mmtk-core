@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     plan::immix::{Immix, Pause},
-    policy::space::Space,
+    policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker, WorkBucketStage},
     util::{
         cm::{LXRMatureEvacProcessEdges, LXRMatureEvacRoots},
@@ -82,7 +82,8 @@ impl PerRegionRemSet {
         let v = if space.address_in_space(e) {
             Line::of(e).currrent_validity_state()
         } else {
-            0
+            debug_assert!(e.is_mapped(), "unmapped edge {:?}", e);
+            LargeObjectSpace::<VM>::currrent_validity_state(e)
         };
         let id = crate::gc_worker_id().unwrap();
         self.gc_buffer(id).push(Line::encode_validity_state(e, v));

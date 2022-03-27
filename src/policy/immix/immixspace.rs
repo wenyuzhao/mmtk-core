@@ -426,18 +426,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
         let space = unsafe { &mut *(self as *mut Self) };
-        let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
-        packets.reserve(self.mutator_recycled_blocks.len());
-        while let Some(blocks) = self.mutator_recycled_blocks.pop() {
-            if !blocks.is_empty() {
-                packets.push(box RCSweepNurseryBlocks {
-                    space,
-                    blocks,
-                    mutator_reused_blocks: true,
-                });
+        if pause == Pause::FullTraceFast {
+            while let Some(blocks) = self.mutator_recycled_blocks.pop() {
+                for b in blocks {
+                    b.set_state(BlockState::Marked);
+                }
             }
+        } else {
+            let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+            packets.reserve(self.mutator_recycled_blocks.len());
+            while let Some(blocks) = self.mutator_recycled_blocks.pop() {
+                if !blocks.is_empty() {
+                    packets.push(box RCSweepNurseryBlocks {
+                        space,
+                        blocks,
+                        mutator_reused_blocks: true,
+                    });
+                }
+            }
+            self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
         }
-        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
 
         if pause == Pause::InitialMark {
             for chunk in self.chunk_map.committed_chunks() {
@@ -747,6 +755,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
         copy_context: &mut impl CopyContext,
         pause: Pause,
+        mark: bool,
     ) -> ObjectReference {
         debug_assert!(crate::args::REF_COUNT);
         if crate::args::RC_MATURE_EVACUATION
@@ -755,7 +764,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         {
             self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
         } else if crate::args::RC_MATURE_EVACUATION {
-            self.trace_mark_rc_mature_object(trace, object, pause)
+            self.trace_mark_rc_mature_object(trace, object, pause, mark)
         } else {
             self.trace_object_without_moving(trace, object)
         }
@@ -767,11 +776,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         trace: &mut impl TransitiveClosure,
         mut object: ObjectReference,
         _pause: Pause,
+        mark: bool,
     ) -> ObjectReference {
         if ForwardingWord::is_forwarded::<VM>(object) {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
         if !Region::containing::<VM>(object).is_defrag_source_active() {
+            if mark && self.attempt_mark(object) {
+                trace.process_node(object);
+            }
             return object;
         }
         // println!("evac trace {:?}", object);

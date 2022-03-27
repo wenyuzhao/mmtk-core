@@ -4,15 +4,19 @@ use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::scheduler::GCWork;
 use crate::util::constants::BYTES_IN_PAGE;
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::{FreeListPageResource, PageResource, VMRequest};
 use crate::util::metadata;
 use crate::util::metadata::compare_exchange_metadata;
 use crate::util::metadata::load_metadata;
+use crate::util::metadata::side_metadata;
+use crate::util::metadata::side_metadata::spec_defs::LOS_PAGE_VALIDITY;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
+use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::util::rc;
 use crate::util::treadmill::TreadMill;
@@ -24,6 +28,8 @@ use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
+
+use super::immix::cset::PerRegionRemSet;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -65,7 +71,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn is_sane(&self) -> bool {
         true
     }
-    fn initialize_object_metadata(&self, object: ObjectReference, _bytes: usize, alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
         if crate::args::REF_COUNT {
             debug_assert!(alloc);
             // Add to object set
@@ -89,6 +95,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             if crate::args::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
                 self.test_and_mark(object, self.mark_state);
             }
+            self.update_validity(
+                object.to_address(),
+                (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
+            );
             return;
         }
         let old_value = load_metadata::<VM>(
@@ -176,6 +186,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     global: global_side_metadata_specs,
                     local: metadata::extract_side_metadata(&[
                         *VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
+                        MetadataSpec::OnSide(LOS_PAGE_VALIDITY),
                     ]),
                 },
             },
@@ -200,6 +211,35 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_mature_objects: Default::default(),
             rc_dead_objects: Default::default(),
         }
+    }
+
+    #[inline(always)]
+    fn update_validity(&self, start: Address, pages: usize) {
+        if !PerRegionRemSet::recording() {
+            side_metadata::bzero_x(&LOS_PAGE_VALIDITY, start, pages << LOG_BYTES_IN_PAGE);
+            return;
+        }
+        for i in 0..pages {
+            let page = start + (i << LOG_BYTES_IN_PAGE);
+            unsafe {
+                let old = side_metadata::load(&LOS_PAGE_VALIDITY, page);
+                assert_ne!(old, 255);
+                side_metadata::store(&LOS_PAGE_VALIDITY, page, old + 1);
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn currrent_validity_state(e: Address) -> u8 {
+        let page = e.align_down(BYTES_IN_PAGE);
+        unsafe { side_metadata::load(&LOS_PAGE_VALIDITY, page) as u8 }
+    }
+
+    #[inline(always)]
+    pub fn pointer_is_valid(&self, e: Address, epoch: u8) -> bool {
+        let page = e.align_down(BYTES_IN_PAGE);
+        let recorded = unsafe { side_metadata::load(&LOS_PAGE_VALIDITY, page) as u8 };
+        epoch == recorded
     }
 
     #[inline]

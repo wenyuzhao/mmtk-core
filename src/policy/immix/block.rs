@@ -403,9 +403,6 @@ impl Block {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             );
         }
-        if !reuse {
-            Line::update_validity(self.lines());
-        }
         if !copy && reuse {
             self.set_state(BlockState::Reusing);
             debug_assert!(!self.is_defrag_source());
@@ -422,6 +419,9 @@ impl Block {
         } else {
             self.set_state(BlockState::Nursery);
             self.set_as_defrag_source(false);
+        }
+        if !reuse {
+            Line::update_validity(self.lines());
         }
     }
 
@@ -443,6 +443,11 @@ impl Block {
     pub fn lines(&self) -> Range<Line> {
         debug_assert!(!super::BLOCK_ONLY);
         Line::from(self.start())..Line::from(self.end())
+    }
+
+    #[inline(always)]
+    pub fn clear_line_validity_states(&self) {
+        side_metadata::bzero_x(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
