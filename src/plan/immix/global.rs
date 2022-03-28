@@ -48,6 +48,7 @@ pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
+static SIMPLE_INCREMENTAL_DEFRAG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
@@ -558,7 +559,10 @@ impl<VM: VMBinding> Immix<VM> {
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-            if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
+            if crate::args::CONCURRENT_MARKING
+                && crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_none()
+                && !crate::concurrent_marking_in_progress()
+            {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
                 self.immix_space.schedule_mark_table_zeroing_tasks();
             }
@@ -583,6 +587,28 @@ impl<VM: VMBinding> Immix<VM> {
         }
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
+        if let Some(n) = *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG {
+            // If CM is finished, do a final mark pause and reset counter
+            if crate::args::CONCURRENT_MARKING
+                && concurrent_marking_in_progress
+                && concurrent_marking_packets_drained
+            {
+                SIMPLE_INCREMENTAL_DEFRAG_COUNTER.store(0, Ordering::SeqCst);
+                // println!("=== {} ===", 0);
+                return Pause::FinalMark;
+            }
+            let old = SIMPLE_INCREMENTAL_DEFRAG_COUNTER.fetch_add(1, Ordering::SeqCst);
+            // println!("=== {} ===", old + 1);
+            // Force RC if still evacuating
+            if CollectionSet::defrag_in_progress() {
+                return Pause::RefCount;
+            }
+            // Do N RCs
+            if crate::args::CONCURRENT_MARKING && !concurrent_marking_in_progress && old + 1 >= n {
+                return Pause::InitialMark;
+            }
+            return Pause::RefCount;
+        }
         if crate::args::LOG_PER_GC_STATE {
             println!(
                 "next_gc_may_perform_cycle_collection: {:?}",

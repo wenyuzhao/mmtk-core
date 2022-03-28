@@ -139,6 +139,11 @@ pub const LOG_REMSET_FOOTPRINT: bool = cfg!(feature = "log_remset_footprint");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
+pub static LXR_SIMPLE_INCREMENTAL_DEFRAG: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("SIMPLE_INCREMENTAL_DEFRAG")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
 
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
@@ -178,6 +183,7 @@ fn dump_features(active_barrier: BarrierSelector) {
         *DISABLE_MUTATOR_LINE_REUSING
     );
     dump_feature!("lock_free_blocks", *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE);
+    dump_feature!("simple_incremental_defrag", *LXR_SIMPLE_INCREMENTAL_DEFRAG);
     dump_feature!("nursery_blocks", *NURSERY_BLOCKS);
     dump_feature!("nursery_ratio", *NURSERY_RATIO);
     dump_feature!(

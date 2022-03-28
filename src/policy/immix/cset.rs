@@ -110,6 +110,11 @@ impl PerRegionRemSet {
         let a = e.as_usize();
         let b = t.to_address().as_usize();
         if unlikely(((a ^ b) >> Region::LOG_BYTES) != 0 && space.in_space(t)) {
+            if CollectionSet::defrag_in_progress() {
+                if !Region::containing::<VM>(t).is_defrag_source() {
+                    return;
+                }
+            }
             Region::containing::<VM>(t).remset().add(e, t, space);
         }
     }
@@ -177,6 +182,12 @@ impl CollectionSet {
         _pause: Pause,
         space: &ImmixSpace<VM>,
     ) {
+        if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
+            assert!(crate::args::LXR_INCREMENTAL_MATURE_DEFRAG);
+            space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork]
+                .add(SimpleDefragRegionSelection);
+            return;
+        }
         // self.collection_set.schedule_defrag_selection_packets(self);
         let tasks = space
             .chunk_map
@@ -232,6 +243,9 @@ impl CollectionSet {
     }
 
     fn should_stop<VM: VMBinding>(&self, _space: &ImmixSpace<VM>) -> bool {
+        if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
+            return self.retired_regions.len() >= 1;
+        }
         self.retired_regions.len() >= 3
     }
 
@@ -395,6 +409,50 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
                     &immix.immix_space,
                 )
         }
+    }
+}
+
+struct SimpleDefragRegionSelection;
+
+impl<VM: VMBinding> GCWork<VM> for SimpleDefragRegionSelection {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        // Select N regions in address order
+        static CURSOR: Atomic<Address> = Atomic::new(Address::ZERO);
+        let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
+        let n = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.unwrap();
+        let mut cursor = CURSOR.load(Ordering::SeqCst);
+        let limit = immix_space.pr.highwater.load(Ordering::SeqCst);
+        if cursor.is_zero() {
+            cursor = immix_space.pr.start;
+        }
+        let original_cursor = cursor;
+        // Search N regions starting from `cursor`
+        let mut regions = vec![];
+        while regions.len() < n {
+            if !Chunk::of(cursor).is_committed() {
+                cursor = Region::align(cursor + Chunk::BYTES);
+                continue;
+            }
+            let region = Region::of(cursor);
+            let committed_blocks = region.committed_blocks().count();
+            if committed_blocks == 0 {
+                cursor += Region::BYTES;
+                continue;
+            }
+            region.set_defrag_source();
+            regions.push(region);
+            cursor += Region::BYTES;
+            if cursor >= limit {
+                cursor = immix_space.pr.start;
+            }
+            if cursor == original_cursor {
+                break;
+            }
+        }
+        CURSOR.store(cursor, Ordering::SeqCst);
+        // Commit
+        immix_space.collection_set.set_reigons(regions);
     }
 }
 

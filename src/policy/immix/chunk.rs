@@ -76,6 +76,11 @@ impl Chunk {
     }
 
     #[inline(always)]
+    pub fn of(a: Address) -> Self {
+        Self(a.align_down(Self::BYTES))
+    }
+
+    #[inline(always)]
     pub fn containing<VM: VMBinding>(object: ObjectReference) -> Self {
         Self(VM::VMObjectModel::ref_to_address(object).align_down(Self::BYTES))
     }

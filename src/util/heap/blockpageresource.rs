@@ -23,7 +23,8 @@ pub struct BlockPageResource<VM: VMBinding> {
     released_blocks: SegQueue<Address>,
     head_locally_freed_blocks: spin::RwLock<Option<ArrayQueue<Address>>>,
     locally_freed_blocks: SegQueue<ArrayQueue<Address>>,
-    highwater: Atomic<Address>,
+    pub start: Address,
+    pub highwater: Atomic<Address>,
     limit: Address,
     _p: PhantomData<VM>,
 }
@@ -74,6 +75,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             released_blocks: Default::default(),
             head_locally_freed_blocks: Default::default(),
             locally_freed_blocks: Default::default(),
+            start,
             highwater: Atomic::new(start),
             limit: (start + bytes).align_up(BYTES_IN_CHUNK),
             _p: PhantomData,
