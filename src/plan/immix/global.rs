@@ -141,6 +141,18 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 }
             }
         }
+        // alloc limits
+        if !crate::args::LXR_RC_ONLY
+            && crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args::REF_COUNT
+            && self
+                .nursery_blocks
+                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                .unwrap_or(false)
+        {
+            ALLOC_TRIGGERED.store(true, Ordering::SeqCst);
+            return true;
+        }
         // inc limits
         if !crate::args::LXR_RC_ONLY
             && crate::args::HEAP_HEALTH_GUIDED_GC
@@ -150,6 +162,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .map(|x| rc::inc_buffer_size() >= x)
                 .unwrap_or(false)
         {
+            INCS_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
         }
         // Concurrent tracing finished
