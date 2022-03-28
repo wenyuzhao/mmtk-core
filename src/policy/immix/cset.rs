@@ -244,7 +244,8 @@ impl CollectionSet {
 
     fn should_stop<VM: VMBinding>(&self, _space: &ImmixSpace<VM>) -> bool {
         if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
-            return self.retired_regions.len() >= 1;
+            return self.retired_regions.len()
+                >= *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
         }
         self.retired_regions.len() >= 3
     }
@@ -420,7 +421,8 @@ impl<VM: VMBinding> GCWork<VM> for SimpleDefragRegionSelection {
         // Select N regions in address order
         static CURSOR: Atomic<Address> = Atomic::new(Address::ZERO);
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
-        let n = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.unwrap();
+        let n = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.unwrap()
+            * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
         let mut cursor = CURSOR.load(Ordering::SeqCst);
         let limit = immix_space.pr.highwater.load(Ordering::SeqCst);
         if cursor.is_zero() {

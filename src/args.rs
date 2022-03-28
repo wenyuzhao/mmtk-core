@@ -144,7 +144,11 @@ pub static LXR_SIMPLE_INCREMENTAL_DEFRAG: Lazy<Option<usize>> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .ok()
 });
-
+pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER: Lazy<usize> = Lazy::new(|| {
+    env::var("SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(1)
+});
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
@@ -178,12 +182,17 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_enable_initial_alloc_limit");
     dump_feature!("lxr_incremental_defrag");
 
+    dump_feature!("simple_incremental_defrag", *LXR_SIMPLE_INCREMENTAL_DEFRAG);
+    dump_feature!(
+        "simple_incremental_defrag_multipler",
+        *LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
+    );
+
     dump_feature!(
         "disable_mutator_line_reusing",
         *DISABLE_MUTATOR_LINE_REUSING
     );
     dump_feature!("lock_free_blocks", *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE);
-    dump_feature!("simple_incremental_defrag", *LXR_SIMPLE_INCREMENTAL_DEFRAG);
     dump_feature!("nursery_blocks", *NURSERY_BLOCKS);
     dump_feature!("nursery_ratio", *NURSERY_RATIO);
     dump_feature!(
