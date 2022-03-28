@@ -1,14 +1,12 @@
 use super::block_allocation::BlockAllocation;
 use super::cset::CollectionSet;
 use super::line::*;
-use super::region::{Region, RegionState};
+use super::region::Region;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause};
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
-use crate::policy::immix::chunk::Chunk;
-use crate::policy::immix::cset::PerRegionRemSet;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -16,7 +14,7 @@ use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
-use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
 use crate::util::rc::SweepBlocksAfterDecs;
 use crate::util::{object_forwarding as ForwardingWord, rc};
@@ -29,8 +27,7 @@ use crate::{
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
-use crossbeam_queue::{ArrayQueue, SegQueue};
-use spin::Mutex;
+use crossbeam_queue::SegQueue;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
@@ -291,7 +288,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // If there are not too much nursery blocks for release, we
         // reclain mature blocks as well.
         if crate::args::NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY {
-            unreachable!();
             let mature_blocks = if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
                 self.num_defrag_blocks.load(Ordering::SeqCst)
             } else {
@@ -310,6 +306,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
                 crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
             }
+            unreachable!()
         }
         self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {

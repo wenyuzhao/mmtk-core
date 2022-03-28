@@ -2,7 +2,7 @@ use std::{
     intrinsics::unlikely,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
-        Mutex, MutexGuard,
+        Mutex,
     },
 };
 
@@ -20,10 +20,7 @@ use crate::{
     plan::immix::{Immix, ImmixCopyContext, Pause},
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker, WorkBucketStage},
-    util::{
-        cm::{LXRMatureEvacProcessEdges, LXRMatureEvacRoots},
-        Address, ObjectReference,
-    },
+    util::{cm::LXRMatureEvacRoots, Address, ObjectReference},
     vm::VMBinding,
     MMTK,
 };
@@ -78,7 +75,7 @@ impl PerRegionRemSet {
     }
 
     #[inline]
-    fn add<VM: VMBinding>(&mut self, e: Address, t: ObjectReference, space: &ImmixSpace<VM>) {
+    fn add<VM: VMBinding>(&mut self, e: Address, _t: ObjectReference, space: &ImmixSpace<VM>) {
         let v = if space.address_in_space(e) {
             Line::of(e).currrent_validity_state()
         } else {
@@ -183,10 +180,7 @@ impl CollectionSet {
         // self.collection_set.schedule_defrag_selection_packets(self);
         let tasks = space
             .chunk_map
-            .generate_tasks(|chunk| box SelectDefragRegionsInChunk {
-                chunk,
-                defrag_threshold: 1,
-            });
+            .generate_tasks(|chunk| box SelectDefragRegionsInChunk { chunk });
         self.fragmented_regions_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
         space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
@@ -206,12 +200,12 @@ impl CollectionSet {
             regions.append(&mut x);
         }
         let mut live_bytes = 0usize;
-        let mut num_regions = 0usize;
+        // let mut num_regions = 0usize;
         regions.sort_by_key(|x| x.1);
         let mut cset = vec![];
         while let Some((region, dead_bytes)) = regions.pop() {
             live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
-            num_regions += 1;
+            // num_regions += 1;
             region.set_defrag_source();
             if !crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
                 for block in region.committed_blocks() {
@@ -237,7 +231,7 @@ impl CollectionSet {
         self.set_reigons(cset.clone());
     }
 
-    fn should_stop<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
+    fn should_stop<VM: VMBinding>(&self, _space: &ImmixSpace<VM>) -> bool {
         self.retired_regions.len() >= 3
     }
 
@@ -294,7 +288,9 @@ impl CollectionSet {
         // RemSets
         let mut packets = region.remset().dispatch(space);
         // Roots
-        while let Some(roots) = unsafe { crate::plan::immix::CURR_ROOTS.pop() } {}
+        // FIXME
+        // unsafe { crate::plan::immix::CURR_ROOTS = SegQueue::new() }
+        while let Some(_roots) = unsafe { crate::plan::immix::CURR_ROOTS.pop() } {}
         for roots in &*self.cached_roots.lock().unwrap() {
             packets.push(
                 (box LXRMatureEvacRoots::new(roots.clone(), unsafe { &*(space as *const _) }))
@@ -322,7 +318,7 @@ impl CollectionSet {
 
     pub fn sweep_retired_defrag_regions<VM: VMBinding>(
         &self,
-        pause: Pause,
+        _pause: Pause,
         space: &ImmixSpace<VM>,
     ) {
         if !self.retired_regions.is_empty() {
@@ -350,7 +346,6 @@ static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct SelectDefragRegionsInChunk {
     chunk: Chunk,
-    defrag_threshold: usize,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {

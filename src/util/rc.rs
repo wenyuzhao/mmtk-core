@@ -2,8 +2,6 @@ use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::cset::{CollectionSet, PerRegionRemSet};
-use crate::policy::immix::region::Region;
-use crate::util::cm::LXRMatureEvacProcessEdges;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{

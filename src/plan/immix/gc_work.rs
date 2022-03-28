@@ -1,10 +1,8 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::line::Line;
-use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
-use crate::scheduler::{gc_work::*, GCWork, GCWorker};
+use crate::scheduler::gc_work::*;
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
 use crate::util::object_forwarding;
@@ -22,7 +20,6 @@ use thread_priority::{self, ThreadPriority};
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
     pub immix: ImmixAllocator<VM>,
-    mature_evac_remset: Vec<Address>,
 }
 
 impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
@@ -81,7 +78,6 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 &*mmtk.plan,
                 true,
             ),
-            mature_evac_remset: vec![],
         }
     }
 }

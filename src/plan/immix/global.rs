@@ -8,9 +8,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::chunk::Chunk;
 use crate::policy::immix::cset::{CollectionSet, PerRegionRemSet};
-use crate::policy::immix::region::Region;
 use crate::policy::immix::MatureSweeping;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -32,7 +30,7 @@ use crate::util::rc::{self, ProcessDecs, RCImmixCollectRootEdges};
 use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
-use crate::util::{metadata, Address, ObjectReference};
+use crate::util::{metadata, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};

@@ -710,8 +710,6 @@ unsafe impl<VM: VMBinding> Send for EvacuateMatureObjects<VM> {}
 unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
 
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
-    pub const CAPACITY: usize = 128;
-
     pub fn new(remset: Vec<Address>, space: &ImmixSpace<VM>) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
