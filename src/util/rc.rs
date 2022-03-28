@@ -374,13 +374,14 @@ impl<VM: VMBinding> ProcessIncs<VM> {
     }
 
     #[inline(always)]
-    fn process_inc(&mut self, o: ObjectReference) -> ObjectReference {
-        let r = self::inc(o);
-        // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
-        if let Ok(0) = r {
-            self.promote(o, false, self.immix().los().in_space(o));
-        }
-        o
+    fn process_inc(&mut self, _o: ObjectReference) -> ObjectReference {
+        unreachable!();
+        // let r = self::inc(o);
+        // // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
+        // if let Ok(0) = r {
+        //     self.promote(o, false, self.immix().los().in_space(o));
+        // }
+        // o
     }
 
     #[inline(always)]
