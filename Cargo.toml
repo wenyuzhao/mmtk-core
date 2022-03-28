@@ -113,7 +113,7 @@ lxr_nevac = ["lxr_basic", "lxr_nursery_evacuation"]
 lxr_evac = ["lxr_basic", "lxr_nursery_evacuation", "lxr_mature_evacuation", "lxr_count_bytes_for_mature_evac"]
 # LXR (Block only)
 lxr_block = ["lxr_basic", "lxr_block_only"]
-lxr_rc_only = []
+lxr_rc_only = ["lxr"]
 # LXR (Default config with full features)
 lxr = ["lxr_basic", "lxr_cm", "lxr_lazy", "lxr_evac"]
 
