@@ -63,14 +63,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
     pub mutator_recycled_blocks: SegQueue<Vec<Block>>,
-    pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    pub last_defrag_regions: SegQueue<Region>,
-    defrag_regions: Vec<Region>,
     num_defrag_blocks: AtomicUsize,
-    #[allow(dead_code)]
-    defrag_chunk_cursor: AtomicUsize,
-    fragmented_regions: SegQueue<Vec<(Region, usize)>>,
-    fragmented_regions_size: AtomicUsize,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub collection_set: CollectionSet,
@@ -235,13 +228,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
             mutator_recycled_blocks: Default::default(),
-            mature_evac_remsets: Default::default(),
             num_defrag_blocks: AtomicUsize::new(0),
-            defrag_chunk_cursor: AtomicUsize::new(0),
-            defrag_regions: Default::default(),
-            last_defrag_regions: Default::default(),
-            fragmented_regions: Default::default(),
-            fragmented_regions_size: Default::default(),
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
             collection_set: Default::default(),
@@ -285,67 +272,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    /// Run after the liveness data of all regions are summarized.
-    /// This will mark one or more region as "evacuation candidate"
-    fn select_mature_evacuation_candidates(&self, _pause: Pause, _total_pages: usize) {
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        debug_assert!(crate::args::RC_MATURE_EVACUATION);
-        // Select mature defrag blocks
-        let defrag_bytes = self.defrag_headroom_pages() << 12;
-        let mut regions = Vec::with_capacity(self.fragmented_regions_size.load(Ordering::SeqCst));
-        while let Some(mut x) = self.fragmented_regions.pop() {
-            regions.append(&mut x);
-        }
-        let mut live_bytes = 0usize;
-        let mut num_regions = 0usize;
-        regions.sort_by_key(|x| x.1);
-        let mut cset = vec![];
-        while let Some((region, dead_bytes)) = regions.pop() {
-            live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
-            num_regions += 1;
-            region.set_defrag_source();
-            if !crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
-                for block in region.committed_blocks() {
-                    if block.get_state() != BlockState::Nursery {
-                        // println!(" ... defrag {:?} {:?}", block, block.get_state());
-                        block.set_as_defrag_source(true)
-                    }
-                }
-            }
-            cset.push(region);
-            if crate::args::LOG_PER_GC_STATE {
-                println!(
-                    " - Defrag {:?} live_bytes={:?} {:?}",
-                    region,
-                    Region::BYTES - dead_bytes,
-                    region.get_state()
-                );
-            }
-            if live_bytes >= defrag_bytes {
-                break;
-            }
-        }
-        self.collection_set.set_reigons(cset.clone());
-        me.defrag_regions = cset;
-        // self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
-    }
-
-    fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        // self.collection_set.schedule_defrag_selection_packets(self);
-        let tasks = self
-            .chunk_map
-            .generate_tasks(|chunk| box SelectDefragRegionsInChunk {
-                chunk,
-                defrag_threshold: 1,
-            });
-        self.fragmented_regions_size.store(0, Ordering::SeqCst);
-        SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
-    }
-
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
-            self.schedule_defrag_selection_packets(pause);
+            self.collection_set
+                .schedule_defrag_selection_packets(pause, self);
         }
         let num_workers = self.scheduler().worker_group().worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
@@ -487,33 +417,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         rc::reset_inc_buffer_size();
         self.collection_set.clear_cached_roots();
-        self.sweep_defrag_regions(pause);
+        self.collection_set
+            .sweep_retired_defrag_regions(pause, self);
     }
 
-    fn sweep_defrag_regions(&mut self, pause: Pause) {
-        if !self.last_defrag_regions.is_empty() {
-            let queue = ArrayQueue::new(self.last_defrag_regions.len() << Region::LOG_BLOCKS);
-            while let Some(region) = self.last_defrag_regions.pop() {
-                for block in region.committed_blocks() {
-                    if block.is_defrag_source() {
-                        block.clear_rc_table::<VM>();
-                        block.clear_striddle_table::<VM>();
-                        if block.rc_sweep_mature::<VM>(self, true) {
-                            queue.push(block.start()).unwrap();
-                        } else {
-                            // unreachable!("{:?} still alive {:?}", block, block.get_state())
-                        }
-                    }
-                }
-                region.set_state(RegionState::Allocated);
-            }
-            self.pr.release_bulk(queue.len(), queue);
-        }
-    }
-
-    pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
+    pub fn schedule_mature_sweeping(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            self.sweep_defrag_regions(pause);
+            self.collection_set
+                .sweep_retired_defrag_regions(pause, self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_desc());
@@ -1213,53 +1124,5 @@ impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
         immix_mut
             .immix_space
             .schedule_mature_sweeping(immix.current_pause().unwrap())
-    }
-}
-
-static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-struct SelectDefragRegionsInChunk {
-    chunk: Chunk,
-    defrag_threshold: usize,
-}
-
-impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
-    #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let mut regions = vec![];
-        // Iterate over all blocks in this chunk
-        for region in self.chunk.regions() {
-            region.set_state(RegionState::Allocated);
-            let mut dead_bytes = 0usize;
-            let mut has_live_mature_blocks = false;
-            for block in region.blocks() {
-                let state = block.get_state();
-                if state == BlockState::Unallocated || state == BlockState::Nursery {
-                    dead_bytes += Block::BYTES;
-                } else {
-                    has_live_mature_blocks = true;
-                    assert!(!block.is_defrag_source(), "{:?} is defrag source", block);
-                    dead_bytes += block.calc_dead_lines() << Line::LOG_BYTES
-                }
-            }
-            if has_live_mature_blocks {
-                if crate::args::LOG_PER_GC_STATE {
-                    // println!(" - candidate {:?} dead_bytes={:?}", region, dead_bytes);
-                }
-                regions.push((region, dead_bytes));
-            }
-        }
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        immix
-            .immix_space
-            .fragmented_regions_size
-            .fetch_add(regions.len(), Ordering::SeqCst);
-        immix.immix_space.fragmented_regions.push(regions);
-        if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix.immix_space.select_mature_evacuation_candidates(
-                immix.current_pause().unwrap(),
-                mmtk.plan.get_total_pages(),
-            )
-        }
     }
 }
