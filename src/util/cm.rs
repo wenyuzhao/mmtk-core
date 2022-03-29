@@ -279,7 +279,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
                 object,
                 unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
                 self.pause,
-                false,
             )
         } else {
             object
