@@ -100,10 +100,14 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         crate::util::alloc_bit::set_alloc_bit(_object);
     }
     #[inline(always)]
-    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+    fn get_forwarded_object(&self, mut object: ObjectReference) -> Option<ObjectReference> {
         debug_assert!(!object.is_null());
         if ForwardingWord::is_forwarded::<VM>(object) {
-            Some(ForwardingWord::read_forwarding_pointer::<VM>(object))
+            object = ForwardingWord::read_forwarding_pointer::<VM>(object);
+            if ForwardingWord::is_forwarded::<VM>(object) {
+                object = ForwardingWord::read_forwarding_pointer::<VM>(object);
+            }
+            Some(object)
         } else {
             None
         }
