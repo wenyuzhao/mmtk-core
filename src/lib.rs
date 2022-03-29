@@ -278,7 +278,7 @@ fn inside_harness() -> bool {
     crate::INSIDE_HARNESS.load(Ordering::Relaxed)
 }
 
-struct Pauses {
+struct Counters {
     pub rc: AtomicUsize,
     pub initial_mark: AtomicUsize,
     pub final_mark: AtomicUsize,
@@ -295,9 +295,10 @@ struct Pauses {
     pub incs_triggerd: AtomicUsize,
     pub alloc_triggerd: AtomicUsize,
     pub overflow_triggerd: AtomicUsize,
+    pub rc_during_satb: AtomicUsize,
 }
 
-impl Pauses {
+impl Counters {
     pub fn print_keys(&self) {
         print!("gc.rc\t");
         print!("gc.initial_satb\t");
@@ -319,6 +320,7 @@ impl Pauses {
         print!("incs_triggerd\t");
         print!("alloc_triggerd\t");
         print!("overflow_triggerd\t");
+        print!("rc_during_satb\t");
     }
     pub fn print_values(&self) {
         print!("{}\t", self.rc.load(Ordering::SeqCst));
@@ -353,27 +355,18 @@ impl Pauses {
         print!("{}\t", self.incs_triggerd.load(Ordering::SeqCst));
         print!("{}\t", self.alloc_triggerd.load(Ordering::SeqCst));
         print!("{}\t", self.overflow_triggerd.load(Ordering::SeqCst));
+        print!("{}\t", self.rc_during_satb.load(Ordering::SeqCst));
     }
 }
 
-static PAUSES: Pauses = Pauses {
-    rc: AtomicUsize::new(0),
-    initial_mark: AtomicUsize::new(0),
-    final_mark: AtomicUsize::new(0),
-    full: AtomicUsize::new(0),
-    emergency: AtomicUsize::new(0),
-    cm_early_quit: AtomicUsize::new(0),
-    yield_nanos: Atomic::new(0),
-    roots_nanos: Atomic::new(0),
-    satb_nanos: Atomic::new(0),
-    total_used_pages: AtomicUsize::new(0),
-    min_used_pages: AtomicUsize::new(usize::MAX),
-    max_used_pages: AtomicUsize::new(0),
-    gc_with_unfinished_lazy_jobs: AtomicUsize::new(0),
-    incs_triggerd: AtomicUsize::new(0),
-    alloc_triggerd: AtomicUsize::new(0),
-    overflow_triggerd: AtomicUsize::new(0),
-};
+const fn create_counters() -> Counters {
+    let mut counters: Counters =
+        unsafe { std::mem::transmute([0u8; std::mem::size_of::<Counters>()]) };
+    counters.min_used_pages = AtomicUsize::new(usize::MAX);
+    counters
+}
+
+static PAUSES: Counters = create_counters();
 
 #[derive(Default)]
 struct GCStat {

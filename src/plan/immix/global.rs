@@ -114,37 +114,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             }
             return true;
         }
-        if crate::args::LXR_RC_ONLY {
-            let inc_overflow = self
-                .inc_buffer_limit
-                .map(|x| rc::inc_buffer_size() >= x)
-                .unwrap_or(false);
-            let alloc_overflow = self
-                .nursery_blocks
-                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
-                .unwrap_or(false);
-            if alloc_overflow || inc_overflow {
-                if inc_overflow {
-                    INCS_TRIGGERED.store(true, Ordering::SeqCst);
-                }
-                if alloc_overflow {
-                    ALLOC_TRIGGERED.store(true, Ordering::SeqCst);
-                }
-                return true;
-            }
-
-            if crate::args::ENABLE_INITIAL_ALLOC_LIMIT
-                && !INITIAL_GC_TRIGGERED.load(Ordering::SeqCst)
-            {
-                if self.immix_space.block_allocation.nursery_blocks() >= 1024 {
-                    return true;
-                }
-            }
-        }
-        // alloc limits
-        if !crate::args::LXR_RC_ONLY
-            && crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::REF_COUNT
+        // Alloc limits
+        if crate::args::REF_COUNT
             && self
                 .nursery_blocks
                 .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
@@ -153,10 +124,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             ALLOC_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
         }
-        // inc limits
-        if !crate::args::LXR_RC_ONLY
-            && crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::REF_COUNT
+        // Inc limits
+        if crate::args::REF_COUNT
             && self
                 .inc_buffer_limit
                 .map(|x| rc::inc_buffer_size() >= x)
@@ -165,30 +134,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             INCS_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
         }
+        // RC-only LXR can only have alloc/incs/fullheap trigger
+        if crate::args::LXR_RC_ONLY {
+            assert!(!crate::args::ENABLE_INITIAL_ALLOC_LIMIT);
+            return false;
+        }
         // Concurrent tracing finished
-        if !crate::args::LXR_RC_ONLY
-            && !crate::args::HEAP_HEALTH_GUIDED_GC
+        if !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
-        {
-            return true;
-        }
-        // RC nursery full
-        if !crate::args::LXR_RC_ONLY
-            && !crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::REF_COUNT
-            && crate::args::LOCK_FREE_BLOCK_ALLOCATION
-            && !(crate::concurrent_marking_in_progress()
-                && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
-            && (self
-                .nursery_blocks
-                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
-                .unwrap_or(false)
-                || self
-                    .inc_buffer_limit
-                    .map(|x| rc::inc_buffer_size() >= x)
-                    .unwrap_or(false))
         {
             return true;
         }
@@ -300,6 +255,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .control_collector_context
                 .is_concurrent_collection(),
         );
+        if crate::inside_harness()
+            && crate::concurrent_marking_in_progress()
+            && pause == Pause::RefCount
+        {
+            crate::PAUSES.rc_during_satb.fetch_add(1, Ordering::SeqCst);
+        }
         if crate::args::LOG_PER_GC_STATE {
             let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
             println!(
@@ -671,10 +632,10 @@ impl<VM: VMBinding> Immix<VM> {
         if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
             INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
         }
-        if crate::args::LXR_RC_ONLY && crate::inside_harness() {
+        if crate::inside_harness() {
             if INCS_TRIGGERED.load(Ordering::SeqCst) {
                 crate::PAUSES.incs_triggerd.fetch_add(1, Ordering::SeqCst);
-            } else if INCS_TRIGGERED.load(Ordering::SeqCst) {
+            } else if ALLOC_TRIGGERED.load(Ordering::SeqCst) {
                 crate::PAUSES.alloc_triggerd.fetch_add(1, Ordering::SeqCst);
             } else {
                 crate::PAUSES
