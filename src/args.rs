@@ -121,7 +121,7 @@ pub static OPPORTUNISTIC_EVAC: Lazy<bool> = Lazy::new(|| {
 pub static OPPORTUNISTIC_EVAC_THRESHOLD: Lazy<usize> = Lazy::new(|| {
     env::var("OPPORTUNISTIC_EVAC_THRESHOLD")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(50)
+        .unwrap_or(10)
 });
 
 // ---------- Barrier flags ---------- //

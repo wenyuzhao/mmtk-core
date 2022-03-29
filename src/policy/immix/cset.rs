@@ -156,8 +156,6 @@ pub struct CollectionSet {
     prev_region: Mutex<Option<Region>>,
     pub retired_regions: SegQueue<Region>,
     cached_roots: Mutex<Vec<Vec<Address>>>,
-    pub fragmented_regions: SegQueue<Vec<(Region, usize)>>,
-    pub fragmented_regions_size: AtomicUsize,
 }
 
 impl CollectionSet {
