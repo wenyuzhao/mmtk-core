@@ -244,6 +244,21 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
     dump_feature!("lxr_rc_only");
 
+    dump_feature!("incremental_defrag", *LXR_INCREMENTAL_DEFRAG);
+    dump_feature!("simple_incremental_defrag", *LXR_SIMPLE_INCREMENTAL_DEFRAG);
+    dump_feature!(
+        "simple_incremental_defrag_multipler",
+        *LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
+    );
+    dump_feature!(
+        "simple_incremental_defrag2",
+        *LXR_SIMPLE_INCREMENTAL_DEFRAG2
+    );
+    dump_feature!(
+        "simple_incremental_defrag2_threshold",
+        *SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD
+    );
+
     println!("----------------------------------------------------");
 }
 

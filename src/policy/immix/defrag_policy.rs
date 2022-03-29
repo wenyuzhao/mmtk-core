@@ -17,10 +17,13 @@ use std::{ops::ControlFlow, sync::atomic::AtomicUsize};
 
 pub fn create_defrag_policy<VM: VMBinding>() -> Box<dyn DefragPolicy<VM>> {
     if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
+        println!("SimpleIntrementalDefragPolicy");
         box SimpleIntrementalDefragPolicy
     } else if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2.is_some() {
+        println!("SimpleIntrementalDefragPolicy2");
         box SimpleIntrementalDefragPolicy2::default()
     } else {
+        println!("DefaultDefragPolicy");
         box DefaultDefragPolicy
     }
 }
