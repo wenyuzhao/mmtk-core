@@ -126,40 +126,26 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
     pub const LOG_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOG;
-    pub const DEAD_WORDS: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
+    pub const LIVE_WORDS: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LIVE_WORDS;
 
     #[inline(always)]
-    fn inc_dead_bytes_sloppy(&self, bytes: usize) {
+    fn inc_live_bytes_sloppy(&self, bytes: usize) {
         let max_words = Self::BYTES >> LOG_BYTES_IN_WORD;
         let words = bytes >> LOG_BYTES_IN_WORD;
-        let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
+        let old = unsafe { side_metadata::load(&Self::LIVE_WORDS, self.start()) };
         let mut new = old + words;
         if new >= max_words {
             new = max_words - 1;
         }
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
+        unsafe { side_metadata::store(&Self::LIVE_WORDS, self.start(), new) };
     }
 
     #[inline(always)]
-    pub fn dec_dead_bytes_sloppy(&self, bytes: usize) {
-        let words = bytes >> LOG_BYTES_IN_WORD;
-        let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
-        let new = if old <= words { 0 } else { old - words };
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
-    }
-
-    #[inline(always)]
-    pub fn inc_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
+    pub fn inc_live_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
         let block = Block::containing::<VM>(o);
-        block.inc_dead_bytes_sloppy(o.get_size::<VM>());
+        block.inc_live_bytes_sloppy(o.get_size::<VM>());
     }
-
-    // #[inline(always)]
-    // pub fn dec_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
-    //     let block = Block::containing::<VM>(o);
-    //     block.dec_dead_bytes_sloppy(o.get_size::<VM>());
-    // }
 
     #[inline(always)]
     pub fn calc_dead_lines(&self) -> usize {
@@ -208,14 +194,14 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn dead_bytes(&self) -> usize {
-        let v = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
+    pub fn live_bytes(&self) -> usize {
+        let v = unsafe { side_metadata::load(&Self::LIVE_WORDS, self.start()) };
         v << LOG_BYTES_IN_WORD
     }
 
     #[inline(always)]
-    fn reset_dead_bytes(&self) {
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), 0) };
+    fn reset_live_bytes(&self) {
+        unsafe { side_metadata::store(&Self::LIVE_WORDS, self.start(), 0) };
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -427,15 +413,13 @@ impl Block {
                 self.region().init_remset(workers);
             }
             Line::update_validity(self.lines());
+            self.reset_live_bytes();
         }
     }
 
     /// Deinitalize a block before releasing.
     #[inline]
     pub fn deinit(&self) {
-        if !crate::args::HOLE_COUNTING && crate::args::REF_COUNT {
-            self.reset_dead_bytes();
-        }
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);

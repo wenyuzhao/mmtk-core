@@ -283,6 +283,9 @@ impl<VM: VMBinding> ProcessIncs<VM> {
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
             self.immix().mark2(o, los);
+            if !los {
+                Block::inc_live_bytes_sloppy_for_object::<VM>(o)
+            }
         }
         self.scan_nursery_object(o, los, !copied);
     }
@@ -787,9 +790,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         let in_ix_space = immix.immix_space.in_space(o);
-        if !crate::args::HOLE_COUNTING && in_ix_space {
-            Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
-        }
         if !crate::args::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
         }

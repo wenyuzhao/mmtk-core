@@ -222,10 +222,8 @@ pub enum WorkBucketStage {
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
     pub const RCProcessIncs: Self = Self::Initial;
-    #[cfg(feature = "ix_delayed_nursery_evacuation")]
-    pub const RCEvacuateNursery: Self = Self::RefClosure;
-    #[cfg(not(feature = "ix_delayed_nursery_evacuation"))]
-    pub const RCEvacuateMature: Self = Self::Closure;
+    pub const RCCollectionSetSelection: Self = Self::RefClosure;
+    pub const RCEvacuateMature: Self = Self::CalculateForwarding;
     pub const RCReleaseNursery: Self = Self::Release;
     #[cfg(not(feature = "instrumentation"))]
     pub const RCFullHeapRelease: Self = Self::RefForwarding;

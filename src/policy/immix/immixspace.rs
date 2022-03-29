@@ -150,7 +150,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
-                MetadataSpec::OnSide(Block::DEAD_WORDS),
+                MetadataSpec::OnSide(Block::LIVE_WORDS),
                 MetadataSpec::OnSide(Line::VALIDITY_STATE),
                 MetadataSpec::OnSide(Region::MARK_TABLE),
                 MetadataSpec::OnSide(Region::REMSET),
@@ -270,7 +270,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             self.collection_set
                 .schedule_defrag_selection_packets(pause, self);
         }
@@ -376,15 +376,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
         }
 
-        if pause == Pause::InitialMark {
-            for chunk in self.chunk_map.committed_chunks() {
-                for region in chunk.regions() {
-                    region.remset().clear();
-                }
-            }
-        }
         if pause == Pause::FinalMark {
-            self.collection_set.move_to_next_region::<VM>(self);
             let mut size = 0usize;
             for chunk in self.chunk_map.committed_chunks() {
                 for region in chunk.regions() {
@@ -400,9 +392,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
-        if pause == Pause::RefCount && CollectionSet::defrag_in_progress() {
-            self.collection_set.move_to_next_region::<VM>(self);
-        }
+        self.collection_set.schedule_evacuation_packets(pause, self);
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
@@ -617,6 +607,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         block.set_state(BlockState::Marked);
                     }
                 }
+            } else {
+                Block::inc_live_bytes_sloppy_for_object::<VM>(object);
             }
             // Visit node
             trace.process_node(object);
@@ -924,7 +916,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             Line::update_validity(start..end);
         }
-        block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);

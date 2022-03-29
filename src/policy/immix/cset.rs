@@ -54,7 +54,7 @@ impl PerRegionRemSet {
     }
 
     #[inline]
-    pub fn disable_recording() {
+    fn disable_recording() {
         RECORD.store(false, Ordering::SeqCst);
     }
 
@@ -178,6 +178,16 @@ impl CollectionSet {
         self.cached_roots.lock().unwrap().push(x);
     }
 
+    pub fn schedule_evacuation_packets<VM: VMBinding>(&self, pause: Pause, space: &ImmixSpace<VM>) {
+        if pause == Pause::FinalMark
+            || pause == Pause::FullTraceFast
+            || (pause == Pause::RefCount && CollectionSet::defrag_in_progress())
+        {
+            space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
+                .add(StartMatureEvacuation);
+        }
+    }
+
     pub fn schedule_defrag_selection_packets<VM: VMBinding>(
         &self,
         _pause: Pause,
@@ -185,17 +195,16 @@ impl CollectionSet {
     ) {
         if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
             assert!(crate::args::LXR_INCREMENTAL_MATURE_DEFRAG);
-            space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork]
+            space.scheduler().work_buckets[WorkBucketStage::RCCollectionSetSelection]
                 .add(SimpleDefragRegionSelection);
             return;
         }
-        // self.collection_set.schedule_defrag_selection_packets(self);
         let tasks = space
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragRegionsInChunk { chunk });
         self.fragmented_regions_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+        space.scheduler().work_buckets[WorkBucketStage::RCCollectionSetSelection].bulk_add(tasks);
     }
 
     pub fn select_mature_evacuation_candidates<VM: VMBinding>(
@@ -219,12 +228,10 @@ impl CollectionSet {
             live_bytes += (Region::BYTES - dead_bytes) * 30 / 100;
             // num_regions += 1;
             region.set_defrag_source();
-            if !crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
-                for block in region.committed_blocks() {
-                    if block.get_state() != BlockState::Nursery {
-                        // println!(" ... defrag {:?} {:?}", block, block.get_state());
-                        block.set_as_defrag_source(true)
-                    }
+            for block in region.committed_blocks() {
+                if block.get_state() != BlockState::Nursery {
+                    // println!(" ... defrag {:?} {:?}", block, block.get_state());
+                    block.set_as_defrag_source(true)
                 }
             }
             cset.push(region);
@@ -248,7 +255,7 @@ impl CollectionSet {
             return self.retired_regions.len()
                 >= *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
         }
-        self.retired_regions.len() >= 3
+        self.retired_regions.len() >= 8
     }
 
     pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
@@ -281,17 +288,6 @@ impl CollectionSet {
             }
             *prev_region = Some(region);
         }
-        if crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
-            for block in region.committed_blocks() {
-                if block.get_state() != BlockState::Nursery {
-                    if block.get_state() == BlockState::Reusing {
-                        block.set_state(BlockState::Marked)
-                    }
-                    // println!(" ... defrag {:?} {:?}", block, block.get_state());
-                    block.set_as_defrag_source(true)
-                }
-            }
-        }
         self.schedule_mature_remset_scanning_packets(region, space);
     }
 
@@ -304,12 +300,6 @@ impl CollectionSet {
         // The allocator may reuse some memory in second region when evacuating first region. And when evacuating the second region,
         // the alloactor may still hold the local alloc buffer that belongs to a defrag block in the second region.
         // No need to do this for non-incremental defrag. Defrag blocks are all selected ahead of time and they'll never be recycled.
-        if crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
-            for w in &space.scheduler().worker_group().workers {
-                let w = unsafe { &mut *(w as *const _ as *mut GCWorker<VM>) };
-                unsafe { w.local::<ImmixCopyContext<VM>>() }.immix.reset();
-            }
-        }
         // RemSets
         let mut packets = region.remset().dispatch(space);
         // Roots
@@ -368,6 +358,23 @@ impl CollectionSet {
     }
 }
 
+struct StartMatureEvacuation;
+
+impl<VM: VMBinding> GCWork<VM> for StartMatureEvacuation {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        for w in &immix.immix_space.scheduler().worker_group().workers {
+            let w = unsafe { &mut *(w as *const _ as *mut GCWorker<VM>) };
+            unsafe { w.local::<ImmixCopyContext<VM>>() }.immix.reset();
+        }
+        immix
+            .immix_space
+            .collection_set
+            .move_to_next_region(&immix.immix_space)
+    }
+}
+
 static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct SelectDefragRegionsInChunk {
@@ -390,7 +397,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
                 } else {
                     has_live_mature_blocks = true;
                     assert!(!block.is_defrag_source(), "{:?} is defrag source", block);
-                    dead_bytes += block.calc_dead_lines() << Line::LOG_BYTES
+                    dead_bytes += Block::BYTES - block.live_bytes()
                 }
             }
             if has_live_mature_blocks {
