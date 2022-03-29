@@ -154,6 +154,7 @@ static IN_DEFRAG: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Default)]
 pub struct CollectionSet {
     regions: Mutex<Vec<Region>>,
+    prev_region: Mutex<Option<Region>>,
     retired_regions: SegQueue<Region>,
     cached_roots: Mutex<Vec<Vec<Address>>>,
     fragmented_regions: SegQueue<Vec<(Region, usize)>>,
@@ -264,6 +265,7 @@ impl CollectionSet {
             println!(" ! Defrag {:?}", region);
         }
         debug_assert!(region.is_defrag_source());
+        // Activate current region
         region.set_active();
         side_metadata::bzero_x(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
@@ -271,6 +273,14 @@ impl CollectionSet {
             Region::BYTES,
         );
         self.retired_regions.push(region);
+        // Deactivate previous region
+        {
+            let mut prev_region = self.prev_region.lock().unwrap();
+            if let Some(region) = *prev_region {
+                region.set_state(RegionState::Allocated);
+            }
+            *prev_region = Some(region);
+        }
         if crate::args::LXR_INCREMENTAL_MATURE_DEFRAG {
             for block in region.committed_blocks() {
                 if block.get_state() != BlockState::Nursery {
@@ -326,6 +336,7 @@ impl CollectionSet {
         if crate::args::LOG_PER_GC_STATE {
             println!(" ! Defrag FINISH");
         }
+        *self.prev_region.lock().unwrap() = None;
         self.cached_roots.lock().unwrap().clear();
         IN_DEFRAG.store(false, Ordering::SeqCst);
         PerRegionRemSet::disable_recording();
