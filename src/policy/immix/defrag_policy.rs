@@ -19,15 +19,18 @@ pub fn create_defrag_policy<VM: VMBinding>() -> Box<dyn DefragPolicy<VM>> {
     if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
         box SimpleIntrementalDefragPolicy
     } else if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2.is_some() {
-        box SimpleIntrementalDefragPolicy2
+        box SimpleIntrementalDefragPolicy2::default()
     } else {
         box DefaultDefragPolicy
     }
 }
 
 pub trait DefragPolicy<VM: VMBinding>: Downcast {
-    fn should_stop(&self, cset: &CollectionSet) -> bool;
     fn select(&self, mmtk: &'static MMTK<VM>);
+    fn should_stop(&self, cset: &CollectionSet) -> bool;
+    fn notify_defrag_start(&self, _region: Region) {}
+    fn notify_defrag_end(&self, _region: Region) {}
+    fn notify_evacuation_stop(&self) {}
 }
 
 impl_downcast!(DefragPolicy<VM> where VM: VMBinding);
@@ -59,36 +62,65 @@ impl<VM: VMBinding> DefragPolicy<VM> for SimpleIntrementalDefragPolicy {
     }
 }
 
-struct SimpleIntrementalDefragPolicy2;
+#[derive(Default)]
+struct SimpleIntrementalDefragPolicy2 {
+    processed_blocks: AtomicUsize,
+    per_pause_budget: AtomicUsize,
+}
 
 impl<VM: VMBinding> DefragPolicy<VM> for SimpleIntrementalDefragPolicy2 {
     fn select(&self, mmtk: &'static MMTK<VM>) {
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
-        let n = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.unwrap()
-            * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
-            * Region::BLOCKS;
+        let regions = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2.unwrap()
+            * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
+        let n = regions * Region::BLOCKS;
         let mut regions = vec![];
         let mut blocks = 0usize;
         let threshold = crate::args::SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD.unwrap();
         immix_space.walk_regions_in_address_order(|region| {
             region.set_defrag_source();
             regions.push(region);
+            let mut c = 0usize;
             for block in region.committed_mature_blocks() {
                 if block.live_bytes() * 100 <= threshold * Block::BYTES {
                     block.set_as_defrag_source(true);
-                    blocks += 1;
+                    c += 1;
                 }
             }
-            if regions.len() >= n {
+            blocks += c;
+            if crate::args::LOG_PER_GC_STATE {
+                println!(
+                    " - Defrag {:?} defrag {} (total {} / {}) blocks",
+                    region, c, blocks, n
+                );
+            }
+            if blocks >= n {
                 ControlFlow::BREAK
             } else {
                 ControlFlow::CONTINUE
             }
         });
+        self.per_pause_budget.store(
+            Region::BLOCKS * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER,
+            Ordering::SeqCst,
+        );
         immix_space.collection_set.set_reigons(regions);
     }
-    fn should_stop(&self, cset: &CollectionSet) -> bool {
-        cset.retired_regions.len() >= *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
+    fn should_stop(&self, _cset: &CollectionSet) -> bool {
+        self.processed_blocks.load(Ordering::Relaxed)
+            >= self.per_pause_budget.load(Ordering::Relaxed)
+    }
+    fn notify_defrag_end(&self, region: Region) {
+        let mut blocks = 0usize;
+        for block in region.committed_blocks() {
+            if block.is_defrag_source() {
+                blocks += 1;
+            }
+        }
+        self.processed_blocks.fetch_add(blocks, Ordering::Relaxed);
+    }
+    fn notify_evacuation_stop(&self) {
+        self.processed_blocks.store(0, Ordering::SeqCst);
     }
 }
 

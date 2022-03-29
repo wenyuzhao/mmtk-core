@@ -210,10 +210,16 @@ impl CollectionSet {
     pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         IN_DEFRAG.store(true, Ordering::SeqCst);
         let mut regions = self.regions.lock().unwrap();
+        // Deactivate previous region
+        if let Some(region) = self.prev_region.lock().unwrap().take() {
+            space.defrag_policy.notify_defrag_end(region);
+            region.set_state(RegionState::Allocated);
+        }
         if regions.is_empty() {
             return self.finish_evacuation();
         }
         if self.should_stop(space) {
+            space.defrag_policy.notify_evacuation_stop();
             return;
         }
         let region = regions.pop().unwrap();
@@ -229,14 +235,8 @@ impl CollectionSet {
             Region::BYTES,
         );
         self.retired_regions.push(region);
-        // Deactivate previous region
-        {
-            let mut prev_region = self.prev_region.lock().unwrap();
-            if let Some(region) = *prev_region {
-                region.set_state(RegionState::Allocated);
-            }
-            *prev_region = Some(region);
-        }
+        *self.prev_region.lock().unwrap() = Some(region);
+        space.defrag_policy.notify_defrag_start(region);
         self.schedule_mature_remset_scanning_packets(region, space);
     }
 
