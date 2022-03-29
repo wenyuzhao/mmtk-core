@@ -316,14 +316,26 @@ impl ChunkMap {
     ) {
         static CURSOR: Atomic<Address> = Atomic::new(Address::ZERO);
         let mut cursor = CURSOR.load(Ordering::SeqCst);
-        let limit = space.pr.highwater.load(Ordering::SeqCst);
+        let limit = space
+            .pr
+            .highwater
+            .load(Ordering::SeqCst)
+            .align_up(Chunk::BYTES);
         if cursor.is_zero() {
             cursor = space.pr.start;
         }
         let original_cursor = cursor;
+        let mut first_block = true;
         loop {
+            if cursor >= limit {
+                cursor = space.pr.start;
+            }
+            if !first_block && cursor == original_cursor {
+                break;
+            }
+            first_block = false;
             if !Chunk::of(cursor).is_committed() {
-                cursor = Region::align(cursor + Chunk::BYTES);
+                cursor += Region::BYTES;
                 continue;
             }
             let region = Region::of(cursor);
@@ -334,12 +346,6 @@ impl ChunkMap {
             }
             let control_flow = f(region);
             cursor += Region::BYTES;
-            if cursor >= limit {
-                cursor = space.pr.start;
-            }
-            if cursor == original_cursor {
-                break;
-            }
             if let ControlFlow::Break(_) = control_flow {
                 break;
             }
