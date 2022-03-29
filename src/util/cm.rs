@@ -118,6 +118,7 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
     }
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        PerRegionRemSet::enable_recording();
         self.worker = worker;
         if !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
             && crate::args::SLOW_CONCURRENT_MARKING
@@ -134,8 +135,8 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
             self.trace_object(self.objects[i]);
         }
         // CM: Decrease counter
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         self.flush();
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -316,14 +317,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
         if self.roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
-        if self.pause == Pause::FullTraceFast {
-            for i in 0..self.edges.len() {
-                self.process_mark_edge(self.edges[i])
-            }
-        } else {
-            for i in 0..self.edges.len() {
-                ProcessEdgesWork::process_edge(self, self.edges[i])
-            }
+        for i in 0..self.edges.len() {
+            ProcessEdgesWork::process_edge(self, self.edges[i])
         }
         self.flush();
         if self.roots {
@@ -332,43 +327,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRMatureEvacProcessEdges<VM> {
             unsafe {
                 crate::plan::immix::CURR_ROOTS.push(roots);
             }
-        }
-    }
-}
-
-impl<VM: VMBinding> LXRMatureEvacProcessEdges<VM> {
-    #[inline(always)]
-    fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null()
-            || !object.to_address().is_mapped()
-            || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid()
-        {
-            return object;
-        }
-        let x = if self.immix.immix_space.in_space(object) {
-            self.immix.immix_space.rc_trace_object(
-                self,
-                object,
-                unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
-                self.pause,
-                true,
-            )
-        } else {
-            self.immix.los().trace_object(self, object)
-        };
-        if self.roots {
-            self.forwarded_roots.push(x)
-        }
-        x
-    }
-
-    #[inline]
-    fn process_mark_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
-        let new_object = self.trace_and_mark_object(object);
-        if Self::OVERWRITE_REFERENCE {
-            unsafe { slot.store(new_object) };
         }
     }
 }

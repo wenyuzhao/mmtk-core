@@ -651,6 +651,10 @@ impl<VM: VMBinding> GCWork<VM> for ProcessIncs<VM> {
                 || self.current_pause == Pause::FullTraceFast
                 || CollectionSet::defrag_in_progress()
             {
+                if self.current_pause == Pause::FullTraceFast {
+                    worker.scheduler().work_buckets[WorkBucketStage::Closure]
+                        .add(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
+                }
                 // Mature evacuation will push updated roots to `crate::plan::immix::CURR_ROOTS`.
                 self.immix()
                     .immix_space

@@ -605,10 +605,14 @@ impl<VM: VMBinding> Immix<VM> {
         if emergency {
             return if crate::args::CONCURRENT_MARKING && concurrent_marking_in_progress {
                 Pause::FinalMark
+            } else if CollectionSet::defrag_in_progress() {
+                CollectionSet::force_evacuate_all();
+                Pause::RefCount
             } else {
                 // FIXME: Trigger STW Full GC
                 assert!(crate::args::CONCURRENT_MARKING);
-                Pause::InitialMark
+                CollectionSet::force_evacuate_all();
+                Pause::FullTraceFast
             };
         }
         // Should trigger CM?

@@ -150,6 +150,7 @@ impl PerRegionRemSet {
 }
 
 static IN_DEFRAG: AtomicBool = AtomicBool::new(false);
+static FORCE_EVACUATE_ALL: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Default)]
 pub struct CollectionSet {
@@ -164,6 +165,10 @@ pub struct CollectionSet {
 impl CollectionSet {
     pub fn defrag_in_progress() -> bool {
         IN_DEFRAG.load(Ordering::SeqCst)
+    }
+
+    pub fn force_evacuate_all() {
+        FORCE_EVACUATE_ALL.store(true, Ordering::SeqCst)
     }
 
     pub fn set_reigons(&self, regions: Vec<Region>) {
@@ -251,6 +256,9 @@ impl CollectionSet {
     }
 
     fn should_stop<VM: VMBinding>(&self, _space: &ImmixSpace<VM>) -> bool {
+        if FORCE_EVACUATE_ALL.load(Ordering::SeqCst) {
+            return false;
+        }
         if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
             return self.retired_regions.len()
                 >= *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
@@ -329,6 +337,7 @@ impl CollectionSet {
         *self.prev_region.lock().unwrap() = None;
         self.cached_roots.lock().unwrap().clear();
         IN_DEFRAG.store(false, Ordering::SeqCst);
+        FORCE_EVACUATE_ALL.store(false, Ordering::SeqCst);
         PerRegionRemSet::disable_recording();
     }
 
