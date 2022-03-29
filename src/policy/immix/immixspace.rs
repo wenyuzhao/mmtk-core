@@ -1,5 +1,6 @@
 use super::block_allocation::BlockAllocation;
 use super::cset::CollectionSet;
+use super::defrag_policy::DefragPolicy;
 use super::line::*;
 use super::region::Region;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
@@ -28,6 +29,7 @@ use crate::{
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam_queue::SegQueue;
+use std::ops::ControlFlow;
 use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
@@ -64,6 +66,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub collection_set: CollectionSet,
+    pub defrag_policy: Box<dyn DefragPolicy<VM>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -233,6 +236,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
             collection_set: Default::default(),
+            defrag_policy: super::defrag_policy::create_defrag_policy(),
         }
     }
 
@@ -1014,6 +1018,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
             .add(RCReleaseMatureLOS::new(counter.clone()));
+    }
+
+    pub fn walk_regions_in_address_order(&self, f: impl FnMut(Region) -> ControlFlow<(), ()>) {
+        self.chunk_map.walk_regions_in_address_order(self, f)
     }
 }
 

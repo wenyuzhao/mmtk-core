@@ -3,6 +3,7 @@ pub mod block_allocation;
 pub mod chunk;
 pub mod cset;
 pub mod defrag;
+pub mod defrag_policy;
 pub mod immixspace;
 pub mod line;
 pub mod region;

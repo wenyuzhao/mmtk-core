@@ -27,6 +27,7 @@
 #![feature(const_for)]
 #![feature(const_ptr_offset)]
 #![feature(thread_local)]
+#![feature(control_flow_enum)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 

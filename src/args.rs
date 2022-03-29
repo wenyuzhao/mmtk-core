@@ -36,7 +36,6 @@ pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
 pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
 pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
 pub const ENABLE_INITIAL_ALLOC_LIMIT: bool = cfg!(feature = "lxr_enable_initial_alloc_limit");
-pub const LXR_INCREMENTAL_MATURE_DEFRAG: bool = cfg!(feature = "lxr_incremental_defrag");
 
 /// One more atomic-store per barrier slow-path if this value is smaller than 6.
 pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = {
@@ -139,6 +138,14 @@ pub const LOG_REMSET_FOOTPRINT: bool = cfg!(feature = "log_remset_footprint");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
+
+// ---------- LXR Mature Defrag Args ---------- //
+pub static LXR_INCREMENTAL_DEFRAG: Lazy<bool> = Lazy::new(|| {
+    env::var("INCREMENTAL_DEFRAG")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
+
 pub static LXR_SIMPLE_INCREMENTAL_DEFRAG: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("SIMPLE_INCREMENTAL_DEFRAG")
         .map(|x| x.parse().unwrap())
@@ -149,6 +156,18 @@ pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER: Lazy<usize> = Lazy::new(|| 
         .map(|x| x.parse().unwrap())
         .unwrap_or(1)
 });
+
+pub static LXR_SIMPLE_INCREMENTAL_DEFRAG2: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("SIMPLE_INCREMENTAL_DEFRAG2")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
+pub static SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
+
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 

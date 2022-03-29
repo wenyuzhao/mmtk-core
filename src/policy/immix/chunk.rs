@@ -14,7 +14,9 @@ use crate::{
     vm::*,
     MMTK,
 };
+use atomic::Atomic;
 use spin::Mutex;
+use std::ops::ControlFlow;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
 /// Data structure to reference a MMTk 4 MB chunk.
@@ -305,6 +307,44 @@ impl ChunkMap {
         self.generate_tasks(|chunk| {
             box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new_desc())
         })
+    }
+
+    pub fn walk_regions_in_address_order<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mut f: impl FnMut(Region) -> ControlFlow<(), ()>,
+    ) {
+        static CURSOR: Atomic<Address> = Atomic::new(Address::ZERO);
+        let mut cursor = CURSOR.load(Ordering::SeqCst);
+        let limit = space.pr.highwater.load(Ordering::SeqCst);
+        if cursor.is_zero() {
+            cursor = space.pr.start;
+        }
+        let original_cursor = cursor;
+        loop {
+            if !Chunk::of(cursor).is_committed() {
+                cursor = Region::align(cursor + Chunk::BYTES);
+                continue;
+            }
+            let region = Region::of(cursor);
+            let committed_blocks = region.committed_blocks().count();
+            if committed_blocks == 0 {
+                cursor += Region::BYTES;
+                continue;
+            }
+            let control_flow = f(region);
+            cursor += Region::BYTES;
+            if cursor >= limit {
+                cursor = space.pr.start;
+            }
+            if cursor == original_cursor {
+                break;
+            }
+            if let ControlFlow::Break(_) = control_flow {
+                break;
+            }
+        }
+        CURSOR.store(cursor, Ordering::SeqCst);
     }
 }
 

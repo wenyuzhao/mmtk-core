@@ -231,6 +231,14 @@ impl Region {
         self.blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
     }
+
+    #[inline(always)]
+    pub fn committed_mature_blocks(&self) -> impl Iterator<Item = Block> {
+        self.blocks().filter(|block| {
+            let state = block.get_state();
+            state != BlockState::Unallocated && state != BlockState::Nursery
+        })
+    }
 }
 
 impl Step for Region {
