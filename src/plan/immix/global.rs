@@ -221,7 +221,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         .num_clean_blocks_released_lazy
                         .load(Ordering::SeqCst)
                         << Block::LOG_PAGES;
-                    let mut x = if used_pages_after_gc >= lazy_released_pages {
+                    let x = if used_pages_after_gc >= lazy_released_pages {
                         used_pages_after_gc - lazy_released_pages
                     } else {
                         0
