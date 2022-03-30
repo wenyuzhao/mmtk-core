@@ -67,6 +67,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         vm_map: &'static VMMap,
     ) -> Self {
         let growable = cfg!(target_pointer_width = "64");
+        assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
             log_pages,
             common: CommonPageResource::new(true, growable, vm_map),
@@ -131,19 +132,28 @@ impl<VM: VMBinding> BlockPageResource<VM> {
                     if x >= self.limit {
                         None
                     } else {
-                        Some(x + (1usize << (self.log_pages + LOG_BYTES_IN_PAGE as usize)))
+                        Some(x + BYTES_IN_CHUNK)
                     }
                 }) {
                 Ok(a) => a,
                 _ => return Result::Err(PRAllocFail),
             };
-        let new_chunk = start.is_aligned_to(BYTES_IN_CHUNK);
-
+        assert!(start.is_aligned_to(BYTES_IN_CHUNK));
+        let first_block = start;
+        let last_block = start + BYTES_IN_CHUNK;
+        let block_size = 1usize << (self.log_pages + LOG_BYTES_IN_PAGE as usize);
+        let queue = ArrayQueue::new(BYTES_IN_CHUNK / block_size);
+        let mut cursor = start + block_size;
+        while cursor < last_block {
+            queue.push(cursor).unwrap();
+            cursor = cursor + block_size;
+        }
+        self.locally_freed_blocks.push(queue);
         self.commit_pages(reserved_pages, required_pages, tls);
         Result::Ok(PRAllocResult {
-            start,
-            pages: required_pages,
-            new_chunk,
+            start: first_block,
+            pages: PAGES_IN_CHUNK,
+            new_chunk: true,
         })
     }
 
