@@ -531,7 +531,10 @@ impl<VM: VMBinding> Immix<VM> {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
             if crate::args::CONCURRENT_MARKING
-                && crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_none()
+                && (crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG
+                    .or(*crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2)
+                    .or(*crate::args::LXR_SATB_N)
+                    .is_none())
                 && !crate::concurrent_marking_in_progress()
             {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
@@ -558,7 +561,10 @@ impl<VM: VMBinding> Immix<VM> {
         }
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        if let Some(n) = *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG {
+        if let Some(n) = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG
+            .or(*crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2)
+            .or(*crate::args::LXR_SATB_N)
+        {
             // If CM is finished, do a final mark pause and reset counter
             if crate::args::CONCURRENT_MARKING
                 && concurrent_marking_in_progress
