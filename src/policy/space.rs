@@ -387,8 +387,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 // we will either call back to the VM for OOM, or simply panic.
                 if res.new_chunk {
                     use crate::util::heap::layout::mmapper::Mmapper;
-                    if let Err(mmap_error) =
-                        self.common().mmapper.ensure_mapped(res.start, res.pages)
+                    if let Err(mmap_error) = self
+                        .common()
+                        .mmapper
+                        .ensure_mapped(res.start, res.pages)
+                        .and(
+                            self.common()
+                                .metadata
+                                .try_map_metadata_space(res.start, bytes),
+                        )
                     {
                         crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
                     }

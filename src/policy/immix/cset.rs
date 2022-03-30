@@ -7,7 +7,7 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
-use crossbeam_queue::{ArrayQueue, SegQueue};
+use crossbeam_queue::SegQueue;
 
 use super::{
     line::Line,
@@ -289,7 +289,6 @@ impl CollectionSet {
         space: &ImmixSpace<VM>,
     ) {
         if !self.retired_regions.is_empty() {
-            let queue = ArrayQueue::new(self.retired_regions.len() << Region::LOG_BLOCKS);
             while let Some(region) = self.retired_regions.pop() {
                 crate::COUNTERS
                     .evacuated_mature_regions
@@ -303,7 +302,7 @@ impl CollectionSet {
                         block.clear_rc_table::<VM>();
                         block.clear_striddle_table::<VM>();
                         if block.rc_sweep_mature::<VM>(space, true) {
-                            queue.push(block.start()).unwrap();
+                            space.pr.release_pages(block.start());
                         } else {
                             // unreachable!("{:?} still alive {:?}", block, block.get_state())
                         }
@@ -317,7 +316,6 @@ impl CollectionSet {
                     .fetch_add(bytes, Ordering::Relaxed);
                 region.set_state(RegionState::Allocated);
             }
-            space.pr.release_bulk(queue.len(), queue);
         }
     }
 }
