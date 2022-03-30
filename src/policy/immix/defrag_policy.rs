@@ -16,7 +16,10 @@ use downcast_rs::Downcast;
 use std::{ops::ControlFlow, sync::atomic::AtomicUsize};
 
 pub fn create_defrag_policy<VM: VMBinding>() -> Box<dyn DefragPolicy<VM>> {
-    if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
+    if crate::args::LXR_NO_DEFRAG.is_some() {
+        println!("NoDefragPolicy");
+        box NoDefragPolicy
+    } else if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
         println!("SimpleIntrementalDefragPolicy");
         box SimpleIntrementalDefragPolicy
     } else if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2.is_some() {
@@ -37,6 +40,18 @@ pub trait DefragPolicy<VM: VMBinding>: Downcast {
 }
 
 impl_downcast!(DefragPolicy<VM> where VM: VMBinding);
+
+struct NoDefragPolicy;
+
+impl<VM: VMBinding> DefragPolicy<VM> for NoDefragPolicy {
+    fn select(&self, mmtk: &'static MMTK<VM>) {
+        let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
+        immix_space.collection_set.set_reigons(vec![]);
+    }
+    fn should_stop(&self, _cset: &CollectionSet) -> bool {
+        unreachable!()
+    }
+}
 
 struct SimpleIntrementalDefragPolicy;
 

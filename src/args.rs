@@ -146,6 +146,9 @@ pub static LXR_INCREMENTAL_DEFRAG: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 
+pub static LXR_NO_DEFRAG: Lazy<Option<usize>> =
+    Lazy::new(|| env::var("NO_DEFRAG").map(|x| x.parse().unwrap()).ok());
+
 pub static LXR_SIMPLE_INCREMENTAL_DEFRAG: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("SIMPLE_INCREMENTAL_DEFRAG")
         .map(|x| x.parse().unwrap())
@@ -258,6 +261,7 @@ fn dump_features(active_barrier: BarrierSelector) {
         "simple_incremental_defrag2_threshold",
         *SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD
     );
+    dump_feature!("no_defrag", *LXR_NO_DEFRAG);
 
     println!("----------------------------------------------------");
 }

@@ -707,7 +707,7 @@ impl<VM: VMBinding> Immix<VM> {
                 .cm_early_quit
                 .fetch_add(1, Ordering::Relaxed);
         }
-        if CollectionSet::defrag_in_progress() || pause == Pause::FinalMark {
+        if CollectionSet::defrag_in_progress() {
             crate::COUNTERS.defrag.fetch_add(1, Ordering::Relaxed);
         }
         match pause {

@@ -205,7 +205,7 @@ impl CollectionSet {
         space.defrag_policy.should_stop(self)
     }
 
-    pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+    pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>, first: bool) {
         IN_DEFRAG.store(true, Ordering::SeqCst);
         let mut regions = self.regions.lock().unwrap();
         // Deactivate previous region
@@ -235,6 +235,9 @@ impl CollectionSet {
         self.retired_regions.push(region);
         *self.prev_region.lock().unwrap() = Some(region);
         space.defrag_policy.notify_defrag_start(region);
+        if first {
+            crate::COUNTERS.defrag.fetch_add(1, Ordering::Relaxed);
+        }
         self.schedule_mature_remset_scanning_packets(region, space);
     }
 
@@ -339,10 +342,11 @@ impl<VM: VMBinding> GCWork<VM> for StartMatureEvacuation {
             let w = unsafe { &mut *(w as *const _ as *mut GCWorker<VM>) };
             unsafe { w.local::<ImmixCopyContext<VM>>() }.immix.reset();
         }
-        immix
-            .immix_space
-            .collection_set
-            .move_to_next_region(&immix.immix_space)
+        let pause = immix.current_pause().unwrap();
+        immix.immix_space.collection_set.move_to_next_region(
+            &immix.immix_space,
+            pause == Pause::FullTraceFast || pause == Pause::FinalMark,
+        )
     }
 }
 
@@ -361,7 +365,9 @@ impl<VM: VMBinding> Drop for MatureEvacJobsCounter<VM> {
     #[inline(always)]
     fn drop(&mut self) {
         if MATURE_EVAC_JOBS_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.0.collection_set.move_to_next_region::<VM>(self.0)
+            self.0
+                .collection_set
+                .move_to_next_region::<VM>(self.0, false)
         }
     }
 }
