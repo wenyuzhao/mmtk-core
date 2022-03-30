@@ -16,18 +16,25 @@ use downcast_rs::Downcast;
 use std::{ops::ControlFlow, sync::atomic::AtomicUsize};
 
 pub fn create_defrag_policy<VM: VMBinding>() -> Box<dyn DefragPolicy<VM>> {
-    if crate::args::LXR_NO_DEFRAG.is_some() {
-        println!("NoDefragPolicy");
-        box NoDefragPolicy
-    } else if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.is_some() {
-        println!("SimpleIntrementalDefragPolicy");
-        box SimpleIntrementalDefragPolicy
-    } else if crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2.is_some() {
-        println!("SimpleIntrementalDefragPolicy2");
-        box SimpleIntrementalDefragPolicy2::default()
-    } else {
-        println!("DefaultDefragPolicy");
-        box DefaultDefragPolicy::default()
+    let policy = crate::args::LXR_DEFRAG_POLICY.as_ref().map(|x| x.as_str());
+    println!("{}", policy.unwrap_or("DefaultDefragPolicy"));
+    match policy {
+        Some("NoDefrag") => {
+            println!("NoDefragPolicy");
+            box NoDefragPolicy
+        }
+        Some("SimpleIncrementalDefrag") => {
+            println!("SimpleIncrementalDefragPolicy");
+            box SimpleIncrementalDefragPolicy
+        }
+        Some("SimpleIncrementalDefrag2") => {
+            println!("SimpleIncrementalDefragPolicy2");
+            box SimpleIncrementalDefragPolicy2::default()
+        }
+        _ => {
+            println!("DefaultDefragPolicy");
+            box DefaultDefragPolicy::default()
+        }
     }
 }
 
@@ -53,12 +60,12 @@ impl<VM: VMBinding> DefragPolicy<VM> for NoDefragPolicy {
     }
 }
 
-struct SimpleIntrementalDefragPolicy;
+struct SimpleIncrementalDefragPolicy;
 
-impl<VM: VMBinding> DefragPolicy<VM> for SimpleIntrementalDefragPolicy {
+impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy {
     fn select(&self, mmtk: &'static MMTK<VM>) {
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
-        let n = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG.unwrap()
+        let n = crate::args::LXR_DEFRAG_N.unwrap()
             * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
         let mut regions = vec![];
         immix_space.walk_regions_in_address_order(|region| {
@@ -81,15 +88,15 @@ impl<VM: VMBinding> DefragPolicy<VM> for SimpleIntrementalDefragPolicy {
 }
 
 #[derive(Default)]
-struct SimpleIntrementalDefragPolicy2 {
+struct SimpleIncrementalDefragPolicy2 {
     processed_blocks: AtomicUsize,
     per_pause_budget: AtomicUsize,
 }
 
-impl<VM: VMBinding> DefragPolicy<VM> for SimpleIntrementalDefragPolicy2 {
+impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy2 {
     fn select(&self, mmtk: &'static MMTK<VM>) {
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
-        let regions = crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG2.unwrap()
+        let regions = crate::args::LXR_DEFRAG_N.unwrap()
             * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
         let n = regions * Region::BLOCKS;
         let mut regions = vec![];
