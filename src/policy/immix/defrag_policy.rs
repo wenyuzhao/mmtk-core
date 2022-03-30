@@ -62,8 +62,46 @@ impl<VM: VMBinding> DefragPolicy<VM> for NoDefragPolicy {
 
 struct SimpleIncrementalDefragPolicy;
 
+impl SimpleIncrementalDefragPolicy {
+    fn select_with_sorting<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
+        let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
+        let n = crate::args::LXR_DEFRAG_N.unwrap()
+            * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;
+        let threshold = crate::args::SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD.unwrap();
+        let mut regions = vec![];
+        for chunk in immix_space.chunk_map.committed_chunks() {
+            for region in chunk.regions() {
+                let mut live_blocks = 0usize;
+                let mut target_blocks = 0usize;
+                for block in region.committed_mature_blocks() {
+                    live_blocks += 1;
+                    if block.live_bytes() * 100 <= threshold * Block::BYTES {
+                        target_blocks += 1;
+                    }
+                }
+                if live_blocks > 0 {
+                    regions.push((region, target_blocks));
+                }
+            }
+        }
+        regions.sort_by_key(|x| x.1);
+        regions.reverse();
+        let regions = regions.iter().take(n).map(|x| x.0).collect::<Vec<_>>();
+        for region in &regions {
+            region.set_defrag_source();
+            for block in region.committed_mature_blocks() {
+                block.set_as_defrag_source(true);
+            }
+        }
+        immix_space.collection_set.set_reigons(regions);
+    }
+}
+
 impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy {
     fn select(&self, mmtk: &'static MMTK<VM>) {
+        if *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS {
+            return self.select_with_sorting(mmtk);
+        }
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
         let n = crate::args::LXR_DEFRAG_N.unwrap()
             * *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER;

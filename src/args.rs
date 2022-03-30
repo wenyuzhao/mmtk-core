@@ -151,6 +151,11 @@ pub static LXR_DEFRAG_N: Lazy<Option<usize>> =
 
 pub static LXR_DEFRAG_POLICY: Lazy<Option<String>> = Lazy::new(|| env::var("DEFRAG_POLICY").ok());
 
+pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS: Lazy<bool> = Lazy::new(|| {
+    env::var("SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
 pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER: Lazy<usize> = Lazy::new(|| {
     env::var("SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER")
         .map(|x| x.parse().unwrap())
@@ -193,7 +198,6 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("log_remset_footprint");
     dump_feature!("lxr_enable_initial_alloc_limit");
-    dump_feature!("lxr_incremental_defrag");
 
     dump_feature!("lxr_defrag_policy", *LXR_DEFRAG_POLICY);
     dump_feature!(
@@ -242,6 +246,10 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!(
         "simple_incremental_defrag_multipler",
         *LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
+    );
+    dump_feature!(
+        "simple_incremental_defrag_sort_regions",
+        *LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS
     );
     dump_feature!(
         "simple_incremental_defrag2_threshold",
