@@ -904,6 +904,12 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                 );
             }
         }
+        if count != 0 && immix.current_pause().is_none() {
+            immix
+                .immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(count, Ordering::Relaxed);
+        }
         immix.immix_space.pr.release_bulk(count, queue)
     }
 }

@@ -49,6 +49,7 @@ static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static SIMPLE_INCREMENTAL_DEFRAG_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
@@ -214,7 +215,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 // Update counters
                 {
                     let o = Ordering::Relaxed;
-                    let x = me.get_pages_reserved();
+                    let x = HEAP_AFTER_GC.load(Ordering::SeqCst)
+                        - me.immix_space
+                            .num_clean_blocks_released_lazy
+                            .load(Ordering::SeqCst);
                     crate::COUNTERS.total_used_pages.store(
                         crate::COUNTERS.total_used_pages.load(o) + x,
                         Ordering::Relaxed,
@@ -434,6 +438,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
         self.avail_pages_at_end_of_last_gc
             .store(self.get_pages_avail(), Ordering::SeqCst);
+        HEAP_AFTER_GC.store(self.get_pages_used(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "nogc_no_zeroing")]

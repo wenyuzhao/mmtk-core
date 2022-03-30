@@ -531,10 +531,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
-        if !nursery && crate::args::LAZY_DECREMENTS {
-            self.num_clean_blocks_released_lazy
-                .fetch_add(1, Ordering::Relaxed);
-        }
         block.deinit();
     }
 
