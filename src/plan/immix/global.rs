@@ -215,10 +215,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 // Update counters
                 {
                     let o = Ordering::Relaxed;
-                    let x = HEAP_AFTER_GC.load(Ordering::SeqCst)
-                        - me.immix_space
-                            .num_clean_blocks_released_lazy
-                            .load(Ordering::SeqCst);
+                    let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
+                    let lazy_released_pages = me
+                        .immix_space
+                        .num_clean_blocks_released_lazy
+                        .load(Ordering::SeqCst)
+                        << Block::LOG_PAGES;
+                    let mut x = if used_pages_after_gc >= lazy_released_pages {
+                        used_pages_after_gc - lazy_released_pages
+                    } else {
+                        0
+                    };
                     crate::COUNTERS.total_used_pages.store(
                         crate::COUNTERS.total_used_pages.load(o) + x,
                         Ordering::Relaxed,
