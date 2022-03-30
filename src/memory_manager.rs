@@ -31,12 +31,12 @@ use std::time::SystemTime;
 pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
     let t = SystemTime::now();
     mmtk.plan.base().stats.start_gc();
-    if cfg!(feature = "yield_and_roots_timer") && crate::inside_harness() {
+    if cfg!(feature = "yield_and_roots_timer") {
         let t = t
             .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::Relaxed))
             .unwrap()
             .as_nanos();
-        crate::PAUSES.yield_nanos.fetch_add(t, Ordering::Relaxed);
+        crate::COUNTERS.yield_nanos.fetch_add(t, Ordering::Relaxed);
     }
 
     if crate::args::LOG_STAGES {
@@ -425,6 +425,7 @@ pub fn add_phantom_candidate<VM: VMBinding>(
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    crate::reset_counters();
     mmtk.harness_begin(tls);
 }
 
@@ -434,6 +435,7 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    crate::stop_counters();
     mmtk.harness_end();
     crate::output_pause_time();
 }

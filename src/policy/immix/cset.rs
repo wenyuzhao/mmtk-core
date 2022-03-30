@@ -288,8 +288,15 @@ impl CollectionSet {
         if !self.retired_regions.is_empty() {
             let queue = ArrayQueue::new(self.retired_regions.len() << Region::LOG_BLOCKS);
             while let Some(region) = self.retired_regions.pop() {
+                crate::COUNTERS
+                    .evacuated_mature_regions
+                    .fetch_add(1, Ordering::Relaxed);
+                let mut blocks = 0usize;
+                let mut bytes = 0usize;
                 for block in region.committed_blocks() {
                     if block.is_defrag_source() {
+                        blocks += 1;
+                        bytes += block.live_bytes();
                         block.clear_rc_table::<VM>();
                         block.clear_striddle_table::<VM>();
                         if block.rc_sweep_mature::<VM>(space, true) {
@@ -299,6 +306,12 @@ impl CollectionSet {
                         }
                     }
                 }
+                crate::COUNTERS
+                    .evacuated_mature_blocks
+                    .fetch_add(blocks, Ordering::Relaxed);
+                crate::COUNTERS
+                    .evacuated_mature_bytes
+                    .fetch_add(bytes, Ordering::Relaxed);
                 region.set_state(RegionState::Allocated);
             }
             space.pr.release_bulk(queue.len(), queue);

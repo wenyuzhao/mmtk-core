@@ -350,17 +350,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     LAST_ACTIVATE_TIME = Some(SystemTime::now());
                 }
             }
-            if cfg!(feature = "yield_and_roots_timer")
-                && x
-                && id == WorkBucketStage::Prepare
-                && crate::inside_harness()
-            {
+            if cfg!(feature = "yield_and_roots_timer") && x && id == WorkBucketStage::Prepare {
                 let t = crate::GC_START_TIME
                     .load(Ordering::SeqCst)
                     .elapsed()
                     .unwrap()
                     .as_nanos();
-                crate::PAUSES.roots_nanos.fetch_add(t, Ordering::SeqCst);
+                crate::COUNTERS.roots_nanos.fetch_add(t, Ordering::SeqCst);
             }
             buckets_updated |= x;
             if x {

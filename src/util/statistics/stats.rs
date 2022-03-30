@@ -206,7 +206,7 @@ impl Stats {
         for value in scheduler_stat.values() {
             print!("{}\t", value);
         }
-        crate::PAUSES.print_values();
+        unsafe { crate::RETIRED_COUNTERS.print_values() };
         #[cfg(feature = "instrumentation")]
         crate::STAT.lock().print_values();
         if crate::args::LOG_REMSET_FOOTPRINT {
@@ -234,7 +234,7 @@ impl Stats {
         for name in scheduler_stat.keys() {
             print!("{}\t", name);
         }
-        crate::PAUSES.print_keys();
+        unsafe { crate::RETIRED_COUNTERS.print_keys() };
         #[cfg(feature = "instrumentation")]
         crate::STAT.lock().print_keys();
         if crate::args::LOG_REMSET_FOOTPRINT {

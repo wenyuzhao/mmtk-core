@@ -211,20 +211,18 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                         me.get_pages_reserved() / 256
                     );
                 }
-                if crate::inside_harness() {
+                // Update counters
+                {
+                    let o = Ordering::Relaxed;
                     let x = me.get_pages_reserved();
-                    crate::PAUSES.total_used_pages.store(
-                        crate::PAUSES.total_used_pages.load(Ordering::Relaxed) + x,
+                    crate::COUNTERS.total_used_pages.store(
+                        crate::COUNTERS.total_used_pages.load(o) + x,
                         Ordering::Relaxed,
                     );
-                    let min = crate::PAUSES.min_used_pages.load(Ordering::Relaxed);
-                    if min > x {
-                        crate::PAUSES.min_used_pages.store(x, Ordering::Relaxed);
-                    }
-                    let max = crate::PAUSES.max_used_pages.load(Ordering::Relaxed);
-                    if max < x {
-                        crate::PAUSES.max_used_pages.store(x, Ordering::Relaxed);
-                    }
+                    let min = crate::COUNTERS.min_used_pages.load(o);
+                    crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
+                    let max = crate::COUNTERS.max_used_pages.load(o);
+                    crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
                 }
                 me.decide_next_gc_may_perform_cycle_collection();
             });
@@ -245,8 +243,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if true {
             unreachable!();
         }
-        if crate::inside_harness() && !crate::LazySweepingJobs::all_finished() {
-            crate::PAUSES
+        if !crate::LazySweepingJobs::all_finished() {
+            crate::COUNTERS
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
@@ -255,11 +253,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .control_collector_context
                 .is_concurrent_collection(),
         );
-        if crate::inside_harness()
-            && crate::concurrent_marking_in_progress()
-            && pause == Pause::RefCount
-        {
-            crate::PAUSES.rc_during_satb.fetch_add(1, Ordering::SeqCst);
+        if crate::concurrent_marking_in_progress() && pause == Pause::RefCount {
+            crate::COUNTERS
+                .rc_during_satb
+                .fetch_add(1, Ordering::SeqCst);
         }
         if crate::args::LOG_PER_GC_STATE {
             let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
@@ -394,7 +391,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     .elapsed()
                     .unwrap()
                     .as_nanos();
-                crate::PAUSES.satb_nanos.fetch_add(t, Ordering::SeqCst);
+                crate::COUNTERS.satb_nanos.fetch_add(t, Ordering::SeqCst);
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
@@ -405,7 +402,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .elapsed()
                 .unwrap()
                 .as_nanos();
-            crate::PAUSES.satb_nanos.fetch_add(t, Ordering::SeqCst);
+            crate::COUNTERS.satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
     }
 
@@ -636,15 +633,14 @@ impl<VM: VMBinding> Immix<VM> {
         if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
             INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
         }
-        if crate::inside_harness() {
-            if INCS_TRIGGERED.load(Ordering::SeqCst) {
-                crate::PAUSES.incs_triggerd.fetch_add(1, Ordering::SeqCst);
-            } else if ALLOC_TRIGGERED.load(Ordering::SeqCst) {
-                crate::PAUSES.alloc_triggerd.fetch_add(1, Ordering::SeqCst);
+        {
+            let o = Ordering::SeqCst;
+            if INCS_TRIGGERED.load(o) {
+                crate::COUNTERS.incs_triggerd.fetch_add(1, o);
+            } else if ALLOC_TRIGGERED.load(o) {
+                crate::COUNTERS.alloc_triggerd.fetch_add(1, o);
             } else {
-                crate::PAUSES
-                    .overflow_triggerd
-                    .fetch_add(1, Ordering::SeqCst);
+                crate::COUNTERS.overflow_triggerd.fetch_add(1, o);
             }
         }
         self.base().set_collection_kind::<Self>(self);
@@ -685,9 +681,7 @@ impl<VM: VMBinding> Immix<VM> {
                 .store(false, Ordering::SeqCst);
             pause
         } else if emergency_collection {
-            if crate::inside_harness() {
-                crate::PAUSES.emergency.fetch_add(1, Ordering::Relaxed);
-            }
+            crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
             if concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {
@@ -708,17 +702,20 @@ impl<VM: VMBinding> Immix<VM> {
                 full_trace()
             }
         };
-        if crate::inside_harness() {
-            if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
-                crate::PAUSES.cm_early_quit.fetch_add(1, Ordering::Relaxed);
-            }
-            match pause {
-                Pause::RefCount => crate::PAUSES.rc.fetch_add(1, Ordering::Relaxed),
-                Pause::InitialMark => crate::PAUSES.initial_mark.fetch_add(1, Ordering::Relaxed),
-                Pause::FinalMark => crate::PAUSES.final_mark.fetch_add(1, Ordering::Relaxed),
-                _ => crate::PAUSES.full.fetch_add(1, Ordering::Relaxed),
-            };
+        if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
+            crate::COUNTERS
+                .cm_early_quit
+                .fetch_add(1, Ordering::Relaxed);
         }
+        if CollectionSet::defrag_in_progress() || pause == Pause::FinalMark {
+            crate::COUNTERS.defrag.fetch_add(1, Ordering::Relaxed);
+        }
+        match pause {
+            Pause::RefCount => crate::COUNTERS.rc.fetch_add(1, Ordering::Relaxed),
+            Pause::InitialMark => crate::COUNTERS.initial_mark.fetch_add(1, Ordering::Relaxed),
+            Pause::FinalMark => crate::COUNTERS.final_mark.fetch_add(1, Ordering::Relaxed),
+            _ => crate::COUNTERS.full.fetch_add(1, Ordering::Relaxed),
+        };
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
             .store(pause != Pause::RefCount, Ordering::SeqCst);
