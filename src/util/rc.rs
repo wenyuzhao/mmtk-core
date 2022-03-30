@@ -22,7 +22,6 @@ use crate::{
     AllocationSemantics, MMTK,
 };
 use atomic::Ordering;
-use crossbeam_queue::ArrayQueue;
 use std::intrinsics::unlikely;
 use std::iter::Step;
 use std::ops::{Deref, DerefMut};
@@ -863,13 +862,10 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         if self.blocks.is_empty() {
             return;
         }
-        let mut count = 0;
-        let queue = ArrayQueue::new(self.blocks.len());
         for (block, defrag) in &self.blocks {
             block.unlog();
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
-                count += 1;
-                queue.push(block.start()).unwrap();
+                immix.immix_space.pr.release_pages(block.start());
                 if *defrag {
                     block.set_as_defrag_source(false);
                 }
@@ -883,7 +879,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                 );
             }
         }
-        immix.immix_space.pr.release_bulk(count, queue)
     }
 }
 

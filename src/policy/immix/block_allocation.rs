@@ -8,7 +8,6 @@ use crate::{
     MMTK,
 };
 use atomic::{Atomic, Ordering};
-use crossbeam_queue::ArrayQueue;
 use spin::Lazy;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -294,15 +293,11 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
         if self.blocks.is_empty() {
             return;
         }
-        let mut count = 0;
-        let queue = ArrayQueue::new(self.blocks.len());
         for block in &self.blocks {
             if block.rc_sweep_nursery(self.space, self.mutator_reused_blocks) {
-                count += 1;
-                queue.push(block.start()).unwrap();
+                self.space.pr.release_pages(block.start());
             }
         }
-        self.space.pr.release_bulk(count, queue)
     }
 }
 
@@ -317,10 +312,8 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseUnallocatedNurseryBlocks<VM> {
         if self.blocks.is_empty() {
             return;
         }
-        let queue = ArrayQueue::new(self.blocks.len());
         for block in &self.blocks {
-            queue.push(block.start()).unwrap();
+            self.space.pr.release_pages(block.start());
         }
-        self.space.pr.release_bulk(self.blocks.len(), queue)
     }
 }

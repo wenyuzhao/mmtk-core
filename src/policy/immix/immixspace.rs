@@ -26,7 +26,7 @@ use crate::{
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
-use crossbeam_queue::{ArrayQueue, SegQueue};
+use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::{
@@ -471,17 +471,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             if self.last_defrag_blocks.len() > 0 {
-                let queue = ArrayQueue::new(self.last_defrag_blocks.len());
                 while let Some(block) = self.last_defrag_blocks.pop() {
                     block.clear_rc_table::<VM>();
                     block.clear_striddle_table::<VM>();
                     if block.rc_sweep_mature::<VM>(self, true) {
-                        queue.push(block.start()).unwrap();
+                        self.pr.release_pages(block.start());
                     }
                     assert!(!block.is_defrag_source());
                     assert_eq!(block.get_state(), BlockState::Unallocated);
                 }
-                self.pr.release_bulk(queue.len(), queue);
             }
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();

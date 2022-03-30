@@ -406,6 +406,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_start(&self) {
+        self.immix_space.pr.flush_all();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
         if crate::args::REF_COUNT {
@@ -444,6 +445,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_end(&self) {
+        self.immix_space.pr.flush_all();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
             crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);

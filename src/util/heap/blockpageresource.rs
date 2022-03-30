@@ -15,14 +15,15 @@ use std::marker::PhantomData;
 use std::sync::Mutex;
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
+const LOCAL_BUFFER_SIZE: usize = 128;
 
 pub struct BlockPageResource<VM: VMBinding> {
     common: CommonPageResource,
     log_pages: usize,
     sync: Mutex<()>,
-    released_blocks: SegQueue<Address>,
-    head_locally_freed_blocks: spin::RwLock<Option<ArrayQueue<Address>>>,
-    locally_freed_blocks: SegQueue<ArrayQueue<Address>>,
+    head_global_freed_blocks: spin::RwLock<Option<ArrayQueue<Address>>>,
+    global_freed_blocks: SegQueue<ArrayQueue<Address>>,
+    worker_local_freed_blocks: Vec<spin::RwLock<ArrayQueue<Address>>>,
     highwater: Atomic<Address>,
     limit: Address,
     _p: PhantomData<VM>,
@@ -39,6 +40,7 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
         &mut self.common
     }
 
+    #[inline(always)]
     fn alloc_pages(
         &self,
         space_descriptor: SpaceDescriptor,
@@ -50,10 +52,12 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
         unsafe { self.alloc_pages_no_lock(space_descriptor, reserved_pages, required_pages, tls) }
     }
 
+    #[inline(always)]
     fn adjust_for_metadata(&self, pages: usize) -> usize {
         pages
     }
 
+    #[inline(always)]
     fn bpr(&self) -> Option<&BlockPageResource<VM>> {
         Some(self)
     }
@@ -68,20 +72,25 @@ impl<VM: VMBinding> BlockPageResource<VM> {
     ) -> Self {
         let growable = cfg!(target_pointer_width = "64");
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
+        let mut worker_local_freed_blocks = vec![];
+        worker_local_freed_blocks.resize_with(*crate::CALC_WORKERS, || {
+            spin::RwLock::new(ArrayQueue::new(LOCAL_BUFFER_SIZE))
+        });
         Self {
             log_pages,
             common: CommonPageResource::new(true, growable, vm_map),
             sync: Mutex::new(()),
-            released_blocks: Default::default(),
-            head_locally_freed_blocks: Default::default(),
-            locally_freed_blocks: Default::default(),
+            head_global_freed_blocks: Default::default(),
+            global_freed_blocks: Default::default(),
             highwater: Atomic::new(start),
             limit: (start + bytes).align_up(BYTES_IN_CHUNK),
+            worker_local_freed_blocks,
             _p: PhantomData,
         }
     }
 
     /// The caller needs to ensure this is called by only one thread.
+    #[inline]
     pub unsafe fn alloc_pages_no_lock(
         &self,
         _space_descriptor: SpaceDescriptor,
@@ -91,32 +100,19 @@ impl<VM: VMBinding> BlockPageResource<VM> {
     ) -> Result<PRAllocResult, PRAllocFail> {
         debug_assert_eq!(reserved_pages, required_pages);
         debug_assert_eq!(reserved_pages, 1 << self.log_pages);
-        // Fast allocate from the released-blocks list
-        if let Some(block) = self.released_blocks.pop() {
-            self.commit_pages(reserved_pages, required_pages, tls);
-            return Result::Ok(PRAllocResult {
-                start: block,
-                pages: required_pages,
-                new_chunk: false,
-            });
-        }
         // Fast allocate from the locally-released-blocks list
-        let head_locally_freed_blocks = self.head_locally_freed_blocks.upgradeable_read();
-        if let Some(block) = head_locally_freed_blocks
-            .as_ref()
-            .map(|q| q.pop())
-            .flatten()
-        {
+        let head_global_freed_blocks = self.head_global_freed_blocks.upgradeable_read();
+        if let Some(block) = head_global_freed_blocks.as_ref().map(|q| q.pop()).flatten() {
             self.commit_pages(reserved_pages, required_pages, tls);
             return Result::Ok(PRAllocResult {
                 start: block,
                 pages: required_pages,
                 new_chunk: false,
             });
-        } else if let Some(blocks) = self.locally_freed_blocks.pop() {
+        } else if let Some(blocks) = self.global_freed_blocks.pop() {
             let block = blocks.pop().unwrap();
-            let mut head_locally_freed_blocks = head_locally_freed_blocks.upgrade();
-            *head_locally_freed_blocks = Some(blocks);
+            let mut head_global_freed_blocks = head_global_freed_blocks.upgrade();
+            *head_global_freed_blocks = Some(blocks);
             self.commit_pages(reserved_pages, required_pages, tls);
             return Result::Ok(PRAllocResult {
                 start: block,
@@ -148,7 +144,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             queue.push(cursor).unwrap();
             cursor = cursor + block_size;
         }
-        self.locally_freed_blocks.push(queue);
+        self.global_freed_blocks.push(queue);
         self.commit_pages(reserved_pages, required_pages, tls);
         Result::Ok(PRAllocResult {
             start: first_block,
@@ -157,21 +153,46 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         })
     }
 
+    #[inline]
     pub fn release_pages(&self, first: Address) {
         debug_assert!(self.common.contiguous);
         debug_assert!(first.is_aligned_to(1usize << (self.log_pages + LOG_BYTES_IN_PAGE as usize)));
         let pages = 1 << self.log_pages;
         debug_assert!(pages as usize <= self.common.accounting.get_committed_pages());
         self.common.accounting.release(pages as _);
-        self.released_blocks.push(first);
+        let id = crate::gc_worker_id().unwrap();
+        let failed = self.worker_local_freed_blocks[id]
+            .read()
+            .push(first)
+            .is_err();
+        if failed {
+            let mut queue = ArrayQueue::new(LOCAL_BUFFER_SIZE);
+            {
+                let mut lock = self.worker_local_freed_blocks[id].write();
+                std::mem::swap(&mut queue, &mut *lock);
+                lock.push(first).unwrap();
+            }
+            if !queue.is_empty() {
+                self.global_freed_blocks.push(queue);
+            }
+        }
     }
 
-    pub fn release_bulk(&self, blocks: usize, queue: ArrayQueue<Address>) {
-        if blocks == 0 {
-            return;
+    pub fn flush(&self, id: usize) {
+        let read = self.worker_local_freed_blocks[id].upgradeable_read();
+        if !read.is_empty() {
+            let mut queue = ArrayQueue::new(LOCAL_BUFFER_SIZE);
+            let mut write = read.upgrade();
+            std::mem::swap(&mut queue, &mut *write);
+            if !queue.is_empty() {
+                self.global_freed_blocks.push(queue)
+            }
         }
-        let pages = blocks << self.log_pages;
-        self.common.accounting.release(pages as _);
-        self.locally_freed_blocks.push(queue);
+    }
+
+    pub fn flush_all(&self) {
+        for i in 0..self.worker_local_freed_blocks.len() {
+            self.flush(i)
+        }
     }
 }
