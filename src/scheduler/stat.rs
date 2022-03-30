@@ -44,6 +44,9 @@ impl SchedulerStat {
 
     /// Used during statistics printing at [`crate::memory_manager::harness_end`]
     pub fn harness_stat(&self) -> HashMap<String, String> {
+        if cfg!(not(feature = "work_packet_counter")) {
+            return Default::default();
+        }
         let mut stat = HashMap::new();
         // Work counts
         let mut total_count = 0;

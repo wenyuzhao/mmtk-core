@@ -862,9 +862,11 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         if self.blocks.is_empty() {
             return;
         }
+        let mut count = 0;
         for (block, defrag) in &self.blocks {
             block.unlog();
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
+                count += 1;
                 immix.immix_space.pr.release_pages(block.start());
                 if *defrag {
                     block.set_as_defrag_source(false);
@@ -878,6 +880,12 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                     block.is_defrag_source()
                 );
             }
+        }
+        if count != 0 && immix.current_pause().is_none() {
+            immix
+                .immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(count, Ordering::Relaxed);
         }
     }
 }

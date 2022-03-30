@@ -274,11 +274,12 @@ fn gc_trigger_time() -> u128 {
 }
 
 #[inline(always)]
+#[allow(unused)]
 fn inside_harness() -> bool {
     crate::INSIDE_HARNESS.load(Ordering::Relaxed)
 }
 
-struct Pauses {
+struct Counters {
     pub rc: AtomicUsize,
     pub initial_mark: AtomicUsize,
     pub final_mark: AtomicUsize,
@@ -295,85 +296,59 @@ struct Pauses {
     pub incs_triggerd: AtomicUsize,
     pub alloc_triggerd: AtomicUsize,
     pub overflow_triggerd: AtomicUsize,
+    pub rc_during_satb: AtomicUsize,
 }
 
-impl Pauses {
-    pub fn print_keys(&self) {
-        print!("gc.rc\t");
-        print!("gc.initial_satb\t");
-        print!("gc.final_satb\t");
-        print!("gc.full\t");
-        print!("gc.emergency\t");
-        print!("cm_early_quit\t");
-        print!("gc_with_unfinished_lazy_jobs\t");
-        if cfg!(feature = "yield_and_roots_timer") {
-            print!("time.yield\t");
-            print!("time.roots\t");
-        }
-        if cfg!(feature = "satb_timer") {
-            print!("time.satb\t");
-        }
-        print!("total_used_pages\t");
-        print!("min_used_pages\t");
-        print!("max_used_pages\t");
-        print!("incs_triggerd\t");
-        print!("alloc_triggerd\t");
-        print!("overflow_triggerd\t");
-    }
-    pub fn print_values(&self) {
-        print!("{}\t", self.rc.load(Ordering::SeqCst));
-        print!("{}\t", self.initial_mark.load(Ordering::SeqCst));
-        print!("{}\t", self.final_mark.load(Ordering::SeqCst));
-        print!("{}\t", self.full.load(Ordering::SeqCst));
-        print!("{}\t", self.emergency.load(Ordering::SeqCst));
-        print!("{}\t", self.cm_early_quit.load(Ordering::SeqCst));
-        print!(
-            "{}\t",
-            self.gc_with_unfinished_lazy_jobs.load(Ordering::SeqCst)
-        );
-        if cfg!(feature = "yield_and_roots_timer") {
-            print!(
-                "{}\t",
-                self.yield_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
-            );
-            print!(
-                "{}\t",
-                self.roots_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
-            );
-        }
-        if cfg!(feature = "satb_timer") {
-            print!(
-                "{}\t",
-                self.satb_nanos.load(Ordering::SeqCst) as f64 / 1000000.0
-            );
-        }
-        print!("{}\t", self.total_used_pages.load(Ordering::SeqCst));
-        print!("{}\t", self.min_used_pages.load(Ordering::SeqCst));
-        print!("{}\t", self.max_used_pages.load(Ordering::SeqCst));
-        print!("{}\t", self.incs_triggerd.load(Ordering::SeqCst));
-        print!("{}\t", self.alloc_triggerd.load(Ordering::SeqCst));
-        print!("{}\t", self.overflow_triggerd.load(Ordering::SeqCst));
+macro_rules! counter_print_keys_and_values {
+    ([$this: ident] $($k: literal: $v: expr,)*) => {
+        pub fn print_keys(&$this) { $(print!("{}\t", $k);)* }
+        pub fn print_values(&$this) { $(print!("{}\t", $v);)* }
+    };
+}
+
+impl Counters {
+    counter_print_keys_and_values! { [self]
+        "gc.rc": self.rc.load(Ordering::SeqCst),
+        "gc.initial_satb": self.initial_mark.load(Ordering::SeqCst),
+        "gc.final_satb": self.final_mark.load(Ordering::SeqCst),
+        "gc.full": self.full.load(Ordering::SeqCst),
+        "gc.emergency": self.emergency.load(Ordering::SeqCst),
+        "cm_early_quit": self.cm_early_quit.load(Ordering::SeqCst),
+        "gc_with_unfinished_lazy_jobs": self.gc_with_unfinished_lazy_jobs.load(Ordering::SeqCst),
+        "time.yield": self.yield_nanos.load(Ordering::SeqCst) as f64 / 1000000.0,
+        "time.roots": self.roots_nanos.load(Ordering::SeqCst) as f64 / 1000000.0,
+        "time.satb": self.satb_nanos.load(Ordering::SeqCst) as f64 / 1000000.0,
+        "total_used_pages": self.total_used_pages.load(Ordering::SeqCst),
+        "min_used_pages": self.min_used_pages.load(Ordering::SeqCst),
+        "max_used_pages": self.max_used_pages.load(Ordering::SeqCst),
+        "incs_triggerd": self.incs_triggerd.load(Ordering::SeqCst),
+        "alloc_triggerd": self.alloc_triggerd.load(Ordering::SeqCst),
+        "overflow_triggerd": self.overflow_triggerd.load(Ordering::SeqCst),
+        "rc_during_satb": self.rc_during_satb.load(Ordering::SeqCst),
     }
 }
 
-static PAUSES: Pauses = Pauses {
-    rc: AtomicUsize::new(0),
-    initial_mark: AtomicUsize::new(0),
-    final_mark: AtomicUsize::new(0),
-    full: AtomicUsize::new(0),
-    emergency: AtomicUsize::new(0),
-    cm_early_quit: AtomicUsize::new(0),
-    yield_nanos: Atomic::new(0),
-    roots_nanos: Atomic::new(0),
-    satb_nanos: Atomic::new(0),
-    total_used_pages: AtomicUsize::new(0),
-    min_used_pages: AtomicUsize::new(usize::MAX),
-    max_used_pages: AtomicUsize::new(0),
-    gc_with_unfinished_lazy_jobs: AtomicUsize::new(0),
-    incs_triggerd: AtomicUsize::new(0),
-    alloc_triggerd: AtomicUsize::new(0),
-    overflow_triggerd: AtomicUsize::new(0),
-};
+const fn create_counters() -> Counters {
+    let mut counters: Counters =
+        unsafe { std::mem::transmute([0u8; std::mem::size_of::<Counters>()]) };
+    counters.min_used_pages = AtomicUsize::new(usize::MAX);
+    counters
+}
+
+fn reset_counters() {
+    let mut new_counters = create_counters();
+    let global = unsafe { &mut *(&COUNTERS as *const Counters as *mut Counters) };
+    std::mem::swap(global, &mut new_counters);
+}
+
+fn stop_counters() {
+    let retired_counters = unsafe { &mut RETIRED_COUNTERS };
+    let global = unsafe { &mut *(&COUNTERS as *const Counters as *mut Counters) };
+    std::mem::swap(global, retired_counters);
+}
+
+static mut RETIRED_COUNTERS: Counters = create_counters();
+static COUNTERS: Counters = create_counters();
 
 #[derive(Default)]
 struct GCStat {

@@ -154,12 +154,6 @@ impl Block {
         block.inc_dead_bytes_sloppy(o.get_size::<VM>());
     }
 
-    // #[inline(always)]
-    // pub fn dec_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
-    //     let block = Block::containing::<VM>(o);
-    //     block.dec_dead_bytes_sloppy(o.get_size::<VM>());
-    // }
-
     #[inline(always)]
     pub fn calc_dead_lines(&self) -> usize {
         let mut dead_lines = 0;
@@ -448,11 +442,6 @@ impl Block {
         debug_assert!(!super::BLOCK_ONLY);
         Line::from(self.start())..Line::from(self.end())
     }
-
-    // #[inline(always)]
-    // pub fn clear_mark_table(&self) {
-    //     side_metadata::bzero_x(&Self::MARK_TABLE, self.start(), Block::BYTES);
-    // }
 
     #[inline(always)]
     pub fn clear_line_validity_states(&self) {
