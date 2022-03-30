@@ -71,6 +71,14 @@ impl Chunk {
     }
 
     #[inline(always)]
+    pub fn committed_mature_blocks(&self) -> impl Iterator<Item = Block> {
+        self.blocks().filter(|block| {
+            let state = block.get_state();
+            state != BlockState::Unallocated && state != BlockState::Nursery
+        })
+    }
+
+    #[inline(always)]
     pub fn regions(&self) -> Range<Region> {
         let start = Region::from(Region::align(self.0));
         let end = Region::from(start.start() + (Self::REGIONS << Region::LOG_BYTES));

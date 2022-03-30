@@ -1,9 +1,4 @@
-use super::{
-    block::Block,
-    chunk::Chunk,
-    cset::CollectionSet,
-    region::{Region, RegionState},
-};
+use super::{block::Block, chunk::Chunk, cset::CollectionSet, region::Region};
 use crate::{
     plan::immix::{Immix, Pause},
     scheduler::{GCWork, GCWorker, WorkBucketStage},
@@ -189,8 +184,8 @@ impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy2 {
 
 #[derive(Default)]
 struct DefaultDefragPolicy {
-    fragmented_regions: SegQueue<Vec<(Region, usize)>>,
-    fragmented_regions_size: AtomicUsize,
+    fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
+    fragmented_blocks_size: AtomicUsize,
 }
 
 impl DefaultDefragPolicy {
@@ -202,38 +197,38 @@ impl DefaultDefragPolicy {
     ) {
         let collection_set = &immix.immix_space.collection_set;
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
-        let defrag_bytes = (immix.get_pages_avail() + immix.get_collection_reserve()) << 12;
-        // Sort regions by scores
-        let mut regions = Vec::with_capacity(self.fragmented_regions_size.load(Ordering::SeqCst));
-        while let Some(mut x) = self.fragmented_regions.pop() {
-            regions.append(&mut x);
+        let total_available_space =
+            (immix.get_pages_avail() + immix.get_collection_reserve()) << 12;
+        // Sort blocks by live_bytes
+        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
+        while let Some(mut x) = self.fragmented_blocks.pop() {
+            blocks.append(&mut x);
         }
+        blocks.sort_by_key(|x| x.1);
+        // Select blocks up to space limit
+        let old_blocks = blocks;
+        let mut blocks = Vec::with_capacity(old_blocks.len());
         let mut live_bytes = 0usize;
-        regions.sort_by_key(|x| x.1);
-        // Select regions
-        let mut cset = vec![];
-        while let Some((region, dead_bytes)) = regions.pop() {
-            region.set_defrag_source();
-            for block in region.committed_mature_blocks() {
-                if block.live_bytes() * 100 <= 20 * Block::BYTES {
-                    block.set_as_defrag_source(true);
-                    live_bytes += block.live_bytes() * 30 / 100;
-                }
+        let mut regions = vec![];
+        for (block, live) in old_blocks {
+            block.set_as_defrag_source(true);
+            let region = block.region();
+            if !region.is_defrag_source() {
+                region.set_defrag_source();
+                regions.push(region);
             }
-            cset.push(region);
-            if crate::args::LOG_PER_GC_STATE {
-                println!(
-                    " - Defrag {:?} live_bytes={:?} {:?}",
-                    region,
-                    Region::BYTES - dead_bytes,
-                    region.get_state()
-                );
-            }
-            if live_bytes >= defrag_bytes {
+            blocks.push(block);
+            live_bytes += live;
+            if live_bytes >= total_available_space {
                 break;
             }
         }
-        collection_set.set_reigons(cset.clone());
+        if crate::args::LOG_PER_GC_STATE {
+            for r in &regions {
+                println!(" - Defrag {:?}", r);
+            }
+        }
+        collection_set.set_reigons(regions);
     }
 }
 
@@ -243,7 +238,7 @@ impl<VM: VMBinding> DefragPolicy<VM> for DefaultDefragPolicy {
         let tasks = immix_space
             .chunk_map
             .generate_tasks(|chunk| box SelectDefragRegionsInChunk { chunk });
-        self.fragmented_regions_size.store(0, Ordering::SeqCst);
+        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
         immix_space.scheduler().work_buckets[WorkBucketStage::RCCollectionSetSelection]
             .bulk_add(tasks);
@@ -274,23 +269,12 @@ struct SelectDefragRegionsInChunk {
 impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let mut regions = vec![];
+        let mut blocks = vec![];
         // Iterate over all blocks in this chunk
-        for region in self.chunk.regions() {
-            region.set_state(RegionState::Allocated);
-            let mut live_blocks = 0usize;
-            let mut defraggable_bytes = 0usize;
-            for block in region.committed_mature_blocks() {
-                live_blocks += 1;
-                if block.live_bytes() * 100 <= 20 * Block::BYTES {
-                    defraggable_bytes += 1;
-                }
-            }
-            if live_blocks > 0 {
-                if crate::args::LOG_PER_GC_STATE {
-                    println!(" - candidate {:?} score={:?}", region, defraggable_bytes);
-                }
-                regions.push((region, defraggable_bytes));
+        for block in self.chunk.committed_mature_blocks() {
+            let live_bytes = block.live_bytes();
+            if live_bytes * 100 <= 30 * Block::BYTES {
+                blocks.push((block, live_bytes));
             }
         }
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
@@ -300,9 +284,9 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragRegionsInChunk {
             .downcast_ref::<DefaultDefragPolicy>()
             .unwrap();
         policy
-            .fragmented_regions_size
-            .fetch_add(regions.len(), Ordering::SeqCst);
-        policy.fragmented_regions.push(regions);
+            .fragmented_blocks_size
+            .fetch_add(blocks.len(), Ordering::SeqCst);
+        policy.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             policy.select_mature_evacuation_candidates(
                 immix.current_pause().unwrap(),
