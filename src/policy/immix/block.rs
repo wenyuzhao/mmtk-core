@@ -418,9 +418,6 @@ impl Block {
             self.set_state(BlockState::Nursery);
             self.set_as_defrag_source(false);
         }
-        if !reuse {
-            Line::update_validity(self.lines());
-        }
     }
 
     /// Deinitalize a block before releasing.
@@ -433,6 +430,7 @@ impl Block {
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
         self.set_as_defrag_source(false);
+        Line::update_validity(self.lines());
     }
 
     /// Get the range of lines within the block.

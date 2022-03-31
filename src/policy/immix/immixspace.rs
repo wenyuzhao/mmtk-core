@@ -286,10 +286,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
-            + self.defrag_headroom_pages()
-            - VM::VMActivePlan::global().get_pages_reserved();
-        let defrag_bytes = available_clean_pages_for_defrag << 12;
+        // let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
+        //     + self.defrag_headroom_pages()
+        //     - VM::VMActivePlan::global().get_pages_reserved();
+        // let defrag_bytes = available_clean_pages_for_defrag << 12;
+        let defrag_bytes = self.defrag_headroom_pages() << 12;
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
             blocks.append(&mut x);
