@@ -811,3 +811,16 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         worker.add_work(WorkBucketStage::Closure, w);
     }
 }
+
+pub struct Lambda<F: 'static + Fn() + Send>(pub &'static str, pub F);
+
+impl<VM: VMBinding, F: 'static + Fn() + Send> GCWork<VM> for Lambda<F> {
+    #[inline(always)]
+    fn name(&self) -> &'static str {
+        self.0
+    }
+    #[inline(always)]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        (self.1)()
+    }
+}

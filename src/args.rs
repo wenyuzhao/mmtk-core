@@ -149,22 +149,24 @@ pub static LXR_INCREMENTAL_DEFRAG: Lazy<bool> = Lazy::new(|| {
 pub static LXR_DEFRAG_N: Lazy<Option<usize>> =
     Lazy::new(|| env::var("LXR_DEFRAG_N").map(|x| x.parse().unwrap()).ok());
 
+pub static LXR_DEFRAG_M: Lazy<usize> = Lazy::new(|| {
+    env::var("LXR_DEFRAG_M")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(1)
+});
+
+pub static LXR_DEFRAG_BLOCK_LIVENESS_THRESHOLD: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("DEFRAG_BLOCK_LIVENESS_THRESHOLD")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
+
 pub static LXR_DEFRAG_POLICY: Lazy<Option<String>> = Lazy::new(|| env::var("DEFRAG_POLICY").ok());
 
 pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS: Lazy<bool> = Lazy::new(|| {
     env::var("SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS")
         .map(|x| x != "0")
         .unwrap_or(false)
-});
-pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER: Lazy<usize> = Lazy::new(|| {
-    env::var("SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(1)
-});
-pub static SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD: Lazy<Option<usize>> = Lazy::new(|| {
-    env::var("SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD")
-        .map(|x| x.parse().unwrap())
-        .ok()
 });
 
 // ---------- Derived flags ---------- //
@@ -198,13 +200,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("log_remset_footprint");
     dump_feature!("lxr_enable_initial_alloc_limit");
-
     dump_feature!("lxr_defrag_policy", *LXR_DEFRAG_POLICY);
-    dump_feature!(
-        "simple_incremental_defrag_multipler",
-        *LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
-    );
-
     dump_feature!(
         "disable_mutator_line_reusing",
         *DISABLE_MUTATOR_LINE_REUSING
@@ -244,18 +240,15 @@ fn dump_features(active_barrier: BarrierSelector) {
 
     dump_feature!("incremental_defrag", *LXR_INCREMENTAL_DEFRAG);
     dump_feature!(
-        "simple_incremental_defrag_multipler",
-        *LXR_SIMPLE_INCREMENTAL_DEFRAG_MULTIPLIER
-    );
-    dump_feature!(
         "simple_incremental_defrag_sort_regions",
         *LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS
     );
     dump_feature!(
-        "simple_incremental_defrag2_threshold",
-        *SIMPLE_INCREMENTAL_DEFRAG2_THRESHOLD
+        "defrag_block_liveness_threshold",
+        *LXR_DEFRAG_BLOCK_LIVENESS_THRESHOLD
     );
     dump_feature!("lxr_n", *LXR_DEFRAG_N);
+    dump_feature!("lxr_m", *LXR_DEFRAG_M);
 
     println!("----------------------------------------------------");
 }

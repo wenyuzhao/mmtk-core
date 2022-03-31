@@ -1,4 +1,5 @@
 use super::block_allocation::BlockAllocation;
+use super::chunk::Chunk;
 use super::cset::CollectionSet;
 use super::defrag_policy::DefragPolicy;
 use super::line::*;
@@ -1014,6 +1015,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn walk_regions_in_address_order(&self, f: impl FnMut(Region) -> ControlFlow<(), ()>) {
         self.chunk_map.walk_regions_in_address_order(self, f)
+    }
+
+    pub fn run_per_chunk_tasks(
+        &self,
+        name: &'static str,
+        func: impl Fn(Chunk) + Send + Sync + 'static,
+        on_finish: impl Fn() + Send + Sync + 'static,
+    ) {
+        self.chunk_map
+            .run_anonymous_tasks(self.scheduler(), name, func, on_finish)
     }
 }
 

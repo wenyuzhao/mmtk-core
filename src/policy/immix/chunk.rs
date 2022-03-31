@@ -4,6 +4,7 @@ use super::immixspace::ImmixSpace;
 use super::line::Line;
 use super::region::Region;
 use crate::plan::immix::Immix;
+use crate::scheduler::gc_work::Lambda;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::rc::{self};
 use crate::util::ObjectReference;
@@ -17,6 +18,8 @@ use crate::{
 use atomic::Atomic;
 use spin::Mutex;
 use std::ops::ControlFlow;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
 /// Data structure to reference a MMTk 4 MB chunk.
@@ -273,6 +276,43 @@ impl ChunkMap {
             work_packets.push(func(chunk));
         }
         work_packets
+    }
+
+    pub fn generate_anonymous_tasks<VM: VMBinding>(
+        &self,
+        name: &'static str,
+        func: impl Fn(Chunk) + Send + Sync + 'static,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        let arc_func = Arc::new(func);
+        self.generate_tasks(|chunk| {
+            let f = arc_func.clone();
+            box Lambda(name, move || f(chunk))
+        })
+    }
+
+    pub fn run_anonymous_tasks<VM: VMBinding>(
+        &self,
+        sched: &GCWorkScheduler<VM>,
+        name: &'static str,
+        func: impl Fn(Chunk) + Send + Sync + 'static,
+        on_finish: impl Fn() + Send + Sync + 'static,
+    ) {
+        let arc_func = Arc::new(func);
+        let arc_on_finish = Arc::new(on_finish);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let tasks = self.generate_tasks(|chunk| {
+            let func = arc_func.clone();
+            let on_finish = arc_on_finish.clone();
+            let c = counter.clone();
+            box Lambda(name, move || {
+                func(chunk);
+                if c.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    on_finish();
+                }
+            })
+        });
+        counter.store(tasks.len(), Ordering::SeqCst);
+        sched.work_buckets[WorkBucketStage::Unconstrained].bulk_add(tasks);
     }
 
     /// Generate chunk sweep work packets.

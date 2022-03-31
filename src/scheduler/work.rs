@@ -1,7 +1,7 @@
 use super::worker::*;
 use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
-use std::any::{type_name, Any};
+use std::any::Any;
 
 /// A special kind of work that will execute on the coordinator (i.e. controller) thread
 ///
@@ -12,20 +12,23 @@ pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
 
 pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     #[inline(always)]
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+    #[inline(always)]
     fn should_defer(&self) -> bool {
         false
     }
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>);
     #[inline]
     fn do_work_with_stat(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        debug!("{}", std::any::type_name::<Self>());
+        debug!("{}", self.name());
         #[cfg(feature = "work_packet_timer")]
-        let stat =
-            worker
-                .stat
-                .measure_work(std::any::TypeId::of::<Self>(), type_name::<Self>(), mmtk);
+        let stat = worker
+            .stat
+            .measure_work(std::any::TypeId::of::<Self>(), self.name(), mmtk);
         if crate::args::LOG_WORK_PACKETS {
-            println!("{} > {}", worker.ordinal, type_name::<Self>());
+            println!("{} > {}", worker.ordinal, self.name());
         }
         self.do_work(worker, mmtk);
         #[cfg(feature = "work_packet_timer")]
