@@ -412,7 +412,6 @@ impl Block {
                 debug_assert_ne!(workers, 0);
                 self.region().init_remset(workers);
             }
-            Line::update_validity(self.lines());
             self.reset_live_bytes();
         }
     }
@@ -424,6 +423,7 @@ impl Block {
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
         self.set_as_defrag_source(false);
+        Line::update_validity(self.lines());
     }
 
     /// Get the range of lines within the block.
