@@ -221,7 +221,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             let page = start + (i << LOG_BYTES_IN_PAGE);
             unsafe {
                 let old = side_metadata::load(&LOS_PAGE_VALIDITY, page);
-                assert_ne!(old, 255);
+                debug_assert_ne!(old, 255);
                 side_metadata::store(&LOS_PAGE_VALIDITY, page, old + 1);
             }
         }
