@@ -320,7 +320,7 @@ impl DefaultDefragPolicy {
             if crate::args::LOG_PER_GC_STATE {
                 println!(" - Defrag {:?} score={} blocks={}", region, s, blocks);
             }
-            if copy_bytes >= available_clean_bytes_for_defrag || cset.len() >= 64 {
+            if copy_bytes >= available_clean_bytes_for_defrag {
                 break;
             }
         }
