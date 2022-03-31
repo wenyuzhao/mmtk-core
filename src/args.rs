@@ -96,7 +96,7 @@ pub static CONCURRENT_GC_THREADS_RATIO: Lazy<usize> = Lazy::new(|| {
 pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
     env::var("CONCURRENT_MARKING_THRESHOLD")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(70)
+        .unwrap_or(90)
 });
 // Do a tracing GC if the previous pause cannot yield more tnan 20% of clean blocks.
 pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
