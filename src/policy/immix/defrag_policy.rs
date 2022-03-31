@@ -324,6 +324,7 @@ impl DefaultDefragPolicy {
                 break;
             }
         }
+        cset.reverse();
         immix.immix_space.collection_set.set_reigons(cset);
     }
 }
@@ -348,11 +349,15 @@ impl<VM: VMBinding> DefragPolicy<VM> for DefaultDefragPolicy {
                         let live_bytes = block.live_bytes();
                         total_live_bytes += live_bytes;
                         if live_bytes <= threshold {
-                            total_reclaimable_bytes += Block::BYTES;
+                            total_reclaimable_bytes += 1;
                         }
                     }
                     if total_reclaimable_bytes > 0 && total_live_bytes > 0 {
-                        let score = total_reclaimable_bytes * 1000 / total_live_bytes;
+                        let score = total_reclaimable_bytes
+                            * total_reclaimable_bytes
+                            * total_reclaimable_bytes
+                            * 1000000
+                            / total_live_bytes;
                         regions.push((region, score));
                     }
                 }
