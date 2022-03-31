@@ -583,7 +583,8 @@ impl<VM: VMBinding> Immix<VM> {
                 .store(true, Ordering::SeqCst);
             if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
-                self.immix_space.schedule_mark_table_zeroing_tasks();
+                self.immix_space
+                    .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
             }
         } else {
             if crate::args::LOG_PER_GC_STATE {
@@ -691,7 +692,8 @@ impl<VM: VMBinding> Immix<VM> {
             if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
             {
-                self.immix_space.schedule_mark_table_zeroing_tasks();
+                self.immix_space
+                    .schedule_mark_table_zeroing_tasks(WorkBucketStage::RCProcessIncs);
             }
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);

@@ -400,13 +400,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn schedule_mark_table_zeroing_tasks(&self) {
+    pub fn schedule_mark_table_zeroing_tasks(&self, stage: WorkBucketStage) {
         assert!(crate::args::HEAP_HEALTH_GUIDED_GC);
         let space = unsafe { &mut *(self as *const Self as *mut Self) };
         let work_packets = self
             .chunk_map
             .generate_concurrent_mark_table_zeroing_tasks::<VM>(space);
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(work_packets);
+        self.scheduler().work_buckets[stage].bulk_add(work_packets);
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
