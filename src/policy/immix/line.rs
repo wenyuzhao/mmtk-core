@@ -162,7 +162,7 @@ impl Line {
         for line in lines {
             unsafe {
                 let old = side_metadata::load(&Self::VALIDITY_STATE, line.start());
-                assert_ne!(old, 255);
+                debug_assert_ne!(old, 255);
                 side_metadata::store(&Self::VALIDITY_STATE, line.start(), old + 1);
             }
         }
