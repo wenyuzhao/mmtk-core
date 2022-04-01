@@ -207,7 +207,9 @@ impl SimpleIncrementalDefragPolicy3 {
         let mut cset = vec![];
         let threshold =
             crate::args::LXR_DEFRAG_BLOCK_LIVENESS_THRESHOLD.unwrap() * Block::BYTES / 100;
-        let n = crate::args::LXR_DEFRAG_N.unwrap() * *crate::args::LXR_DEFRAG_M;
+        let n = crate::args::LXR_DEFRAG_N.unwrap()
+            * *crate::args::LXR_DEFRAG_M
+            * *crate::args::LXR_DEFRAG_COALESCE_M;
         while let Some((region, _)) = regions.pop() {
             region.set_defrag_source();
             cset.push(region);
