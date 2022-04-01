@@ -153,7 +153,7 @@ static FORCE_EVACUATE_ALL: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Default)]
 pub struct CollectionSet {
     regions: Mutex<Vec<Region>>,
-    prev_region: Mutex<Option<Region>>,
+    prev_regions: Mutex<Vec<Region>>,
     pub retired_regions: SegQueue<Region>,
     cached_roots: Mutex<Vec<Vec<Address>>>,
 }
@@ -209,10 +209,15 @@ impl CollectionSet {
         IN_DEFRAG.store(true, Ordering::SeqCst);
         let mut regions = self.regions.lock().unwrap();
         // Deactivate previous region
-        if let Some(region) = self.prev_region.lock().unwrap().take() {
-            space.defrag_policy.notify_defrag_end(region);
-            region.set_state(RegionState::Allocated);
+        {
+            let mut prev_regions = self.prev_regions.lock().unwrap();
+            for region in &*prev_regions {
+                space.defrag_policy.notify_defrag_end(*region);
+                region.set_state(RegionState::Allocated);
+            }
+            prev_regions.clear();
         }
+        // Should pause or finish evacuation?
         if regions.is_empty() {
             return self.finish_evacuation();
         }
@@ -220,30 +225,42 @@ impl CollectionSet {
             space.defrag_policy.notify_evacuation_stop();
             return;
         }
-        let region = regions.pop().unwrap();
+        // Select regions to evacuate
         if crate::args::LOG_PER_GC_STATE {
-            println!(" ! Defrag {:?}", region);
+            println!("--- move_to_next_regions ---");
         }
-        debug_assert!(region.is_defrag_source());
-        // Activate current region
-        region.set_active();
-        side_metadata::bzero_x(
-            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
-            region.start(),
-            Region::BYTES,
-        );
-        self.retired_regions.push(region);
-        *self.prev_region.lock().unwrap() = Some(region);
-        space.defrag_policy.notify_defrag_start(region);
+        let m = *crate::args::LXR_DEFRAG_COALESCE_M;
+        let mut selected_regions = vec![];
+        for _ in 0..m {
+            let region = match regions.pop() {
+                Some(x) => x,
+                _ => break,
+            };
+            if crate::args::LOG_PER_GC_STATE {
+                println!(" ! Defrag {:?}", region);
+            }
+            debug_assert!(region.is_defrag_source());
+            // Activate current region
+            region.set_active();
+            side_metadata::bzero_x(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+                region.start(),
+                Region::BYTES,
+            );
+            self.retired_regions.push(region);
+            selected_regions.push(region);
+            space.defrag_policy.notify_defrag_start(region);
+        }
         if first {
             crate::COUNTERS.defrag.fetch_add(1, Ordering::Relaxed);
         }
-        self.schedule_mature_remset_scanning_packets(region, space);
+        *self.prev_regions.lock().unwrap() = selected_regions.clone();
+        self.schedule_mature_remset_scanning_packets(selected_regions, space);
     }
 
     fn schedule_mature_remset_scanning_packets<VM: VMBinding>(
         &self,
-        region: Region,
+        regions: Vec<Region>,
         space: &ImmixSpace<VM>,
     ) {
         // Reset allocators between the evacaution of two regions.
@@ -251,7 +268,10 @@ impl CollectionSet {
         // the alloactor may still hold the local alloc buffer that belongs to a defrag block in the second region.
         // No need to do this for non-incremental defrag. Defrag blocks are all selected ahead of time and they'll never be recycled.
         // RemSets
-        let mut packets = region.remset().dispatch(space);
+        let mut packets = vec![];
+        for region in regions {
+            packets.append(&mut region.remset().dispatch(space));
+        }
         // Roots
         // FIXME
         // unsafe { crate::plan::immix::CURR_ROOTS = SegQueue::new() }
@@ -276,7 +296,7 @@ impl CollectionSet {
         if crate::args::LOG_PER_GC_STATE {
             println!(" ! Defrag FINISH");
         }
-        *self.prev_region.lock().unwrap() = None;
+        self.prev_regions.lock().unwrap().clear();
         self.cached_roots.lock().unwrap().clear();
         IN_DEFRAG.store(false, Ordering::SeqCst);
         FORCE_EVACUATE_ALL.store(false, Ordering::SeqCst);

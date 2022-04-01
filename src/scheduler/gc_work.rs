@@ -726,13 +726,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
             return false;
         }
-        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
-            return true;
-        }
         // Check if it is a real oop field
         if immix.immix_space.address_in_space(e) {
             let block = Block::of(e);
             if block.get_state() == BlockState::Unallocated {
+                return false;
+            }
+            if block.region().is_defrag_source_active() {
                 return false;
             }
             if cfg!(feature = "slow_edge_check") {
@@ -758,16 +758,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 }
                 return false;
             } else {
-                if Line::of(e).pointer_is_valid(epoch) {
-                    return true;
-                }
-                false
+                Line::of(e).pointer_is_valid(epoch)
             }
         } else {
-            if immix.los().pointer_is_valid(e, epoch) {
-                return true;
-            }
-            false
+            immix.los().pointer_is_valid(e, epoch)
         }
     }
 

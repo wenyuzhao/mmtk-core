@@ -155,6 +155,12 @@ pub static LXR_DEFRAG_M: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(1)
 });
 
+pub static LXR_DEFRAG_COALESCE_M: Lazy<usize> = Lazy::new(|| {
+    env::var("LXR_DEFRAG_COALESCE_M")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(1)
+});
+
 pub static LXR_DEFRAG_BLOCK_LIVENESS_THRESHOLD: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("DEFRAG_BLOCK_LIVENESS_THRESHOLD")
         .map(|x| x.parse().unwrap())
