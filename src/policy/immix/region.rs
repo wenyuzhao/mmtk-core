@@ -39,7 +39,13 @@ pub struct Region(Address);
 
 impl Region {
     pub const LOG_BLOCKS: usize = {
-        if cfg!(feature = "lxr_region_256k") {
+        if cfg!(feature = "lxr_region_32k") {
+            0
+        } else if cfg!(feature = "lxr_region_64k") {
+            1
+        } else if cfg!(feature = "lxr_region_128k") {
+            2
+        } else if cfg!(feature = "lxr_region_256k") {
             3
         } else if cfg!(feature = "lxr_region_512k") {
             4
