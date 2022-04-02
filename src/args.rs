@@ -205,6 +205,8 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
     dump_feature!("lxr_rc_only");
 
+    dump_feature!("lxr_trace_threshold", *TRACE_THRESHOLD);
+
     println!("----------------------------------------------------");
 }
 
