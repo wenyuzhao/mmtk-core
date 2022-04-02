@@ -97,6 +97,7 @@ impl SimpleIncrementalDefragPolicy {
 
 impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy {
     fn select(&self, mmtk: &'static MMTK<VM>) {
+        assert_eq!(*crate::args::LXR_DEFRAG_COALESCE_M, 1);
         if *crate::args::LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS {
             return self.select_with_sorting(mmtk);
         }
@@ -130,6 +131,7 @@ struct SimpleIncrementalDefragPolicy2 {
 
 impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy2 {
     fn select(&self, mmtk: &'static MMTK<VM>) {
+        assert_eq!(*crate::args::LXR_DEFRAG_COALESCE_M, 1);
         let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
         let regions = crate::args::LXR_DEFRAG_N.unwrap() * *crate::args::LXR_DEFRAG_M;
         let n = regions * Region::BLOCKS;
@@ -273,7 +275,8 @@ impl<VM: VMBinding> DefragPolicy<VM> for SimpleIncrementalDefragPolicy3 {
         );
     }
     fn should_stop(&self, cset: &CollectionSet) -> bool {
-        cset.retired_regions.len() >= *crate::args::LXR_DEFRAG_M
+        cset.retired_regions.len()
+            >= *crate::args::LXR_DEFRAG_M * *crate::args::LXR_DEFRAG_COALESCE_M
     }
 }
 
