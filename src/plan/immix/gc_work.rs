@@ -8,7 +8,7 @@ use crate::scheduler::{gc_work::*, GCWork, GCWorker};
 use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
 use crate::util::alloc::{Allocator, ImmixAllocator};
 use crate::util::object_forwarding;
-use crate::util::rc::ProcessIncs;
+use crate::util::rc::{EdgeKind, ProcessIncs};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
@@ -262,7 +262,8 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
             let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk().scheduler.work_buckets[bucket].add(ProcessIncs::new(roots, true));
+            self.mmtk().scheduler.work_buckets[bucket]
+                .add(ProcessIncs::<_, { EdgeKind::Root }>::new(roots));
         }
         self.flush();
     }
