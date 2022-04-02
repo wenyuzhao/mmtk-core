@@ -13,6 +13,7 @@ use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
+use crate::util::rc::EdgeKind;
 use crate::util::rc::ProcessDecs;
 use crate::util::rc::ProcessIncs;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
@@ -405,7 +406,8 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             let mut incs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut incs, &mut self.incs);
             let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk.scheduler.work_buckets[bucket].add(ProcessIncs::new(incs, false));
+            self.mmtk.scheduler.work_buckets[bucket]
+                .add(ProcessIncs::<_, { EdgeKind::Mature }>::new(incs));
             // Dec buffer
             let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
