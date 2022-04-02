@@ -220,8 +220,10 @@ impl ChunkMap {
         if state == ChunkState::Allocated {
             let workers = *crate::CALC_WORKERS;
             debug_assert_ne!(workers, 0);
-            for region in chunk.regions() {
-                region.init_remset(workers);
+            if crate::args::REF_COUNT {
+                for region in chunk.regions() {
+                    region.init_remset(workers);
+                }
             }
             debug_assert!(!chunk.start().is_zero());
             let mut range = self.chunk_range.lock();

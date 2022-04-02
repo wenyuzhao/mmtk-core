@@ -406,7 +406,7 @@ impl Block {
             self.set_state(BlockState::Nursery);
             self.set_as_defrag_source(false);
         }
-        if !reuse {
+        if crate::args::REF_COUNT && !reuse {
             if !self.region().remset_is_initialized() {
                 let workers = *crate::CALC_WORKERS;
                 debug_assert_ne!(workers, 0);
