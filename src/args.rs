@@ -176,6 +176,12 @@ pub static LXR_SIMPLE_INCREMENTAL_DEFRAG_SORT_REGIONS: Lazy<bool> = Lazy::new(||
         .unwrap_or(false)
 });
 
+pub static LXR_REGION_COALESCE_THRESHOLD: Lazy<usize> = Lazy::new(|| {
+    env::var("REGION_COALESCE_THRESHOLD")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(4)
+});
+
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
@@ -257,6 +263,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_n", *LXR_DEFRAG_N);
     dump_feature!("lxr_m", *LXR_DEFRAG_M);
     dump_feature!("lxr_coalesce_m", *LXR_DEFRAG_COALESCE_M);
+    dump_feature!("lxr_coalesce_threshold", *LXR_REGION_COALESCE_THRESHOLD);
 
     dump_feature!("lxr_eager_defrag_selection");
 

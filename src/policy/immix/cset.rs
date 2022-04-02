@@ -10,6 +10,7 @@ use atomic::{Atomic, Ordering};
 use crossbeam_queue::SegQueue;
 
 use super::{
+    block::Block,
     line::Line,
     region::{Region, RegionState},
     ImmixSpace,
@@ -25,6 +26,9 @@ use crate::{
 use crate::{util::metadata::side_metadata, vm::ObjectModel};
 
 static RECORD: AtomicBool = AtomicBool::new(false);
+
+pub type RegionSelection = Result<Vec<Region>, Vec<Region>>;
+pub type PartialRegionSelection = Result<(), Vec<Region>>;
 
 #[derive(Debug, Default)]
 pub struct PerRegionRemSet {
@@ -107,13 +111,23 @@ impl PerRegionRemSet {
         }
         let a = e.as_usize();
         let b = t.to_address().as_usize();
-        if unlikely(((a ^ b) >> Region::LOG_BYTES) != 0 && space.in_space(t)) {
-            if CollectionSet::defrag_in_progress() {
-                if !Region::containing::<VM>(t).is_defrag_source() {
-                    return;
+        if crate::args::LXR_EAGER_DEFRAG_SELECTION {
+            if space.in_space(t) && Block::containing::<VM>(t).is_defrag_source() {
+                if ((a ^ b) >> Region::LOG_BYTES) != 0 || !Block::of(e).is_defrag_source() {
+                    Region::containing::<VM>(t).remset().add(e, t, space);
                 }
             }
-            Region::containing::<VM>(t).remset().add(e, t, space);
+        } else {
+            let a = e.as_usize();
+            let b = t.to_address().as_usize();
+            if unlikely(((a ^ b) >> Region::LOG_BYTES) != 0 && space.in_space(t)) {
+                if CollectionSet::defrag_in_progress() {
+                    if !Region::containing::<VM>(t).is_defrag_source() {
+                        return;
+                    }
+                }
+                Region::containing::<VM>(t).remset().add(e, t, space);
+            }
         }
     }
 
@@ -127,22 +141,15 @@ impl PerRegionRemSet {
 
     #[inline]
     pub fn dispatch<VM: VMBinding>(&mut self, space: &ImmixSpace<VM>) -> Vec<Box<dyn GCWork<VM>>> {
-        // let mut buffers = vec![];
-        // std::mem::swap(&mut buffers, &mut self.gc_buffers);
-        // println!("dispatch remset@{:?}", self as *const Self);
-        // for i in 0..self.gc_buffers.len() {
-        //     println!(
-        //         " - dispatch remset@{:?} {:?} {:?}",
-        //         self as *const Self,
-        //         i,
-        //         self.gc_buffer(i)
-        //     );
-        // }
-        // TODO: Optimize this
         (0..self.gc_buffers.len())
-            .map(|i| self.gc_buffer(i))
-            .filter(|buf| !buf.is_empty())
-            .map(|buf| box EvacuateMatureObjects::new(buf.to_vec(), space) as Box<dyn GCWork<VM>>)
+            .filter_map(|i| {
+                let buf = self.gc_buffer(i);
+                if buf.is_empty() {
+                    None
+                } else {
+                    Some(box EvacuateMatureObjects::new(buf.to_vec(), space) as Box<dyn GCWork<VM>>)
+                }
+            })
             .collect()
     }
 }
@@ -154,11 +161,71 @@ static FORCE_EVACUATE_ALL: AtomicBool = AtomicBool::new(false);
 pub struct CollectionSet {
     regions: Mutex<Vec<Region>>,
     prev_regions: Mutex<Vec<Region>>,
-    pub retired_regions: SegQueue<Region>,
+    retired_regions: SegQueue<Region>,
     cached_roots: Mutex<Vec<Vec<Address>>>,
 }
 
 impl CollectionSet {
+    pub fn time_limit_test() -> PartialRegionSelection {
+        if !*crate::args::OPPORTUNISTIC_EVAC {
+            return Ok(());
+        }
+        let pause_time = crate::GC_START_TIME
+            .load(Ordering::SeqCst)
+            .elapsed()
+            .unwrap()
+            .as_millis();
+        if pause_time as usize >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD {
+            Err(vec![])
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn incremental_test(regions: &mut Vec<Region>) -> PartialRegionSelection {
+        if !*crate::args::LXR_INCREMENTAL_DEFRAG {
+            Err(Self::take_all_regions(regions).unwrap())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn take_all_regions(regions: &mut Vec<Region>) -> RegionSelection {
+        let mut selected = vec![];
+        std::mem::swap(regions, &mut selected);
+        Ok(selected)
+    }
+
+    pub fn pop_prioritized_regions(regions: &mut Vec<Region>) -> RegionSelection {
+        let mut selected = vec![];
+        let m = *crate::args::LXR_DEFRAG_COALESCE_M;
+        while let Some(region) = regions.pop() {
+            selected.push(region);
+            if selected.len() >= m {
+                break;
+            }
+        }
+        Ok(selected)
+    }
+
+    pub fn filter_prioritized_regions(
+        regions: &mut Vec<Region>,
+        mut f: impl FnMut(Region) -> bool,
+    ) -> RegionSelection {
+        let mut selected = vec![];
+        while let Some(region) = regions.pop() {
+            if !f(region) {
+                return Ok(selected);
+            }
+            selected.push(region);
+        }
+        Ok(selected)
+    }
+
+    pub fn retired_regions(&self) -> usize {
+        self.retired_regions.len()
+    }
+
     pub fn defrag_in_progress() -> bool {
         IN_DEFRAG.load(Ordering::SeqCst)
     }
@@ -198,11 +265,24 @@ impl CollectionSet {
             .add(SelectDefragRegions);
     }
 
-    fn should_stop<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
-        if FORCE_EVACUATE_ALL.load(Ordering::SeqCst) {
-            return false;
+    fn prepare_region_for_evacuation<VM: VMBinding>(&self, region: Region) {
+        region.set_active();
+        if crate::args::LXR_EAGER_DEFRAG_SELECTION {
+            for block in region.defrag_blocks() {
+                side_metadata::bzero_x(
+                    &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+                    block.start(),
+                    Block::BYTES,
+                );
+            }
+        } else {
+            side_metadata::bzero_x(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
+                region.start(),
+                Region::BYTES,
+            );
         }
-        space.defrag_policy.should_stop(self)
+        self.retired_regions.push(region);
     }
 
     pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>, first: bool) {
@@ -221,35 +301,30 @@ impl CollectionSet {
         if regions.is_empty() {
             return self.finish_evacuation();
         }
-        if self.should_stop(space) {
+        // Select regions to evacuate
+        let selected_regions = if FORCE_EVACUATE_ALL.load(Ordering::SeqCst) {
+            Self::take_all_regions(&mut regions).unwrap()
+        } else {
+            match space.defrag_policy.schedule(self, &mut regions) {
+                Ok(v) => v,
+                Err(v) => v,
+            }
+        };
+        if selected_regions.is_empty() {
             space.defrag_policy.notify_evacuation_stop();
             return;
         }
-        // Select regions to evacuate
         if crate::args::LOG_PER_GC_STATE {
             println!("--- move_to_next_regions ---");
         }
-        let m = *crate::args::LXR_DEFRAG_COALESCE_M;
-        let mut selected_regions = vec![];
-        for _ in 0..m {
-            let region = match regions.pop() {
-                Some(x) => x,
-                _ => break,
-            };
+        for region in &selected_regions {
             if crate::args::LOG_PER_GC_STATE {
                 println!(" ! Defrag {:?}", region);
             }
             debug_assert!(region.is_defrag_source());
-            // Activate current region
-            region.set_active();
-            side_metadata::bzero_x(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
-                region.start(),
-                Region::BYTES,
-            );
-            self.retired_regions.push(region);
-            selected_regions.push(region);
-            space.defrag_policy.notify_defrag_start(region);
+            self.prepare_region_for_evacuation::<VM>(*region);
+            self.retired_regions.push(*region);
+            space.defrag_policy.notify_defrag_start(*region);
         }
         if first {
             crate::COUNTERS.defrag.fetch_add(1, Ordering::Relaxed);

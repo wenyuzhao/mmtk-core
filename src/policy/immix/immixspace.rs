@@ -279,7 +279,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        if pause == Pause::FullTraceFast
+            || (!crate::args::LXR_EAGER_DEFRAG_SELECTION && pause == Pause::FinalMark)
+            || (crate::args::LXR_EAGER_DEFRAG_SELECTION && pause == Pause::InitialMark)
+        {
             self.collection_set
                 .schedule_defrag_selection_packets(pause, self);
         }

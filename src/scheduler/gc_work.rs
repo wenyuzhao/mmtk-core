@@ -732,7 +732,8 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
-            if block.region().is_defrag_source_active() {
+            if !crate::args::LXR_EAGER_DEFRAG_SELECTION && block.region().is_defrag_source_active()
+            {
                 return false;
             }
             if cfg!(feature = "slow_edge_check") {

@@ -222,7 +222,10 @@ pub enum WorkBucketStage {
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
     pub const RCProcessIncs: Self = Self::Initial;
+    #[cfg(not(feature = "lxr_eager_defrag_selection"))]
     pub const RCCollectionSetSelection: Self = Self::RefClosure;
+    #[cfg(feature = "lxr_eager_defrag_selection")]
+    pub const RCCollectionSetSelection: Self = Self::Prepare;
     pub const RCEvacuateMature: Self = Self::CalculateForwarding;
     pub const RCReleaseNursery: Self = Self::Release;
     #[cfg(not(feature = "instrumentation"))]

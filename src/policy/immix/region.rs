@@ -245,6 +245,11 @@ impl Region {
             state != BlockState::Unallocated && state != BlockState::Nursery
         })
     }
+
+    #[inline(always)]
+    pub fn defrag_blocks(&self) -> impl Iterator<Item = Block> {
+        self.blocks().filter(|block| block.is_defrag_source())
+    }
 }
 
 impl Step for Region {
