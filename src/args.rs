@@ -276,9 +276,9 @@ fn dump_features(active_barrier: BarrierSelector) {
         "lxr_defrag_force_select_all_blocks",
         *LXR_DEFRAG_FORCE_SELECT_ALL_BLOCKS
     );
-    dump_feature!("lxr_trace_threshold", *TRACE_THRESHOLD);
-
     dump_feature!("lxr_eager_defrag_selection");
+
+    dump_feature!("lxr_trace_threshold", *TRACE_THRESHOLD);
 
     println!("----------------------------------------------------");
 }
