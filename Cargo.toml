@@ -64,6 +64,7 @@ lxr_region_512k = []
 lxr_region_1m = []
 lxr_region_2m = []
 lxr_region_4m = []
+lxr_region_inf = ["lxr_eager_defrag_selection"]
 # IX Features
 ix_concurrent_marking = []
 ix_lock_free_block_allocation = []

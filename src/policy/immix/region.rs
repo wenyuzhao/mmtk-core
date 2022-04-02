@@ -2,6 +2,7 @@ use super::block::{Block, BlockState};
 use super::chunk::Chunk;
 use super::cset::PerRegionRemSet;
 use crate::util::constants::*;
+use crate::util::heap::layout::heap_parameters::LOG_SPACE_SIZE_64;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
@@ -55,6 +56,8 @@ impl Region {
             6
         } else if cfg!(feature = "lxr_region_4m") {
             7
+        } else if cfg!(feature = "lxr_region_inf") {
+            LOG_SPACE_SIZE_64 - Block::LOG_BYTES
         } else {
             5
         }
@@ -225,10 +228,19 @@ impl Region {
     // pub fn record_remset(&self, region: Region, e: Address) {}
 
     /// Get a range of blocks within this chunk.
+    #[cfg(not(feature = "lxr_region_inf"))]
     #[inline(always)]
     pub fn blocks(&self) -> Range<Block> {
         let start = Block::from(Block::align(self.0));
         let end = Block::from(start.start() + (Self::BLOCKS << Block::LOG_BYTES));
+        start..end
+    }
+
+    #[cfg(feature = "lxr_region_inf")]
+    #[inline(always)]
+    pub fn blocks(&self) -> Range<Block> {
+        let start = Block::from(Block::align(self.0));
+        let end = Block::from(Block::align(super::chunk::TOP.load(Ordering::SeqCst)));
         start..end
     }
 

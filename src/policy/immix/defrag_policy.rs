@@ -507,6 +507,9 @@ impl<VM: VMBinding> DefragPolicy<VM> for EagerDefragPolicy {
     }
 
     fn schedule(&self, _cset: &CollectionSet, regions: &mut Vec<Region>) -> RegionSelection {
+        if cfg!(feature = "lxr_region_inf") {
+            return CollectionSet::take_all_regions(regions);
+        }
         CollectionSet::incremental_test(regions)?;
         CollectionSet::time_limit_test()?;
         let mut total_copy_bytes = 0usize;

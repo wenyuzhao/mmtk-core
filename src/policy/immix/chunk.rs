@@ -22,6 +22,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
+pub(super) static TOP: Atomic<Address> = Atomic::new(Address::ZERO);
+
 /// Data structure to reference a MMTk 4 MB chunk.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
@@ -38,8 +40,10 @@ impl Chunk {
     pub const LOG_BLOCKS: usize = Self::LOG_BYTES - Block::LOG_BYTES;
     /// Blocks in chunk
     pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
-    pub const LOG_REGIONS: usize = Self::LOG_BYTES - Region::LOG_BYTES;
-    pub const REGIONS: usize = 1 << Self::LOG_REGIONS;
+    #[cfg(not(feature = "lxr_region_inf"))]
+    const LOG_REGIONS: usize = Self::LOG_BYTES - Region::LOG_BYTES;
+    #[cfg(not(feature = "lxr_region_inf"))]
+    const REGIONS: usize = 1 << Self::LOG_REGIONS;
 
     /// Align the give address to the chunk boundary.
     pub const fn align(address: Address) -> Address {
@@ -81,11 +85,24 @@ impl Chunk {
         })
     }
 
+    #[cfg(not(feature = "lxr_region_inf"))]
     #[inline(always)]
     pub fn regions(&self) -> Range<Region> {
         let start = Region::from(Region::align(self.0));
         let end = Region::from(start.start() + (Self::REGIONS << Region::LOG_BYTES));
         start..end
+    }
+
+    #[cfg(feature = "lxr_region_inf")]
+    #[inline(always)]
+    pub fn regions(&self) -> Range<Region> {
+        let start = Region::from(Region::align(self.0));
+        if self.start().is_aligned_to(Region::BYTES) {
+            let end = Region::from(start.start() + Region::BYTES);
+            start..end
+        } else {
+            start..start
+        }
     }
 
     #[inline(always)]
@@ -216,6 +233,14 @@ impl ChunkMap {
         }
         // Update alloc byte
         unsafe { side_metadata::store(&Self::ALLOC_TABLE, chunk.start(), state as u8 as _) };
+        let end = chunk.start() + Chunk::BYTES;
+        let _ = TOP.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |a| {
+            if a < end {
+                Some(end)
+            } else {
+                None
+            }
+        });
         // If this is a newly allcoated chunk, then expand the chunk range.
         if state == ChunkState::Allocated {
             let workers = *crate::CALC_WORKERS;
