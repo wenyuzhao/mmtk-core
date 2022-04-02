@@ -138,6 +138,7 @@ pub const LOG_REMSET_FOOTPRINT: bool = cfg!(feature = "log_remset_footprint");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
+pub const LXR_EAGER_DEFRAG_SELECTION: bool = cfg!(feature = "lxr_eager_defrag_selection");
 
 // ---------- LXR Mature Defrag Args ---------- //
 pub static LXR_INCREMENTAL_DEFRAG: Lazy<bool> = Lazy::new(|| {
@@ -255,6 +256,9 @@ fn dump_features(active_barrier: BarrierSelector) {
     );
     dump_feature!("lxr_n", *LXR_DEFRAG_N);
     dump_feature!("lxr_m", *LXR_DEFRAG_M);
+    dump_feature!("lxr_coalesce_m", *LXR_DEFRAG_COALESCE_M);
+
+    dump_feature!("lxr_eager_defrag_selection");
 
     println!("----------------------------------------------------");
 }
