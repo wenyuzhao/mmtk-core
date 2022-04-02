@@ -436,12 +436,15 @@ impl EagerDefragPolicy {
         let available_clean_bytes_for_defrag = available_clean_pages_for_defrag << 12;
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Sort blocks by liveness
+        let choose_all = *crate::args::LXR_DEFRAG_FORCE_SELECT_ALL_BLOCKS;
         let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
         while let Some(mut x) = self.fragmented_blocks.pop() {
             blocks.append(&mut x);
         }
-        blocks.sort_by_key(|x| x.1);
-        blocks.reverse();
+        if !choose_all {
+            blocks.sort_by_key(|x| x.1);
+            blocks.reverse();
+        }
         // Select blocks up to space limit
         let mut cset = vec![];
         let mut copy_bytes = 0usize;
@@ -461,15 +464,11 @@ impl EagerDefragPolicy {
                     copy_bytes >> 20
                 );
             }
-            if copy_bytes >= available_clean_bytes_for_defrag {
+            if !choose_all && copy_bytes >= available_clean_bytes_for_defrag {
                 break;
             }
         }
-        cset.sort_by_cached_key(|r| {
-            r.committed_mature_blocks()
-                .filter(|b| b.is_defrag_source())
-                .count()
-        });
+        cset.sort_by_cached_key(|r| r.defrag_blocks().count());
         immix.immix_space.collection_set.set_reigons(cset);
     }
 }

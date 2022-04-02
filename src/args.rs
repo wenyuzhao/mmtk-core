@@ -3,6 +3,7 @@ use std::env;
 
 use crate::{
     policy::immix::{block::Block, line::Line, region::Region},
+    util::rc::REF_COUNT_BITS,
     BarrierSelector,
 };
 
@@ -182,6 +183,12 @@ pub static LXR_REGION_COALESCE_THRESHOLD: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(4)
 });
 
+pub static LXR_DEFRAG_FORCE_SELECT_ALL_BLOCKS: Lazy<bool> = Lazy::new(|| {
+    env::var("DEFRAG_FORCE_SELECT_ALL_BLOCKS")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
+
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
@@ -214,6 +221,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_remset_footprint");
     dump_feature!("lxr_enable_initial_alloc_limit");
     dump_feature!("lxr_defrag_policy", *LXR_DEFRAG_POLICY);
+    dump_feature!("rc_bits", REF_COUNT_BITS);
     dump_feature!(
         "disable_mutator_line_reusing",
         *DISABLE_MUTATOR_LINE_REUSING
@@ -264,6 +272,10 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lxr_m", *LXR_DEFRAG_M);
     dump_feature!("lxr_coalesce_m", *LXR_DEFRAG_COALESCE_M);
     dump_feature!("lxr_coalesce_threshold", *LXR_REGION_COALESCE_THRESHOLD);
+    dump_feature!(
+        "lxr_defrag_force_select_all_blocks",
+        *LXR_DEFRAG_FORCE_SELECT_ALL_BLOCKS
+    );
 
     dump_feature!("lxr_eager_defrag_selection");
 
