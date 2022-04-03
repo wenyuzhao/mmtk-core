@@ -301,6 +301,14 @@ fn dump_features(active_barrier: BarrierSelector) {
 
     dump_feature!("lxr_trace_threshold", *TRACE_THRESHOLD);
 
+    dump_feature!("sort_regions_after_satb", *SORT_REGIONS_AFTER_SATB);
+
+    dump_feature!("frag_block_selection", *FRAG_BLOCK_SELECTION);
+
+    dump_feature!("mature_occupancy", *MATURE_OCCUPANCY);
+
+    dump_feature!("rc_after_satb", *RC_AFTER_SATB);
+
     println!("----------------------------------------------------");
 }
 
