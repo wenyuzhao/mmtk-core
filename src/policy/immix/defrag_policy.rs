@@ -448,8 +448,13 @@ impl EagerDefragPolicy {
         // Select blocks up to space limit
         let mut cset = vec![];
         let mut copy_bytes = 0usize;
+        let rank_by_holes = *crate::args::FRAG_BLOCK_SELECTION;
         while let Some((block, live_bytes)) = blocks.pop() {
-            copy_bytes += live_bytes;
+            copy_bytes += if rank_by_holes {
+                (Block::LINES - block.calc_dead_lines()) << Line::LOG_BYTES
+            } else {
+                live_bytes
+            };
             block.set_as_defrag_source(true);
             let region = block.region();
             if !region.is_defrag_source() {
@@ -458,9 +463,10 @@ impl EagerDefragPolicy {
             }
             if crate::args::LOG_PER_GC_STATE {
                 println!(
-                    " - Defrag {:?} live={} total={}M",
+                    " - Defrag {:?} live={} holes={} total={}M",
                     block,
-                    live_bytes,
+                    (Block::LINES - block.calc_dead_lines()) << Line::LOG_BYTES,
+                    block.calc_holes(),
                     copy_bytes >> 20
                 );
             }
@@ -486,10 +492,20 @@ impl<VM: VMBinding> DefragPolicy<VM> for EagerDefragPolicy {
             move |chunk| {
                 let mut blocks = vec![];
                 // Calculate score
-                for block in chunk.committed_mature_blocks() {
-                    let live_bytes = (Block::LINES - block.calc_dead_lines()) << Line::LOG_BYTES;
-                    if live_bytes <= threshold {
-                        blocks.push((block, live_bytes))
+                if *crate::args::FRAG_BLOCK_SELECTION {
+                    for block in chunk.committed_mature_blocks() {
+                        let holes = block.calc_holes();
+                        if holes > 2 {
+                            blocks.push((block, Block::LINES * 100 / holes));
+                        }
+                    }
+                } else {
+                    for block in chunk.committed_mature_blocks() {
+                        let live_bytes =
+                            (Block::LINES - block.calc_dead_lines()) << Line::LOG_BYTES;
+                        if live_bytes <= threshold {
+                            blocks.push((block, live_bytes))
+                        }
                     }
                 }
                 self.fragmented_blocks_size

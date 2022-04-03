@@ -285,6 +285,20 @@ impl CollectionSet {
         self.retired_regions.push(region);
     }
 
+    fn sort_regions(regions: &mut Vec<Region>) {
+        if *crate::args::SORT_REGIONS_AFTER_SATB {
+            regions.sort_by_cached_key(|r| {
+                let mut copy = 0usize;
+                let mut reclaim = 0usize;
+                for b in r.defrag_blocks() {
+                    reclaim += 1;
+                    copy += b.live_bytes()
+                }
+                reclaim * Block::BYTES * 1000 / copy
+            });
+        }
+    }
+
     pub fn move_to_next_region<VM: VMBinding>(&self, space: &ImmixSpace<VM>, first: bool) {
         IN_DEFRAG.store(true, Ordering::SeqCst);
         let mut regions = self.regions.lock().unwrap();
@@ -297,11 +311,20 @@ impl CollectionSet {
             }
             prev_regions.clear();
         }
+        // Filter out all the empty regions
+        let retired_regions = regions.drain_filter(|r| {
+            let c = r.defrag_blocks().filter(|b| b.live_bytes() > 0).count();
+            c == 0
+        });
+        for r in retired_regions {
+            self.retired_regions.push(r);
+        }
         // Should pause or finish evacuation?
         if regions.is_empty() {
             return self.finish_evacuation();
         }
         // Select regions to evacuate
+        Self::sort_regions(&mut regions);
         let selected_regions = if FORCE_EVACUATE_ALL.load(Ordering::SeqCst) {
             Self::take_all_regions(&mut regions).unwrap()
         } else {

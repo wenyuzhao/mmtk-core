@@ -189,6 +189,27 @@ pub static LXR_DEFRAG_FORCE_SELECT_ALL_BLOCKS: Lazy<bool> = Lazy::new(|| {
         .unwrap_or(false)
 });
 
+pub static SORT_REGIONS_AFTER_SATB: Lazy<bool> = Lazy::new(|| {
+    env::var("SORT_REGIONS_AFTER_SATB")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
+
+pub static FRAG_BLOCK_SELECTION: Lazy<bool> = Lazy::new(|| {
+    env::var("FRAG_BLOCK_SELECTION")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
+
+pub static MATURE_OCCUPANCY: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("MATURE_OCCUPANCY")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
+
+pub static RC_AFTER_SATB: Lazy<Option<usize>> =
+    Lazy::new(|| env::var("RC_AFTER_SATB").map(|x| x.parse().unwrap()).ok());
+
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
