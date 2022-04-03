@@ -115,13 +115,13 @@ pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
 #[allow(unused)]
 #[inline(always)]
 pub fn is_dead(o: ObjectReference) -> bool {
-    let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::SeqCst);
+    let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::Relaxed);
     v == 0
 }
 
 #[inline(always)]
 pub fn is_straddle_line(line: Line) -> bool {
-    let v = side_metadata::load_atomic(&RC_STRADDLE_LINES, line.start(), Ordering::SeqCst);
+    let v = side_metadata::load_atomic(&RC_STRADDLE_LINES, line.start(), Ordering::Relaxed);
     v != 0
 }
 
@@ -132,17 +132,21 @@ pub fn address_is_in_straddle_line(a: Address) -> bool {
 }
 
 #[inline(always)]
-pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
+fn mark_straddle_object_with_size<VM: VMBinding>(o: ObjectReference, size: usize) {
     debug_assert!(!crate::args::BLOCK_ONLY);
-    // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
-    let size = VM::VMObjectModel::get_current_size(o);
     debug_assert!(size > Line::BYTES);
     let start_line = Line::forward(Line::containing::<VM>(o), 1);
     let end_line = Line::from(Line::align(o.to_address() + size));
     for line in start_line..end_line {
-        side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 1, Ordering::SeqCst);
+        side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 1, Ordering::Relaxed);
         self::set(unsafe { line.start().to_object_reference() }, 1);
     }
+}
+
+#[inline(always)]
+pub fn mark_straddle_object<VM: VMBinding>(o: ObjectReference) {
+    let size = VM::VMObjectModel::get_current_size(o);
+    mark_straddle_object_with_size::<VM>(o, size)
 }
 
 #[inline(always)]
@@ -155,9 +159,9 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
         let end_line = Line::from(Line::align(o.to_address() + size));
         for line in start_line..end_line {
             self::set(unsafe { line.start().to_object_reference() }, 0);
-            std::sync::atomic::fence(Ordering::SeqCst);
-            side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 0, Ordering::SeqCst);
-            std::sync::atomic::fence(Ordering::SeqCst);
+            // std::sync::atomic::fence(Ordering::Relaxed);
+            side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 0, Ordering::Relaxed);
+            // std::sync::atomic::fence(Ordering::Relaxed);
         }
     }
 }
@@ -175,8 +179,9 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
 #[inline(always)]
 pub fn promote<VM: VMBinding>(o: ObjectReference) {
     o.log_start_address::<VM>();
-    if !crate::args::BLOCK_ONLY && o.get_size::<VM>() > Line::BYTES {
-        self::mark_straddle_object::<VM>(o);
+    let size = o.get_size::<VM>();
+    if size > Line::BYTES {
+        self::mark_straddle_object_with_size::<VM>(o, size);
     }
 }
 
@@ -192,7 +197,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     immix: *const Immix<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
-    current_pause_should_do_mature_evac: bool,
     no_evac: bool,
 }
 
@@ -214,7 +218,7 @@ pub fn inc_inc_buffer_size() {
 #[inline(always)]
 pub fn reset_inc_buffer_size() {
     crate::add_incs(inc_buffer_size());
-    INC_BUFFER_SIZE.store(0, Ordering::SeqCst)
+    INC_BUFFER_SIZE.store(0, Ordering::Relaxed)
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -243,7 +247,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             immix: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
-            current_pause_should_do_mature_evac: false,
             no_evac: false,
         }
     }
@@ -315,17 +318,28 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 }
             }
         }
-        let x = in_place_promotion && !los;
-        EdgeIterator::<VM>::iterate(o, |edge| {
-            if x {
+        if in_place_promotion && !los {
+            EdgeIterator::<VM>::iterate(o, |edge| {
                 edge.unlog::<VM>();
-            }
-            let target = unsafe { edge.load::<ObjectReference>() };
-            self.record_mature_evac_remset(edge, target, false);
-            if !target.is_null() && !self::rc_stick(target) {
-                self.new_incs.push(edge);
-            }
-        });
+                let target = unsafe { edge.load::<ObjectReference>() };
+                if !target.is_null() {
+                    self.record_mature_evac_remset(edge, target, false);
+                    if !self::rc_stick(target) {
+                        self.new_incs.push(edge);
+                    }
+                }
+            });
+        } else {
+            EdgeIterator::<VM>::iterate(o, |edge| {
+                let target = unsafe { edge.load::<ObjectReference>() };
+                if !target.is_null() {
+                    self.record_mature_evac_remset(edge, target, false);
+                    if !self::rc_stick(target) {
+                        self.new_incs.push(edge);
+                    }
+                }
+            });
+        }
         if self.new_incs.len() >= Self::CAPACITY {
             self.flush()
         }
@@ -355,11 +369,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         //     self.promote(o, false, self.immix().los().in_space(o));
         // }
         // o
-    }
-
-    #[inline(always)]
-    const fn should_do_mature_evac(&self) -> bool {
-        crate::args::RC_MATURE_EVACUATION && self.current_pause_should_do_mature_evac
     }
 
     #[inline(always)]
@@ -412,34 +421,26 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             new
         } else {
             let is_nursery = self::count(o) == 0;
-            if is_nursery {
+            if is_nursery && !self.no_evac {
                 // Evacuate the object
-                if self.no_evac {
-                    // Object is not moved.
-                    if let Ok(0) = self::inc(o) {
-                        self.promote(o, false, los);
-                    }
-                    object_forwarding::clear_forwarding_bits::<VM>(o);
-                    o
-                } else {
-                    let new = object_forwarding::forward_object::<VM, _>(
-                        o,
-                        AllocationSemantics::Default,
-                        copy_context,
-                    );
-                    if crate::should_record_copy_bytes() {
-                        unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
-                    }
-                    let _ = self::inc(new);
-                    self.promote(new, true, false);
-                    new
+                let new = object_forwarding::forward_object::<VM, _>(
+                    o,
+                    AllocationSemantics::Default,
+                    copy_context,
+                );
+                if crate::should_record_copy_bytes() {
+                    unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
                 }
+                let _ = self::inc(new);
+                self.promote(new, true, false);
+                new
             } else {
                 // Object is not moved.
-                if let Ok(0) = self::inc(o) {
+                let r = self::inc(o);
+                object_forwarding::clear_forwarding_bits::<VM>(o);
+                if let Ok(0) = r {
                     self.promote(o, false, los);
                 }
-                object_forwarding::clear_forwarding_bits::<VM>(o);
                 o
             }
         }
@@ -568,17 +569,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         self.current_pause = self.immix().current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        self.current_pause_should_do_mature_evac = crate::args::RC_MATURE_EVACUATION
-            && (self.current_pause == Pause::FullTraceFast
-                || self.current_pause == Pause::FinalMark);
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
         if *crate::args::OPPORTUNISTIC_EVAC {
-            if crate::NO_EVAC.load(Ordering::SeqCst) {
+            if crate::NO_EVAC.load(Ordering::Relaxed) {
                 self.no_evac = true;
             } else {
                 let over_time = crate::GC_START_TIME
-                    .load(Ordering::SeqCst)
+                    .load(Ordering::Relaxed)
                     .elapsed()
                     .unwrap()
                     .as_millis()
@@ -587,7 +585,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     > mmtk.plan.get_total_pages();
                 if over_space || over_time {
                     self.no_evac = true;
-                    crate::NO_EVAC.store(true, Ordering::SeqCst);
+                    crate::NO_EVAC.store(true, Ordering::Relaxed);
                     if crate::args::LOG_PER_GC_STATE {
                         println!(" - no evac");
                     }
