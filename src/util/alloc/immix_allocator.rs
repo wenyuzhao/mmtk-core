@@ -43,7 +43,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// we will eventually call allow_slow_once_stress_test(). With this flag set to true, we know
     /// we are resolving an allocation request and have failed the thread local allocation. In
     /// this case, we will acquire new block from the space.
-    alloc_slow_for_stress: bool,
+    retry: bool,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -116,7 +116,10 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     /// Acquire a clean block from ImmixSpace for allocation.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_once", self.tls);
-        self.acquire_clean_block(size, align, offset)
+        self.retry = true;
+        let result = self.alloc(size, align, offset);
+        self.retry = false;
+        result
     }
 
     /// This is called when precise stress is used. We try use the thread local buffer for
@@ -125,60 +128,12 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     /// we will set the fake limit so future allocations will fail the slowpath and get here as well.
     fn alloc_slow_once_precise_stress(
         &mut self,
-        size: usize,
-        align: usize,
-        offset: isize,
-        need_poll: bool,
+        _size: usize,
+        _align: usize,
+        _offset: isize,
+        _need_poll: bool,
     ) -> Address {
-        if crate::args::REF_COUNT {
-            unreachable!();
-        }
-        trace!("{:?}: alloc_slow_once_precise_stress", self.tls);
-        // If we are required to make a poll, we call acquire_clean_block() which will acquire memory
-        // from the space which includes a GC poll.
-        if need_poll {
-            trace!(
-                "{:?}: alloc_slow_once_precise_stress going to poll",
-                self.tls
-            );
-            let ret = self.acquire_clean_block(size, align, offset);
-            // Set fake limits so later allocation will fail in the fastpath, and end up going to this
-            // special slowpath.
-            self.set_limit_for_stress();
-            trace!(
-                "{:?}: alloc_slow_once_precise_stress done - forced stress poll",
-                self.tls
-            );
-            return ret;
-        }
-
-        // We are not yet required to do a stress GC. We will try to allocate from thread local buffer if possible.
-        // Restore the fake limit to the normal limit so we can do thread local alloaction normally.
-        self.restore_limit_for_stress();
-        let ret = if self.alloc_slow_for_stress {
-            // If we are already doing allow_slow for stress test, and reach here, it means we have failed the
-            // thread local allocation, and we have to get a new block from the space.
-            trace!(
-                "{:?}: alloc_slow_once_precise_stress - acquire new block",
-                self.tls
-            );
-            self.acquire_clean_block(size, align, offset)
-        } else {
-            // Indicate that we are doing alloc slow for stress test. If the alloc() cannot allocate from
-            // thread local buffer, we will reach this method again. In that case, we will need to poll, rather
-            // than attempting to alloc() again.
-            self.alloc_slow_for_stress = true;
-            // Try allocate. The allocator will try allocate from thread local buffer, if that fails, it will
-            // get a clean block.
-            trace!("{:?}: alloc_slow_once_precise_stress - alloc()", self.tls);
-            let ret = self.alloc(size, align, offset);
-            // Indicate that we finish the alloc slow for stress test.
-            self.alloc_slow_for_stress = false;
-            ret
-        };
-        // Set fake limits
-        self.set_limit_for_stress();
-        ret
+        unreachable!()
     }
 
     fn get_tls(&self) -> VMThread {
@@ -206,7 +161,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             mutator_recycled_blocks: box vec![],
-            alloc_slow_for_stress: false,
+            retry: false,
         }
     }
 
@@ -232,7 +187,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let end = start + size;
         if end > self.large_limit {
             self.request_for_large = true;
-            let rtn = self.alloc_slow_inline(size, align, offset);
+            let rtn = if self.retry {
+                self.acquire_clean_block(size, align, offset)
+            } else {
+                self.alloc_slow_inline(size, align, offset)
+            };
             self.request_for_large = false;
             rtn
         } else {
@@ -248,6 +207,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         trace!("{:?}: alloc_slow_hot", self.tls);
         if self.acquire_recyclable_lines(size, align, offset) {
             self.alloc(size, align, offset)
+        } else if self.retry {
+            self.acquire_clean_block(size, align, offset)
         } else {
             self.alloc_slow_inline(size, align, offset)
         }
@@ -313,15 +274,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     // Get a clean block from ImmixSpace.
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: isize) -> Address {
         match self.immix_space().get_clean_block(self.tls, self.copy) {
-            None => {
-                // if !self.immix_space().reusable_blocks_drained() {
-                //     self.request_for_large = false;
-                //     self.alloc(size, align, offset)
-                // } else {
-                //     Address::ZERO
-                // }
-                Address::ZERO
-            }
+            None => Address::ZERO,
             Some(block) => {
                 trace!("{:?}: Acquired a new block {:?}", self.tls, block);
                 if self.request_for_large {
