@@ -259,6 +259,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 s.promoted_los_volume += o.get_size::<VM>();
             }
         });
+        if cfg!(feature = "report_mature_survival_ratio") {
+            crate::COUNTERS
+                .mature_bytes
+                .fetch_add(o.get_size::<VM>(), Ordering::SeqCst);
+        }
         if !los {
             self::promote::<VM>(o);
         } else {
@@ -800,6 +805,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
+            if cfg!(feature = "report_mature_survival_ratio") && dead {
+                crate::COUNTERS
+                    .reclaimed_mature_bytes
+                    .fetch_add(o.get_size::<VM>(), Ordering::SeqCst);
+            }
         }
     }
 }

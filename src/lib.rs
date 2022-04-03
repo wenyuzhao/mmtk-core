@@ -302,6 +302,8 @@ struct Counters {
     pub evacuated_mature_regions: AtomicUsize,
     pub evacuated_mature_blocks: AtomicUsize,
     pub evacuated_mature_bytes: AtomicUsize,
+    pub mature_bytes: AtomicUsize,
+    pub reclaimed_mature_bytes: AtomicUsize,
 }
 
 macro_rules! counter_print_keys_and_values {
@@ -334,6 +336,8 @@ impl Counters {
         "evacuated_mature_regions": self.evacuated_mature_regions.load(Ordering::SeqCst),
         "evacuated_mature_blocks": self.evacuated_mature_blocks.load(Ordering::SeqCst),
         "evacuated_mature_bytes": self.evacuated_mature_bytes.load(Ordering::SeqCst),
+        "mature_bytes": self.mature_bytes.load(Ordering::SeqCst),
+        "reclaimed_mature_bytes": self.reclaimed_mature_bytes.load(Ordering::SeqCst),
     }
 }
 
