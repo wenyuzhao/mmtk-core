@@ -583,7 +583,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .unwrap()
                     .as_millis()
                     >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128;
-                let over_space = mmtk.plan.get_pages_used() > mmtk.plan.get_total_pages();
+                let over_space = mmtk.plan.get_pages_used() - mmtk.plan.get_collection_reserve()
+                    > mmtk.plan.get_total_pages();
                 if over_space || over_time {
                     self.no_evac = true;
                     crate::NO_EVAC.store(true, Ordering::SeqCst);

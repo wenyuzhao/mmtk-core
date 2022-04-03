@@ -474,13 +474,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             if self.last_defrag_blocks.len() > 0 {
                 while let Some(block) = self.last_defrag_blocks.pop() {
+                    if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
+                        continue;
+                    }
                     block.clear_rc_table::<VM>();
                     block.clear_striddle_table::<VM>();
                     if block.rc_sweep_mature::<VM>(self, true) {
                         self.pr.release_pages(block.start());
                     }
                     assert!(!block.is_defrag_source());
-                    assert_eq!(block.get_state(), BlockState::Unallocated);
                 }
             }
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
