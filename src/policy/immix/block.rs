@@ -714,7 +714,7 @@ impl Block {
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
         debug_assert!(crate::args::REF_COUNT);
-        if (!defrag && self.is_defrag_source()) || self.get_state() == BlockState::Unallocated {
+        if self.get_state() == BlockState::Unallocated {
             return false;
         }
         if defrag || self.rc_dead() {
