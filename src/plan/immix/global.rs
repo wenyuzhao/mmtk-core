@@ -50,6 +50,7 @@ static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static SIMPLE_INCREMENTAL_DEFRAG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
+static FORCE_RC: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
@@ -597,6 +598,7 @@ impl<VM: VMBinding> Immix<VM> {
             if crate::args::CONCURRENT_MARKING
                 && crate::args::LXR_DEFRAG_N.is_none()
                 && !crate::concurrent_marking_in_progress()
+                && (crate::args::RC_AFTER_SATB.is_some() && FORCE_RC.load(Ordering::Relaxed) > 0)
             {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
                 self.immix_space
@@ -658,6 +660,11 @@ impl<VM: VMBinding> Immix<VM> {
             && concurrent_marking_packets_drained
         {
             return Pause::FinalMark;
+        }
+        // Force RCs after SATB
+        if crate::args::RC_AFTER_SATB.is_some() && FORCE_RC.load(Ordering::Relaxed) > 0 {
+            FORCE_RC.fetch_sub(1, Ordering::SeqCst);
+            return Pause::RefCount;
         }
         // Only do RC pauses if we're doing incremental evacuation
         if CollectionSet::defrag_in_progress() {
@@ -745,6 +752,9 @@ impl<VM: VMBinding> Immix<VM> {
             }
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);
+            if crate::args::RC_AFTER_SATB.is_some() && pause == Pause::FinalMark {
+                FORCE_RC.store(crate::args::RC_AFTER_SATB.unwrap(), Ordering::SeqCst);
+            }
             pause
         } else if emergency_collection {
             crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
