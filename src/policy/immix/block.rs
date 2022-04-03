@@ -6,7 +6,7 @@ use crate::util::metadata::side_metadata::{self, *};
 use crate::util::{constants::*, rc};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use spin::{Mutex, MutexGuard};
+use crossbeam_queue::SegQueue;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
 /// The block allocation state.
@@ -690,7 +690,10 @@ impl Block {
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
                 // println!("reuse N {:?}", self);
-                space.reusable_blocks.push(*self)
+                space.reusable_blocks.push_x(
+                    *self,
+                    (Block::LINES - self.calc_dead_lines()) << Line::LOG_BYTES,
+                );
             } else if mutator_reused_blocks {
                 // debug_assert_eq!(self.get_state(), BlockState::Reusing);
                 self.set_state(BlockState::Marked);
@@ -758,7 +761,10 @@ impl Block {
             };
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
-                space.reusable_blocks.push(*self)
+                space.reusable_blocks.push_x(
+                    *self,
+                    (Block::LINES - self.calc_dead_lines()) << Line::LOG_BYTES,
+                );
             }
         }
         false
@@ -883,37 +889,66 @@ impl Step for Block {
 /// A non-block single-linked list to store blocks.
 #[derive(Default)]
 pub struct BlockList {
-    queue: Mutex<Vec<Block>>,
+    prioritized_queue: SegQueue<Block>,
+    queue: spin::RwLock<SegQueue<Block>>,
 }
 
 impl BlockList {
     /// Get number of blocks in this list.
     #[inline]
     pub fn len(&self) -> usize {
-        self.queue.lock().len()
+        self.queue.read().len()
+    }
+
+    #[inline]
+    pub fn push_x(&self, block: Block, live: usize) {
+        if live > (Block::BYTES >> 1) {
+            self.push_prioritized(block)
+        } else {
+            self.push(block)
+        }
+    }
+
+    #[inline]
+    pub fn push_prioritized(&self, block: Block) {
+        self.prioritized_queue.push(block)
     }
 
     /// Add a block to the list.
     #[inline]
     pub fn push(&self, block: Block) {
-        self.queue.lock().push(block)
+        self.queue.read().push(block)
     }
 
     /// Pop a block out of the list.
     #[inline]
     pub fn pop(&self) -> Option<Block> {
-        self.queue.lock().pop()
+        if let Some(b) = self.prioritized_queue.pop() {
+            return Some(b);
+        }
+        self.queue.read().pop()
     }
 
     /// Clear the list.
     #[inline]
     pub fn reset(&self) {
-        *self.queue.lock() = Vec::new()
+        *self.queue.write() = SegQueue::new()
     }
 
     /// Get an array of all reusable blocks stored in this BlockList.
     #[inline]
-    pub fn get_blocks(&self) -> MutexGuard<Vec<Block>> {
-        self.queue.lock()
+    pub fn get_blocks(&self) -> spin::RwLockReadGuard<SegQueue<Block>> {
+        self.queue.read()
+    }
+
+    #[inline]
+    pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
+        let q = SegQueue::new();
+        let guard = self.queue.upgradeable_read();
+        while let Some(b) = guard.pop() {
+            q.push(b);
+            f(b)
+        }
+        *guard.upgrade() = q;
     }
 }
