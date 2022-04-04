@@ -462,13 +462,13 @@ impl EagerDefragPolicy {
                 cset.push(region);
             }
             if crate::args::LOG_PER_GC_STATE {
-                println!(
-                    " - Defrag {:?} live={} holes={} total={}M",
-                    block,
-                    (Block::LINES - block.calc_dead_lines()) << Line::LOG_BYTES,
-                    block.calc_holes(),
-                    copy_bytes >> 20
-                );
+                // println!(
+                //     " - Defrag {:?} live={} holes={} total={}M",
+                //     block,
+                //     (Block::LINES - block.calc_dead_lines()) << Line::LOG_BYTES,
+                //     block.calc_holes(),
+                //     copy_bytes >> 20
+                // );
             }
             if !choose_all && copy_bytes >= available_clean_bytes_for_defrag {
                 break;

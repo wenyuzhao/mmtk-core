@@ -1011,9 +1011,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 box SweepBlocksAfterDecs::new(blocks, counter.clone())
             })
             .collect();
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            .add(RCReleaseMatureLOS::new(counter.clone()));
+            .add_prioritized(box RCReleaseMatureLOS::new(counter.clone()));
     }
 
     pub fn walk_regions_in_address_order(&self, f: impl FnMut(Region) -> ControlFlow<(), ()>) {

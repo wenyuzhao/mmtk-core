@@ -708,10 +708,19 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         if !self.new_decs.is_empty() {
             let mut new_decs = vec![];
             std::mem::swap(&mut new_decs, &mut self.new_decs);
-            self.worker().add_work(
-                WorkBucketStage::Unconstrained,
-                ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
-            );
+            let mmtk = unsafe { &*self.mmtk };
+            let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+            if immix.current_pause().is_none() {
+                self.worker().add_work_prioritized(
+                    WorkBucketStage::Unconstrained,
+                    ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
+                );
+            } else {
+                self.worker().add_work(
+                    WorkBucketStage::Unconstrained,
+                    ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
+                );
+            }
         }
         if !self.mark_objects.is_empty() {
             let mut objects = vec![];

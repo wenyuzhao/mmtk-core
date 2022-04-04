@@ -337,17 +337,17 @@ impl CollectionSet {
             space.defrag_policy.notify_evacuation_stop();
             return;
         }
-        if crate::args::LOG_PER_GC_STATE {
-            println!("--- move_to_next_regions ---");
-        }
         for region in &selected_regions {
-            if crate::args::LOG_PER_GC_STATE {
-                println!(" ! Defrag {:?}", region);
-            }
+            // if crate::args::LOG_PER_GC_STATE {
+            //     println!(" ! Defrag {:?}", region);
+            // }
             debug_assert!(region.is_defrag_source());
             self.prepare_region_for_evacuation::<VM>(*region);
             self.retired_regions.push(*region);
             space.defrag_policy.notify_defrag_start(*region);
+        }
+        if crate::args::LOG_PER_GC_STATE {
+            println!("--- move_to_next_regions ({}) ---", selected_regions.len());
         }
         if first {
             crate::COUNTERS.defrag.fetch_add(1, Ordering::Relaxed);
