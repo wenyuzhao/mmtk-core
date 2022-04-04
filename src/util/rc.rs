@@ -266,6 +266,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         if !los {
             self::promote::<VM>(o);
+            crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.record_promotion(o.get_size::<VM>());
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }

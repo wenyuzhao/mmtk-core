@@ -48,6 +48,7 @@ pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
+static SURVIVAL_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static SIMPLE_INCREMENTAL_DEFRAG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 static FORCE_RC: AtomicUsize = AtomicUsize::new(0);
@@ -64,6 +65,7 @@ pub struct Immix<VM: VMBinding> {
     last_gc_was_defrag: AtomicBool,
     nursery_blocks: Option<usize>,
     inc_buffer_limit: Option<usize>,
+    max_survival_mb: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     cm_threshold: usize,
     zeroing_packets_scheduled: AtomicBool,
@@ -114,6 +116,27 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.next_gc_may_perform_cycle_collection
                     .store(true, Ordering::SeqCst);
             }
+            return true;
+        }
+        // Survival limits
+        if crate::args::REF_COUNT
+            && self
+                .max_survival_mb
+                .map(|x| {
+                    self.immix_space.block_allocation.nursery_mb() as f64
+                        * super::SURVIVAL_RATIO_PREDICTOR.ratio()
+                        >= x as f64
+                })
+                .unwrap_or(false)
+        {
+            // println!(
+            //     "Survival limits {} * {} > {} blocks={}",
+            //     self.immix_space.block_allocation.nursery_mb(),
+            //     super::SURVIVAL_RATIO_PREDICTOR.ratio(),
+            //     self.max_survival_mb.unwrap(),
+            //     self.immix_space.block_allocation.nursery_blocks()
+            // );
+            SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
         }
         // Alloc limits
@@ -334,6 +357,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.immix_space.prepare(true, true);
             }
         } else {
+            super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
             self.common.prepare(
                 tls,
                 pause == Pause::FullTraceFast || pause == Pause::InitialMark,
@@ -392,6 +416,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
         if crate::args::REF_COUNT {
+            super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
+                self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES,
+            );
+            super::SURVIVAL_RATIO_PREDICTOR
+                .pause_start
+                .store(SystemTime::now(), Ordering::SeqCst);
             let me = unsafe { &mut *(self as *const _ as *mut Self) };
             me.immix_space.rc_eager_prepare(pause);
         }
@@ -508,6 +538,7 @@ impl<VM: VMBinding> Immix<VM> {
             last_gc_was_defrag: AtomicBool::new(false),
             nursery_blocks: *crate::args::NURSERY_BLOCKS,
             inc_buffer_limit: None,
+            max_survival_mb: *crate::args::MAX_SURVIVAL_MB,
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             cm_threshold: 0,
             zeroing_packets_scheduled: AtomicBool::new(false),
@@ -707,7 +738,9 @@ impl<VM: VMBinding> Immix<VM> {
         }
         {
             let o = Ordering::SeqCst;
-            if INCS_TRIGGERED.load(o) {
+            if SURVIVAL_TRIGGERED.load(o) {
+                crate::COUNTERS.survival_triggerd.fetch_add(1, o);
+            } else if INCS_TRIGGERED.load(o) {
                 crate::COUNTERS.incs_triggerd.fetch_add(1, o);
             } else if ALLOC_TRIGGERED.load(o) {
                 crate::COUNTERS.alloc_triggerd.fetch_add(1, o);

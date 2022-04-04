@@ -210,6 +210,9 @@ pub static MATURE_OCCUPANCY: Lazy<Option<usize>> = Lazy::new(|| {
 pub static RC_AFTER_SATB: Lazy<Option<usize>> =
     Lazy::new(|| env::var("RC_AFTER_SATB").map(|x| x.parse().unwrap()).ok());
 
+pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> =
+    Lazy::new(|| env::var("MAX_SURVIVAL_MB").map(|x| x.parse().unwrap()).ok());
+
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
@@ -308,6 +311,8 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("mature_occupancy", *MATURE_OCCUPANCY);
 
     dump_feature!("rc_after_satb", *RC_AFTER_SATB);
+
+    dump_feature!("MAX_SURVIVAL_MB", *MAX_SURVIVAL_MB);
 
     println!("----------------------------------------------------");
 }
