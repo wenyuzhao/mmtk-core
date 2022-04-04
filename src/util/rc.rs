@@ -318,13 +318,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
             if !self::rc_stick(target) {
                 self.new_incs.push(edge);
+                if unlikely(self.new_incs.len() >= Self::CAPACITY) {
+                    self.flush()
+                }
             } else {
                 PerRegionRemSet::record(edge, target, &self.immix().immix_space)
             }
         });
-        if self.new_incs.len() >= Self::CAPACITY {
-            self.flush()
-        }
     }
 
     #[inline(always)]
