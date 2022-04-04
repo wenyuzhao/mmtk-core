@@ -413,7 +413,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             std::mem::swap(&mut decs, &mut self.decs);
             let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
-                self.mmtk.scheduler.postpone(w);
+                self.mmtk.scheduler.postpone_prioritized(w);
             } else {
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
             }

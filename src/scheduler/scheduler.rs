@@ -48,6 +48,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
     postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     in_gc_pause: AtomicBool,
 }
 
@@ -84,6 +85,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             finalizer: Mutex::new(None),
             closure_end: Mutex::new(None),
             postponed_concurrent_work: spin::RwLock::new(Injector::new()),
+            postponed_concurrent_work_prioritized: spin::RwLock::new(Injector::new()),
             in_gc_pause: AtomicBool::new(false),
         })
     }
@@ -149,14 +151,35 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     #[inline]
+    pub fn postpone_prioritized(&self, w: impl GCWork<VM>) {
+        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+        self.postponed_concurrent_work_prioritized
+            .read()
+            .push(box w)
+    }
+
+    #[inline]
     pub fn postpone_dyn(&self, w: Box<dyn GCWork<VM>>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(w)
     }
 
     #[inline]
+    pub fn postpone_dyn_prioritized(&self, w: Box<dyn GCWork<VM>>) {
+        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+        self.postponed_concurrent_work_prioritized.read().push(w)
+    }
+
+    #[inline]
     pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
         let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        ws.into_iter()
+            .for_each(|w| postponed_concurrent_work.push(w));
+    }
+
+    #[inline]
+    pub fn postpone_all_prioritized(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+        let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
         ws.into_iter()
             .for_each(|w| postponed_concurrent_work.push(w));
     }
@@ -376,6 +399,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Drain the message queue and execute coordinator work. Only the coordinator should call this.
     pub fn wait_for_completion(&self) {
         self.in_gc_pause.store(true, Ordering::SeqCst);
+        if !crate::LazySweepingJobs::all_finished() {
+            self.work_buckets[WorkBucketStage::Unconstrained].force_notify_all_workers();
+        }
         // At the start of a GC, we probably already have received a `ScheduleCollection` work. Run it now.
         if let Some(initializer) = self.startup.lock().unwrap().take() {
             self.process_coordinator_work(initializer);
@@ -413,20 +439,40 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
         std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
 
+        let mut pqueue = Injector::new();
+        std::mem::swap::<Q<VM>>(
+            &mut pqueue,
+            &mut self.postponed_concurrent_work_prioritized.write(),
+        );
+
         if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
             self.process_coordinator_work(finalizer);
         }
         self.in_gc_pause.store(false, Ordering::SeqCst);
 
-        self.schedule_concurrent_packets(queue);
+        self.schedule_concurrent_packets(queue, pqueue);
         self.assert_all_deactivated();
     }
 
-    fn schedule_concurrent_packets(&self, queue: Injector<Box<dyn GCWork<VM>>>) {
+    fn schedule_concurrent_packets(
+        &self,
+        queue: Injector<Box<dyn GCWork<VM>>>,
+        pqueue: Injector<Box<dyn GCWork<VM>>>,
+    ) {
         crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
+        let mut notify = false;
         if !queue.is_empty() {
             let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
             debug_assert!(old_queue.is_empty());
+            notify = true;
+        }
+        if !pqueue.is_empty() {
+            let old_queue =
+                self.work_buckets[WorkBucketStage::Unconstrained].swap_queue_prioritized(pqueue);
+            debug_assert!(old_queue.is_empty());
+            notify = true;
+        }
+        if notify {
             self.work_buckets[WorkBucketStage::Unconstrained].notify_all_workers();
         }
     }

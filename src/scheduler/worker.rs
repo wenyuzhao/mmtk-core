@@ -93,6 +93,17 @@ impl<VM: VMBinding> GCWorker<VM> {
     }
 
     #[inline]
+    pub fn add_work_prioritized(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
+        if !self.scheduler().work_buckets[bucket].is_activated()
+            || !self.local_work_buffer.is_empty()
+        {
+            self.scheduler.work_buckets[bucket].add_prioritized(box work);
+            return;
+        }
+        self.local_work_buffer.push(box work);
+    }
+
+    #[inline]
     pub fn add_work(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
         if !self.scheduler().work_buckets[bucket].is_activated()
             || !self.local_work_buffer.is_empty()

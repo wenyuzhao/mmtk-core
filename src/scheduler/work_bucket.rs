@@ -44,12 +44,29 @@ impl<VM: VMBinding> BucketQueue<VM> {
             Self::LwLock(x) => x.read().push(w),
         }
     }
+    #[inline(always)]
+    fn push_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+        match self {
+            Self::LockFree(x) => {
+                for w in ws {
+                    x.push(w)
+                }
+            }
+            Self::LwLock(x) => {
+                let x = x.read();
+                for w in ws {
+                    x.push(w)
+                }
+            }
+        }
+    }
 }
 
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     /// A priority queue
     queue: BucketQueue<VM>,
+    prioritized_queue: BucketQueue<VM>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,
@@ -65,6 +82,11 @@ impl<VM: VMBinding> WorkBucket<VM> {
             } else {
                 BucketQueue::LockFree(Injector::new())
             },
+            prioritized_queue: if unconstrained {
+                BucketQueue::LwLock(RwLock::new(Injector::new()))
+            } else {
+                BucketQueue::LockFree(Injector::new())
+            },
             monitor,
             can_open: None,
             group: None,
@@ -75,6 +97,18 @@ impl<VM: VMBinding> WorkBucket<VM> {
         mut queue: Injector<Box<dyn GCWork<VM>>>,
     ) -> Injector<Box<dyn GCWork<VM>>> {
         match &self.queue {
+            BucketQueue::LockFree(_) => unreachable!(),
+            BucketQueue::LwLock(x) => {
+                std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut x.write(), &mut queue);
+                queue
+            }
+        }
+    }
+    pub fn swap_queue_prioritized(
+        &self,
+        mut queue: Injector<Box<dyn GCWork<VM>>>,
+    ) -> Injector<Box<dyn GCWork<VM>>> {
+        match &self.prioritized_queue {
             BucketQueue::LockFree(_) => unreachable!(),
             BucketQueue::LwLock(x) => {
                 std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut x.write(), &mut queue);
@@ -102,6 +136,15 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
     #[inline(always)]
+    pub fn force_notify_all_workers(&self) {
+        if let Some(parked) = self.parked_workers() {
+            if parked > 0 {
+                let _guard = self.monitor.0.lock().unwrap();
+                self.monitor.1.notify_all()
+            }
+        }
+    }
+    #[inline(always)]
     pub fn notify_all_workers(&self) {
         if !self.is_activated() {
             return;
@@ -124,7 +167,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Test if the bucket is drained
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+        self.queue.is_empty() && self.prioritized_queue.is_empty()
     }
     #[inline(always)]
     pub fn is_drained(&self) -> bool {
@@ -134,6 +177,13 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn deactivate(&self) {
         debug_assert!(self.queue.is_empty(), "Bucket not drained before close");
         self.active.store(false, Ordering::SeqCst);
+    }
+    #[inline(always)]
+    pub fn add_prioritized(&self, work: Box<dyn GCWork<VM>>) {
+        self.prioritized_queue.push(work);
+        if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
+            self.notify_one_worker();
+        }
     }
     /// Add a work packet to this bucket, with a given priority
     #[inline(always)]
@@ -156,9 +206,14 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     #[inline(always)]
     pub fn bulk_add_with_priority(&self, _priority: usize, work_vec: Vec<Box<dyn GCWork<VM>>>) {
-        for w in work_vec {
-            self.queue.push(w)
+        self.queue.push_all(work_vec);
+        if self.is_activated() {
+            self.notify_all_workers();
         }
+    }
+    #[inline(always)]
+    pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+        self.prioritized_queue.push_all(work_vec);
         if self.is_activated() {
             self.notify_all_workers();
         }
@@ -173,20 +228,26 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Get a work packet (with the greatest priority) from this bucket
     #[inline(always)]
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
-        if !self.active.load(Ordering::SeqCst) || self.queue.is_empty() {
+        if !self.active.load(Ordering::SeqCst)
+            || (self.queue.is_empty() && self.prioritized_queue.is_empty())
+        {
             return Steal::Empty;
         }
-        self.queue.steal_batch_and_pop(worker)
+        self.prioritized_queue
+            .steal_batch_and_pop(worker)
+            .or_else(|| self.queue.steal_batch_and_pop(worker))
     }
     #[inline(always)]
     pub fn poll_no_batch(&self) -> Steal<Box<dyn GCWork<VM>>> {
         if !self.active.load(Ordering::SeqCst) {
             return Steal::Empty;
         }
-        if self.queue.is_empty() {
+        if self.queue.is_empty() && self.prioritized_queue.is_empty() {
             return Steal::Empty;
         }
-        self.queue.steal()
+        self.prioritized_queue
+            .steal()
+            .or_else(|| self.queue.steal())
     }
     pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(box pred);

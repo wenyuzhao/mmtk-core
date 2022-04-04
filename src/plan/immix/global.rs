@@ -837,7 +837,7 @@ impl<VM: VMBinding> Immix<VM> {
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-            scheduler.postpone_all(work_packets);
+            scheduler.postpone_all_prioritized(work_packets);
         } else {
             scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);
         }
@@ -902,47 +902,4 @@ impl<VM: VMBinding> Immix<VM> {
     pub const fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
     }
-
-    // fn resize_nursery(&self) {
-    //     // Don't resize if nursery is fixed.
-    //     if crate::args::NURSERY_BLOCKS.is_some() {
-    //         return;
-    //     }
-    //     // Resize based on throughput goal
-    //     let min_nursery = *crate::args::MIN_NURSERY_BLOCKS;
-    //     let max_nursery = crate::args::MAX_NURSERY_BLOCKS.unwrap_or_else(|| {
-    //         usize::max(
-    //             min_nursery,
-    //             (self.get_total_pages() >> Block::LOG_PAGES) / 3,
-    //         )
-    //     });
-    //     let pause_time = crate::GC_START_TIME
-    //         .load(Ordering::SeqCst)
-    //         .elapsed()
-    //         .unwrap()
-    //         .as_micros() as f64
-    //         / 1000f64;
-    //     static PREV_AVG_PAUSE: Atomic<f64> = Atomic::new(0f64);
-    //     let prev_avg_pause = PREV_AVG_PAUSE.load(Ordering::Relaxed);
-    //     let avg_pause = if prev_avg_pause == 0f64 {
-    //         pause_time
-    //     } else {
-    //         (prev_avg_pause + pause_time) / 2f64
-    //     };
-    //     PREV_AVG_PAUSE.store(avg_pause, Ordering::Relaxed);
-    //     let scale = avg_pause / 5f64;
-    //     let _ = crate::args::ADAPTIVE_NURSERY_BLOCKS.fetch_update(
-    //         Ordering::SeqCst,
-    //         Ordering::SeqCst,
-    //         |x| Some((x as f64 * (1f64 / scale)) as _),
-    //     );
-    //     let mut n = crate::args::ADAPTIVE_NURSERY_BLOCKS.load(Ordering::SeqCst);
-    //     if n < min_nursery {
-    //         n = min_nursery;
-    //     }
-    //     if n > max_nursery {
-    //         n = max_nursery;
-    //     }
-    //     crate::args::ADAPTIVE_NURSERY_BLOCKS.store(n, Ordering::SeqCst);
-    // }
 }
