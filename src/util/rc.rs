@@ -326,6 +326,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     self.record_mature_evac_remset(edge, target, false);
                     if !self::rc_stick(target) {
                         self.new_incs.push(edge);
+                        if self.new_incs.len() >= Self::CAPACITY {
+                            self.flush()
+                        }
                     }
                 }
             });
@@ -336,12 +339,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     self.record_mature_evac_remset(edge, target, false);
                     if !self::rc_stick(target) {
                         self.new_incs.push(edge);
+                        if self.new_incs.len() >= Self::CAPACITY {
+                            self.flush()
+                        }
                     }
                 }
             });
-        }
-        if self.new_incs.len() >= Self::CAPACITY {
-            self.flush()
         }
     }
 
