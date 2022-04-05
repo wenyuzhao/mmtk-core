@@ -457,6 +457,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_end(&self) {
+        if crate::NO_EVAC.load(Ordering::SeqCst) {
+            crate::COUNTERS.no_evac.fetch_add(1, Ordering::SeqCst);
+        }
         self.immix_space.pr.flush_all();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
@@ -776,6 +779,9 @@ impl<VM: VMBinding> Immix<VM> {
         let pause = if crate::args::LXR_RC_ONLY {
             Pause::RefCount
         } else if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
+            if emergency_collection {
+                crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
+            }
             let pause = self.select_lxr_collection_kind(emergency_collection);
             if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
