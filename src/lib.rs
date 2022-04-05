@@ -323,7 +323,7 @@ impl Counters {
         "gc.full": self.full.load(Ordering::SeqCst),
         "gc.defrag": self.defrag.load(Ordering::SeqCst),
         "gc.emergency": self.emergency.load(Ordering::SeqCst),
-        "gc.stop_evac": self.emergency.load(Ordering::SeqCst),
+        "gc.stop_evac": self.no_evac.load(Ordering::SeqCst),
         "cm_early_quit": self.cm_early_quit.load(Ordering::SeqCst),
         "gc_with_unfinished_lazy_jobs": self.gc_with_unfinished_lazy_jobs.load(Ordering::SeqCst),
         "time.yield": self.yield_nanos.load(Ordering::SeqCst) as f64 / 1000000.0,
