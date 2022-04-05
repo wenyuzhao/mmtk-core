@@ -438,6 +438,7 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     crate::stop_counters();
     mmtk.harness_end();
     crate::output_pause_time();
+    crate::output_survival_ratios();
 }
 
 /// Register a finalizable object. MMTk will retain the liveness of

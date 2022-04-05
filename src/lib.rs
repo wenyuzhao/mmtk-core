@@ -546,6 +546,26 @@ fn add_bucket_time(stage: WorkBucketStage, nanos: u128) {
     }
 }
 
+static SRV: SegQueue<(f64, f64)> = SegQueue::new();
+
+#[inline(always)]
+fn add_survival_ratio(srv: f64, predict: f64) {
+    if cfg!(feature = "survival_ratio") && INSIDE_HARNESS.load(Ordering::SeqCst) {
+        SRV.push((srv, predict));
+    }
+}
+
+fn output_survival_ratios() {
+    let headers = ["srv", "predict"];
+    let mut s = headers.join(",") + "\n";
+    while let Some((a, b)) = SRV.pop() {
+        s += &[format!("{}", a), format!("{}", b)].join(",");
+        s += "\n";
+    }
+    let mut file = File::create("scratch/srv.csv").unwrap();
+    file.write_all(s.as_bytes()).unwrap();
+}
+
 static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();
 static PAUSE_TYPES: SegQueue<Pause> = SegQueue::new();
 

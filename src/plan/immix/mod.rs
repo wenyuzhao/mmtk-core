@@ -77,6 +77,7 @@ impl SurvivalRatioPredictor {
         let curr = self.promote_vol.load(Ordering::Relaxed) as f64
             / self.alloc_vol.load(Ordering::Relaxed) as f64;
         let ratio = (curr + prev) / 2f64;
+        crate::add_survival_ratio(curr, prev);
         self.prev_ratio.store(ratio, Ordering::Relaxed);
         self.alloc_vol.store(0, Ordering::Relaxed);
         self.promote_vol.store(0, Ordering::Relaxed);
