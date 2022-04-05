@@ -656,6 +656,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             std::mem::swap(&mut incs, &mut self.new_incs);
             self.process_incs::<{ EdgeKind::Nursery }>(AddressBuffer::Ref(&mut incs), copy_context);
         }
+        crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.sync();
     }
 }
 
