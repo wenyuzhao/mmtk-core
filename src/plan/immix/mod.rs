@@ -76,8 +76,6 @@ impl SurvivalRatioPredictor {
         let prev = self.prev_ratio.load(Ordering::Relaxed);
         let curr = self.promote_vol.load(Ordering::Relaxed) as f64
             / self.alloc_vol.load(Ordering::Relaxed) as f64;
-        assert_ne!(curr, 0f64);
-        assert_ne!(prev, 0f64);
         let ratio = if *crate::args::SURVIVAL_PREDICTOR_WEIGHTED {
             if curr > prev {
                 (curr * 3f64 + prev) / 4f64
