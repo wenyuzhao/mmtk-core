@@ -559,7 +559,7 @@ fn output_survival_ratios() {
     let headers = ["srv", "predict"];
     let mut s = headers.join(",") + "\n";
     while let Some((a, b)) = SRV.pop() {
-        s += &[format!("{}", a), format!("{}", b)].join(",");
+        s += &[format!("{:.3}", a), format!("{:.3}", b)].join(",");
         s += "\n";
     }
     let mut file = File::create("scratch/srv.csv").unwrap();
