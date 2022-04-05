@@ -94,24 +94,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn pause_concurrent_work_packets_during_gc(&self) {
         let mut old_queue = Injector::new();
         old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(old_queue);
-        let mut postponed = 0usize;
-        loop {
-            match old_queue.steal() {
-                Steal::Success(w) => {
-                    if w.type_id() == TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
-                        postponed += 1;
-                        self.postponed_concurrent_work.read().push(w);
-                    } else {
-                        self.work_buckets[WorkBucketStage::Unconstrained].add_dyn(w);
-                    }
-                }
-                Steal::Empty => break,
-                Steal::Retry => {}
-            }
-        }
-        if crate::args::LOG_PER_GC_STATE {
-            println!("Pause {} concurrent packets", postponed);
-        }
+        let mut queue = self.postponed_concurrent_work.write();
+        assert!(queue.is_empty());
+        *queue = old_queue;
         crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
 
