@@ -213,6 +213,17 @@ pub static RC_AFTER_SATB: Lazy<Option<usize>> =
 pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> =
     Lazy::new(|| env::var("MAX_SURVIVAL_MB").map(|x| x.parse().unwrap()).ok());
 
+pub static SURVIVAL_PREDICTOR_HARMONIC_MEAN: Lazy<bool> = Lazy::new(|| {
+    env::var("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
+pub static SURVIVAL_PREDICTOR_WEIGHTED: Lazy<bool> = Lazy::new(|| {
+    env::var("SURVIVAL_PREDICTOR_WEIGHTED")
+        .map(|x| x != "0")
+        .unwrap_or(false)
+});
+
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
@@ -312,7 +323,12 @@ fn dump_features(active_barrier: BarrierSelector) {
 
     dump_feature!("rc_after_satb", *RC_AFTER_SATB);
 
-    dump_feature!("MAX_SURVIVAL_MB", *MAX_SURVIVAL_MB);
+    dump_feature!("max_survival_mb", *MAX_SURVIVAL_MB);
+    dump_feature!(
+        "survival_predictor_harmonic_mean",
+        *SURVIVAL_PREDICTOR_HARMONIC_MEAN
+    );
+    dump_feature!("survival_predictor_weighted", *SURVIVAL_PREDICTOR_WEIGHTED);
 
     println!("----------------------------------------------------");
 }

@@ -76,7 +76,23 @@ impl SurvivalRatioPredictor {
         let prev = self.prev_ratio.load(Ordering::Relaxed);
         let curr = self.promote_vol.load(Ordering::Relaxed) as f64
             / self.alloc_vol.load(Ordering::Relaxed) as f64;
-        let ratio = (curr + prev) / 2f64;
+        assert_ne!(curr, 0f64);
+        assert_ne!(prev, 0f64);
+        let ratio = if *crate::args::SURVIVAL_PREDICTOR_WEIGHTED {
+            if curr > prev {
+                (curr * 3f64 + prev) / 4f64
+            } else {
+                (curr + 3f64 * prev) / 4f64
+            }
+        } else if *crate::args::SURVIVAL_PREDICTOR_HARMONIC_MEAN {
+            if curr >= prev {
+                2f64 * curr * prev / (curr + prev)
+            } else {
+                (curr * curr + prev * prev) / (curr + prev)
+            }
+        } else {
+            (curr + prev) / 2f64
+        };
         crate::add_survival_ratio(curr, prev);
         self.prev_ratio.store(ratio, Ordering::Relaxed);
         self.alloc_vol.store(0, Ordering::Relaxed);
