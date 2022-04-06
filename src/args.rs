@@ -138,6 +138,12 @@ pub static OPPORTUNISTIC_EVAC_THRESHOLD: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(50)
 });
 
+pub static MAX_COPY_SIZE: Lazy<usize> = Lazy::new(|| {
+    env::var("MAX_COPY_SIZE")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(2048)
+});
+
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
 pub const TAKERATE_MEASUREMENT: bool = false;
@@ -246,6 +252,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     );
     dump_feature!("survival_predictor_weighted", *SURVIVAL_PREDICTOR_WEIGHTED);
     dump_feature!("trace_threshold2", *TRACE_THRESHOLD2);
+    dump_feature!("max_copy_size", *MAX_COPY_SIZE);
 
     println!("----------------------------------------------------");
 }

@@ -199,6 +199,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     concurrent_marking_in_progress: bool,
     no_evac: bool,
     slice: Option<&'static [ObjectReference]>,
+    max_copy: usize,
 }
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -250,6 +251,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: Some(slice),
+            max_copy: *crate::args::MAX_COPY_SIZE,
         }
     }
 
@@ -266,6 +268,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: None,
+            max_copy: *crate::args::MAX_COPY_SIZE,
         }
     }
 
@@ -433,7 +436,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        if o.get_size::<VM>() >= 2048 {
+        if o.get_size::<VM>() >= self.max_copy {
             return true;
         }
         false
