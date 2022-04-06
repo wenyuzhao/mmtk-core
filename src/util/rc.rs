@@ -198,6 +198,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     no_evac: bool,
+    slice: Option<&'static [ObjectReference]>,
 }
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -237,6 +238,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline]
+    pub fn new_array_slice(slice: &'static [ObjectReference]) -> Self {
+        debug_assert!(crate::args::REF_COUNT);
+        Self {
+            incs: vec![],
+            new_incs: vec![],
+            remset: vec![],
+            worker: std::ptr::null_mut(),
+            immix: std::ptr::null(),
+            current_pause: Pause::RefCount,
+            concurrent_marking_in_progress: false,
+            no_evac: false,
+            slice: Some(slice),
+        }
+    }
+
+    #[inline]
     pub fn new(incs: Vec<Address>) -> Self {
         debug_assert!(crate::args::REF_COUNT);
         Self {
@@ -248,6 +265,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
+            slice: None,
         }
     }
 
@@ -285,6 +303,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
+        if VM::VMScanning::is_type_array(o) {
+            return;
+        }
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -310,25 +331,55 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             }
-        }
-        let x = in_place_promotion && !los;
-        EdgeIterator::<VM>::iterate(o, |edge| {
-            if x {
-                edge.unlog::<VM>();
-            }
-            let target = unsafe { edge.load::<ObjectReference>() };
-            if target.is_null() {
-                return;
-            }
-            if !self::rc_stick(target) {
-                self.new_incs.push(edge);
-                if unlikely(self.new_incs.len() >= Self::CAPACITY) {
-                    self.flush()
+        } else if in_place_promotion {
+            let size = o.get_size::<VM>();
+            let end = o.to_address() + size;
+            let aligned_end = end.align_down(64);
+            let mut cursor = o.to_address() + 16usize;
+            let mut meta = side_metadata::address_to_meta_address(
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                cursor.align_up(64),
+            );
+            while cursor < aligned_end {
+                if cursor.is_aligned_to(64) {
+                    unsafe { meta.store(0xffu8) }
+                    meta += 1usize;
+                    cursor += 64usize;
+                } else {
+                    cursor.unlog::<VM>();
+                    cursor += 8usize;
                 }
-            } else {
-                PerRegionRemSet::record(edge, target, &self.immix().immix_space)
             }
-        });
+            while cursor < end {
+                cursor.unlog::<VM>();
+                cursor += 8usize;
+            }
+        };
+        if los && VM::VMScanning::is_obj_array(o) {
+            let data = VM::VMScanning::obj_array_data(o);
+            let mut packets = vec![];
+            for chunk in data.chunks(512) {
+                let w = box ProcessIncs::<VM, { EdgeKind::Nursery }>::new_array_slice(chunk);
+                packets.push(w as Box<dyn GCWork<VM>>);
+            }
+            self.worker().scheduler().work_buckets[WorkBucketStage::RCProcessIncs]
+                .bulk_add(packets);
+        } else {
+            EdgeIterator::<VM>::iterate(o, |edge| {
+                let target = unsafe { edge.load::<ObjectReference>() };
+                if target.is_null() {
+                    return;
+                }
+                if !self::rc_stick(target) {
+                    self.new_incs.push(edge);
+                    if unlikely(self.new_incs.len() >= Self::CAPACITY) {
+                        self.flush()
+                    }
+                } else {
+                    PerRegionRemSet::record(edge, target, &self.immix().immix_space)
+                }
+            });
+        }
     }
 
     #[inline(always)]
@@ -372,6 +423,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
+        // if o.get_size::<VM>() >= 4096 {
+        //     return true;
+        // }
         false
     }
 
@@ -533,6 +587,19 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             None
         }
     }
+
+    #[inline(always)]
+    fn process_incs_for_obj_array<const K: EdgeKind>(
+        &mut self,
+        slice: &[ObjectReference],
+        copy_context: &mut ImmixCopyContext<VM>,
+    ) -> Option<Vec<ObjectReference>> {
+        for e in slice {
+            let e = Address::from_ref(e);
+            self.process_edge::<K>(e, copy_context);
+        }
+        None
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -609,9 +676,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             vec![]
         };
-        let mut incs = vec![];
-        std::mem::swap(&mut incs, &mut self.incs);
-        let roots = self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context);
+        let roots = {
+            if let Some(slice) = self.slice {
+                assert_eq!(KIND, EdgeKind::Nursery);
+                self.process_incs_for_obj_array::<KIND>(slice, copy_context)
+            } else {
+                let mut incs = vec![];
+                std::mem::swap(&mut incs, &mut self.incs);
+                self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context)
+            }
+        };
         if let Some(roots) = roots {
             if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
                 worker
