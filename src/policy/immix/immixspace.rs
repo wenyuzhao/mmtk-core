@@ -1183,6 +1183,7 @@ static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct SelectDefragBlocksInChunk {
     chunk: Chunk,
+    #[allow(unused)]
     defrag_threshold: usize,
 }
 

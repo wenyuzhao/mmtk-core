@@ -121,3 +121,29 @@ impl SurvivalRatioPredictorLocal {
         self.promote_vol.store(0, Ordering::Relaxed);
     }
 }
+
+pub static MATURE_LIVE_PREDICTOR: MatureLivePredictor = MatureLivePredictor {
+    live_pages: Atomic::new(0f64),
+};
+
+pub struct MatureLivePredictor {
+    live_pages: Atomic<f64>,
+}
+
+impl MatureLivePredictor {
+    #[inline(always)]
+    pub fn live_pages(&self) -> f64 {
+        self.live_pages.load(Ordering::Relaxed)
+    }
+
+    #[inline(always)]
+    pub fn update(&self, live_pages: usize) {
+        // println!("live_pages {}", live_pages);
+        let prev = self.live_pages.load(Ordering::Relaxed);
+        let curr = live_pages as f64;
+        let next = (curr + prev) / 2f64;
+        // println!("predict {}", next);
+        // crate::add_mature_reclaim(live_pages, prev);
+        self.live_pages.store(next, Ordering::Relaxed);
+    }
+}

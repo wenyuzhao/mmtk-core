@@ -263,11 +263,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
                 if crate::args::LOG_PER_GC_STATE {
                     println!(
-                        " - lazy jobs done, heap {:?}M",
-                        me.get_pages_reserved() / 256
+                        " - lazy jobs done, heap {:?}M {:?}",
+                        me.get_pages_reserved() / 256,
+                        me.previous_pause()
                     );
                 }
                 // Update counters
+                if !crate::args::LAZY_DECREMENTS {
+                    HEAP_AFTER_GC.store(me.get_pages_used(), Ordering::SeqCst);
+                }
                 {
                     let o = Ordering::Relaxed;
                     let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
@@ -290,7 +294,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     let max = crate::COUNTERS.max_used_pages.load(o);
                     crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
                 }
-                me.decide_next_gc_may_perform_cycle_collection();
+                if crate::args::TRACE_THRESHOLD2.is_some() {
+                    me.decide_next_gc_may_perform_cycle_collection2();
+                } else {
+                    me.decide_next_gc_may_perform_cycle_collection();
+                }
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -517,6 +525,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.perform_cycle_collection.store(false, Ordering::SeqCst);
         self.avail_pages_at_end_of_last_gc
             .store(self.get_pages_avail(), Ordering::SeqCst);
+        HEAP_AFTER_GC.store(self.get_pages_used(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -620,6 +629,67 @@ impl<VM: VMBinding> Immix<VM> {
         } else {
             if crate::args::LOG_PER_GC_STATE {
                 println!("next rc ({} / {})", last_freed_blocks, total_blocks);
+            }
+            self.next_gc_may_perform_cycle_collection
+                .store(false, Ordering::SeqCst);
+        }
+        notify();
+    }
+
+    fn decide_next_gc_may_perform_cycle_collection2(&self) {
+        let (lock, cvar) = &self.next_gc_selected;
+        let notify = || {
+            let mut gc_selection_done = lock.lock().unwrap();
+            *gc_selection_done = true;
+            cvar.notify_one();
+        };
+        if !crate::args::HEAP_HEALTH_GUIDED_GC {
+            notify();
+            return;
+        }
+        let pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst)
+            - (self
+                .immix_space
+                .num_clean_blocks_released_lazy
+                .load(Ordering::SeqCst)
+                << Block::LOG_PAGES);
+        if self.previous_pause() == Some(Pause::FinalMark)
+            || self.previous_pause() == Some(Pause::FullTraceFast)
+        {
+            super::MATURE_LIVE_PREDICTOR.update(pages_after_gc)
+        }
+        let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
+        let garbage = if pages_after_gc > live_mature_pages {
+            pages_after_gc - live_mature_pages
+        } else {
+            0
+        };
+        let total_pages = self.get_total_pages();
+        let threshold = crate::args::TRACE_THRESHOLD2.unwrap();
+        let last_freed_blocks = self
+            .immix_space
+            .num_clean_blocks_released
+            .load(Ordering::SeqCst);
+        if garbage * 100 >= threshold as usize * total_pages || last_freed_blocks < 100 {
+            if crate::args::LOG_PER_GC_STATE {
+                println!(
+                    "next trace ({} / {}) {} {}",
+                    garbage,
+                    total_pages,
+                    pages_after_gc,
+                    HEAP_AFTER_GC.load(Ordering::SeqCst)
+                );
+            }
+            self.next_gc_may_perform_cycle_collection
+                .store(true, Ordering::SeqCst);
+            if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
+                self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
+                self.immix_space
+                    .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
+            }
+        } else {
+            if crate::args::LOG_PER_GC_STATE {
+                println!("next rc ({} / {}) {}", garbage, total_pages, pages_after_gc);
             }
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);
