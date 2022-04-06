@@ -739,12 +739,13 @@ pub struct ProcessDecs<VM: VMBinding> {
     counter: LazySweepingJobsCounter,
     mark_objects: Vec<ObjectReference>,
     concurrent_marking_in_progress: bool,
+    slice: Option<(bool, &'static [ObjectReference])>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
 
 impl<VM: VMBinding> ProcessDecs<VM> {
-    const CAPACITY: usize = 128;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -762,14 +763,47 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             counter,
             mark_objects: vec![],
             concurrent_marking_in_progress: false,
+            slice: None,
+        }
+    }
+
+    #[inline]
+    pub fn new_array_slice(
+        slice: &'static [ObjectReference],
+        not_marked: bool,
+        counter: LazySweepingJobsCounter,
+    ) -> Self {
+        debug_assert!(crate::args::REF_COUNT);
+        Self {
+            decs: vec![],
+            new_decs: vec![],
+            worker: std::ptr::null_mut(),
+            mmtk: std::ptr::null_mut(),
+            counter,
+            mark_objects: vec![],
+            concurrent_marking_in_progress: false,
+            slice: Some((not_marked, slice)),
         }
     }
 
     #[inline(always)]
     pub fn recursive_dec(&mut self, o: ObjectReference) {
+        if self.new_decs.is_empty() {
+            self.new_decs.reserve(Self::CAPACITY);
+        }
         self.new_decs.push(o);
         if self.new_decs.len() > Self::CAPACITY {
             self.flush()
+        }
+    }
+
+    #[inline]
+    fn new_work(&self, immix: &Immix<VM>, w: ProcessDecs<VM>) {
+        if immix.current_pause().is_none() {
+            self.worker()
+                .add_work_prioritized(WorkBucketStage::Unconstrained, w);
+        } else {
+            self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
     }
 
@@ -780,17 +814,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             let mmtk = unsafe { &*self.mmtk };
             let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-            if immix.current_pause().is_none() {
-                self.worker().add_work_prioritized(
-                    WorkBucketStage::Unconstrained,
-                    ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
-                );
-            } else {
-                self.worker().add_work(
-                    WorkBucketStage::Unconstrained,
-                    ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
-                );
-            }
+            self.new_work(
+                immix,
+                ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
+            );
         }
         if !self.mark_objects.is_empty() {
             let mut objects = vec![];
@@ -825,19 +852,39 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         // println!(" - dead {:?}", o.range::<VM>());
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
-        EdgeIterator::<VM>::iterate(o, |edge| {
-            let x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() {
-                // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);
-                let rc = self::count(x);
-                if rc != MAX_REF_COUNT && rc != 0 {
-                    self.recursive_dec(x);
-                }
-                if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(x) {
-                    self.mark_objects.push(x);
-                }
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
+            let data = VM::VMScanning::obj_array_data(o);
+            let mut packets = vec![];
+            for chunk in data.chunks(Self::CAPACITY) {
+                let w = box ProcessDecs::<VM>::new_array_slice(
+                    chunk,
+                    not_marked,
+                    self.counter.clone_with_decs(),
+                );
+                packets.push(w as Box<dyn GCWork<VM>>);
             }
-        });
+            if immix.current_pause().is_none() {
+                self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                    .bulk_add_prioritized(packets);
+            } else {
+                self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                    .bulk_add(packets);
+            }
+        } else {
+            EdgeIterator::<VM>::iterate(o, |edge| {
+                let x = unsafe { edge.load::<ObjectReference>() };
+                if !x.is_null() {
+                    // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);
+                    let rc = self::count(x);
+                    if rc != MAX_REF_COUNT && rc != 0 {
+                        self.recursive_dec(x);
+                    }
+                    if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(x) {
+                        self.mark_objects.push(x);
+                    }
+                }
+            });
+        }
         let in_ix_space = immix.immix_space.in_space(o);
         if !crate::args::BLOCK_ONLY && in_ix_space {
             self::unmark_straddle_object::<VM>(o);
@@ -856,13 +903,25 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[inline]
-    fn process_decs(&mut self, decs: &Vec<ObjectReference>, immix: &Immix<VM>) {
+    fn process_decs(
+        &mut self,
+        decs: &[ObjectReference],
+        immix: &Immix<VM>,
+        slice: bool,
+        not_marked: bool,
+    ) {
         for o in decs {
             // println!("dec {:?}", o);
             if o.is_null() {
                 continue;
             }
-            if self::count(*o) == 0 {
+            if slice {
+                if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(*o) {
+                    self.mark_objects.push(*o);
+                }
+            }
+            let rc = self::count(*o);
+            if rc == 0 || rc == MAX_REF_COUNT {
                 continue;
             }
             let o =
@@ -901,14 +960,18 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
+        if let Some((not_marked, slice)) = self.slice {
+            self.process_decs(slice, immix, true, not_marked);
+        } else {
+            let mut decs = vec![];
+            std::mem::swap(&mut decs, &mut self.decs);
+            self.process_decs(&decs, immix, false, false);
+        }
         let mut decs = vec![];
-        std::mem::swap(&mut decs, &mut self.decs);
-        // println!("DECS {:?}", decs);
-        self.process_decs(&decs, immix);
         while !self.new_decs.is_empty() {
             decs.clear();
             std::mem::swap(&mut decs, &mut self.new_decs);
-            self.process_decs(&decs, immix);
+            self.process_decs(&decs, immix, false, false);
         }
         self.flush();
     }
