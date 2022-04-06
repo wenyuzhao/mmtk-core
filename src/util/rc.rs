@@ -26,7 +26,6 @@ use std::intrinsics::unlikely;
 use std::iter::Step;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
-use std::time::SystemTime;
 
 pub const LOG_REF_COUNT_BITS: usize = 1;
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
