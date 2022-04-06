@@ -31,7 +31,7 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
 
 impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
-    const CAPACITY: usize = 512;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         let plan = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
@@ -90,7 +90,8 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
 
     #[inline]
     fn process_node(&mut self, object: ObjectReference) {
-        if crate::args::MARK_LINE_AT_SCAN_TIME
+        if !crate::args::REF_COUNT
+            && crate::args::MARK_LINE_AT_SCAN_TIME
             && !crate::args::BLOCK_ONLY
             && self.plan.immix_space.in_space(object)
         {
@@ -111,6 +112,9 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                 }
             }
             if !t.is_null() {
+                if self.next_objects.is_empty() {
+                    self.next_objects.reserve(Self::CAPACITY);
+                }
                 self.next_objects.push(t);
                 if self.next_objects.len() >= Self::CAPACITY {
                     self.flush();
