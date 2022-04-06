@@ -15,6 +15,7 @@ use super::{
     region::{Region, RegionState},
     ImmixSpace,
 };
+use crate::scheduler::ProcessEdgesWork;
 use crate::{
     plan::immix::{Immix, ImmixCopyContext, Pause},
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
@@ -23,7 +24,11 @@ use crate::{
     vm::VMBinding,
     MMTK,
 };
-use crate::{util::metadata::side_metadata, vm::ObjectModel};
+use crate::{plan::Plan, util::cm::LXRMatureEvacProcessEdges};
+use crate::{
+    util::metadata::side_metadata,
+    vm::{ActivePlan, ObjectModel},
+};
 
 static RECORD: AtomicBool = AtomicBool::new(false);
 
@@ -142,13 +147,13 @@ impl PerRegionRemSet {
     #[inline]
     pub fn dispatch<VM: VMBinding>(&mut self, space: &ImmixSpace<VM>) -> Vec<Box<dyn GCWork<VM>>> {
         (0..self.gc_buffers.len())
-            .filter_map(|i| {
+            .filter(|i| !self.gc_buffer(*i).is_empty())
+            .flat_map(|i| {
                 let buf = self.gc_buffer(i);
-                if buf.is_empty() {
-                    None
-                } else {
-                    Some(box EvacuateMatureObjects::new(buf.to_vec(), space) as Box<dyn GCWork<VM>>)
-                }
+                buf.chunks(LXRMatureEvacProcessEdges::<VM>::CAPACITY)
+                    .map(|chunk| {
+                        box EvacuateMatureObjects::new(chunk.to_vec(), space) as Box<dyn GCWork<VM>>
+                    })
             })
             .collect()
     }
@@ -166,9 +171,17 @@ pub struct CollectionSet {
 }
 
 impl CollectionSet {
-    pub fn time_limit_test() -> PartialRegionSelection {
+    pub fn time_and_space_limit_test<VM: VMBinding>() -> PartialRegionSelection {
         if !*crate::args::OPPORTUNISTIC_EVAC {
             return Ok(());
+        }
+        let plan = VM::VMActivePlan::global()
+            .downcast_ref::<Immix<VM>>()
+            .unwrap();
+        let over_space =
+            plan.get_pages_used() - plan.get_collection_reserve() > plan.get_total_pages();
+        if over_space {
+            return Err(vec![]);
         }
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)
@@ -181,7 +194,6 @@ impl CollectionSet {
             Ok(())
         }
     }
-
     pub fn incremental_test(regions: &mut Vec<Region>) -> PartialRegionSelection {
         if !*crate::args::LXR_INCREMENTAL_DEFRAG {
             Err(Self::take_all_regions(regions).unwrap())

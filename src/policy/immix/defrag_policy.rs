@@ -413,7 +413,7 @@ impl<VM: VMBinding> DefragPolicy<VM> for DefaultDefragPolicy {
 
     fn schedule(&self, _cset: &CollectionSet, regions: &mut Vec<Region>) -> RegionSelection {
         CollectionSet::incremental_test(regions)?;
-        CollectionSet::time_limit_test()?;
+        CollectionSet::time_and_space_limit_test::<VM>()?;
         CollectionSet::pop_prioritized_regions(regions)
     }
 }
@@ -527,7 +527,7 @@ impl<VM: VMBinding> DefragPolicy<VM> for EagerDefragPolicy {
             return CollectionSet::take_all_regions(regions);
         }
         CollectionSet::incremental_test(regions)?;
-        CollectionSet::time_limit_test()?;
+        CollectionSet::time_and_space_limit_test::<VM>()?;
         let mut total_copy_bytes = 0usize;
         let threshold = *crate::args::LXR_REGION_COALESCE_THRESHOLD << 20;
         CollectionSet::filter_prioritized_regions(regions, |region| {
