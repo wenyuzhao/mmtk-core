@@ -225,7 +225,7 @@ pub fn reset_inc_buffer_size() {
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = 512;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -366,7 +366,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
-            for chunk in data.chunks(512) {
+            for chunk in data.chunks(Self::CAPACITY) {
                 let w = box ProcessIncs::<VM, { EdgeKind::Nursery }>::new_array_slice(chunk);
                 packets.push(w as Box<dyn GCWork<VM>>);
             }

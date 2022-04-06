@@ -6,6 +6,20 @@ use crate::{
     BarrierSelector,
 };
 
+pub const BUFFER_SIZE: usize = {
+    if cfg!(feature = "lxr_buf_2048") {
+        2048
+    } else if cfg!(feature = "lxr_buf_1024") {
+        1024
+    } else if cfg!(feature = "lxr_buf_512") {
+        512
+    } else if cfg!(feature = "lxr_buf_256") {
+        512
+    } else {
+        1024
+    }
+};
+
 pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
 pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
