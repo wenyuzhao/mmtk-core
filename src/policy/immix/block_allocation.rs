@@ -48,6 +48,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.cursor.load(Ordering::SeqCst)
     }
 
+    #[inline]
+    pub fn nursery_mb(&self) -> usize {
+        self.nursery_blocks() << Block::LOG_BYTES >> 20
+    }
+
     pub fn init(&mut self, space: &'static ImmixSpace<VM>) {
         self.space = Some(space);
     }

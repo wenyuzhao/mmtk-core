@@ -295,6 +295,7 @@ struct Counters {
     pub gc_with_unfinished_lazy_jobs: AtomicUsize,
     pub incs_triggerd: AtomicUsize,
     pub alloc_triggerd: AtomicUsize,
+    pub survival_triggerd: AtomicUsize,
     pub overflow_triggerd: AtomicUsize,
     pub rc_during_satb: AtomicUsize,
 }
@@ -323,6 +324,7 @@ impl Counters {
         "max_used_pages": self.max_used_pages.load(Ordering::SeqCst),
         "incs_triggerd": self.incs_triggerd.load(Ordering::SeqCst),
         "alloc_triggerd": self.alloc_triggerd.load(Ordering::SeqCst),
+        "survival_triggerd": self.survival_triggerd.load(Ordering::SeqCst),
         "overflow_triggerd": self.overflow_triggerd.load(Ordering::SeqCst),
         "rc_during_satb": self.rc_during_satb.load(Ordering::SeqCst),
     }
@@ -529,6 +531,26 @@ fn add_bucket_time(stage: WorkBucketStage, nanos: u128) {
     if should_record_pause_time() {
         PER_BUCKET_TIMERS[&stage].push(nanos);
     }
+}
+
+static SRV: SegQueue<(f64, f64)> = SegQueue::new();
+
+#[inline(always)]
+fn add_survival_ratio(srv: f64, predict: f64) {
+    if cfg!(feature = "survival_ratio") && INSIDE_HARNESS.load(Ordering::SeqCst) {
+        SRV.push((srv, predict));
+    }
+}
+
+fn output_survival_ratios() {
+    let headers = ["srv", "predict"];
+    let mut s = headers.join(",") + "\n";
+    while let Some((a, b)) = SRV.pop() {
+        s += &[format!("{:.3}", a), format!("{:.3}", b)].join(",");
+        s += "\n";
+    }
+    let mut file = File::create("scratch/srv.csv").unwrap();
+    file.write_all(s.as_bytes()).unwrap();
 }
 
 static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();

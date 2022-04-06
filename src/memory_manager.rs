@@ -427,6 +427,7 @@ pub fn add_phantom_candidate<VM: VMBinding>(
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     crate::reset_counters();
     mmtk.harness_begin(tls);
+    crate::output_survival_ratios();
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
