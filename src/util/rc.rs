@@ -26,6 +26,7 @@ use std::intrinsics::unlikely;
 use std::iter::Step;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
+use std::time::SystemTime;
 
 pub const LOG_REF_COUNT_BITS: usize = 1;
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
@@ -225,7 +226,7 @@ pub fn reset_inc_buffer_size() {
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = 128;
+    const CAPACITY: usize = 512;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -363,7 +364,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor += 8usize;
             }
         };
-        if los && VM::VMScanning::is_obj_array(o) {
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(512) {
@@ -377,6 +378,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 let target = unsafe { edge.load::<ObjectReference>() };
                 if !target.is_null() {
                     if !self::rc_stick(target) {
+                        if self.new_incs.is_empty() {
+                            self.new_incs.reserve(Self::CAPACITY)
+                        }
                         self.new_incs.push(edge);
                         if self.new_incs.len() >= Self::CAPACITY {
                             self.flush()
@@ -430,9 +434,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        // if o.get_size::<VM>() >= 4096 {
-        //     return true;
-        // }
+        if o.get_size::<VM>() >= 2048 {
+            return true;
+        }
         false
     }
 

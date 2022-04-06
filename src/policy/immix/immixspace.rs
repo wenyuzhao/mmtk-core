@@ -1211,7 +1211,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 // block.calc_dead_bytes::<VM>()
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
-            if score >= self.defrag_threshold {
+            if score >= (Block::BYTES >> 1) {
                 blocks.push((block, score));
             }
         }
