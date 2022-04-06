@@ -310,9 +310,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[inline(always)]
     fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
-        if VM::VMScanning::is_type_array(o) {
-            return;
-        }
+        // if VM::VMScanning::is_type_array(o) {
+        //     return;
+        // }
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
