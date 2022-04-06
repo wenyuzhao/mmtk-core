@@ -7,6 +7,20 @@ use crate::{
     BarrierSelector,
 };
 
+pub const BUFFER_SIZE: usize = {
+    if cfg!(feature = "lxr_buf_2048") {
+        2048
+    } else if cfg!(feature = "lxr_buf_1024") {
+        1024
+    } else if cfg!(feature = "lxr_buf_512") {
+        512
+    } else if cfg!(feature = "lxr_buf_256") {
+        256
+    } else {
+        1024
+    }
+};
+
 pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
 pub const ENABLE_NON_TEMPORAL_MEMSET: bool = true;
 pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
@@ -125,6 +139,12 @@ pub static OPPORTUNISTIC_EVAC_THRESHOLD: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(10)
 });
 
+pub static MAX_COPY_SIZE: Lazy<usize> = Lazy::new(|| {
+    env::var("MAX_COPY_SIZE")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(2048)
+});
+
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
 pub const TAKERATE_MEASUREMENT: bool = false;
@@ -223,7 +243,11 @@ pub static SURVIVAL_PREDICTOR_WEIGHTED: Lazy<bool> = Lazy::new(|| {
         .map(|x| x != "0")
         .unwrap_or(false)
 });
-
+pub static TRACE_THRESHOLD2: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("TRACE_THRESHOLD2")
+        .map(|x| x.parse().unwrap())
+        .ok()
+});
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
 
@@ -329,6 +353,8 @@ fn dump_features(active_barrier: BarrierSelector) {
         *SURVIVAL_PREDICTOR_HARMONIC_MEAN
     );
     dump_feature!("survival_predictor_weighted", *SURVIVAL_PREDICTOR_WEIGHTED);
+    dump_feature!("trace_threshold2", *TRACE_THRESHOLD2);
+    dump_feature!("max_copy_size", *MAX_COPY_SIZE);
 
     println!("----------------------------------------------------");
 }

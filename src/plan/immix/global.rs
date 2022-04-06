@@ -232,8 +232,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
                 if crate::args::LOG_PER_GC_STATE {
                     println!(
-                        " - lazy jobs done, heap {:?}M",
-                        me.get_pages_reserved() / 256
+                        " - lazy jobs done, heap {:?}M {:?}",
+                        me.get_pages_reserved() / 256,
+                        me.previous_pause()
                     );
                 }
                 // Update counters
@@ -262,7 +263,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     let max = crate::COUNTERS.max_used_pages.load(o);
                     crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
                 }
-                if crate::args::MATURE_OCCUPANCY.is_some() {
+                if crate::args::TRACE_THRESHOLD2.is_some() {
                     me.decide_next_gc_may_perform_cycle_collection2();
                 } else {
                     me.decide_next_gc_may_perform_cycle_collection();
@@ -615,23 +616,46 @@ impl<VM: VMBinding> Immix<VM> {
             notify();
             return;
         }
-        let threshold = crate::args::MATURE_OCCUPANCY.unwrap();
-        let total_pages = self.get_total_pages();
         let pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst)
             - (self
                 .immix_space
                 .num_clean_blocks_released_lazy
                 .load(Ordering::SeqCst)
                 << Block::LOG_PAGES);
-        if !CollectionSet::defrag_in_progress() && pages_after_gc * 100 > threshold * total_pages {
+        if self.previous_pause() == Some(Pause::FinalMark)
+            || self.previous_pause() == Some(Pause::FullTraceFast)
+        {
+            super::MATURE_LIVE_PREDICTOR.update(pages_after_gc)
+        }
+        let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
+        let garbage = if pages_after_gc > live_mature_pages {
+            pages_after_gc - live_mature_pages
+        } else {
+            0
+        };
+        let total_pages = self.get_total_pages();
+        let threshold = crate::args::TRACE_THRESHOLD2.unwrap();
+        let last_freed_blocks = self
+            .immix_space
+            .num_clean_blocks_released
+            .load(Ordering::SeqCst);
+        if !CollectionSet::defrag_in_progress()
+            && (garbage * 100 >= threshold as usize * total_pages || last_freed_blocks < 100)
+        {
             if crate::args::LOG_PER_GC_STATE {
-                println!("next trace ({} / {})", pages_after_gc, total_pages);
+                println!(
+                    "next trace ({} / {}) {} {}",
+                    garbage,
+                    total_pages,
+                    pages_after_gc,
+                    HEAP_AFTER_GC.load(Ordering::SeqCst)
+                );
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
             if crate::args::CONCURRENT_MARKING
-                && crate::args::LXR_DEFRAG_N.is_none()
                 && !crate::concurrent_marking_in_progress()
+                && crate::args::LXR_DEFRAG_N.is_none()
                 && (crate::args::RC_AFTER_SATB.is_some() && FORCE_RC.load(Ordering::Relaxed) > 0)
             {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
@@ -640,7 +664,7 @@ impl<VM: VMBinding> Immix<VM> {
             }
         } else {
             if crate::args::LOG_PER_GC_STATE {
-                println!("next rc ({} / {})", pages_after_gc, total_pages);
+                println!("next rc ({} / {}) {}", garbage, total_pages, pages_after_gc);
             }
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);

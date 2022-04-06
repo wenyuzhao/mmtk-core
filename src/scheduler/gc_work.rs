@@ -475,7 +475,7 @@ pub trait ProcessEdgesWork:
     Send + 'static + Sized + DerefMut + Deref<Target = ProcessEdgesBase<Self>>
 {
     type VM: VMBinding;
-    const CAPACITY: usize = 512;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const OVERWRITE_REFERENCE: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
     const RC_ROOTS: bool = false;

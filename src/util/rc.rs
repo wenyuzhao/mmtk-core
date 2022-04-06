@@ -199,6 +199,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     concurrent_marking_in_progress: bool,
     no_evac: bool,
     slice: Option<&'static [ObjectReference]>,
+    max_copy: usize,
 }
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -225,7 +226,7 @@ pub fn reset_inc_buffer_size() {
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = 128;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -250,6 +251,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: Some(slice),
+            max_copy: *crate::args::MAX_COPY_SIZE,
         }
     }
 
@@ -266,6 +268,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: None,
+            max_copy: *crate::args::MAX_COPY_SIZE,
         }
     }
 
@@ -355,10 +358,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor += 8usize;
             }
         };
-        if los && VM::VMScanning::is_obj_array(o) {
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
-            for chunk in data.chunks(512) {
+            for chunk in data.chunks(Self::CAPACITY) {
                 let w = box ProcessIncs::<VM, { EdgeKind::Nursery }>::new_array_slice(chunk);
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
@@ -371,6 +374,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     return;
                 }
                 if !self::rc_stick(target) {
+                    if self.new_incs.is_empty() {
+                        self.new_incs.reserve(Self::CAPACITY)
+                    }
                     self.new_incs.push(edge);
                     if unlikely(self.new_incs.len() >= Self::CAPACITY) {
                         self.flush()
@@ -423,9 +429,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        // if o.get_size::<VM>() >= 4096 {
-        //     return true;
-        // }
+        if o.get_size::<VM>() >= self.max_copy {
+            return true;
+        }
         false
     }
 
@@ -718,7 +724,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             std::mem::swap(&mut incs, &mut self.new_incs);
             self.process_incs::<{ EdgeKind::Nursery }>(AddressBuffer::Ref(&mut incs), copy_context);
         }
-        crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.sync();
+        crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.sync()
     }
 }
 
