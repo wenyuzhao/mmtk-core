@@ -670,7 +670,17 @@ impl<VM: VMBinding> Immix<VM> {
             .immix_space
             .num_clean_blocks_released
             .load(Ordering::SeqCst);
-        if garbage * 100 >= threshold as usize * total_pages || last_freed_blocks < 100 {
+        // println!(
+        //     "garbage {} / {} livemature={} ratio={:.4}",
+        //     garbage,
+        //     total_pages,
+        //     live_mature_pages,
+        //     (garbage as f64) / (total_pages as f64)
+        // );
+        if !crate::concurrent_marking_in_progress()
+            && garbage * 100 >= threshold as usize * total_pages
+            || last_freed_blocks < 128
+        {
             if crate::args::LOG_PER_GC_STATE {
                 println!(
                     "next trace ({} / {}) {} {}",
@@ -729,6 +739,13 @@ impl<VM: VMBinding> Immix<VM> {
             } else {
                 Pause::FullTraceFast
             };
+        }
+        if self
+            .next_gc_may_perform_cycle_collection
+            .load(Ordering::Relaxed)
+            && concurrent_marking_in_progress
+        {
+            return Pause::FinalMark;
         }
         // Should trigger CM?
         if self

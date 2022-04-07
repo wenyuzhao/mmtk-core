@@ -306,9 +306,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // println!(" - skip defrag {:?} {:?}", block, block.get_state());
                 continue;
             }
-            if !block.attempt_to_set_as_defrag_source() {
-                continue;
-            }
+            block.set_as_defrag_source(true);
             // println!(
             //     " - defrag {:?} {:?} {}",
             //     block,
@@ -316,7 +314,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     block.dead_bytes()
             // );
             me.defrag_blocks.push(block);
-            live_bytes += Block::BYTES - dead_bytes;
+            live_bytes += (Block::BYTES - dead_bytes) >> 1;
             num_blocks += 1;
             if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
                 if live_bytes >= defrag_bytes {

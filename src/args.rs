@@ -6,6 +6,7 @@ use crate::{
     BarrierSelector,
 };
 
+pub const CM_LARGE_ARRAY_OPTIMIZATION: bool = true;
 pub const BUFFER_SIZE: usize = {
     if cfg!(feature = "lxr_buf_2048") {
         2048

@@ -141,7 +141,12 @@ impl MatureLivePredictor {
         // println!("live_pages {}", live_pages);
         let prev = self.live_pages.load(Ordering::Relaxed);
         let curr = live_pages as f64;
-        let next = (curr + prev) / 2f64;
+        let weight = 3f64;
+        let next = if curr > prev {
+            (curr + prev * weight) / (weight + 1f64)
+        } else {
+            (weight * curr + prev) / (weight + 1f64)
+        };
         // println!("predict {}", next);
         // crate::add_mature_reclaim(live_pages, prev);
         self.live_pages.store(next, Ordering::Relaxed);

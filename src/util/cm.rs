@@ -26,6 +26,7 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
     objects: Vec<ObjectReference>,
     next_objects: Vec<ObjectReference>,
     worker: *mut GCWorker<VM>,
+    slice: Option<&'static [ObjectReference]>,
 }
 
 unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
@@ -42,6 +43,20 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             objects,
             next_objects: vec![],
             worker: ptr::null_mut(),
+            slice: None,
+        }
+    }
+
+    pub fn new_slice(slice: &'static [ObjectReference], mmtk: &'static MMTK<VM>) -> Self {
+        let plan = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        Self {
+            plan,
+            mmtk,
+            objects: vec![],
+            next_objects: vec![],
+            worker: ptr::null_mut(),
+            slice: Some(slice),
         }
     }
 
@@ -98,20 +113,35 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
             self.plan.immix_space.mark_lines(object);
         }
         let should_check_remset = !self.plan.in_defrag(object);
-        EdgeIterator::<VM>::iterate(object, |e| {
-            let t = unsafe { e.load() };
-            if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && should_check_remset
-                && self.plan.in_defrag(t)
-            {
-                unsafe {
-                    self.worker()
-                        .local::<ImmixCopyContext<VM>>()
-                        .add_mature_evac_remset(e)
-                }
+        if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
+            && VM::VMScanning::is_obj_array(object)
+            && VM::VMScanning::obj_array_data(object).len() > 1024
+        {
+            let data = VM::VMScanning::obj_array_data(object);
+            let mut packets = vec![];
+            for chunk in data.chunks(Self::CAPACITY) {
+                packets.push((box Self::new_slice(chunk, self.mmtk)) as Box<dyn GCWork<VM>>);
             }
-            if !t.is_null() {
+            self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                .bulk_add(packets);
+        } else {
+            EdgeIterator::<VM>::iterate(object, |e| {
+                let t: ObjectReference = unsafe { e.load() };
+                if t.is_null() || crate::util::rc::count(t) == 0 {
+                    return;
+                }
+                if crate::args::REF_COUNT
+                    && crate::args::RC_MATURE_EVACUATION
+                    && should_check_remset
+                    && self.plan.in_defrag(t)
+                    && crate::util::rc::count(t) != 0
+                {
+                    unsafe {
+                        self.worker()
+                            .local::<ImmixCopyContext<VM>>()
+                            .add_mature_evac_remset(e)
+                    }
+                }
                 if self.next_objects.is_empty() {
                     self.next_objects.reserve(Self::CAPACITY);
                 }
@@ -119,8 +149,8 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                 if self.next_objects.len() >= Self::CAPACITY {
                     self.flush();
                 }
-            }
-        });
+            });
+        }
     }
 }
 
@@ -129,21 +159,34 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
     #[inline]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        if !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-            && crate::args::SLOW_CONCURRENT_MARKING
-            && mmtk
-                .plan
-                .downcast_ref::<Immix<VM>>()
-                .unwrap()
-                .current_pause()
-                .is_none()
-        {
-            std::thread::sleep(std::time::Duration::from_micros(200));
+        if let Some(slice) = self.slice {
+            for o in slice {
+                if !self.plan.address_in_defrag(Address::from_ref(o))
+                    && self.plan.in_defrag(*o)
+                    && crate::util::rc::count(*o) != 0
+                {
+                    unsafe {
+                        self.worker()
+                            .local::<ImmixCopyContext<VM>>()
+                            .add_mature_evac_remset(Address::from_ref(o))
+                    }
+                }
+                self.trace_object(*o);
+            }
+        } else {
+            for i in 0..self.objects.len() {
+                self.trace_object(self.objects[i]);
+            }
         }
-        for i in 0..self.objects.len() {
-            self.trace_object(self.objects[i]);
+        let mut objects = vec![];
+        while !self.next_objects.is_empty() {
+            objects.clear();
+            std::mem::swap(&mut objects, &mut self.next_objects);
+            for i in 0..objects.len() {
+                self.trace_object(objects[i]);
+            }
         }
         // CM: Decrease counter
         self.flush();
