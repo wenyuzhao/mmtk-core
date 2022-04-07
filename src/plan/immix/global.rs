@@ -814,6 +814,9 @@ impl<VM: VMBinding> Immix<VM> {
             }
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);
+            if emergency_collection {
+                crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
+            }
             pause
         } else if emergency_collection {
             crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
