@@ -315,7 +315,7 @@ impl Block {
     #[inline(always)]
     pub fn is_defrag_source(&self) -> bool {
         let byte =
-            side_metadata::load_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), Ordering::SeqCst)
+            side_metadata::load_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), Ordering::Relaxed)
                 as u8;
         byte == Self::DEFRAG_SOURCE_STATE
     }

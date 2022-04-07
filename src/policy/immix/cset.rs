@@ -67,7 +67,7 @@ impl PerRegionRemSet {
 
     #[inline]
     pub fn recording() -> bool {
-        RECORD.load(Ordering::SeqCst)
+        RECORD.load(Ordering::Relaxed)
     }
 
     #[inline]

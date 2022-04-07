@@ -638,7 +638,7 @@ pub fn gc_worker_id() -> Option<usize> {
     if !crate::scheduler::IS_WORKER.load(Ordering::Relaxed) {
         return None;
     }
-    let id = crate::scheduler::WORKER_ID.load(Ordering::SeqCst);
+    let id = crate::scheduler::WORKER_ID.load(Ordering::Relaxed);
     Some(id)
 }
 
