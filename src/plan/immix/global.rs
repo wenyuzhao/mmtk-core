@@ -666,10 +666,7 @@ impl<VM: VMBinding> Immix<VM> {
         };
         let total_pages = self.get_total_pages();
         let threshold = crate::args::TRACE_THRESHOLD2.unwrap();
-        let last_freed_blocks = self
-            .immix_space
-            .num_clean_blocks_released
-            .load(Ordering::SeqCst);
+        let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
         // println!(
         //     "garbage {} / {} livemature={} ratio={:.4}",
         //     garbage,
@@ -679,7 +676,7 @@ impl<VM: VMBinding> Immix<VM> {
         // );
         if !crate::concurrent_marking_in_progress()
             && garbage * 100 >= threshold as usize * total_pages
-            || last_freed_blocks < 128
+            || available_blocks < *crate::args::CM_STOP_BLOCKS
         {
             if crate::args::LOG_PER_GC_STATE {
                 println!(

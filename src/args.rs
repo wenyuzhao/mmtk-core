@@ -145,6 +145,12 @@ pub static MAX_COPY_SIZE: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(2048)
 });
 
+pub static CM_STOP_BLOCKS: Lazy<usize> = Lazy::new(|| {
+    env::var("CM_STOP_BLOCKS")
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(128)
+});
+
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
 pub const TAKERATE_MEASUREMENT: bool = false;
