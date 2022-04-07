@@ -830,7 +830,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
-        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
+        if false
+            && VM::VMScanning::is_obj_array(o)
+            && VM::VMScanning::obj_array_data(o).len() > 1024
+        {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
