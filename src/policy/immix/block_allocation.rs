@@ -296,9 +296,17 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
         if self.blocks.is_empty() {
             return;
         }
-        for block in &self.blocks {
-            if block.rc_sweep_nursery(self.space, self.mutator_reused_blocks) {
-                self.space.pr.release_pages(block.start());
+        if crate::args::LAZY_MU_REUSE_BLOCK_SWEEPING && self.mutator_reused_blocks {
+            for block in &self.blocks {
+                if block.rc_sweep_mature(self.space, false) {
+                    self.space.pr.release_pages(block.start());
+                }
+            }
+        } else {
+            for block in &self.blocks {
+                if block.rc_sweep_nursery(self.space, self.mutator_reused_blocks) {
+                    self.space.pr.release_pages(block.start());
+                }
             }
         }
     }

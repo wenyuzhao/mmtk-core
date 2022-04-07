@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub const CM_LARGE_ARRAY_OPTIMIZATION: bool = true;
+pub const LAZY_MU_REUSE_BLOCK_SWEEPING: bool = true;
 pub const BUFFER_SIZE: usize = {
     if cfg!(feature = "lxr_buf_2048") {
         2048
@@ -262,6 +263,8 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("max_copy_size", *MAX_COPY_SIZE);
     dump_feature!("buffer_size", BUFFER_SIZE);
     dump_feature!("nontemporal");
+    dump_feature!("cm_large_array_optimization", CM_LARGE_ARRAY_OPTIMIZATION);
+    dump_feature!("lazy_mu_reuse_block_sweeping", LAZY_MU_REUSE_BLOCK_SWEEPING);
 
     println!("----------------------------------------------------");
 }

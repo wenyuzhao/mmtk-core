@@ -448,17 +448,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             packets.reserve(self.mutator_recycled_blocks.len());
             while let Some(blocks) = self.mutator_recycled_blocks.pop() {
                 if !blocks.is_empty() {
-                    packets.push(box RCSweepNurseryBlocks {
-                        space,
-                        blocks,
-                        mutator_reused_blocks: true,
-                    });
+                    for chunk in blocks.chunks(256) {
+                        packets.push(box RCSweepNurseryBlocks {
+                            space,
+                            blocks: chunk.to_vec(),
+                            mutator_reused_blocks: true,
+                        });
+                    }
                 }
             }
-            if pause == Pause::FinalMark {
-                self.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
+            if crate::args::LAZY_MU_REUSE_BLOCK_SWEEPING {
+                self.scheduler().postpone_all_prioritized(packets);
             } else {
-                self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
+                if pause == Pause::FinalMark {
+                    self.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
+                        .bulk_add(packets);
+                } else {
+                    self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery]
+                        .bulk_add(packets);
+                }
             }
         }
         if pause == Pause::FinalMark {
