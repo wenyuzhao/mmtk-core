@@ -647,12 +647,8 @@ impl Block {
             }
         }
         if !mutator_reused_blocks && self.rc_dead() {
-            if self.attempt_dealloc(false) {
-                space.deinit_block(*self, true, false);
-                true
-            } else {
-                false
-            }
+            space.deinit_block(*self, true, false);
+            true
         } else {
             // See the caller of this function.
             // At least one object is dead in the block.
@@ -672,20 +668,14 @@ impl Block {
                     1
                 };
                 let has_holes = self.has_holes();
-                self.fetch_update_state(|s| {
-                    if s == BlockState::Reusing
-                        || s == BlockState::Unallocated
-                        || s.is_reusable()
-                        || !has_holes
-                    {
-                        None
-                    } else {
-                        Some(BlockState::Reusable {
-                            unavailable_lines: holes as _,
-                        })
-                    }
-                })
-                .is_ok()
+                if has_holes {
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: holes as _,
+                    });
+                    true
+                } else {
+                    false
+                }
             };
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());

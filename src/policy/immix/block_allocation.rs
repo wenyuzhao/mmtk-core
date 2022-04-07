@@ -79,7 +79,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let _guard = self.refill_lock.lock().unwrap();
         let blocks = self.cursor.load(Ordering::SeqCst);
         let high_water = self.high_water.load(Ordering::SeqCst);
-        let num_bins = num_workers << 3;
+        let num_bins = num_workers << 2;
         let bin_cap = blocks / num_bins + if blocks % num_bins == 0 { 0 } else { 1 };
         let mut bins = (0..num_bins)
             .map(|_| Vec::with_capacity(bin_cap))

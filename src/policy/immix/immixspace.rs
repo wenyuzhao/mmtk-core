@@ -382,7 +382,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
             }
         }
-        self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
+        if pause == Pause::FinalMark {
+            self.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(stw_packets);
+        } else {
+            self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
+        }
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
             // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -451,7 +455,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     });
                 }
             }
-            self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
+            if pause == Pause::FinalMark {
+                self.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(packets);
+            } else {
+                self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(packets);
+            }
         }
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
