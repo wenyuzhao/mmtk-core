@@ -314,7 +314,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     block.dead_bytes()
             // );
             me.defrag_blocks.push(block);
-            live_bytes += (Block::BYTES - dead_bytes) >> 1;
+            live_bytes += Block::BYTES - dead_bytes;
             num_blocks += 1;
             if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
                 if live_bytes >= defrag_bytes {
