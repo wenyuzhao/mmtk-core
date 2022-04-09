@@ -79,10 +79,8 @@ extern crate downcast_rs;
 
 mod mmtk;
 use std::{
-    collections::HashMap,
     fs::File,
     io::Write,
-    lazy::SyncLazy,
     sync::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
@@ -500,7 +498,7 @@ fn stat(f: impl Fn(&mut GCStat)) {
 
 #[inline(always)]
 fn should_record_copy_bytes() -> bool {
-    cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
+    false
 }
 
 static mut SLOPPY_COPY_BYTES: usize = 0;
@@ -525,32 +523,13 @@ fn add_incs(incs: usize) {
 static COPY_BYTES: SegQueue<usize> = SegQueue::new();
 static INCS: SegQueue<usize> = SegQueue::new();
 
-static PER_BUCKET_TIMERS: SyncLazy<HashMap<WorkBucketStage, SegQueue<u128>>> =
-    SyncLazy::new(|| {
-        let mut x = HashMap::new();
-        // x.insert(WorkBucketStage::Unconstrained, SegQueue::new());
-        // x.insert(WorkBucketStage::FinishConcurrentWork, SegQueue::new());
-        x.insert(WorkBucketStage::Initial, SegQueue::new());
-        x.insert(WorkBucketStage::Prepare, SegQueue::new());
-        x.insert(WorkBucketStage::Closure, SegQueue::new());
-        x.insert(WorkBucketStage::RefClosure, SegQueue::new());
-        x.insert(WorkBucketStage::RefForwarding, SegQueue::new());
-        x.insert(WorkBucketStage::Release, SegQueue::new());
-        x.insert(WorkBucketStage::Final, SegQueue::new());
-        x
-    });
-
 #[inline(always)]
 fn should_record_pause_time() -> bool {
     cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
 }
 
 #[inline(always)]
-fn add_bucket_time(stage: WorkBucketStage, nanos: u128) {
-    if should_record_pause_time() {
-        PER_BUCKET_TIMERS[&stage].push(nanos);
-    }
-}
+fn add_bucket_time(_stage: WorkBucketStage, _nanos: u128) {}
 
 static SRV: SegQueue<(f64, f64)> = SegQueue::new();
 
@@ -573,63 +552,18 @@ fn output_survival_ratios() {
 }
 
 static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();
-static PAUSE_TYPES: SegQueue<Pause> = SegQueue::new();
 
 #[inline(always)]
-fn add_pause_time(pause: Pause, nanos: u128) {
+fn add_pause_time(_pause: Pause, nanos: u128) {
     if should_record_pause_time() {
-        PAUSE_TYPES.push(pause);
         PAUSE_TIMES.push(nanos);
     }
 }
 
 fn output_pause_time() {
-    let pause_to_id = |p: Pause| match p {
-        Pause::RefCount => 0u128,
-        Pause::InitialMark => 1u128,
-        Pause::FinalMark => 2u128,
-        Pause::FullTraceFast => 3u128,
-        Pause::FullTraceDefrag => 4u128,
-    };
-    let headers = [
-        "total",
-        "wait",
-        "init",
-        "prepare",
-        "closure",
-        "refclosure",
-        "refforward",
-        "release",
-        "copy",
-        "incs",
-        "pause",
-    ];
-    let pop_record = || {
-        use WorkBucketStage::*;
-        Some(vec![
-            PAUSE_TIMES.pop()?,
-            // x.push(PER_BUCKET_TIMERS[&Unconstrained].pop().unwrap());
-            // x.push(PER_BUCKET_TIMERS[&FinishConcurrentWork].pop().unwrap());
-            PER_BUCKET_TIMERS[&Initial].pop().unwrap(),
-            PER_BUCKET_TIMERS[&Prepare].pop().unwrap(),
-            PER_BUCKET_TIMERS[&Closure].pop().unwrap(),
-            PER_BUCKET_TIMERS[&RefClosure].pop().unwrap(),
-            PER_BUCKET_TIMERS[&RefForwarding].pop().unwrap(),
-            PER_BUCKET_TIMERS[&Release].pop().unwrap(),
-            PER_BUCKET_TIMERS[&Final].pop().unwrap(),
-            COPY_BYTES.pop().unwrap() as _,
-            INCS.pop().unwrap() as _,
-            pause_to_id(PAUSE_TYPES.pop().unwrap()),
-        ])
-    };
-    let mut s = headers.join(",") + "\n";
-    while let Some(record) = pop_record() {
-        s += &record
-            .iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        s += "\n";
+    let mut s = "".to_owned();
+    while let Some(record) = PAUSE_TIMES.pop() {
+        s += &format!("{}\n", record);
     }
     let mut file = File::create("scratch/pauses.csv").unwrap();
     file.write_all(s.as_bytes()).unwrap();
