@@ -251,7 +251,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: Some(slice),
-            max_copy: *crate::args::MAX_COPY_SIZE,
+            max_copy: if !cfg(feature = "lxr") {
+                Block::BYTES
+            } else {
+                *crate::args::MAX_COPY_SIZE
+            },
         }
     }
 
