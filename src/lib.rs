@@ -385,6 +385,9 @@ struct GCStat {
     pub dead_mature_tracing_stuck_volume: usize,
     pub dead_mature_tracing_stuck_los_objects: usize,
     pub dead_mature_tracing_stuck_los_volume: usize,
+    // Reclaimed blocks
+    pub reclaimed_blocks_nursery: usize,
+    pub reclaimed_blocks_mature: usize,
     // Inc counters
     pub inc_objects: usize,
     pub inc_volume: usize,
@@ -436,6 +439,8 @@ impl GCStat {
         dead_mature_tracing_stuck_volume,
         dead_mature_tracing_stuck_los_objects,
         dead_mature_tracing_stuck_los_volume,
+        reclaimed_blocks_nursery,
+        reclaimed_blocks_mature,
         inc_objects,
         inc_volume,
     ];
@@ -470,6 +475,8 @@ static STAT: Mutex<GCStat> = Mutex::new(GCStat {
     dead_mature_tracing_stuck_volume: 0,
     dead_mature_tracing_stuck_los_objects: 0,
     dead_mature_tracing_stuck_los_volume: 0,
+    reclaimed_blocks_nursery: 0,
+    reclaimed_blocks_mature: 0,
     inc_objects: 0,
     inc_volume: 0,
 });
