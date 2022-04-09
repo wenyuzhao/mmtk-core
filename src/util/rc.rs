@@ -282,6 +282,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
             }
+            if copied {
+                s.promoted_copy_objects += 1;
+                s.promoted_copy_volume += o.get_size::<VM>();
+            }
         });
         if !los {
             self::promote::<VM>(o);
