@@ -11,7 +11,7 @@
 3. Under _mmtk-openjdk/repos/openjdk_ directory:
    1. Run `sh configure --disable-warnings-as-errors --with-debug-level=release --with-target-bits=64 --disable-zip-debug-info --with-jvm-features=shenandoahgc`
    2. Run `make --no-print-directory CONF=linux-x86_64-normal-server-release THIRD_PARTY_HEAP=$PWD/../../openjdk`
-   3. To run any java program, e.g. _Hello.class_, please run `MMTK_PLAN=Immix ./mmtk-openjdk/repos/openjdk/build/linux-x86_64-normal-server-release/jdk/bin/java -XX:MetaspaceSize=1G -XX:-UseBiasedLocking -XX:-TieredCompilation -XX:+UnlockDiagnosticVMOptions -XX:-InlineObjectCopy -Xms100M -Xmx100M -XX:+UseThirdPartyHeap Hello`.
+4. To run any java program, e.g. _Hello.class_, please run `MMTK_PLAN=Immix ./mmtk-openjdk/repos/openjdk/build/linux-x86_64-normal-server-release/jdk/bin/java -XX:MetaspaceSize=1G -XX:-UseBiasedLocking -XX:-TieredCompilation -XX:+UnlockDiagnosticVMOptions -XX:-InlineObjectCopy -Xms100M -Xmx100M -XX:+UseThirdPartyHeap Hello`.
 
 ---
 
