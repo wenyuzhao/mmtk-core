@@ -14,13 +14,17 @@
       * Please try again if running into any errors.
 4. To run any java program, e.g. _Hello.class_, please run `MMTK_PLAN=Immix ./mmtk-openjdk/repos/openjdk/build/linux-x86_64-normal-server-release/jdk/bin/java -XX:MetaspaceSize=1G -XX:-UseBiasedLocking -XX:-TieredCompilation -XX:+UnlockDiagnosticVMOptions -XX:-InlineObjectCopy -Xms100M -Xmx100M -XX:+UseThirdPartyHeap Hello`.
 
-## Reproducibility:
+## Reproducibility
 
 * **Please refer to [github.com/wenyuzhao/lxr-pldi-2022-artifact](https://github.com/wenyuzhao/lxr-pldi-2022-artifact) for detailed instructions to reproduce the results in the paper.**
 * The commit for running the camera-readly paper results is https://github.com/wenyuzhao/mmtk-core/tree/lxr-pldi-2022
   * To build LXR on this commit, please modify the environment variable to `GC_FEATURES=lxr,lxr_heap_health_guided_gc`
   * Please also modify the runtime environment variables to `MMTK_PLAN=Immix TRACE_THRESHOLD2=10 LOCK_FREE_BLOCKS=32 MAX_SURVIVAL_MB=256 SURVIVAL_PREDICTOR_WEIGHTED=1`
 * Please note that the hardware differences can greatly affect the results.
+
+---
+
+---
 
 ---
 
