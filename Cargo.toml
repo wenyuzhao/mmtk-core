@@ -103,7 +103,7 @@ lxr_enable_initial_alloc_limit = []
 no_meta_counting = []
 
 # Non-moving, Non-concurrent LXR
-lxr_basic = ["ix_ref_count"]
+lxr_basic = ["ix_ref_count", "lxr_heap_health_guided_gc"]
 # LXR (Concurrent marking)
 lxr_cm = ["lxr_basic", "lxr_concurrent_marking"]
 # LXR (Lazy RC processing)

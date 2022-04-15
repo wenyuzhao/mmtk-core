@@ -81,7 +81,7 @@ pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
     env::var("LOCK_FREE_BLOCKS")
         .map(|x| x.parse().unwrap())
         .ok()
-        .unwrap_or_else(|| 4 * num_cpus::get())
+        .unwrap_or_else(|| 1 * num_cpus::get())
 });
 pub static NURSERY_BLOCKS: Lazy<Option<usize>> =
     Lazy::new(|| env::var("NURSERY_BLOCKS").map(|x| x.parse().unwrap()).ok());
@@ -166,8 +166,12 @@ pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 
-pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> =
-    Lazy::new(|| env::var("MAX_SURVIVAL_MB").map(|x| x.parse().unwrap()).ok());
+pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("MAX_SURVIVAL_MB")
+        .map(|x| x.parse().unwrap())
+        .ok()
+        .or(Some(128))
+});
 
 pub static SURVIVAL_PREDICTOR_HARMONIC_MEAN: Lazy<bool> = Lazy::new(|| {
     env::var("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
@@ -177,12 +181,13 @@ pub static SURVIVAL_PREDICTOR_HARMONIC_MEAN: Lazy<bool> = Lazy::new(|| {
 pub static SURVIVAL_PREDICTOR_WEIGHTED: Lazy<bool> = Lazy::new(|| {
     env::var("SURVIVAL_PREDICTOR_WEIGHTED")
         .map(|x| x != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 });
 pub static TRACE_THRESHOLD2: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("TRACE_THRESHOLD2")
         .map(|x| x.parse().unwrap())
         .ok()
+        .or(Some(5))
 });
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
