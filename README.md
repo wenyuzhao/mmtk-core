@@ -1,3 +1,21 @@
+# Source code for the paper "Low-Latency, High-Throughput Garbage Collection", PLDI 2022.
+
+**Please check [github.com/wenyuzhao/mmtk-core/tree/lxr](https://github.com/wenyuzhao/mmtk-core/tree/lxr) for the latest implementation.**
+
+**Please refer to [github.com/wenyuzhao/lxr-pldi-2022-artifact](https://github.com/wenyuzhao/lxr-pldi-2022-artifact) for detailed instructions to reproduce the results in the paper.**
+
+## Getting started
+
+1. Clone [mmtk-core](https://github.com/wenyuzhao/mmtk-core) and [mmtk-openjdk](https://github.com/wenyuzhao/mmtk-openjdk). Checkout the _lxr_ branch for both repos.
+2. Change the _mmtk-core_ dependency in _mmtk-openjdk/mmtk/Cargo.toml_ to point to your clone of mmtk-core.
+3. Under _mmtk-openjdk/repos/openjdk_ directory:
+   1. Run `sh configure --disable-warnings-as-errors --with-debug-level=release --with-target-bits=64 --disable-zip-debug-info --with-jvm-features=shenandoahgc`
+   2. Run `GC_FEATURES=lxr,lxr_heap_health_guided_gc make --no-print-directory CONF=linux-x86_64-normal-server-release THIRD_PARTY_HEAP=$PWD/../../openjdk`
+      * Try again if running into any errors.
+4. To run any java program, e.g. _Hello.class_, please run `MMTK_PLAN=Immix TRACE_THRESHOLD2=10 LOCK_FREE_BLOCKS=32 MAX_SURVIVAL_MB=256 SURVIVAL_PREDICTOR_WEIGHTED=1 ./mmtk-openjdk/repos/openjdk/build/linux-x86_64-normal-server-release/jdk/bin/java -XX:MetaspaceSize=1G -XX:-UseBiasedLocking -XX:-TieredCompilation -XX:+UnlockDiagnosticVMOptions -XX:-InlineObjectCopy -Xms100M -Xmx100M -XX:+UseThirdPartyHeap Hello`.
+
+---
+
 # MMTk
 
 [![crates.io](https://img.shields.io/crates/v/mmtk.svg)](https://crates.io/crates/mmtk)
@@ -30,7 +48,7 @@ $ export RUSTUP_TOOLCHAIN=nightly-YYYY-MM-DD
 $ cargo build
 ```
 
-MMTk also provides a list of optional features that users can choose from. 
+MMTk also provides a list of optional features that users can choose from.
 A full list of available features can be seen by examining [`Cargo.toml`](Cargo.toml).
 By passing the `--features` flag to the Rust compiler,
 we conditionally compile feature-related code.

@@ -27,7 +27,17 @@ use std::iter::Step;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 
-pub const LOG_REF_COUNT_BITS: usize = 1;
+pub const LOG_REF_COUNT_BITS: usize = {
+    if cfg!(feature = "lxr_rc_bits_2") {
+        1
+    } else if cfg!(feature = "lxr_rc_bits_4") {
+        2
+    } else if cfg!(feature = "lxr_rc_bits_8") {
+        3
+    } else {
+        1
+    }
+};
 pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
 pub const REF_COUNT_MASK: usize = (1 << REF_COUNT_BITS) - 1;
 const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;
@@ -251,7 +261,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: Some(slice),
-            max_copy: *crate::args::MAX_COPY_SIZE,
+            max_copy: if !cfg!(feature = "lxr") {
+                usize::MAX
+            } else {
+                *crate::args::MAX_COPY_SIZE
+            },
         }
     }
 
@@ -268,7 +282,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: None,
-            max_copy: *crate::args::MAX_COPY_SIZE,
+            max_copy: if !cfg!(feature = "lxr") {
+                usize::MAX
+            } else {
+                *crate::args::MAX_COPY_SIZE
+            },
         }
     }
 
@@ -281,6 +299,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             if self.immix().los().in_space(o) {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
+            }
+            if copied {
+                s.promoted_copy_objects += 1;
+                s.promoted_copy_volume += o.get_size::<VM>();
             }
         });
         if !los {

@@ -611,6 +611,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
         block.deinit();
+        crate::stat(|s| {
+            if nursery {
+                s.reclaimed_blocks_nursery += 1;
+            } else {
+                s.reclaimed_blocks_mature += 1;
+            }
+        })
     }
 
     /// Allocate a clean block.
@@ -802,6 +809,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 AllocationSemantics::Default,
                 copy_context,
             );
+            crate::stat(|s| {
+                s.mature_copy_objects += 1usize;
+                s.mature_copy_volume += new.get_size::<VM>();
+            });
             if crate::should_record_copy_bytes() {
                 unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
             }
