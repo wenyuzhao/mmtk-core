@@ -10,7 +10,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::MatureSweeping;
+use crate::policy::immix::{MatureSweeping, UpdateWeakProcessor};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -864,6 +864,7 @@ impl<VM: VMBinding> Immix<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         if super::REF_COUNT {
             Self::process_prev_roots(scheduler);
+            scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -933,6 +934,7 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
             ImmixGCWorkContext<VM, { TraceKind::Fast }>,
         >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         if super::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }

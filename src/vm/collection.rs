@@ -83,4 +83,6 @@ pub trait Collection<VM: VMBinding> {
 
     /// Delegate to the VM binding for reference processing.
     fn process_weak_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {}
+
+    fn update_weak_processor() {}
 }

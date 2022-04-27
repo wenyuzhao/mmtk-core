@@ -1255,3 +1255,12 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         }
     }
 }
+
+pub struct UpdateWeakProcessor;
+
+impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        VM::VMCollection::update_weak_processor();
+    }
+}
