@@ -13,6 +13,7 @@ use crossbeam_queue::ArrayQueue;
 use crossbeam_queue::SegQueue;
 use std::marker::PhantomData;
 use std::sync::Mutex;
+use spin::rwlock::RwLock;
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 const LOCAL_BUFFER_SIZE: usize = 128;
@@ -21,9 +22,9 @@ pub struct BlockPageResource<VM: VMBinding> {
     common: CommonPageResource,
     log_pages: usize,
     sync: Mutex<()>,
-    head_global_freed_blocks: spin::RwLock<Option<ArrayQueue<Address>>>,
+    head_global_freed_blocks: RwLock<Option<ArrayQueue<Address>>, spin::Yield>,
     global_freed_blocks: SegQueue<ArrayQueue<Address>>,
-    worker_local_freed_blocks: Vec<spin::RwLock<ArrayQueue<Address>>>,
+    worker_local_freed_blocks: Vec<RwLock<ArrayQueue<Address>, spin::Yield>>,
     highwater: Atomic<Address>,
     limit: Address,
     _p: PhantomData<VM>,
@@ -74,7 +75,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         let mut worker_local_freed_blocks = vec![];
         worker_local_freed_blocks.resize_with(*crate::CALC_WORKERS, || {
-            spin::RwLock::new(ArrayQueue::new(LOCAL_BUFFER_SIZE))
+            spin::rwlock::RwLock::new(ArrayQueue::new(LOCAL_BUFFER_SIZE))
         });
         Self {
             log_pages,

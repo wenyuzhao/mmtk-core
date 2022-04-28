@@ -880,7 +880,7 @@ impl Step for Block {
 #[derive(Default)]
 pub struct BlockList {
     prioritized_queue: SegQueue<Block>,
-    queue: spin::RwLock<SegQueue<Block>>,
+    queue: spin::rwlock::RwLock<SegQueue<Block>, spin::Yield>,
 }
 
 impl BlockList {
