@@ -678,13 +678,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
-            let over_time = *crate::args::OPPORTUNISTIC_EVAC
-                && crate::GC_START_TIME
-                    .load(Ordering::Relaxed)
-                    .elapsed()
-                    .unwrap()
-                    .as_millis()
-                    >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128;
+            let over_time = crate::args::MAX_PAUSE_MILLIS
+                .map(|threshold| {
+                    crate::GC_START_TIME
+                        .load(Ordering::Relaxed)
+                        .elapsed()
+                        .unwrap()
+                        .as_millis()
+                        >= threshold as u128
+                })
+                .unwrap_or(false);
             let over_space = mmtk.plan.get_pages_used() - mmtk.plan.get_collection_reserve()
                 > mmtk.plan.get_total_pages();
             if over_space || over_time {

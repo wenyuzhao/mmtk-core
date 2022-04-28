@@ -128,16 +128,10 @@ pub static MAX_MATURE_DEFRAG_PERCENT: Lazy<usize> = Lazy::new(|| {
         .unwrap_or(15)
 });
 
-pub static OPPORTUNISTIC_EVAC: Lazy<bool> = Lazy::new(|| {
-    env::var("OPPORTUNISTIC_EVAC")
-        .map(|_| true)
-        .unwrap_or(false)
-});
-// Do not perform evacuation if the pause time (in millis) reaches this limit
-pub static OPPORTUNISTIC_EVAC_THRESHOLD: Lazy<usize> = Lazy::new(|| {
-    env::var("OPPORTUNISTIC_EVAC_THRESHOLD")
+pub static MAX_PAUSE_MILLIS: Lazy<Option<usize>> = Lazy::new(|| {
+    env::var("MAX_PAUSE_MILLIS")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(50)
+        .ok()
 });
 
 pub static MAX_COPY_SIZE: Lazy<usize> = Lazy::new(|| {
@@ -249,11 +243,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
     dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
-    dump_feature!("opportunistic_evac", *OPPORTUNISTIC_EVAC);
-    dump_feature!(
-        "opportunistic_evac_threshold",
-        *OPPORTUNISTIC_EVAC_THRESHOLD
-    );
+    dump_feature!("max_pause_millis", *MAX_PAUSE_MILLIS);
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
     dump_feature!("lxr_rc_only");
 
