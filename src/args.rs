@@ -165,6 +165,7 @@ pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
+pub const INC_MAX_COPY_DEPTH: bool = false;
 
 pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("MAX_SURVIVAL_MB")
@@ -270,6 +271,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("nontemporal");
     dump_feature!("cm_large_array_optimization", CM_LARGE_ARRAY_OPTIMIZATION);
     dump_feature!("lazy_mu_reuse_block_sweeping", LAZY_MU_REUSE_BLOCK_SWEEPING);
+    dump_feature!("inc_max_copy_depth", INC_MAX_COPY_DEPTH);
 
     println!("----------------------------------------------------");
 }

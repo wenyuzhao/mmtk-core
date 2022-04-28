@@ -210,6 +210,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     no_evac: bool,
     slice: Option<&'static [ObjectReference]>,
     max_copy: usize,
+    depth: usize,
 }
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
@@ -266,6 +267,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             } else {
                 *crate::args::MAX_COPY_SIZE
             },
+            depth: 1,
         }
     }
 
@@ -287,11 +289,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             } else {
                 *crate::args::MAX_COPY_SIZE
             },
+            depth: 1,
         }
     }
 
     #[inline(always)]
-    fn promote(&mut self, o: ObjectReference, copied: bool, los: bool) {
+    fn promote(&mut self, o: ObjectReference, copied: bool, los: bool, depth: usize) {
         o.verify();
         crate::stat(|s| {
             s.promoted_objects += 1;
@@ -315,7 +318,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
             self.immix().mark2(o, los);
         }
-        self.scan_nursery_object(o, los, !copied);
+        self.scan_nursery_object(o, los, !copied, depth);
     }
 
     #[inline(always)]
@@ -335,7 +338,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline(always)]
-    fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool) {
+    fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool, depth: usize) {
         // if VM::VMScanning::is_type_array(o) {
         //     return;
         // }
@@ -392,7 +395,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let w = box ProcessIncs::<VM, { EdgeKind::Nursery }>::new_array_slice(chunk);
+                let mut w = box ProcessIncs::<VM, { EdgeKind::Nursery }>::new_array_slice(chunk);
+                w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
             self.worker().scheduler().work_buckets[WorkBucketStage::RCProcessIncs]
@@ -427,7 +431,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if !self.new_incs.is_empty() {
             let mut new_incs = vec![];
             std::mem::swap(&mut new_incs, &mut self.new_incs);
-            let w = ProcessIncs::<VM, { EdgeKind::Nursery }>::new(new_incs);
+            let mut w = ProcessIncs::<VM, { EdgeKind::Nursery }>::new(new_incs);
+            w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
     }
@@ -469,6 +474,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         o: ObjectReference,
         copy_context: &mut ImmixCopyContext<VM>,
+        depth: usize,
     ) -> ObjectReference {
         o.verify();
         crate::stat(|s| {
@@ -479,7 +485,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let los = self.immix().los().in_space(o);
         if self.dont_evacuate(o, los) {
             if let Ok(0) = self::inc(o) {
-                self.promote(o, false, los);
+                self.promote(o, false, los, depth);
             }
             return o;
         }
@@ -496,7 +502,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             new
         } else {
             let is_nursery = self::count(o) == 0;
-            if is_nursery && !self.no_evac {
+            let copy_depth_reached = crate::args::INC_MAX_COPY_DEPTH && depth > 16;
+            if is_nursery && !self.no_evac && !copy_depth_reached {
                 // Evacuate the object
                 let new = object_forwarding::forward_object::<VM, _>(
                     o,
@@ -507,14 +514,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
                 }
                 let _ = self::inc(new);
-                self.promote(new, true, false);
+                self.promote(new, true, false, depth);
                 new
             } else {
                 // Object is not moved.
                 let r = self::inc(o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 if let Ok(0) = r {
-                    self.promote(o, false, los);
+                    self.promote(o, false, los, depth);
                 }
                 o
             }
@@ -544,6 +551,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         e: Address,
         cc: &mut ImmixCopyContext<VM>,
+        depth: usize,
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
@@ -554,7 +562,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let new = if !crate::args::RC_NURSERY_EVACUATION {
             self.process_inc(o)
         } else {
-            self.process_inc_and_evacuate(o, cc)
+            self.process_inc_and_evacuate(o, cc, depth)
         };
         if K != EdgeKind::Root {
             self.record_mature_evac_remset(e, o, false);
@@ -573,12 +581,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         mut incs: AddressBuffer<'_>,
         copy_context: &mut ImmixCopyContext<VM>,
+        depth: usize,
     ) -> Option<Vec<ObjectReference>> {
         if K == EdgeKind::Root {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
             for e in &mut *incs {
-                if let Some(new) = self.process_edge::<K>(*e, copy_context) {
+                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
@@ -596,7 +605,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         } else {
             for e in &mut *incs {
-                self.process_edge::<K>(*e, copy_context);
+                self.process_edge::<K>(*e, copy_context, depth);
             }
             None
         }
@@ -607,10 +616,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         slice: &[ObjectReference],
         copy_context: &mut ImmixCopyContext<VM>,
+        depth: usize,
     ) -> Option<Vec<ObjectReference>> {
         for e in slice {
             let e = Address::from_ref(e);
-            self.process_edge::<K>(e, copy_context);
+            self.process_edge::<K>(e, copy_context, depth);
         }
         None
     }
@@ -659,24 +669,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let copy_context =
             unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
-        if *crate::args::OPPORTUNISTIC_EVAC {
-            if crate::NO_EVAC.load(Ordering::Relaxed) {
+        if crate::NO_EVAC.load(Ordering::Relaxed) {
+            self.no_evac = true;
+        } else {
+            let over_time = *crate::args::OPPORTUNISTIC_EVAC&&crate::GC_START_TIME
+                .load(Ordering::Relaxed)
+                .elapsed()
+                .unwrap()
+                .as_millis()
+                >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128;
+            let over_space = mmtk.plan.get_pages_used() - mmtk.plan.get_collection_reserve()
+                > mmtk.plan.get_total_pages();
+            if over_space || over_time {
                 self.no_evac = true;
-            } else {
-                let over_time = crate::GC_START_TIME
-                    .load(Ordering::Relaxed)
-                    .elapsed()
-                    .unwrap()
-                    .as_millis()
-                    >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128;
-                let over_space = mmtk.plan.get_pages_used() - mmtk.plan.get_collection_reserve()
-                    > mmtk.plan.get_total_pages();
-                if over_space || over_time {
-                    self.no_evac = true;
-                    crate::NO_EVAC.store(true, Ordering::Relaxed);
-                    if crate::args::LOG_PER_GC_STATE {
-                        println!(" - no evac");
-                    }
+                crate::NO_EVAC.store(true, Ordering::Relaxed);
+                if crate::args::LOG_PER_GC_STATE {
+                    println!(" - no evac");
                 }
             }
         }
@@ -692,11 +700,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         let roots = {
             if let Some(slice) = self.slice {
                 assert_eq!(KIND, EdgeKind::Nursery);
-                self.process_incs_for_obj_array::<KIND>(slice, copy_context)
+                self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
             } else {
                 let mut incs = vec![];
                 std::mem::swap(&mut incs, &mut self.incs);
-                self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context)
+                self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context, self.depth)
             }
         };
         if let Some(roots) = roots {
@@ -718,11 +726,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         // Process recursively generated buffer
+        let mut depth = self.depth;
         let mut incs = vec![];
         while !self.new_incs.is_empty() {
+            depth += 1;
             incs.clear();
             std::mem::swap(&mut incs, &mut self.new_incs);
-            self.process_incs::<{ EdgeKind::Nursery }>(AddressBuffer::Ref(&mut incs), copy_context);
+            self.process_incs::<{ EdgeKind::Nursery }>(AddressBuffer::Ref(&mut incs), copy_context, depth);
         }
         crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.sync()
     }
