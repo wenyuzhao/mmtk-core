@@ -338,7 +338,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline(always)]
-    fn scan_nursery_object(&mut self, o: ObjectReference, los: bool, in_place_promotion: bool, depth: usize) {
+    fn scan_nursery_object(
+        &mut self,
+        o: ObjectReference,
+        los: bool,
+        in_place_promotion: bool,
+        depth: usize,
+    ) {
         // if VM::VMScanning::is_type_array(o) {
         //     return;
         // }
@@ -672,12 +678,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
-            let over_time = *crate::args::OPPORTUNISTIC_EVAC&&crate::GC_START_TIME
-                .load(Ordering::Relaxed)
-                .elapsed()
-                .unwrap()
-                .as_millis()
-                >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128;
+            let over_time = *crate::args::OPPORTUNISTIC_EVAC
+                && crate::GC_START_TIME
+                    .load(Ordering::Relaxed)
+                    .elapsed()
+                    .unwrap()
+                    .as_millis()
+                    >= *crate::args::OPPORTUNISTIC_EVAC_THRESHOLD as u128;
             let over_space = mmtk.plan.get_pages_used() - mmtk.plan.get_collection_reserve()
                 > mmtk.plan.get_total_pages();
             if over_space || over_time {
@@ -732,7 +739,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             depth += 1;
             incs.clear();
             std::mem::swap(&mut incs, &mut self.new_incs);
-            self.process_incs::<{ EdgeKind::Nursery }>(AddressBuffer::Ref(&mut incs), copy_context, depth);
+            self.process_incs::<{ EdgeKind::Nursery }>(
+                AddressBuffer::Ref(&mut incs),
+                copy_context,
+                depth,
+            );
         }
         crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.sync()
     }

@@ -11,9 +11,9 @@ use crate::vm::*;
 use atomic::{Atomic, Ordering};
 use crossbeam_queue::ArrayQueue;
 use crossbeam_queue::SegQueue;
+use spin::rwlock::RwLock;
 use std::marker::PhantomData;
 use std::sync::Mutex;
-use spin::rwlock::RwLock;
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 const LOCAL_BUFFER_SIZE: usize = 128;

@@ -79,14 +79,14 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
 
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() || !object.is_mapped()  {
+        if object.is_null() || !object.is_mapped() {
             return object;
         }
         let no_trace = crate::args::REF_COUNT && crate::util::rc::count(object) == 0;
         if no_trace {
             return object;
         }
-        if !object.class_is_valid()  {
+        if !object.class_is_valid() {
             return object;
         }
         if self.plan.immix_space.in_space(object) {
