@@ -130,6 +130,12 @@ pub fn is_dead(o: ObjectReference) -> bool {
 }
 
 #[inline(always)]
+pub fn is_dead_or_stick(o: ObjectReference) -> bool {
+    let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::Relaxed);
+    v == 0 || v == MAX_REF_COUNT
+}
+
+#[inline(always)]
 pub fn is_straddle_line(line: Line) -> bool {
     let v = side_metadata::load_atomic(&RC_STRADDLE_LINES, line.start(), Ordering::Relaxed);
     v != 0
@@ -764,12 +770,13 @@ pub struct ProcessDecs<VM: VMBinding> {
     mark_objects: Vec<ObjectReference>,
     concurrent_marking_in_progress: bool,
     slice: Option<(bool, &'static [ObjectReference])>,
+    mature_sweeping_in_progress: bool,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
 
 impl<VM: VMBinding> ProcessDecs<VM> {
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
     const fn worker(&self) -> &mut GCWorker<VM> {
@@ -788,6 +795,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             mark_objects: vec![],
             concurrent_marking_in_progress: false,
             slice: None,
+            mature_sweeping_in_progress: false,
         }
     }
 
@@ -807,6 +815,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             mark_objects: vec![],
             concurrent_marking_in_progress: false,
             slice: Some((not_marked, slice)),
+            mature_sweeping_in_progress: false,
         }
     }
 
@@ -872,7 +881,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 s.dead_mature_rc_los_volume += o.get_size::<VM>();
             }
         });
-        let not_marked = immix.mark(o);
+        let not_marked = self.concurrent_marking_in_progress && immix.mark(o);
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
@@ -950,8 +959,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     self.mark_objects.push(*o);
                 }
             }
-            let rc = self::count(*o);
-            if rc == 0 || rc == MAX_REF_COUNT {
+            if self::is_dead_or_stick(*o)
+                || (self.mature_sweeping_in_progress && !immix.is_marked(*o))
+            {
                 continue;
             }
             let o =
@@ -984,6 +994,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         self.mmtk = mmtk;
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        self.mature_sweeping_in_progress = immix.previous_pause() == Some(Pause::FinalMark)
+            || immix.previous_pause() == Some(Pause::FullTraceFast);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         if let Some((not_marked, slice)) = self.slice {
             self.process_decs(slice, immix, true, not_marked);

@@ -3,8 +3,9 @@ use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
 use crate::plan::immix::Immix;
+use crate::plan::EdgeIterator;
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
-use crate::util::rc::{self};
+use crate::util::rc::{self, ProcessDecs};
 use crate::util::ObjectReference;
 use crate::LazySweepingJobsCounter;
 use crate::{
@@ -14,6 +15,7 @@ use crate::{
     MMTK,
 };
 use spin::Mutex;
+use std::intrinsics::unlikely;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
 /// Data structure to reference a MMTk 4 MB chunk.
@@ -373,8 +375,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
     worker: *mut GCWorker<VM>,
-    _counter: LazySweepingJobsCounter,
+    counter: LazySweepingJobsCounter,
     immix: *const Immix<VM>,
+    recursive_dec_objects: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
@@ -384,7 +387,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     const CAPACITY: usize = 1024;
 
     #[inline(always)]
-    fn worker(&self) -> &mut GCWorker<VM> {
+    fn worker(&self) -> &'static mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
 
@@ -399,11 +402,51 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             chunk,
             worker: std::ptr::null_mut(),
             immix: std::ptr::null_mut(),
-            _counter: counter,
+            counter,
+            recursive_dec_objects: vec![],
         }
     }
 
-    #[inline(always)]
+    #[cold]
+    fn flush_recursive_dec_objects(&mut self, end: bool) {
+        if self.recursive_dec_objects.is_empty() {
+            return;
+        }
+        let mut recursive_dec_objects = vec![];
+        std::mem::swap(&mut recursive_dec_objects, &mut self.recursive_dec_objects);
+        let immix = self.immix();
+        let w = ProcessDecs::new(recursive_dec_objects, self.counter.clone_with_decs());
+        if end {
+            self.worker().do_work(w)
+        } else if immix.current_pause().is_none() {
+            self.worker()
+                .add_work_prioritized(WorkBucketStage::Unconstrained, w);
+        } else {
+            self.worker().add_work(WorkBucketStage::Unconstrained, w);
+        }
+    }
+
+    #[inline(never)]
+    fn scan_and_recursively_dec_objects(&mut self, dead: ObjectReference) {
+        EdgeIterator::<VM>::iterate(dead, |edge| {
+            let mut x = unsafe { edge.load::<ObjectReference>() };
+            if !x.is_null() && !rc::is_dead_or_stick(x) && self.immix().is_marked(x) {
+                debug_assert!(x.is_mapped());
+                x = x.fix_start_address::<VM>();
+                debug_assert!(x.class_is_valid());
+                if unlikely(self.recursive_dec_objects.is_empty()) {
+                    self.recursive_dec_objects
+                        .reserve(ProcessDecs::<VM>::CAPACITY);
+                }
+                self.recursive_dec_objects.push(x);
+                if self.recursive_dec_objects.len() >= ProcessDecs::<VM>::CAPACITY {
+                    self.flush_recursive_dec_objects(false);
+                }
+            }
+        });
+    }
+
+    #[inline(never)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM>();
         crate::stat(|s| {
@@ -421,7 +464,9 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
-        // self.immix().mark(o);
+        if crate::args::SATB_SWEEP_APPLY_DECS {
+            self.scan_and_recursively_dec_objects(o);
+        }
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
@@ -470,15 +515,14 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         self.immix = immix;
         let immix_space = &immix.immix_space;
         for block in self.chunk.committed_blocks() {
-            if block.is_defrag_source() {
+            if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
                 continue;
             } else {
-                let state = block.get_state();
-                if state == BlockState::Nursery || state == BlockState::Reusing {
-                    continue;
-                }
                 self.process_block(block, immix_space)
             }
+        }
+        if crate::args::SATB_SWEEP_APPLY_DECS {
+            self.flush_recursive_dec_objects(true);
         }
     }
 }
