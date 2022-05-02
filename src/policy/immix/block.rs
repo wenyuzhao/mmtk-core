@@ -2,11 +2,11 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
+use crate::util::heap::blockpageresource::BlockQueue;
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::{constants::*, rc};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use crossbeam_queue::SegQueue;
 use std::{iter::Step, ops::Range, sync::atomic::Ordering};
 
 /// The block allocation state.
@@ -877,20 +877,25 @@ impl Step for Block {
 }
 
 /// A non-block single-linked list to store blocks.
-#[derive(Default)]
 pub struct BlockList {
-    prioritized_queue: SegQueue<Block>,
-    queue: spin::rwlock::RwLock<SegQueue<Block>, spin::Yield>,
+    prioritized_queue: BlockQueue<Block>,
+    queue: BlockQueue<Block>,
 }
 
 impl BlockList {
+    pub fn new() -> Self {
+        Self {
+            prioritized_queue: BlockQueue::new(),
+            queue: BlockQueue::new(),
+        }
+    }
     /// Get number of blocks in this list.
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
-        self.queue.read().len()
+        self.queue.len() + self.prioritized_queue.len()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn push_x(&self, block: Block, live: usize) {
         if live > (Block::BYTES >> 1) {
             self.push_prioritized(block)
@@ -899,46 +904,41 @@ impl BlockList {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn push_prioritized(&self, block: Block) {
         self.prioritized_queue.push(block)
     }
 
     /// Add a block to the list.
-    #[inline]
+    #[inline(always)]
     pub fn push(&self, block: Block) {
-        self.queue.read().push(block)
+        self.queue.push(block)
     }
 
     /// Pop a block out of the list.
-    #[inline]
+    #[inline(always)]
     pub fn pop(&self) -> Option<Block> {
         if let Some(b) = self.prioritized_queue.pop() {
             return Some(b);
         }
-        self.queue.read().pop()
+        self.queue.pop()
     }
 
     /// Clear the list.
-    #[inline]
-    pub fn reset(&self) {
-        *self.queue.write() = SegQueue::new()
-    }
-
-    /// Get an array of all reusable blocks stored in this BlockList.
-    #[inline]
-    pub fn get_blocks(&self) -> spin::RwLockReadGuard<SegQueue<Block>> {
-        self.queue.read()
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.prioritized_queue = BlockQueue::new();
+        self.queue = BlockQueue::new();
     }
 
     #[inline]
     pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
-        let q = SegQueue::new();
-        let guard = self.queue.upgradeable_read();
-        while let Some(b) = guard.pop() {
-            q.push(b);
-            f(b)
-        }
-        *guard.upgrade() = q;
+        self.prioritized_queue.iterate_blocks(&mut f);
+        self.queue.iterate_blocks(&mut f);
+    }
+
+    pub fn flush_all(&self) {
+        self.prioritized_queue.flush_all();
+        self.queue.flush_all();
     }
 }

@@ -261,6 +261,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 me.immix_space.schedule_rc_block_sweeping_tasks(c);
             });
             crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
+                // me.immix_space.reusable_blocks.flush_all();
                 if crate::args::LOG_PER_GC_STATE {
                     println!(
                         " - lazy jobs done, heap {:?}M {:?}",
@@ -493,6 +494,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn gc_pause_end(&self) {
+        if !crate::args::REF_COUNT {
+            self.immix_space.reusable_blocks.flush_all();
+        }
         self.immix_space.pr.flush_all();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
