@@ -68,12 +68,7 @@ impl Chunk {
     }
 
     /// Sweep this chunk.
-    pub fn sweep<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        mark_histogram: &mut Histogram,
-        perform_cycle_collection: bool,
-    ) {
+    pub fn sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>, mark_histogram: &mut Histogram) {
         let line_mark_state = if super::BLOCK_ONLY {
             None
         } else {
@@ -82,16 +77,8 @@ impl Chunk {
         // number of allocated blocks.
         let mut allocated_blocks = 0;
         // Iterate over all allocated blocks in this chunk.
-        for block in self
-            .blocks()
-            .filter(|block| block.get_state() != BlockState::Unallocated)
-        {
-            if !block.sweep(
-                space,
-                mark_histogram,
-                line_mark_state,
-                perform_cycle_collection,
-            ) {
+        for block in self.committed_blocks() {
+            if !block.sweep(space, mark_histogram, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
             }
@@ -354,15 +341,13 @@ struct SweepChunk<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         if self.nursery_only {
             unreachable!()
         } else {
-            let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
             let mut histogram = self.space.defrag.new_histogram();
             if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
-                self.chunk
-                    .sweep(self.space, &mut histogram, immix.perform_cycle_collection());
+                self.chunk.sweep(self.space, &mut histogram);
             }
             if super::DEFRAG {
                 self.space.defrag.add_completed_mark_histogram(histogram);

@@ -493,9 +493,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     }
                     block.clear_rc_table::<VM>();
                     block.clear_striddle_table::<VM>();
-                    if block.rc_sweep_mature::<VM>(self, true) {
-                        self.pr.release_pages(block.start());
-                    }
+                    block.rc_sweep_mature::<VM>(self, true);
                     assert!(!block.is_defrag_source());
                 }
             }
@@ -586,13 +584,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release a block.
-    pub fn release_block(&self, block: Block, nursery: bool) {
-        debug_assert!(!crate::args::REF_COUNT);
-        self.deinit_block(block, nursery, false);
-        self.pr.release_pages(block.start());
-    }
-
-    pub fn deinit_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
+    pub fn release_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
         // println!(
         //     "Release {:?} nursery={} defrag={}",
         //     block,
@@ -617,7 +609,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 s.reclaimed_blocks_mature += 1;
             }
-        })
+        });
+        self.pr.release_pages(block.start());
     }
 
     /// Allocate a clean block.

@@ -1039,10 +1039,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
             block.unlog();
             if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
                 count += 1;
-                immix.immix_space.pr.release_pages(block.start());
-                if *defrag {
-                    block.set_as_defrag_source(false);
-                }
             } else {
                 assert!(
                     !*defrag,

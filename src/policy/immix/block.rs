@@ -566,21 +566,14 @@ impl Block {
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
-        perform_cycle_collection: bool,
     ) -> bool {
+        debug_assert!(!crate::args::REF_COUNT);
         if super::BLOCK_ONLY {
-            if super::REF_COUNT && !perform_cycle_collection {
-                let live = !self.rc_dead();
-                if !live {
-                    space.release_block(*self, false);
-                }
-                return !live;
-            }
             match self.get_state() {
                 BlockState::Unallocated => false,
                 BlockState::Unmarked => {
                     // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self, false);
+                    space.release_block(*self, false, false);
                     true
                 }
                 BlockState::Nursery | BlockState::Marked | BlockState::Reusing => {
@@ -610,7 +603,7 @@ impl Block {
 
             if marked_lines == 0 {
                 // Release the block if non of its lines are marked.
-                space.release_block(*self, false);
+                space.release_block(*self, false, false);
                 true
             } else {
                 // There are some marked lines. Keep the block live.
@@ -638,17 +631,16 @@ impl Block {
         &self,
         space: &ImmixSpace<VM>,
         mutator_reused_blocks: bool,
-    ) -> bool {
+    ) {
         debug_assert!(crate::args::REF_COUNT);
         if mutator_reused_blocks {
             if self.rc_dead() {
-                space.deinit_block(*self, true, true);
-                return true;
+                space.release_block(*self, true, true);
+                return;
             }
         }
         if !mutator_reused_blocks && self.rc_dead() {
-            space.deinit_block(*self, true, false);
-            true
+            space.release_block(*self, true, false);
         } else {
             // See the caller of this function.
             // At least one object is dead in the block.
@@ -688,7 +680,6 @@ impl Block {
                 // debug_assert_eq!(self.get_state(), BlockState::Reusing);
                 self.set_state(BlockState::Marked);
             }
-            false
         }
     }
 
@@ -712,7 +703,7 @@ impl Block {
         }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(*crate::args::IGNORE_REUSING_BLOCKS) {
-                space.deinit_block(*self, false, true);
+                space.release_block(*self, false, true);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {
