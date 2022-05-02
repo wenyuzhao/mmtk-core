@@ -502,8 +502,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .unwrap();
     }
 
-    #[inline]
-    fn in_concurrent(&self) -> bool {
+    #[inline(always)]
+    pub fn in_concurrent(&self) -> bool {
         !self.in_gc_pause.load(Ordering::SeqCst)
     }
 

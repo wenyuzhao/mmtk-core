@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Weak};
+use thread_priority::ThreadPriority;
 
 /// Thread-local data for each worker thread.
 ///
@@ -157,8 +158,23 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.parked.store(false, Ordering::SeqCst);
         IS_WORKER.store(true, Ordering::SeqCst);
         WORKER_ID.store(self.ordinal, Ordering::SeqCst);
+        let lower_priority_for_concurrent_work = *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY;
+        let mut low_priority = false;
         loop {
             let mut work = self.poll();
+
+            if lower_priority_for_concurrent_work {
+                let in_concurrent = self.scheduler().in_concurrent();
+                if in_concurrent && !low_priority {
+                    let _ = thread_priority::set_current_thread_priority(ThreadPriority::Min);
+                    low_priority = true;
+                }
+                if !in_concurrent && low_priority {
+                    let _ = thread_priority::set_current_thread_priority(ThreadPriority::Max);
+                    low_priority = false;
+                }
+            }
+
             debug_assert!(!self.is_parked());
             if work.should_defer() {
                 mmtk.scheduler.postpone_dyn(work);

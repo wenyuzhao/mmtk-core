@@ -35,16 +35,10 @@ impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
         self.immix.tls = tls.0;
     }
     fn prepare(&mut self) {
-        if *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
-            let _ = thread_priority::set_current_thread_priority(ThreadPriority::Max);
-        }
         self.immix.reset()
     }
     fn release(&mut self) {
         self.immix.reset();
-        if *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY {
-            let _ = thread_priority::set_current_thread_priority(ThreadPriority::Min);
-        }
     }
     #[inline(always)]
     fn alloc_copy(
