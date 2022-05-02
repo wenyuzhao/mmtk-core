@@ -294,11 +294,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     let max = crate::COUNTERS.max_used_pages.load(o);
                     crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
                 }
-                if crate::args::TRACE_THRESHOLD2.is_some() {
-                    me.decide_next_gc_may_perform_cycle_collection2();
-                } else {
-                    me.decide_next_gc_may_perform_cycle_collection();
-                }
+                me.decide_next_gc_may_perform_cycle_collection();
             });
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
@@ -519,10 +515,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         unsafe {
             crate::LAZY_SWEEPING_JOBS.swap();
         };
-        let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
-        self.next_gc_may_perform_cycle_collection
-            .store(perform_cycle_collection, Ordering::SeqCst);
-        self.perform_cycle_collection.store(false, Ordering::SeqCst);
+        if !crate::args::REF_COUNT || crate::args::LAZY_DECREMENTS {
+            let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+            self.next_gc_may_perform_cycle_collection
+                .store(perform_cycle_collection, Ordering::SeqCst);
+            self.perform_cycle_collection.store(false, Ordering::SeqCst);
+        }
         self.avail_pages_at_end_of_last_gc
             .store(self.get_pages_avail(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_pages_used(), Ordering::SeqCst);
@@ -599,44 +597,6 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     fn decide_next_gc_may_perform_cycle_collection(&self) {
-        let (lock, cvar) = &self.next_gc_selected;
-        let notify = || {
-            let mut gc_selection_done = lock.lock().unwrap();
-            *gc_selection_done = true;
-            cvar.notify_one();
-        };
-        if !crate::args::HEAP_HEALTH_GUIDED_GC {
-            notify();
-            return;
-        }
-        let total_blocks = self.get_total_pages() >> Block::LOG_PAGES;
-        let threshold = *crate::args::TRACE_THRESHOLD;
-        let last_freed_blocks = self
-            .immix_space
-            .num_clean_blocks_released
-            .load(Ordering::SeqCst);
-        if last_freed_blocks * 100 < (threshold * total_blocks as f32) as usize {
-            if crate::args::LOG_PER_GC_STATE {
-                println!("next trace ({} / {}) 1", last_freed_blocks, total_blocks);
-            }
-            self.next_gc_may_perform_cycle_collection
-                .store(true, Ordering::SeqCst);
-            if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
-                self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
-                self.immix_space
-                    .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
-            }
-        } else {
-            if crate::args::LOG_PER_GC_STATE {
-                println!("next rc ({} / {})", last_freed_blocks, total_blocks);
-            }
-            self.next_gc_may_perform_cycle_collection
-                .store(false, Ordering::SeqCst);
-        }
-        notify();
-    }
-
-    fn decide_next_gc_may_perform_cycle_collection2(&self) {
         let (lock, cvar) = &self.next_gc_selected;
         let notify = || {
             let mut gc_selection_done = lock.lock().unwrap();
