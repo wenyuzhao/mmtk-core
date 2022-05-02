@@ -17,7 +17,6 @@ use crate::{
     util::opaque_pointer::{VMThread, VMWorkerThread},
 };
 use std::ops::{Deref, DerefMut};
-use thread_priority::{self, ThreadPriority};
 
 /// Immix copy allocator
 pub struct ImmixCopyContext<VM: VMBinding> {
