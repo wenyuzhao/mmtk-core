@@ -261,6 +261,7 @@ static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
 static SATB_START: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static PAUSE_CONCURRENT_MARKING: AtomicBool = AtomicBool::new(false);
+static MOVE_CONCURRENT_MARKING_TO_STW: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn gc_trigger_time() -> u128 {

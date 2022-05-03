@@ -98,6 +98,28 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
                 .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
         }
     }
+
+    fn process_objects(&mut self, objects: &[ObjectReference], slice: bool) {
+        if slice {
+            for o in objects {
+                if !self.plan.address_in_defrag(Address::from_ref(o))
+                    && self.plan.in_defrag(*o)
+                    && crate::util::rc::count(*o) != 0
+                {
+                    unsafe {
+                        self.worker()
+                            .local::<ImmixCopyContext<VM>>()
+                            .add_mature_evac_remset(Address::from_ref(o))
+                    }
+                }
+                self.trace_object(*o);
+            }
+        } else {
+            for i in 0..objects.len() {
+                self.trace_object(objects[i]);
+            }
+        }
+    }
 }
 
 impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
@@ -161,27 +183,23 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
+    #[inline(always)]
+    fn should_move_to_stw(&self) -> Option<WorkBucketStage> {
+        if crate::MOVE_CONCURRENT_MARKING_TO_STW.load(Ordering::SeqCst) {
+            Some(WorkBucketStage::RCProcessIncs)
+        } else {
+            None
+        }
+    }
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         if let Some(slice) = self.slice {
-            for o in slice {
-                if !self.plan.address_in_defrag(Address::from_ref(o))
-                    && self.plan.in_defrag(*o)
-                    && crate::util::rc::count(*o) != 0
-                {
-                    unsafe {
-                        self.worker()
-                            .local::<ImmixCopyContext<VM>>()
-                            .add_mature_evac_remset(Address::from_ref(o))
-                    }
-                }
-                self.trace_object(*o);
-            }
+            self.process_objects(slice, true)
         } else {
-            for i in 0..self.objects.len() {
-                self.trace_object(self.objects[i]);
-            }
+            let mut objects = vec![];
+            std::mem::swap(&mut objects, &mut self.objects);
+            self.process_objects(&objects, false)
         }
         let mut objects = vec![];
         while !self.next_objects.is_empty() {

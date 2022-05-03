@@ -34,6 +34,7 @@ use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
 use std::intrinsics::unlikely;
+use std::sync::atomic::AtomicUsize;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -53,6 +54,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_nursery_objects: SegQueue<ObjectReference>,
     rc_mature_objects: Mutex<HashSet<ObjectReference>>,
     rc_dead_objects: SegQueue<ObjectReference>,
+    pub num_pages_released_lazy: AtomicUsize,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -214,6 +216,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_nursery_objects: Default::default(),
             rc_mature_objects: Default::default(),
             rc_dead_objects: Default::default(),
+            num_pages_released_lazy: AtomicUsize::new(0),
         }
     }
 
@@ -247,16 +250,16 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[inline]
-    fn release_object(&self, start: Address) {
+    fn release_object(&self, start: Address) -> usize {
         if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
             if crate::args::REF_COUNT {
                 rc::set(unsafe { start.to_object_reference() }, 0);
             }
-            self.pr.release_pages_and_reset_unlog_bits(start);
+            self.pr.release_pages_and_reset_unlog_bits(start)
         } else {
-            self.pr.release_pages(start);
+            self.pr.release_pages(start)
         }
     }
 
@@ -271,6 +274,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
+        self.num_pages_released_lazy.store(0, Ordering::Relaxed);
     }
 
     pub fn release(&mut self, full_heap: bool) {
@@ -604,7 +608,9 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
             o.to_address().unlog::<VM>();
             if removed {
                 // println!("kill los {:?}", o);
-                los.release_object(o.to_address());
+                let pages = los.release_object(o.to_address());
+                los.num_pages_released_lazy
+                    .fetch_add(pages, Ordering::Relaxed);
             } else {
                 // println!("keep los {:?}", o);
             }

@@ -1,4 +1,5 @@
 use super::worker::*;
+use super::WorkBucketStage;
 use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
 use std::any::{type_name, Any};
@@ -14,6 +15,10 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     #[inline(always)]
     fn should_defer(&self) -> bool {
         false
+    }
+    #[inline(always)]
+    fn should_move_to_stw(&self) -> Option<WorkBucketStage> {
+        None
     }
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>);
     #[inline]

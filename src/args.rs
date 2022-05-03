@@ -160,7 +160,7 @@ pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 pub const INC_MAX_COPY_DEPTH: bool = false;
-pub const SATB_SWEEP_APPLY_DECS: bool = false;
+pub const SATB_SWEEP_APPLY_DECS: bool = cfg!(feature = "lxr_dec_on_satb_sweep");
 
 pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("MAX_SURVIVAL_MB")

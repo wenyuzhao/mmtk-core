@@ -452,7 +452,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         }
     }
 
-    pub fn release_pages_and_reset_unlog_bits(&self, first: Address) {
+    pub fn release_pages_and_reset_unlog_bits(&self, first: Address) -> usize {
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages(first - self.start);
         let pages = self.free_list.size(page_offset as _);
@@ -484,9 +484,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // only discontiguous spaces use chunks
             me.release_free_chunks(first, freed as _);
         }
+        pages as _
     }
 
-    pub fn release_pages(&self, first: Address) {
+    pub fn release_pages(&self, first: Address) -> usize {
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages(first - self.start);
         let pages = self.free_list.size(page_offset as _);
@@ -512,6 +513,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // only discontiguous spaces use chunks
             me.release_free_chunks(first, freed as _);
         }
+        pages as _
     }
 
     fn release_free_chunks(&mut self, freed_page: Address, pages_freed: usize) {

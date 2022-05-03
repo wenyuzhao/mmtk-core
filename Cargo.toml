@@ -95,6 +95,7 @@ lxr_nursery_evacuation = ["ix_ref_count"]
 lxr_mature_evacuation = ["ix_ref_count", "lxr_nursery_evacuation"]
 lxr_concurrent_marking = ["ix_ref_count", "ix_concurrent_marking"]
 lxr_block_only = ["ix_ref_count", "ix_block_only"]
+lxr_dec_on_satb_sweep = []
 # LXR Features (unused)
 lxr_evacuate_nursery_in_recycled_lines = []
 lxr_delayed_nursery_evacuation = []

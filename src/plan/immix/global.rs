@@ -276,11 +276,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 {
                     let o = Ordering::Relaxed;
                     let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
-                    let lazy_released_pages = me
+                    let lazy_released_pages = (me
                         .immix_space
                         .num_clean_blocks_released_lazy
                         .load(Ordering::SeqCst)
-                        << Block::LOG_PAGES;
+                        << Block::LOG_PAGES)
+                        + me.los().num_pages_released_lazy.load(Ordering::SeqCst);
                     let x = if used_pages_after_gc >= lazy_released_pages {
                         used_pages_after_gc - lazy_released_pages
                     } else {
@@ -616,7 +617,8 @@ impl<VM: VMBinding> Immix<VM> {
                 .immix_space
                 .num_clean_blocks_released_lazy
                 .load(Ordering::SeqCst)
-                << Block::LOG_PAGES);
+                << Block::LOG_PAGES)
+            - self.los().num_pages_released_lazy.load(Ordering::SeqCst);
         if self.previous_pause() == Some(Pause::FinalMark)
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {
@@ -887,6 +889,9 @@ impl<VM: VMBinding> Immix<VM> {
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if super::REF_COUNT {
+            if crate::concurrent_marking_in_progress() {
+                crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
+            }
             Self::process_prev_roots(scheduler);
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());

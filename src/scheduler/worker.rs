@@ -180,6 +180,12 @@ impl<VM: VMBinding> GCWorker<VM> {
                 mmtk.scheduler.postpone_dyn(work);
                 continue;
             }
+            if let Some(stage) = work.should_move_to_stw() {
+                if !self.scheduler.work_buckets[stage].is_activated() {
+                    self.scheduler.work_buckets[stage].add_dyn(work);
+                    continue;
+                }
+            }
             work.do_work_with_stat(self, mmtk);
         }
     }

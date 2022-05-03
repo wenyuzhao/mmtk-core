@@ -444,6 +444,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         queue: Injector<Box<dyn GCWork<VM>>>,
         pqueue: Injector<Box<dyn GCWork<VM>>>,
     ) {
+        crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
         crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
         let mut notify = false;
         if !queue.is_empty() {
