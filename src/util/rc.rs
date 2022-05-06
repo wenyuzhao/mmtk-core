@@ -1060,7 +1060,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
 }
 
 pub struct RCImmixCollectRootEdges<VM: VMBinding> {
-    base: ProcessEdgesBase<Self>,
+    base: ProcessEdgesBase<VM>,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
@@ -1097,7 +1097,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
 }
 
 impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
-    type Target = ProcessEdgesBase<Self>;
+    type Target = ProcessEdgesBase<VM>;
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.base

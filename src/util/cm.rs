@@ -211,7 +211,7 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
 }
 
 pub struct CMImmixCollectRootEdges<VM: VMBinding> {
-    base: ProcessEdgesBase<Self>,
+    base: ProcessEdgesBase<VM>,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
@@ -245,7 +245,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
 }
 
 impl<VM: VMBinding> Deref for CMImmixCollectRootEdges<VM> {
-    type Target = ProcessEdgesBase<Self>;
+    type Target = ProcessEdgesBase<VM>;
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.base
@@ -304,7 +304,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
 pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     immix: &'static Immix<VM>,
     pause: Pause,
-    base: ProcessEdgesBase<Self>,
+    base: ProcessEdgesBase<VM>,
     forwarded_roots: Vec<ObjectReference>,
 }
 
@@ -424,7 +424,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
 }
 
 impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
-    type Target = ProcessEdgesBase<Self>;
+    type Target = ProcessEdgesBase<VM>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.base
