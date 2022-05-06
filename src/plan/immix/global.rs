@@ -246,14 +246,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
         crate::args::validate_features(*ACTIVE_BARRIER);
-        self.common.gc_init(heap_size, vm_map, scheduler);
+        self.common.gc_init(heap_size, vm_map);
         self.immix_space.init(vm_map);
         unsafe {
             crate::LAZY_SWEEPING_JOBS.init();
@@ -322,11 +317,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
-        let pause = self.select_collection_kind(
-            self.base()
-                .control_collector_context
-                .is_concurrent_collection(),
-        );
+        let pause =
+            self.select_collection_kind(self.base().gc_requester.is_concurrent_collection());
         if crate::concurrent_marking_in_progress() && pause == Pause::RefCount {
             crate::COUNTERS
                 .rc_during_satb
@@ -367,8 +359,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // Resume mutators
         #[cfg(feature = "sanity")]
         scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
-
-        scheduler.set_finalizer(Some(EndOfGC));
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -450,7 +440,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &self.common
     }
 
-    fn gc_pause_start(&self) {
+    fn gc_pause_start(&self, scheduler: &GCWorkScheduler<VM>) {
         self.immix_space.pr.flush_all();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
@@ -465,7 +455,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             me.immix_space.rc_eager_prepare(pause);
         }
         if crate::args::REF_COUNT {
-            let scheduler = self.base().control_collector_context.scheduler();
             scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
             if pause == Pause::RefCount {
                 // scheduler.work_buckets[WorkBucketStage::Initial].activate();

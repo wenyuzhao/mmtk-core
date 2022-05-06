@@ -22,6 +22,9 @@ pub use worker::GCWorker;
 pub(crate) use worker::{GCWorkerLocal, GCWorkerLocalPtr};
 pub use worker::{IS_WORKER, WORKER_ID};
 
+mod controller;
+pub use controller::GCController;
+
 pub(crate) mod gc_work;
 pub use gc_work::ProcessEdgesWork;
 // TODO: We shouldn't need to expose ScanStackRoot. However, OpenJDK uses it.

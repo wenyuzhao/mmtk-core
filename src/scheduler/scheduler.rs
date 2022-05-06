@@ -1,11 +1,12 @@
 use super::stat::SchedulerStat;
 use super::work_bucket::*;
-use super::worker::{GCWorker, WorkerGroup};
+use super::worker::{GCWorker, GCWorkerShared, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
 use crate::util::cm::ImmixConcurrentTraceObjects;
 use crate::util::opaque_pointer::*;
-use crate::vm::VMBinding;
+use crate::vm::Collection;
+use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam_deque::{Injector, Steal};
 use enum_map::{enum_map, EnumMap};
 use std::any::TypeId;
@@ -23,20 +24,14 @@ pub enum CoordinatorMessage<VM: VMBinding> {
 }
 
 pub struct GCWorkScheduler<VM: VMBinding> {
+    /// Work buckets
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
     /// workers
     worker_group: Option<Arc<WorkerGroup<VM>>>,
+    /// The shared part of the GC worker object of the controller thread
+    coordinator_worker_shared: Option<RwLock<Arc<GCWorkerShared<VM>>>>,
     /// Condition Variable for worker synchronization
     pub worker_monitor: Arc<(Mutex<()>, Condvar)>,
-    mmtk: Option<&'static MMTK<VM>>,
-    coordinator_worker: Option<RwLock<GCWorker<VM>>>,
-    /// A message channel to send new coordinator work and other actions to the coordinator thread
-    channel: (
-        Sender<CoordinatorMessage<VM>>,
-        Receiver<CoordinatorMessage<VM>>,
-    ),
-    startup: Mutex<Option<Box<dyn CoordinatorWork<VM>>>>,
-    finalizer: Mutex<Option<Box<dyn CoordinatorWork<VM>>>>,
     /// A callback to be fired after the `Closure` bucket is drained.
     /// This callback should return `true` if it adds more work packets to the
     /// `Closure` bucket. `WorkBucket::can_open` then consult this return value
@@ -47,9 +42,9 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
-    postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
-    postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
-    in_gc_pause: AtomicBool,
+    pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    pub(super) in_gc_pause: AtomicBool,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -77,12 +72,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone(), false),
             },
             worker_group: None,
-            worker_monitor: worker_monitor.clone(),
-            mmtk: None,
-            coordinator_worker: None,
-            channel: channel(),
-            startup: Mutex::new(None),
-            finalizer: Mutex::new(None),
+            coordinator_worker_shared: None,
+            worker_monitor,
             closure_end: Mutex::new(None),
             postponed_concurrent_work: spin::RwLock::new(Injector::new()),
             postponed_concurrent_work_prioritized: spin::RwLock::new(Injector::new()),
@@ -186,27 +177,22 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             num_workers
         };
 
+        let (sender, receiver) = channel::<CoordinatorMessage<VM>>();
+
         let mut self_mut = self.clone();
         let self_mut = unsafe { Arc::get_mut_unchecked(&mut self_mut) };
 
-        self_mut.mmtk = Some(mmtk);
-        self_mut.coordinator_worker = Some(RwLock::new(GCWorker::new(
-            233,
-            self.clone(),
-            true,
-            self.channel.0.clone(),
-        )));
+        let coordinator_worker = GCWorker::new(mmtk, 0, self.clone(), true, sender.clone());
+        self_mut.coordinator_worker_shared = Some(RwLock::new(coordinator_worker.shared.clone()));
+
         let (worker_group, spawn_workers) =
-            WorkerGroup::new(num_workers, self.clone(), self.channel.0.clone());
+            WorkerGroup::new(mmtk, num_workers, self.clone(), sender);
         self_mut.worker_group = Some(worker_group);
 
         let group = self_mut.worker_group.as_ref().unwrap().clone();
         self_mut.work_buckets.values_mut().for_each(|bucket| {
             bucket.set_group(group.clone());
         });
-        // FIXME: because of the `Arc::get_mut_unchanged` above, we are now mutating the scheduler
-        // while the spawned workers already have access to the scheduler.
-        spawn_workers(tls);
 
         {
             // Unconstrained is always open. Prepare will be opened at the beginning of a GC.
@@ -245,6 +231,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 }
             }
         }
+
+        // Now that the scheduler is initialized, we spawn the worker threads and the controller thread.
+        spawn_workers(tls);
+
+        let gc_controller = GCController::new(
+            mmtk,
+            mmtk.plan.base().gc_requester.clone(),
+            self.clone(),
+            receiver,
+            coordinator_worker,
+        );
+
+        VM::VMCollection::spawn_gc_thread(tls, GCThreadContext::<VM>::Controller(gc_controller));
     }
 
     /// Schedule all the common work packets
@@ -295,26 +294,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     .add(ForwardFinalization::<C::ProcessEdgesWorkType>::new());
             }
         }
-
-        // Set EndOfGC to run at the end
-        self.set_finalizer(Some(EndOfGC));
     }
 
     fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
         buckets.iter().all(|&b| self.work_buckets[b].is_drained())
-    }
-
-    pub fn initialize_coordinator_worker(self: &Arc<Self>, tls: VMWorkerThread) {
-        let mut coordinator_worker = self.coordinator_worker.as_ref().unwrap().write().unwrap();
-        coordinator_worker.tls = tls;
-    }
-
-    pub fn set_initializer<W: CoordinatorWork<VM>>(&self, w: Option<W>) {
-        *self.startup.lock().unwrap() = w.map(|w| box w as Box<dyn CoordinatorWork<VM>>);
-    }
-
-    pub fn set_finalizer<W: CoordinatorWork<VM>>(&self, w: Option<W>) {
-        *self.finalizer.lock().unwrap() = w.map(|w| box w as Box<dyn CoordinatorWork<VM>>);
     }
 
     pub fn on_closure_end(&self, f: Box<dyn Send + Fn() -> bool>) {
@@ -325,7 +308,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.worker_group.as_ref().unwrap()
     }
 
-    fn all_buckets_empty(&self) -> bool {
+    pub fn all_buckets_empty(&self) -> bool {
         self.work_buckets.values().all(|bucket| bucket.is_empty())
     }
 
@@ -373,72 +356,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         buckets_updated && new_packets
     }
 
-    /// Execute coordinator work, in the controller thread
-    fn process_coordinator_work(&self, mut work: Box<dyn CoordinatorWork<VM>>) {
-        let mut coordinator_worker = self.coordinator_worker.as_ref().unwrap().write().unwrap();
-        let mmtk = self.mmtk.unwrap();
-        work.do_work_with_stat(&mut coordinator_worker, mmtk);
-    }
-
-    /// Drain the message queue and execute coordinator work. Only the coordinator should call this.
-    pub fn wait_for_completion(&self) {
-        self.in_gc_pause.store(true, Ordering::SeqCst);
-        if !crate::LazySweepingJobs::all_finished() {
-            self.work_buckets[WorkBucketStage::Unconstrained].force_notify_all_workers();
-        }
-        // At the start of a GC, we probably already have received a `ScheduleCollection` work. Run it now.
-        if let Some(initializer) = self.startup.lock().unwrap().take() {
-            self.process_coordinator_work(initializer);
-        }
-        loop {
-            let message = self.channel.1.recv().unwrap();
-            match message {
-                CoordinatorMessage::Work(work) => {
-                    self.process_coordinator_work(work);
-                }
-                CoordinatorMessage::AllWorkerParked | CoordinatorMessage::BucketDrained => {
-                    unreachable!()
-                }
-                CoordinatorMessage::Finish => {}
-            }
-            let _guard = self.worker_monitor.0.lock().unwrap();
-            if self.worker_group().all_parked() && self.all_buckets_empty() {
-                break;
-            }
-        }
-        for message in self.channel.1.try_iter() {
-            if let CoordinatorMessage::Work(work) = message {
-                self.process_coordinator_work(work);
-            }
-        }
-        self.deactivate_all();
-        unsafe { LAST_ACTIVATE_TIME = None };
-        // Finalization: Resume mutators, reset gc states
-        // Note: Resume-mutators must happen after all work buckets are closed.
-        //       Otherwise, for generational GCs, workers will receive and process
-        //       newly generated remembered-sets from those open buckets.
-        //       But these remsets should be preserved until next GC.
-
-        let mut queue = Injector::new();
-        type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
-        std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
-
-        let mut pqueue = Injector::new();
-        std::mem::swap::<Q<VM>>(
-            &mut pqueue,
-            &mut self.postponed_concurrent_work_prioritized.write(),
-        );
-
-        if let Some(finalizer) = self.finalizer.lock().unwrap().take() {
-            self.process_coordinator_work(finalizer);
-        }
-        self.in_gc_pause.store(false, Ordering::SeqCst);
-
-        self.schedule_concurrent_packets(queue, pqueue);
-        self.assert_all_deactivated();
-    }
-
-    fn schedule_concurrent_packets(
+    pub(super) fn schedule_concurrent_packets(
         &self,
         queue: Injector<Box<dyn GCWork<VM>>>,
         pqueue: Injector<Box<dyn GCWork<VM>>>,
@@ -459,16 +377,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         if notify {
             self.work_buckets[WorkBucketStage::Unconstrained].notify_all_workers();
-        }
-    }
-
-    pub fn assert_all_deactivated(&self) {
-        if cfg!(debug_assertions) {
-            self.work_buckets.iter().for_each(|(id, bkt)| {
-                if id != WorkBucketStage::Unconstrained {
-                    assert!(!bkt.is_activated());
-                }
-            });
         }
     }
 
@@ -493,6 +401,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 bkt.deactivate();
             }
         });
+    }
+
+    pub fn debug_assert_all_buckets_deactivated(&self) {
+        if cfg!(debug_assertions) {
+            self.work_buckets.iter().for_each(|(id, bkt)| {
+                if id != WorkBucketStage::Unconstrained {
+                    assert!(!bkt.is_activated());
+                }
+            });
+        }
     }
 
     pub fn add_coordinator_work(&self, work: impl CoordinatorWork<VM>, worker: &GCWorker<VM>) {
@@ -618,8 +536,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let worker_stat = worker.borrow_stat();
             worker_stat.enable();
         }
-        let coordinator_worker = self.coordinator_worker.as_ref().unwrap().read().unwrap();
-        let coordinator_worker_stat = coordinator_worker.shared.borrow_stat();
+        let coordinator_worker_shared = self
+            .coordinator_worker_shared
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap();
+        let coordinator_worker_stat = coordinator_worker_shared.borrow_stat();
         coordinator_worker_stat.enable();
     }
 
@@ -629,8 +552,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let worker_stat = worker.borrow_stat();
             summary.merge(&worker_stat);
         }
-        let coordinator_worker = self.coordinator_worker.as_ref().unwrap().read().unwrap();
-        let coordinator_worker_stat = coordinator_worker.shared.borrow_stat();
+        let coordinator_worker_shared = self
+            .coordinator_worker_shared
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap();
+        let coordinator_worker_stat = coordinator_worker_shared.borrow_stat();
         summary.merge(&coordinator_worker_stat);
         let mut stat = summary.harness_stat();
         if crate::plan::barriers::TAKERATE_MEASUREMENT {
@@ -655,7 +583,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
-        mmtk.plan.base().control_collector_context.clear_request();
+        mmtk.plan.base().gc_requester.clear_request();
         let first_stw_bucket = self.work_buckets.values().skip(1).next().unwrap();
         // debug_assert!(!first_stw_bucket.is_activated());
         first_stw_bucket.activate();
