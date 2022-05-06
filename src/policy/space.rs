@@ -264,9 +264,9 @@ impl<'a> SFTMap<'a> {
         if object.to_address().chunk_index() >= self.sft.len() {
             return false;
         }
-        if crate::args::REF_COUNT {
-            return self.get(object.to_address()) as *const dyn SFT != &EMPTY_SPACE_SFT;
-        }
+        // if crate::args::REF_COUNT {
+        //     return self.get(object.to_address()) as *const dyn SFT != &EMPTY_SPACE_SFT;
+        // }
         self.get(object.to_address()).is_mmtk_object(object)
     }
 }
