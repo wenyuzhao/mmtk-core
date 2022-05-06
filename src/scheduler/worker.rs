@@ -129,18 +129,8 @@ impl<VM: VMBinding> GCWorker<VM> {
         &self.scheduler
     }
 
-    // TODO: We should be able to remove this method. We can create the copy context without a proper tls.
-    // In init(), we set tls for the worker and for the copy context.
-    pub fn set_local(&mut self, copy: GCWorkerCopyContext<VM>) {
-        self.copy = copy;
-    }
-
     pub fn get_copy_context_mut(&mut self) -> &mut GCWorkerCopyContext<VM> {
         &mut self.copy
-    }
-
-    pub fn init(&mut self, tls: VMWorkerThread) {
-        self.tls = tls;
     }
 
     pub fn do_work(&'static mut self, mut work: impl GCWork<VM>) {
@@ -154,7 +144,9 @@ impl<VM: VMBinding> GCWorker<VM> {
             .unwrap()
     }
 
-    pub fn run(&mut self, mmtk: &'static MMTK<VM>) {
+    pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
+        self.tls = tls;
+        self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
         self.mmtk = Some(mmtk);
         self.parked.store(false, Ordering::SeqCst);
         IS_WORKER.store(true, Ordering::SeqCst);

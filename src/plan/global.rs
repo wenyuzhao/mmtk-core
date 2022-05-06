@@ -37,7 +37,7 @@ pub fn create_mutator<VM: VMBinding>(
     tls: VMMutatorThread,
     mmtk: &'static MMTK<VM>,
 ) -> Box<Mutator<VM>> {
-    Box::new(match mmtk.options.plan {
+    Box::new(match *mmtk.options.plan {
         PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, &*mmtk.plan),
         PlanSelector::SemiSpace => {
             crate::plan::semispace::mutator::create_ss_mutator(tls, &*mmtk.plan)
@@ -95,7 +95,7 @@ pub fn create_plan<VM: VMBinding>(
 }
 
 /// Create thread local GC worker.
-pub fn create_worker<VM: VMBinding>(
+pub fn create_gc_worker_context<VM: VMBinding>(
     tls: VMWorkerThread,
     mmtk: &'static MMTK<VM>,
 ) -> GCWorkerCopyContext<VM> {
@@ -464,7 +464,7 @@ impl<VM: VMBinding> BasePlan<VM> {
                 vm_map,
                 mmapper,
                 &mut heap,
-                options.vm_space_size,
+                *options.vm_space_size,
                 constraints,
                 global_side_metadata_specs,
             ),
@@ -528,7 +528,7 @@ impl<VM: VMBinding> BasePlan<VM> {
 
     /// The application code has requested a collection.
     pub fn handle_user_collection_request(&self, _tls: VMMutatorThread, _force: bool) {
-        // if force || !self.options.ignore_system_g_c {
+        // if force || !*self.options.ignore_system_g_c {
         //     info!("User triggering collection");
         //     self.user_triggered_collection
         //         .store(true, Ordering::Relaxed);
@@ -754,21 +754,21 @@ impl<VM: VMBinding> BasePlan<VM> {
     /// we should do stress GC.
     pub fn is_stress_test_gc_enabled(&self) -> bool {
         use crate::util::constants::DEFAULT_STRESS_FACTOR;
-        self.options.stress_factor != DEFAULT_STRESS_FACTOR
-            || self.options.analysis_factor != DEFAULT_STRESS_FACTOR
+        *self.options.stress_factor != DEFAULT_STRESS_FACTOR
+            || *self.options.analysis_factor != DEFAULT_STRESS_FACTOR
     }
 
     /// Check if we should do precise stress test. If so, we need to check for stress GCs for every allocation.
     /// Otherwise, we only check in the allocation slow path.
     pub fn is_precise_stress(&self) -> bool {
-        self.options.precise_stress
+        *self.options.precise_stress
     }
 
     /// Check if we should do a stress GC now. If GC is initialized and the allocation bytes exceeds
     /// the stress factor, we should do a stress GC.
     pub fn should_do_stress_gc(&self) -> bool {
         self.initialized.load(Ordering::SeqCst)
-            && (self.allocation_bytes.load(Ordering::SeqCst) > self.options.stress_factor)
+            && (self.allocation_bytes.load(Ordering::SeqCst) > *self.options.stress_factor)
     }
 
     pub(super) fn collection_required<P: Plan>(
@@ -782,7 +782,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             debug!(
                 "Stress GC: allocation_bytes = {}, stress_factor = {}",
                 self.allocation_bytes.load(Ordering::Relaxed),
-                self.options.stress_factor
+                *self.options.stress_factor
             );
             debug!("Doing stress GC");
             self.allocation_bytes.store(0, Ordering::SeqCst);

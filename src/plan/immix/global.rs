@@ -751,7 +751,7 @@ impl<VM: VMBinding> Immix<VM> {
             true,
             self.base().cur_collection_attempts.load(Ordering::SeqCst),
             self.base().is_user_triggered_collection(),
-            self.base().options.full_heap_system_gc,
+            *self.base().options.full_heap_system_gc,
         );
         let full_trace = || {
             if in_defrag {
@@ -762,7 +762,7 @@ impl<VM: VMBinding> Immix<VM> {
         };
         let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
             || self.is_emergency_collection()
-            || self.base().options.full_heap_system_gc;
+            || *self.base().options.full_heap_system_gc;
 
         let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
