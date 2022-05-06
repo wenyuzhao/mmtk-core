@@ -68,7 +68,7 @@ pub struct WorkBucket<VM: VMBinding> {
     queue: BucketQueue<VM>,
     prioritized_queue: BucketQueue<VM>,
     monitor: Arc<(Mutex<()>, Condvar)>,
-    can_open: Option<Box<dyn (Fn() -> bool) + Send>>,
+    can_open: Option<Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send>>,
     group: Option<Arc<WorkerGroup<VM>>>,
 }
 
@@ -249,13 +249,16 @@ impl<VM: VMBinding> WorkBucket<VM> {
             .steal()
             .or_else(|| self.queue.steal())
     }
-    pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
+    pub fn set_open_condition(
+        &mut self,
+        pred: impl Fn(&GCWorkScheduler<VM>) -> bool + Send + 'static,
+    ) {
         self.can_open = Some(box pred);
     }
     #[inline(always)]
-    pub fn update(&self) -> bool {
+    pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
         if let Some(can_open) = self.can_open.as_ref() {
-            if !self.is_activated() && can_open() {
+            if !self.is_activated() && can_open(scheduler) {
                 self.activate();
                 return true;
             }

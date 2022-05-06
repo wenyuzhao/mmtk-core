@@ -227,7 +227,7 @@ pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThre
         !mmtk.plan.is_initialized(),
         "MMTk collection has been initialized (was initialize_collection() already called before?)"
     );
-    mmtk.scheduler.initialize(*mmtk.options.threads, mmtk, tls);
+    mmtk.scheduler.spawn_gc_threads(mmtk, tls);
     mmtk.plan.base().initialized.store(true, Ordering::SeqCst);
 }
 
@@ -295,7 +295,7 @@ pub fn process_bulk<VM: VMBinding>(mmtk: &'static MMTK<VM>, options: &str) -> bo
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn used_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
-    mmtk.plan.get_pages_used() << LOG_BYTES_IN_PAGE
+    mmtk.plan.get_used_pages() << LOG_BYTES_IN_PAGE
 }
 
 /// Return free memory in bytes.

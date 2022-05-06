@@ -356,7 +356,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
-        let num_workers = self.scheduler().worker_group().worker_count();
+        let num_workers = self.scheduler().worker_group.worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
         //         self.block_allocation

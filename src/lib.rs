@@ -1,12 +1,9 @@
 #![allow(incomplete_features)]
-#![feature(asm)]
 #![feature(integer_atomics)]
 #![feature(is_sorted)]
 #![feature(drain_filter)]
 #![feature(nll)]
 #![feature(box_syntax)]
-#![feature(maybe_uninit_extra)]
-#![feature(get_mut_unchecked)]
 #![feature(arbitrary_self_types)]
 #![feature(associated_type_defaults)]
 #![feature(specialization)]
@@ -27,6 +24,7 @@
 #![feature(const_for)]
 #![feature(const_ptr_offset)]
 #![feature(thread_local)]
+#![feature(get_mut_unchecked)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 

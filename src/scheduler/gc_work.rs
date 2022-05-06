@@ -61,7 +61,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
             }
-            for w in &mmtk.scheduler.worker_group().workers_shared {
+            for w in &mmtk.scheduler.worker_group.workers_shared {
                 w.local_work_bucket.add(PrepareCollector);
             }
         }
@@ -133,7 +133,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
                     .add(ReleaseMutator::<C::VM>::new(mutator));
             }
         }
-        for w in &mmtk.scheduler.worker_group().workers_shared {
+        for w in &mmtk.scheduler.worker_group.workers_shared {
             // FIXME: Performance
             w.local_work_bucket.add(ReleaseCollector);
             // let w = unsafe { &mut *(w as *const _ as *mut GCWorkerShared<C::VM>) };
@@ -205,7 +205,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         <E::VM as VMBinding>::VMCollection::stop_all_mutators::<E>(worker.tls);
         if crate::args::LOG_PER_GC_STATE {
             crate::RESERVED_PAGES_AT_GC_START
-                .store(mmtk.plan.get_pages_reserved(), Ordering::SeqCst);
+                .store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
         if crate::args::LOG_STAGES {
             println!(
@@ -284,7 +284,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 crate::RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,
-                mmtk.plan.get_pages_reserved() / 256,
+                mmtk.plan.get_reserved_pages() / 256,
                 mmtk.plan.get_total_pages() / 256,
                 pause_time
             );

@@ -10,7 +10,7 @@ use crossbeam_deque::{Stealer, Worker};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use thread_priority::ThreadPriority;
 
 /// Thread-local data for each worker thread.
@@ -69,6 +69,17 @@ pub struct GCWorkerShared<VM: VMBinding> {
     pub local_work_buffer: Worker<Box<dyn GCWork<VM>>>,
 }
 
+impl<VM: VMBinding> GCWorkerShared<VM> {
+    pub fn new(worker_monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
+        Self {
+            parked: AtomicBool::new(true),
+            stat: Default::default(),
+            local_work_bucket: WorkBucket::new(true, worker_monitor, false),
+            local_work_buffer: Worker::new_fifo(),
+        }
+    }
+}
+
 /// A GC worker.  This part is privately owned by a worker thread.
 /// The GC controller also has an embedded `GCWorker` because it may also execute work packets.
 pub struct GCWorker<VM: VMBinding> {
@@ -120,6 +131,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
         is_coordinator: bool,
         sender: Sender<CoordinatorMessage<VM>>,
+        shared: Arc<GCWorkerShared<VM>>,
     ) -> Self {
         let worker_monitor = scheduler.worker_monitor.clone();
         Self {
@@ -131,12 +143,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             scheduler,
             mmtk,
             is_coordinator,
-            shared: Arc::new(GCWorkerShared {
-                parked: AtomicBool::new(true),
-                stat: Default::default(),
-                local_work_buffer: Worker::new_fifo(),
-                local_work_bucket: WorkBucket::new(true, worker_monitor, false),
-            }),
+            shared,
         }
     }
 
@@ -248,52 +255,42 @@ pub struct WorkerGroup<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> WorkerGroup<VM> {
-    pub fn new(
-        mmtk: &'static MMTK<VM>,
-        workers: usize,
-        scheduler: Arc<GCWorkScheduler<VM>>,
-        sender: Sender<CoordinatorMessage<VM>>,
-    ) -> (Arc<Self>, Box<dyn FnOnce(VMThread)>) {
-        let mut workers_shared = Vec::new();
-        let mut workers_to_spawn = Vec::new();
-
-        for ordinal in 0..workers {
-            let worker = Box::new(GCWorker::new(
-                mmtk,
-                ordinal,
-                scheduler.clone(),
-                false,
-                sender.clone(),
-            ));
-            let worker_shared = worker.shared.clone();
-            workers_shared.push(worker_shared);
-            workers_to_spawn.push(worker);
-        }
-
-        // NOTE: We cannot call spawn_gc_thread here,
-        // because the worker will access `Scheduler::worker_group` immediately after started,
-        // but that field will not be assigned to before this function returns.
-        // Therefore we defer the spawning operation later.
-        let deferred_spawn = Box::new(move |tls| {
-            for worker in workers_to_spawn.drain(..) {
-                VM::VMCollection::spawn_gc_thread(tls, GCThreadContext::<VM>::Worker(worker));
-            }
-        });
+    pub fn new(num_workers: usize, worker_monitor: Arc<(Mutex<()>, Condvar)>) -> Arc<Self> {
+        let workers_shared = (0..num_workers)
+            .map(|_| Arc::new(GCWorkerShared::<VM>::new(worker_monitor.clone())))
+            .collect::<Vec<_>>();
 
         let stealers = workers_shared
             .iter()
-            .zip(0..workers)
+            .zip(0..num_workers)
             .map(|(w, ordinal)| (ordinal, w.local_work_buffer.stealer()))
             .collect();
 
-        (
-            Arc::new(Self {
-                workers_shared,
-                stealers,
-                parked_workers: Default::default(),
-            }),
-            deferred_spawn,
-        )
+        Arc::new(Self {
+            workers_shared,
+            stealers,
+            parked_workers: Default::default(),
+        })
+    }
+
+    pub fn spawn(
+        &self,
+        mmtk: &'static MMTK<VM>,
+        sender: Sender<CoordinatorMessage<VM>>,
+        tls: VMThread,
+    ) {
+        // Spawn each worker thread.
+        for (ordinal, shared) in self.workers_shared.iter().enumerate() {
+            let worker = Box::new(GCWorker::new(
+                mmtk,
+                ordinal,
+                mmtk.scheduler.clone(),
+                false,
+                sender.clone(),
+                shared.clone(),
+            ));
+            VM::VMCollection::spawn_gc_thread(tls, GCThreadContext::<VM>::Worker(worker));
+        }
     }
 
     #[inline(always)]

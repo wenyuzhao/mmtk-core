@@ -695,7 +695,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                         >= threshold as u128
                 })
                 .unwrap_or(false);
-            let over_space = mmtk.plan.get_pages_used() - mmtk.plan.get_collection_reserve()
+            let over_space = mmtk.plan.get_used_pages() - mmtk.plan.get_collection_reserved_pages()
                 > mmtk.plan.get_total_pages();
             if over_space || over_time {
                 self.no_evac = true;

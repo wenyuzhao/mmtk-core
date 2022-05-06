@@ -218,7 +218,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             && !crate::plan::barriers::BARRIER_MEASUREMENT
             && !crate::concurrent_marking_in_progress()
             && self.base().gc_status() == GcStatus::NotInGC
-            && self.get_pages_reserved()
+            && self.get_reserved_pages()
                 >= self.get_total_pages() * *crate::args::CONCURRENT_MARKING_THRESHOLD / 100
     }
 
@@ -262,13 +262,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 if crate::args::LOG_PER_GC_STATE {
                     println!(
                         " - lazy jobs done, heap {:?}M {:?}",
-                        me.get_pages_reserved() / 256,
+                        me.get_reserved_pages() / 256,
                         me.previous_pause()
                     );
                 }
                 // Update counters
                 if !crate::args::LAZY_DECREMENTS {
-                    HEAP_AFTER_GC.store(me.get_pages_used(), Ordering::SeqCst);
+                    HEAP_AFTER_GC.store(me.get_used_pages(), Ordering::SeqCst);
                 }
                 {
                     let o = Ordering::Relaxed;
@@ -422,12 +422,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         );
     }
 
-    fn get_collection_reserve(&self) -> usize {
+    fn get_collection_reserved_pages(&self) -> usize {
         self.immix_space.defrag_headroom_pages()
     }
 
-    fn get_pages_used(&self) -> usize {
-        self.immix_space.reserved_pages() + self.common.get_pages_used()
+    fn get_used_pages(&self) -> usize {
+        self.immix_space.reserved_pages() + self.common.get_used_pages()
     }
 
     #[inline(always)]
@@ -511,14 +511,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::LAZY_SWEEPING_JOBS.swap();
         };
         if !crate::args::REF_COUNT || crate::args::LAZY_DECREMENTS {
-            let perform_cycle_collection = self.get_pages_avail() < super::CYCLE_TRIGGER_THRESHOLD;
+            let perform_cycle_collection =
+                self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
             self.next_gc_may_perform_cycle_collection
                 .store(perform_cycle_collection, Ordering::SeqCst);
             self.perform_cycle_collection.store(false, Ordering::SeqCst);
         }
         self.avail_pages_at_end_of_last_gc
-            .store(self.get_pages_avail(), Ordering::SeqCst);
-        HEAP_AFTER_GC.store(self.get_pages_used(), Ordering::SeqCst);
+            .store(self.get_available_pages(), Ordering::SeqCst);
+        HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
     }
 
     #[cfg(feature = "nogc_no_zeroing")]

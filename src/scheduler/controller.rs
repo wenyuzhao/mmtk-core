@@ -96,7 +96,7 @@ impl<VM: VMBinding> GCController<VM> {
                 CoordinatorMessage::Finish => {}
             }
             let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
-            if self.scheduler.worker_group().all_parked() && self.scheduler.all_buckets_empty() {
+            if self.scheduler.worker_group.all_parked() && self.scheduler.all_buckets_empty() {
                 break;
             }
         }
