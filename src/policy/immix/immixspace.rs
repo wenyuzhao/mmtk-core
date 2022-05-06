@@ -1314,7 +1314,7 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
         space: &'static ImmixSpace<VM>,
     ) -> Self {
         ImmixCopyContext {
-            copy_allocator: ImmixAllocator::new(tls.0, Some(space), plan, false),
+            copy_allocator: ImmixAllocator::new(tls.0, Some(space), plan, true),
             defrag_allocator: ImmixAllocator::new(tls.0, Some(space), plan, true),
         }
     }
