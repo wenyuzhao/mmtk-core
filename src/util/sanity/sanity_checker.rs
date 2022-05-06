@@ -114,7 +114,7 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(PrepareMutator::<P::VM>::new(mutator));
         }
-        for w in &mmtk.scheduler.worker_group().workers {
+        for w in &mmtk.scheduler.worker_group().workers_shared {
             w.local_work_bucket.add(PrepareCollector);
         }
     }
@@ -138,7 +138,7 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Release]
                 .add(ReleaseMutator::<P::VM>::new(mutator));
         }
-        for w in &mmtk.scheduler.worker_group().workers {
+        for w in &mmtk.scheduler.worker_group().workers_shared {
             w.local_work_bucket.add(ReleaseCollector);
         }
     }

@@ -36,6 +36,7 @@ spin = {version = "0.9.2", features = ["std"]}
 env_logger = "0.8.2"
 pfm = {version = "0.1.0-beta.1", optional = true}
 thread-priority = "0.2.4"
+atomic_refcell = "0.1.7"
 
 [dev-dependencies]
 crossbeam = "0.7.3"

@@ -192,20 +192,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self_mut.mmtk = Some(mmtk);
         self_mut.coordinator_worker = Some(RwLock::new(GCWorker::new(
             233,
-            Arc::downgrade(self),
+            self.clone(),
             true,
             self.channel.0.clone(),
         )));
-        self_mut.worker_group = Some(WorkerGroup::new(
-            num_workers,
-            Arc::downgrade(self),
-            self.channel.0.clone(),
-        ));
+        let (worker_group, spawn_workers) =
+            WorkerGroup::new(num_workers, self.clone(), self.channel.0.clone());
+        self_mut.worker_group = Some(worker_group);
+
         let group = self_mut.worker_group.as_ref().unwrap().clone();
         self_mut.work_buckets.values_mut().for_each(|bucket| {
             bucket.set_group(group.clone());
         });
-        self.worker_group.as_ref().unwrap().spawn_workers(tls, mmtk);
+        // FIXME: because of the `Arc::get_mut_unchanged` above, we are now mutating the scheduler
+        // while the spawned workers already have access to the scheduler.
+        spawn_workers(tls);
 
         {
             // Unconstrained is always open. Prepare will be opened at the beginning of a GC.
@@ -320,8 +321,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         *self.closure_end.lock().unwrap() = Some(f);
     }
 
-    pub fn worker_group(&self) -> Arc<WorkerGroup<VM>> {
-        self.worker_group.as_ref().unwrap().clone()
+    pub fn worker_group(&self) -> &WorkerGroup<VM> {
+        self.worker_group.as_ref().unwrap()
     }
 
     fn all_buckets_empty(&self) -> bool {
@@ -519,7 +520,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline(always)]
     fn pop_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
         let mut retry = false;
-        match worker.local_work_bucket.poll_no_batch() {
+        match worker.shared.local_work_bucket.poll_no_batch() {
             Steal::Success(w) => return Steal::Success(w),
             Steal::Retry => retry = true,
             _ => {}
@@ -528,7 +529,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return Steal::Empty;
         }
         for work_bucket in self.work_buckets.values() {
-            match work_bucket.poll(&worker.local_work_buffer) {
+            match work_bucket.poll(&worker.shared.local_work_buffer) {
                 Steal::Success(w) => return Steal::Success(w),
                 Steal::Retry => retry = true,
                 _ => {}
@@ -579,10 +580,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     #[cold]
     fn poll_slow(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
-        debug_assert!(!worker.is_parked());
+        debug_assert!(!worker.shared.is_parked());
         let mut guard = self.worker_monitor.0.lock().unwrap();
         loop {
-            debug_assert!(!worker.is_parked());
+            debug_assert!(!worker.shared.is_parked());
             if let Some(work) = self.pop_schedulable_work(worker) {
                 return work;
             }
@@ -608,24 +609,29 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             // println!("[{}] wake", worker.ordinal);
             // Unpark this worker
             self.worker_group().dec_parked_workers();
+            worker.shared.parked.store(false, Ordering::SeqCst);
         }
     }
 
     pub fn enable_stat(&self) {
-        for worker in &self.worker_group().workers {
-            worker.stat.enable();
+        for worker in &self.worker_group().workers_shared {
+            let worker_stat = worker.borrow_stat();
+            worker_stat.enable();
         }
         let coordinator_worker = self.coordinator_worker.as_ref().unwrap().read().unwrap();
-        coordinator_worker.stat.enable();
+        let coordinator_worker_stat = coordinator_worker.shared.borrow_stat();
+        coordinator_worker_stat.enable();
     }
 
     pub fn statistics(&self) -> HashMap<String, String> {
         let mut summary = SchedulerStat::default();
-        for worker in &self.worker_group().workers {
-            summary.merge(&worker.stat);
+        for worker in &self.worker_group().workers_shared {
+            let worker_stat = worker.borrow_stat();
+            summary.merge(&worker_stat);
         }
         let coordinator_worker = self.coordinator_worker.as_ref().unwrap().read().unwrap();
-        summary.merge(&coordinator_worker.stat);
+        let coordinator_worker_stat = coordinator_worker.shared.borrow_stat();
+        summary.merge(&coordinator_worker_stat);
         let mut stat = summary.harness_stat();
         if crate::plan::barriers::TAKERATE_MEASUREMENT {
             let fast = crate::plan::barriers::FAST_COUNT.load(Ordering::SeqCst);

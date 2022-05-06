@@ -61,7 +61,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
             }
-            for w in &mmtk.scheduler.worker_group().workers {
+            for w in &mmtk.scheduler.worker_group().workers_shared {
                 w.local_work_bucket.add(PrepareCollector);
             }
         }
@@ -133,11 +133,11 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
                     .add(ReleaseMutator::<C::VM>::new(mutator));
             }
         }
-        for w in &mmtk.scheduler.worker_group().workers {
-            // w.local_work_bucket.add(ReleaseCollector);
-            let w = unsafe { &mut *(w as *const _ as *mut GCWorker<C::VM>) };
-            // unsafe { w.local::<C::CopyContextType>() }.release();
-            w.get_copy_context_mut().release()
+        for w in &mmtk.scheduler.worker_group().workers_shared {
+            // FIXME: Performance
+            w.local_work_bucket.add(ReleaseCollector);
+            // let w = unsafe { &mut *(w as *const _ as *mut GCWorkerShared<C::VM>) };
+            // w.get_copy_context_mut().release()
         }
         // TODO: Process weak references properly
         mmtk.reference_processors.clear();
