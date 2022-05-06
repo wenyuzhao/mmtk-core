@@ -194,6 +194,8 @@ pub struct WorkerLocalStat<C> {
     _phantom: PhantomData<C>,
 }
 
+unsafe impl<C> Send for WorkerLocalStat<C> {}
+
 impl<C> Default for WorkerLocalStat<C> {
     fn default() -> Self {
         WorkerLocalStat {
