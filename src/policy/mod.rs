@@ -13,6 +13,9 @@
 /// memory).
 pub mod space;
 
+/// Copy context defines the thread local copy allocator for copying policies.
+pub mod copy_context;
+
 pub mod copyspace;
 #[macro_use]
 pub mod immix;

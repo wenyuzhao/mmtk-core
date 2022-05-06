@@ -1,145 +1,14 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
-use crate::plan::PlanConstraints;
-use crate::policy::immix::line::Line;
-use crate::policy::largeobjectspace::LargeObjectSpace;
+use crate::policy::immix::ImmixCopyContext;
 use crate::policy::space::Space;
-use crate::scheduler::{gc_work::*, GCWork, GCWorker};
-use crate::scheduler::{GCWorkerLocal, WorkBucketStage};
-use crate::util::alloc::{Allocator, ImmixAllocator};
-use crate::util::object_forwarding;
+use crate::scheduler::{gc_work::*, WorkBucketStage};
+use crate::util::copy::CopySemantics;
 use crate::util::rc::{EdgeKind, ProcessIncs};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
-use crate::{
-    plan::CopyContext,
-    util::opaque_pointer::{VMThread, VMWorkerThread},
-};
 use std::ops::{Deref, DerefMut};
-
-/// Immix copy allocator
-pub struct ImmixCopyContext<VM: VMBinding> {
-    immix: ImmixAllocator<VM>,
-    mature_evac_remset: Vec<Address>,
-}
-
-impl<VM: VMBinding> CopyContext for ImmixCopyContext<VM> {
-    type VM = VM;
-
-    fn constraints(&self) -> &'static PlanConstraints {
-        &super::global::IMMIX_CONSTRAINTS
-    }
-    fn init(&mut self, tls: VMWorkerThread) {
-        self.immix.tls = tls.0;
-    }
-    fn prepare(&mut self) {
-        self.immix.reset()
-    }
-    fn release(&mut self) {
-        self.immix.reset();
-    }
-    #[inline(always)]
-    fn alloc_copy(
-        &mut self,
-        _original: ObjectReference,
-        bytes: usize,
-        align: usize,
-        offset: isize,
-        _semantics: crate::AllocationSemantics,
-    ) -> Address {
-        self.immix.alloc(bytes, align, offset)
-    }
-    #[inline(always)]
-    fn post_copy(
-        &mut self,
-        obj: ObjectReference,
-        _tib: Address,
-        _bytes: usize,
-        _semantics: crate::AllocationSemantics,
-    ) {
-        object_forwarding::clear_forwarding_bits::<VM>(obj);
-        if crate::args::REF_COUNT {
-            debug_assert_eq!(crate::util::rc::count(obj), 0);
-        }
-    }
-}
-
-impl<VM: VMBinding> ImmixCopyContext<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        Self {
-            immix: ImmixAllocator::new(
-                VMThread::UNINITIALIZED,
-                Some(&mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space),
-                &*mmtk.plan,
-                true,
-            ),
-            mature_evac_remset: vec![],
-        }
-    }
-
-    pub fn flush_mature_evac_remset(&mut self) {
-        if self.mature_evac_remset.len() > 0 {
-            let mut remset = vec![];
-            std::mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.immix
-                .immix_space()
-                .mature_evac_remsets
-                .lock()
-                .push(box w);
-        }
-    }
-
-    pub fn flush_mature_evac_remset_to_scheduler(&mut self) {
-        if self.mature_evac_remset.len() > 0 {
-            let mut remset = vec![];
-            std::mem::swap(&mut remset, &mut self.mature_evac_remset);
-            let w = EvacuateMatureObjects::new(remset);
-            self.immix.immix_space().scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                .add(w);
-        }
-    }
-
-    #[inline(always)]
-    pub fn add_mature_evac_remset(&mut self, e: Address) {
-        let v = if self.immix.immix_space().address_in_space(e) {
-            Line::of(e).currrent_validity_state()
-        } else {
-            LargeObjectSpace::<VM>::currrent_validity_state(e)
-        };
-        self.mature_evac_remset
-            .push(Line::encode_validity_state(e, v));
-        if self.mature_evac_remset.len() >= EvacuateMatureObjects::<VM>::CAPACITY {
-            self.flush_mature_evac_remset()
-        }
-    }
-}
-
-impl<VM: VMBinding> GCWorkerLocal for ImmixCopyContext<VM> {
-    fn init(&mut self, tls: VMWorkerThread) {
-        CopyContext::init(self, tls);
-    }
-}
-
-pub struct FlushMatureEvacRemsets;
-
-impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
-    fn do_work(&mut self, worker: &mut crate::scheduler::GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        for w in &worker.scheduler().worker_group().workers {
-            let cc = unsafe {
-                let w = &mut *(w as *const GCWorker<VM> as *mut GCWorker<VM>);
-                w.local::<ImmixCopyContext<VM>>()
-            };
-            cc.flush_mature_evac_remset_to_scheduler();
-        }
-        mmtk.plan
-            .downcast_ref::<Immix<VM>>()
-            .unwrap()
-            .immix_space
-            .process_mature_evacuation_remset();
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum TraceKind {
@@ -172,9 +41,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
             self.immix().immix_space.fast_trace_object(self, object);
             object
         } else {
-            self.immix()
-                .common
-                .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
+            self.immix().common.trace_object(self, object)
         }
     }
 
@@ -228,14 +95,12 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 self.immix().immix_space.trace_object(
                     self,
                     object,
-                    super::global::ALLOC_IMMIX,
-                    unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                    CopySemantics::DefaultCopy,
+                    self.worker(),
                 )
             }
         } else {
-            self.immix()
-                .common
-                .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
+            self.immix().common.trace_object::<Self>(self, object)
         }
     }
 
@@ -285,6 +150,5 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
 {
     type VM = VM;
     type PlanType = Immix<VM>;
-    type CopyContextType = ImmixCopyContext<VM>;
     type ProcessEdgesWorkType = ImmixProcessEdges<VM, KIND>;
 }

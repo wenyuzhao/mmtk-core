@@ -62,8 +62,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
                     .add(PrepareMutator::<C::VM>::new(mutator));
             }
             for w in &mmtk.scheduler.worker_group().workers {
-                w.local_work_bucket
-                    .add(PrepareCollector::<C::CopyContextType>::new());
+                w.local_work_bucket.add(PrepareCollector);
             }
         }
     }
@@ -92,19 +91,13 @@ impl<VM: VMBinding> GCWork<VM> for PrepareMutator<VM> {
 
 /// The collector GC Preparation Work
 #[derive(Default)]
-pub struct PrepareCollector<W: CopyContext + GCWorkerLocal>(PhantomData<W>);
+pub struct PrepareCollector;
 
-impl<W: CopyContext + GCWorkerLocal> PrepareCollector<W> {
-    #[allow(unused)]
-    pub fn new() -> Self {
-        PrepareCollector(PhantomData)
-    }
-}
-
-impl<VM: VMBinding, W: CopyContext + GCWorkerLocal> GCWork<VM> for PrepareCollector<W> {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         trace!("Prepare Collector");
-        unsafe { worker.local::<W>() }.prepare();
+        worker.get_copy_context_mut().prepare();
+        mmtk.plan.prepare_worker(worker);
     }
 }
 
@@ -141,9 +134,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             }
         }
         for w in &mmtk.scheduler.worker_group().workers {
-            // w.local_work_bucket.add(ReleaseCollector::<C::CopyContextType>::new());
+            // w.local_work_bucket.add(ReleaseCollector);
             let w = unsafe { &mut *(w as *const _ as *mut GCWorker<C::VM>) };
-            unsafe { w.local::<C::CopyContextType>() }.release();
+            // unsafe { w.local::<C::CopyContextType>() }.release();
+            w.get_copy_context_mut().release()
         }
         // TODO: Process weak references properly
         mmtk.reference_processors.clear();
@@ -173,19 +167,12 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseMutator<VM> {
 
 /// The collector release Work
 #[derive(Default)]
-pub struct ReleaseCollector<W: CopyContext + GCWorkerLocal>(PhantomData<W>);
+pub struct ReleaseCollector;
 
-impl<W: CopyContext + GCWorkerLocal> ReleaseCollector<W> {
-    #[allow(unused)]
-    pub fn new() -> Self {
-        ReleaseCollector(PhantomData)
-    }
-}
-
-impl<VM: VMBinding, W: CopyContext + GCWorkerLocal> GCWork<VM> for ReleaseCollector<W> {
+impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         trace!("Release Collector");
-        unsafe { worker.local::<W>() }.release();
+        worker.get_copy_context_mut().release();
     }
 }
 

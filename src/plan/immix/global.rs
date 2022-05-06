@@ -1,6 +1,4 @@
-use super::gc_work::{
-    FlushMatureEvacRemsets, ImmixCopyContext, ImmixGCWorkContext, ImmixProcessEdges, TraceKind,
-};
+use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::Pause;
 use crate::plan::global::BasePlan;
@@ -10,6 +8,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::remset::FlushMatureEvacRemsets;
 use crate::policy::immix::{MatureSweeping, UpdateWeakProcessor};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -19,6 +18,7 @@ use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
 use crate::util::cm::CMImmixCollectRootEdges;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -234,14 +234,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &IMMIX_CONSTRAINTS
     }
 
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = ImmixCopyContext::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
+    fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
+        use enum_map::enum_map;
+        CopyConfig {
+            copy_mapping: enum_map! {
+                CopySemantics::DefaultCopy => CopySelector::Immix(0),
+                _ => CopySelector::Unused,
+            },
+            space_mapping: vec![(CopySelector::Immix(0), &self.immix_space)],
+            constraints: &IMMIX_CONSTRAINTS,
+        }
     }
 
     fn gc_init(

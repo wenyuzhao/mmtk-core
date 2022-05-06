@@ -14,8 +14,6 @@ use crossbeam_queue::SegQueue;
 
 use crate::util::ObjectReference;
 
-pub use self::gc_work::ImmixCopyContext;
-
 pub const CONCURRENT_MARKING: bool = crate::args::CONCURRENT_MARKING;
 
 pub const REF_COUNT: bool = crate::args::REF_COUNT;

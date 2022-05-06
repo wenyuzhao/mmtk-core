@@ -1,11 +1,14 @@
+use super::copy::GCWorkerCopyContext;
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::ImmixCopyContext;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
+use crate::util::copy::CopySemantics;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
-        immix::{Immix, ImmixCopyContext, Pause},
+        immix::{Immix, Pause},
         EdgeIterator,
     },
     policy::{
@@ -246,7 +249,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
-    const fn worker(&self) -> &mut GCWorker<VM> {
+    const fn worker(&self) -> &'static mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
 
@@ -335,11 +338,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if force || (!self.immix().address_in_defrag(e) && self.immix().in_defrag(o)) {
-            unsafe {
-                self.worker()
-                    .local::<ImmixCopyContext<VM>>()
-                    .add_mature_evac_remset(e)
-            }
+            self.immix()
+                .immix_space
+                .remset
+                .record(e, &self.immix().immix_space);
         }
     }
 
@@ -485,7 +487,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn process_inc_and_evacuate(
         &mut self,
         o: ObjectReference,
-        copy_context: &mut ImmixCopyContext<VM>,
+        copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> ObjectReference {
         o.verify();
@@ -517,9 +519,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let copy_depth_reached = crate::args::INC_MAX_COPY_DEPTH && depth > 16;
             if is_nursery && !self.no_evac && !copy_depth_reached {
                 // Evacuate the object
-                let new = object_forwarding::forward_object::<VM, _>(
+                let new = object_forwarding::forward_object::<VM>(
                     o,
-                    AllocationSemantics::Default,
+                    CopySemantics::DefaultCopy,
                     copy_context,
                 );
                 if crate::should_record_copy_bytes() {
@@ -562,7 +564,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn process_edge<const K: EdgeKind>(
         &mut self,
         e: Address,
-        cc: &mut ImmixCopyContext<VM>,
+        cc: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
@@ -592,7 +594,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn process_incs<const K: EdgeKind>(
         &mut self,
         mut incs: AddressBuffer<'_>,
-        copy_context: &mut ImmixCopyContext<VM>,
+        copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
         if K == EdgeKind::Root {
@@ -627,7 +629,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn process_incs_for_obj_array<const K: EdgeKind>(
         &mut self,
         slice: &[ObjectReference],
-        copy_context: &mut ImmixCopyContext<VM>,
+        copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
         for e in slice {
@@ -679,8 +681,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         self.current_pause = self.immix().current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        let copy_context =
-            unsafe { &mut *(worker.local::<ImmixCopyContext<VM>>() as *mut ImmixCopyContext<VM>) };
+        let copy_context = self.worker().get_copy_context_mut();
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {

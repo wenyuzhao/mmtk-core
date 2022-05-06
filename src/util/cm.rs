@@ -1,12 +1,11 @@
+use super::copy::CopySemantics;
 use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
+use crate::policy::immix::ImmixCopyContext;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::{
-    plan::{
-        immix::{Immix, ImmixCopyContext},
-        EdgeIterator,
-    },
+    plan::{immix::Immix, EdgeIterator},
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     util::metadata::side_metadata::address_to_meta_address,
     vm::*,
@@ -93,9 +92,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             self.plan.immix_space.fast_trace_object(self, object);
             object
         } else {
-            self.plan
-                .common
-                .trace_object::<Self, ImmixCopyContext<VM>>(self, object)
+            self.plan.common.trace_object(self, object)
         }
     }
 
@@ -106,11 +103,10 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
                     && self.plan.in_defrag(*o)
                     && crate::util::rc::count(*o) != 0
                 {
-                    unsafe {
-                        self.worker()
-                            .local::<ImmixCopyContext<VM>>()
-                            .add_mature_evac_remset(Address::from_ref(o))
-                    }
+                    self.plan
+                        .immix_space
+                        .remset
+                        .record(Address::from_ref(o), &self.plan.immix_space);
                 }
                 self.trace_object(*o);
             }
@@ -161,11 +157,10 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                     && self.plan.in_defrag(t)
                     && crate::util::rc::count(t) != 0
                 {
-                    unsafe {
-                        self.worker()
-                            .local::<ImmixCopyContext<VM>>()
-                            .add_mature_evac_remset(e)
-                    }
+                    self.plan
+                        .immix_space
+                        .remset
+                        .record(e, &self.plan.immix_space);
                 }
                 if self.next_objects.is_empty() {
                     self.next_objects.reserve(Self::CAPACITY);
@@ -350,9 +345,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             self.immix.immix_space.rc_trace_object(
                 self,
                 object,
-                unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                CopySemantics::DefaultCopy,
                 self.pause,
                 false,
+                self.worker(),
             )
         } else {
             object
@@ -403,9 +399,10 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
             self.immix.immix_space.rc_trace_object(
                 self,
                 object,
-                unsafe { self.worker().local::<ImmixCopyContext<VM>>() },
+                CopySemantics::DefaultCopy,
                 self.pause,
                 true,
+                self.worker(),
             )
         } else {
             self.immix.los().trace_object(self, object)

@@ -11,12 +11,9 @@ use crate::policy::space::Space;
 use crate::util::alloc::AllocatorSelector;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
-use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::Plan;
-
-use std::sync::atomic::Ordering;
 
 use super::mutator_context::create_space_mapping;
 use super::mutator_context::ReservedAllocators;
@@ -82,26 +79,6 @@ pub fn new_generational_global_metadata_specs<VM: VMBinding>() -> Vec<SideMetada
     let specs =
         crate::util::metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC]);
     SideMetadataContext::new_global_specs(&specs)
-}
-
-/// Post copying operation for generational plans.
-pub fn generational_post_copy<VM: VMBinding>(
-    obj: ObjectReference,
-    _tib: Address,
-    bytes: usize,
-    _semantics: AllocationSemantics,
-) {
-    crate::util::object_forwarding::clear_forwarding_bits::<VM>(obj);
-    if !FULL_NURSERY_GC {
-        debug_assert_eq!(*ACTIVE_BARRIER, BarrierSelector::ObjectBarrier);
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(obj, Ordering::SeqCst);
-    } else if !NO_SLOW {
-        for i in (0..bytes).step_by(8) {
-            let a = obj.to_address() + i;
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
-        }
-    }
 }
 
 const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {

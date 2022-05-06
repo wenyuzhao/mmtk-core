@@ -2,6 +2,7 @@ use super::stat::WorkerLocalStat;
 use super::work_bucket::*;
 use super::*;
 use crate::mmtk::MMTK;
+use crate::util::copy::GCWorkerCopyContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::{Collection, VMBinding};
 use crossbeam_deque::{Stealer, Worker};
@@ -58,7 +59,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub ordinal: usize,
     pub parked: AtomicBool,
     scheduler: Arc<GCWorkScheduler<VM>>,
-    local: GCWorkerLocalPtr,
+    copy: GCWorkerCopyContext<VM>,
     pub local_work_bucket: WorkBucket<VM>,
     pub sender: Sender<CoordinatorMessage<VM>>,
     pub stat: WorkerLocalStat<VM>,
@@ -82,7 +83,8 @@ impl<VM: VMBinding> GCWorker<VM> {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,
             parked: AtomicBool::new(true),
-            local: GCWorkerLocalPtr::UNINITIALIZED,
+            // We will set this later
+            copy: GCWorkerCopyContext::new_non_copy(),
             local_work_bucket: WorkBucket::new(true, scheduler.worker_monitor.clone(), false),
             sender,
             scheduler,
@@ -127,15 +129,14 @@ impl<VM: VMBinding> GCWorker<VM> {
         &self.scheduler
     }
 
-    /// # Safety
-    /// The user needs to guarantee that the type supplied here is the same type used to create this pointer.
-    #[inline]
-    pub unsafe fn local<W: 'static + GCWorkerLocal>(&mut self) -> &mut W {
-        self.local.as_type::<W>()
+    // TODO: We should be able to remove this method. We can create the copy context without a proper tls.
+    // In init(), we set tls for the worker and for the copy context.
+    pub fn set_local(&mut self, copy: GCWorkerCopyContext<VM>) {
+        self.copy = copy;
     }
 
-    pub fn set_local(&mut self, local: GCWorkerLocalPtr) {
-        self.local = local;
+    pub fn get_copy_context_mut(&mut self) -> &mut GCWorkerCopyContext<VM> {
+        &mut self.copy
     }
 
     pub fn init(&mut self, tls: VMWorkerThread) {
