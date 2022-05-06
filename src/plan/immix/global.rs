@@ -366,8 +366,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         // Resume mutators
         #[cfg(feature = "sanity")]
-        scheduler.work_buckets[WorkBucketStage::Final]
-            .add(ScheduleSanityGC::<Self, ImmixCopyContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
 
         scheduler.set_finalizer(Some(EndOfGC));
     }

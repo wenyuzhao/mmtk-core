@@ -1,6 +1,5 @@
 use crate::plan::immix::Immix;
 use crate::plan::immix::Pause;
-use crate::plan::CopyContext;
 use crate::plan::Plan;
 use crate::policy::immix::block::Block;
 use crate::policy::space::Space;
