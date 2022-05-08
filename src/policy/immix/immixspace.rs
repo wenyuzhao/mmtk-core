@@ -9,6 +9,7 @@ use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
 use crate::policy::immix::chunk::Chunk;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
+use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
@@ -120,6 +121,14 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             None
         }
     }
+    fn sft_trace_object(
+        &self,
+        _trace: SFTProcessEdgesMutRef,
+        _object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        panic!("We do not use SFT to trace objects for Immix. sft_trace_object() cannot be used.")
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
@@ -145,6 +154,9 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
+    }
+    fn set_copy_for_sft_trace(&mut self, _semantics: Option<CopySemantics>) {
+        panic!("We do not use SFT to trace objects for Immix. set_copy_context() cannot be used.")
     }
 }
 
@@ -671,6 +683,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object
         );
         if Block::containing::<VM>(object).is_defrag_source() {
+            debug_assert!(self.in_defrag());
             self.trace_object_with_opportunistic_copy(trace, object, semantics, worker)
         } else {
             self.trace_object_without_moving(trace, object)
