@@ -276,6 +276,7 @@ pub enum WorkBucketStage {
     Closure,
     RefClosure,
     CalculateForwarding,
+    SecondRoots,
     RefForwarding,
     Compact,
     Release,
