@@ -12,8 +12,8 @@ use enum_map::{enum_map, EnumMap};
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
 pub enum CoordinatorMessage<VM: VMBinding> {

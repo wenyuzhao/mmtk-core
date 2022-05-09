@@ -7,53 +7,10 @@ use crate::util::opaque_pointer::*;
 use crate::vm::{Collection, GCThreadContext, VMBinding};
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use crossbeam_deque::{Stealer, Worker};
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 use thread_priority::ThreadPriority;
-
-/// Thread-local data for each worker thread.
-///
-/// For mmtk, each gc can define their own worker-local data, to contain their required copy allocators and other stuffs.
-pub trait GCWorkerLocal {
-    fn init(&mut self, _tls: VMWorkerThread) {}
-}
-
-/// This struct will be accessed during trace_object(), which is performance critical.
-/// However, we do not know its concrete type as the plan and its copy context is dynamically selected.
-/// Instead use a void* type to store it, and during trace_object() we cast it to the correct copy context type.
-#[derive(Copy, Clone)]
-pub struct GCWorkerLocalPtr {
-    data: *mut c_void,
-    // Save the type name for debug builds, so we can later do type check
-    #[cfg(debug_assertions)]
-    ty: &'static str,
-}
-
-impl GCWorkerLocalPtr {
-    pub const UNINITIALIZED: Self = GCWorkerLocalPtr {
-        data: std::ptr::null_mut(),
-        #[cfg(debug_assertions)]
-        ty: "uninitialized",
-    };
-
-    pub fn new<W: GCWorkerLocal>(worker_local: W) -> Self {
-        GCWorkerLocalPtr {
-            data: Box::into_raw(Box::new(worker_local)) as *mut c_void,
-            #[cfg(debug_assertions)]
-            ty: std::any::type_name::<W>(),
-        }
-    }
-
-    /// # Safety
-    /// The user needs to guarantee that the type supplied here is the same type used to create this pointer.
-    pub unsafe fn as_type<W: GCWorkerLocal>(&mut self) -> &mut W {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.ty, std::any::type_name::<W>());
-        &mut *(self.data as *mut W)
-    }
-}
 
 /// The part shared between a GCWorker and the scheduler.
 /// This structure is used for communication, e.g. adding new work packets.
@@ -133,7 +90,6 @@ impl<VM: VMBinding> GCWorker<VM> {
         sender: Sender<CoordinatorMessage<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
     ) -> Self {
-        let worker_monitor = scheduler.worker_monitor.clone();
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,

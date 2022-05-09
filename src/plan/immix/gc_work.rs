@@ -1,6 +1,5 @@
 use super::global::Immix;
 use crate::plan::immix::Pause;
-use crate::policy::immix::ImmixCopyContext;
 use crate::policy::space::Space;
 use crate::scheduler::{gc_work::*, WorkBucketStage};
 use crate::util::copy::CopySemantics;

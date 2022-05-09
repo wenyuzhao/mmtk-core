@@ -33,7 +33,7 @@ use crate::util::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
-use crate::{mmtk::MMTK, policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
+use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -43,8 +43,6 @@ use std::time::SystemTime;
 use atomic::{Atomic, Ordering};
 use enum_map::EnumMap;
 use spin::Lazy;
-
-pub const ALLOC_IMMIX: AllocationSemantics = AllocationSemantics::Default;
 
 static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);

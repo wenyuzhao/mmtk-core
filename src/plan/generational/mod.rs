@@ -51,11 +51,6 @@ pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
 
 /// Full heap collection as nursery GC.
 pub const FULL_NURSERY_GC: bool = crate::args::BARRIER_MEASUREMENT;
-/// Force object barrier never enters the slow-path.
-/// If enabled,
-///  - `FULL_NURSERY_GC` must be `true`.
-///  - `ACTIVE_BARRIER` must be `ObjectBarrier`.
-pub const NO_SLOW: bool = false;
 
 /// Constraints for generational plans. Each generational plan should overwrite based on this constant.
 pub static GEN_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {

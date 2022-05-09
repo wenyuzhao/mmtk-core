@@ -2,7 +2,6 @@ use super::copy::GCWorkerCopyContext;
 use super::metadata::MetadataSpec;
 use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
-use crate::policy::immix::ImmixCopyContext;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::util::copy::CopySemantics;
 use crate::LazySweepingJobsCounter;
@@ -22,7 +21,7 @@ use crate::{
         object_forwarding, ObjectReference,
     },
     vm::*,
-    AllocationSemantics, MMTK,
+    MMTK,
 };
 use atomic::Ordering;
 use std::intrinsics::unlikely;

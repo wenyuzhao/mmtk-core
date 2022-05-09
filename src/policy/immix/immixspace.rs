@@ -16,7 +16,7 @@ use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
-use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{
     self, compare_exchange_metadata, load_metadata, store_metadata, MetadataSpec,
 };
@@ -30,7 +30,7 @@ use crate::{
         heap::blockpageresource::BlockPageResource,
         opaque_pointer::{VMThread, VMWorkerThread},
     },
-    AllocationSemantics, MMTK,
+    MMTK,
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
@@ -809,7 +809,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         trace: &mut impl TransitiveClosure,
         object: ObjectReference,
-        semantics: CopySemantics,
+        _semantics: CopySemantics,
         _pause: Pause,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {

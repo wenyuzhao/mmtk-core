@@ -1,7 +1,6 @@
 use super::copy::CopySemantics;
 use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
-use crate::policy::immix::ImmixCopyContext;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::{

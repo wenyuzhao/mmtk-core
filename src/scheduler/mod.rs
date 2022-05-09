@@ -19,7 +19,6 @@ pub use work_bucket::WorkBucketStage;
 
 mod worker;
 pub use worker::GCWorker;
-pub(crate) use worker::{GCWorkerLocal, GCWorkerLocalPtr};
 pub use worker::{IS_WORKER, WORKER_ID};
 
 mod controller;
