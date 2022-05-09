@@ -78,7 +78,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
 
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() || !object.is_mapped() {
+        if object.is_null() || !object.is_in_any_space() {
             return object;
         }
         let no_trace = crate::args::REF_COUNT && crate::util::rc::count(object) == 0;
@@ -335,7 +335,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null()
-            || !object.is_mapped()
+            || !object.is_in_any_space()
             || !object.to_address().is_aligned_to(8)
             || !object.class_is_valid()
         {
@@ -389,7 +389,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     #[inline(always)]
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null()
-            || !object.is_mapped()
+            || !object.is_in_any_space()
             || !object.to_address().is_aligned_to(8)
             || !object.class_is_valid()
         {

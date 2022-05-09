@@ -422,7 +422,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         EdgeIterator::<VM>::iterate(dead, |edge| {
             let mut x = unsafe { edge.load::<ObjectReference>() };
             if !x.is_null() && !rc::is_dead_or_stick(x) && self.immix().is_marked(x) {
-                debug_assert!(x.is_mapped());
+                debug_assert!(x.is_in_any_space());
                 x = x.fix_start_address::<VM>();
                 debug_assert!(x.class_is_valid());
                 if unlikely(self.recursive_dec_objects.is_empty()) {

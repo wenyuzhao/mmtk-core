@@ -650,8 +650,8 @@ impl ObjectReference {
         SFT_MAP.get(Address(self.0)).get_forwarded_object(self)
     }
 
-    pub fn is_mapped(self) -> bool {
-        SFT_MAP.is_in_space(self)
+    pub fn is_in_any_space(self) -> bool {
+        SFT_MAP.is_in_any_space(self)
     }
 
     #[cfg(feature = "sanity")]
@@ -761,7 +761,7 @@ impl ObjectReference {
             if self.is_null() {
                 return;
             }
-            assert!(self.is_mapped());
+            assert!(self.is_in_any_space());
             assert_ne!(
                 unsafe { self.to_address().load::<usize>() },
                 0xdead,
