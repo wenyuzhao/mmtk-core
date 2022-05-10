@@ -4,6 +4,7 @@ use super::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::policy::immix::block::BlockState;
 use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::util::copy::CopySemantics;
+use crate::util::linear_scan::Region;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{
@@ -24,8 +25,6 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use std::intrinsics::unlikely;
-use std::iter::Step;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 
@@ -153,11 +152,13 @@ pub fn address_is_in_straddle_line(a: Address) -> bool {
 fn mark_straddle_object_with_size<VM: VMBinding>(o: ObjectReference, size: usize) {
     debug_assert!(!crate::args::BLOCK_ONLY);
     debug_assert!(size > Line::BYTES);
-    let start_line = Line::forward(Line::containing::<VM>(o), 1);
+    let start_line = Line::containing::<VM>(o).next();
     let end_line = Line::from(Line::align(o.to_address() + size));
-    for line in start_line..end_line {
+    let mut line = start_line;
+    while line != end_line {
         side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 1, Ordering::Relaxed);
         self::set(unsafe { line.start().to_object_reference() }, 1);
+        line = line.next();
     }
 }
 
@@ -173,13 +174,15 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
     let size = VM::VMObjectModel::get_current_size(o);
     if size > Line::BYTES {
-        let start_line = Line::forward(Line::containing::<VM>(o), 1);
+        let start_line = Line::containing::<VM>(o).next();
         let end_line = Line::from(Line::align(o.to_address() + size));
-        for line in start_line..end_line {
+        let mut line = start_line;
+        while line != end_line {
             self::set(unsafe { line.start().to_object_reference() }, 0);
             // std::sync::atomic::fence(Ordering::Relaxed);
             side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 0, Ordering::Relaxed);
             // std::sync::atomic::fence(Ordering::Relaxed);
+            line = line.next();
         }
     }
 }
@@ -248,12 +251,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
-    const fn worker(&self) -> &'static mut GCWorker<VM> {
+    fn worker(&self) -> &'static mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
 
     #[inline(always)]
-    const fn immix(&self) -> &'static Immix<VM> {
+    fn immix(&self) -> &'static Immix<VM> {
         unsafe { &*self.immix }
     }
 
@@ -318,7 +321,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         });
         if !los {
             self::promote::<VM>(o);
-            crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.record_promotion(o.get_size::<VM>());
+            crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL
+                .with(|x| x.record_promotion(o.get_size::<VM>()));
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }
@@ -408,7 +412,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = box ProcessIncs::<VM, { EdgeKind::Nursery }>::new_array_slice(chunk);
+                let mut w = Box::new(ProcessIncs::<VM, { EDGE_KIND_NURSERY }>::new_array_slice(
+                    chunk,
+                ));
                 w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
@@ -444,7 +450,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if !self.new_incs.is_empty() {
             let mut new_incs = vec![];
             std::mem::swap(&mut new_incs, &mut self.new_incs);
-            let mut w = ProcessIncs::<VM, { EdgeKind::Nursery }>::new(new_incs);
+            let mut w = ProcessIncs::<VM, { EDGE_KIND_NURSERY }>::new(new_incs);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -550,7 +556,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
         let o = unsafe { e.load::<ObjectReference>() };
         // unlog edge
-        if K == EdgeKind::Mature {
+        if K == EDGE_KIND_MATURE {
             e.unlog::<VM>();
         }
         if o.is_null() {
@@ -577,7 +583,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             self.process_inc_and_evacuate(o, cc, depth)
         };
-        if K != EdgeKind::Root {
+        if K != EDGE_KIND_ROOT {
             self.record_mature_evac_remset(e, o, false);
         }
         if new != o {
@@ -596,7 +602,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
-        if K == EdgeKind::Root {
+        if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
             for e in &mut *incs {
@@ -639,12 +645,17 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EdgeKind {
-    Root,
-    Nursery,
-    Mature,
-}
+pub type EdgeKind = u8;
+pub const EDGE_KIND_ROOT: u8 = 0;
+pub const EDGE_KIND_NURSERY: u8 = 1;
+pub const EDGE_KIND_MATURE: u8 = 2;
+
+// #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+// pub enum EdgeKind {
+//     Root,
+//     Nursery,
+//     Mature,
+// }
 
 enum AddressBuffer<'a> {
     Owned(Vec<Address>),
@@ -705,7 +716,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         // Process main buffer
-        let root_edges = if KIND == EdgeKind::Root
+        let root_edges = if KIND == EDGE_KIND_ROOT
             && (self.current_pause == Pause::FinalMark
                 || self.current_pause == Pause::FullTraceFast)
         {
@@ -715,7 +726,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         };
         let roots = {
             if let Some(slice) = self.slice {
-                assert_eq!(KIND, EdgeKind::Nursery);
+                assert_eq!(KIND, EDGE_KIND_NURSERY);
                 self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
             } else {
                 let mut incs = vec![];
@@ -748,13 +759,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             depth += 1;
             incs.clear();
             std::mem::swap(&mut incs, &mut self.new_incs);
-            self.process_incs::<{ EdgeKind::Nursery }>(
+            self.process_incs::<{ EDGE_KIND_NURSERY }>(
                 AddressBuffer::Ref(&mut incs),
                 copy_context,
                 depth,
             );
         }
-        crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.sync()
+        crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.with(|x| x.sync())
     }
 }
 
@@ -779,7 +790,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
-    const fn worker(&self) -> &mut GCWorker<VM> {
+    fn worker(&self) -> &mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
 
@@ -892,11 +903,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let w = box ProcessDecs::<VM>::new_array_slice(
+                let w = Box::new(ProcessDecs::<VM>::new_array_slice(
                     chunk,
                     not_marked,
                     self.counter.clone_with_decs(),
-                );
+                ));
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
             if immix.current_pause().is_none() {
@@ -972,12 +983,12 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 };
             let mut dead = false;
             let _ = self::fetch_update(o, |c| {
-                if c == 1 && unlikely(!dead) {
+                if c == 1 && !dead {
                     dead = true;
                     self.process_dead_object(o, immix);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
-                if unlikely(c == 0 || c == MAX_REF_COUNT) {
+                if c == 0 || c == MAX_REF_COUNT {
                     None /* sticky */
                 } else {
                     Some(c - 1)
@@ -1084,7 +1095,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         if !self.edges.is_empty() {
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
-            let w = ProcessIncs::<_, { EdgeKind::Root }>::new(roots);
+            let w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
             // if crate::args::LAZY_DECREMENTS {
             //     GCWork::do_work(&mut w, self.worker(), self.mmtk())
             // } else {

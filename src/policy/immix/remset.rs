@@ -1,5 +1,3 @@
-use std::intrinsics::unlikely;
-
 use atomic::{Atomic, Ordering};
 
 use crate::{
@@ -22,7 +20,7 @@ impl RemSet {
         let workers = *crate::CALC_WORKERS;
         let mut rs = RemSet { gc_buffers: vec![] };
         rs.gc_buffers
-            .resize_with(workers, || Atomic::new(Box::leak(box vec![])));
+            .resize_with(workers, || Atomic::new(Box::leak(Box::new(vec![]))));
         rs
     }
 
@@ -38,7 +36,7 @@ impl RemSet {
             if self.gc_buffer(id).len() > 0 {
                 let mut remset = vec![];
                 std::mem::swap(&mut remset, self.gc_buffer(id));
-                mature_evac_remsets.push(box EvacuateMatureObjects::new(remset));
+                mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
             }
         }
     }
@@ -49,7 +47,7 @@ impl RemSet {
             let mut remset = vec![];
             std::mem::swap(&mut remset, self.gc_buffer(id));
             let w = EvacuateMatureObjects::new(remset);
-            space.mature_evac_remsets.lock().push(box w);
+            space.mature_evac_remsets.lock().push(Box::new(w));
         }
     }
 
@@ -62,7 +60,7 @@ impl RemSet {
         };
         let id = crate::gc_worker_id().unwrap();
         self.gc_buffer(id).push(Line::encode_validity_state(e, v));
-        if unlikely(self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY) {
+        if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush(id, space)
         }
     }

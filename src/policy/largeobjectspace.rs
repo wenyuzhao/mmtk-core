@@ -34,7 +34,6 @@ use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
-use std::intrinsics::unlikely;
 use std::sync::atomic::AtomicUsize;
 
 #[allow(unused)]
@@ -508,7 +507,7 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
     }
 
     #[inline(always)]
-    const fn immix(&self) -> &Immix<VM> {
+    fn immix(&self) -> &Immix<VM> {
         unsafe { &*self.immix }
     }
 
@@ -539,7 +538,7 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
                 debug_assert!(x.is_in_any_space());
                 x = x.fix_start_address::<VM>();
                 debug_assert!(x.class_is_valid());
-                if unlikely(self.recursive_dec_objects.is_empty()) {
+                if self.recursive_dec_objects.is_empty() {
                     self.recursive_dec_objects
                         .reserve(ProcessDecs::<VM>::CAPACITY);
                 }

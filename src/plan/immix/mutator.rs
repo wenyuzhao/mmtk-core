@@ -1,8 +1,8 @@
+use super::gc_work::TRACE_KIND_FAST;
 use super::Immix;
 use crate::plan::barriers::FieldLoggingBarrier;
 use crate::plan::barriers::ObjectRememberingBarrier;
 use crate::plan::immix::gc_work::ImmixProcessEdges;
-use crate::plan::immix::gc_work::TraceKind;
 use crate::plan::immix::global::ACTIVE_BARRIER;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
@@ -61,27 +61,29 @@ pub fn create_immix_mutator<VM: VMBinding>(
     let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
     let config = MutatorConfig {
         allocator_mapping: &*ALLOCATOR_MAPPING,
-        space_mapping: box {
+        space_mapping: Box::new({
             let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, mmtk.get_plan());
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
             vec
-        },
+        }),
         prepare_func: &immix_mutator_prepare,
         release_func: &immix_mutator_release,
     };
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
-        barrier: if *ACTIVE_BARRIER == BarrierSelector::ObjectBarrier {
-            box ObjectRememberingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
-                mmtk,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            )
+        barrier: if ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier) {
+            Box::new(ObjectRememberingBarrier::<
+                ImmixProcessEdges<VM, { TRACE_KIND_FAST }>,
+            >::new(
+                mmtk, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            ))
         } else {
-            box FieldLoggingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
-                mmtk,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            )
+            Box::new(FieldLoggingBarrier::<
+                ImmixProcessEdges<VM, { TRACE_KIND_FAST }>,
+            >::new(
+                mmtk, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            ))
         },
         mutator_tls,
         config,

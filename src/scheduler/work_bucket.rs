@@ -196,7 +196,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Add a work packet to this bucket, with a default priority (1000)
     #[inline(always)]
     pub fn add<W: GCWork<VM>>(&self, work: W) {
-        self.add_with_priority(Self::DEFAULT_PRIORITY, box work);
+        self.add_with_priority(Self::DEFAULT_PRIORITY, Box::new(work));
     }
 
     #[inline(always)]
@@ -253,7 +253,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         &mut self,
         pred: impl Fn(&GCWorkScheduler<VM>) -> bool + Send + 'static,
     ) {
-        self.can_open = Some(box pred);
+        self.can_open = Some(Box::new(pred));
     }
     #[inline(always)]
     pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {

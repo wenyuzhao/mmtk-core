@@ -3,6 +3,7 @@ use std::env;
 
 use crate::{
     policy::immix::{block::Block, line::Line},
+    util::linear_scan::Region,
     BarrierSelector,
 };
 

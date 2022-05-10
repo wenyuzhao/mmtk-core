@@ -2,12 +2,13 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
+use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockQueue;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, *};
-use crate::util::{constants::*, rc};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use std::{iter::Step, ops::Range, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 /// The block allocation state.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -83,6 +84,25 @@ impl BlockState {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Block(Address);
+
+impl From<Address> for Block {
+    #[inline(always)]
+    fn from(address: Address) -> Block {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+}
+
+impl From<Block> for Address {
+    #[inline(always)]
+    fn from(block: Block) -> Address {
+        block.0
+    }
+}
+
+impl Region for Block {
+    const LOG_BYTES: usize = 15;
+}
 
 impl Block {
     /// Log bytes in block
@@ -174,30 +194,6 @@ impl Block {
             }
         }
         dead_lines
-    }
-
-    #[inline(always)]
-    pub fn calc_dead_bytes<VM: VMBinding>(&self) -> usize {
-        let mut live = 0usize;
-        for o in (self.start()..self.end())
-            .step_by(rc::MIN_OBJECT_SIZE)
-            .map(|a| unsafe { a.to_object_reference() })
-        {
-            let c = rc::count(o);
-            if c != 0 {
-                if Line::is_aligned(o.to_address()) {
-                    if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
-                        continue;
-                    }
-                }
-                let o = o.fix_start_address::<VM>();
-                live += o.get_size::<VM>();
-            }
-        }
-        if live > Self::BYTES {
-            return 0;
-        }
-        Self::BYTES - live
     }
 
     #[inline(always)]
@@ -435,12 +431,22 @@ impl Block {
         }
     }
 
+    #[inline(always)]
+    pub fn start_line(&self) -> Line {
+        Line::from(self.start())
+    }
+
+    #[inline(always)]
+    pub fn end_line(&self) -> Line {
+        Line::from(self.end())
+    }
+
     /// Get the range of lines within the block.
     #[allow(clippy::assertions_on_constants)]
     #[inline(always)]
-    pub fn lines(&self) -> Range<Line> {
+    pub fn lines(&self) -> RegionIterator<Line> {
         debug_assert!(!super::BLOCK_ONLY);
-        Line::from(self.start())..Line::from(self.end())
+        RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
     #[inline(always)]
@@ -826,44 +832,6 @@ impl Block {
             holes += 1;
         }
         holes
-    }
-}
-
-impl Step for Block {
-    /// Get the number of blocks between the given two blocks.
-    #[inline(always)]
-    #[allow(clippy::assertions_on_constants)]
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        if start > end {
-            return None;
-        }
-        Some((end.start() - start.start()) >> Self::LOG_BYTES)
-    }
-    /// result = block_address + count * block_size
-    #[inline(always)]
-    fn forward(start: Self, count: usize) -> Self {
-        Self::from(start.start() + (count << Self::LOG_BYTES))
-    }
-    /// result = block_address + count * block_size
-    #[inline(always)]
-    fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() > usize::MAX - (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::forward(start, count))
-    }
-    /// result = block_address + count * block_size
-    #[inline(always)]
-    fn backward(start: Self, count: usize) -> Self {
-        Self::from(start.start() - (count << Self::LOG_BYTES))
-    }
-    /// result = block_address - count * block_size
-    #[inline(always)]
-    fn backward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() < (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::backward(start, count))
     }
 }
 

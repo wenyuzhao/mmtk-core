@@ -40,11 +40,12 @@ pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredi
     pause_start: Atomic::new(SystemTime::UNIX_EPOCH),
 };
 
-#[thread_local]
-pub static SURVIVAL_RATIO_PREDICTOR_LOCAL: SurvivalRatioPredictorLocal =
-    SurvivalRatioPredictorLocal {
-        promote_vol: AtomicUsize::new(0),
-    };
+thread_local! {
+    pub static SURVIVAL_RATIO_PREDICTOR_LOCAL: SurvivalRatioPredictorLocal =
+        SurvivalRatioPredictorLocal {
+            promote_vol: AtomicUsize::new(0),
+        };
+}
 
 pub struct SurvivalRatioPredictor {
     prev_ratio: Atomic<f64>,

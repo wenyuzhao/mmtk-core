@@ -1,7 +1,10 @@
+use std::ops::Range;
+
 use atomic::Ordering;
 
 use super::block::Block;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
 use crate::util::rc;
@@ -9,21 +12,35 @@ use crate::{
     util::{Address, ObjectReference},
     vm::*,
 };
-use std::iter::Step;
-use std::ops::Range;
 
 /// Data structure to reference a line within an immix block.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
 pub struct Line(Address);
 
+impl From<Address> for Line {
+    #[allow(clippy::assertions_on_constants)]
+    #[inline(always)]
+    fn from(address: Address) -> Line {
+        debug_assert!(!super::BLOCK_ONLY);
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+}
+
+impl From<Line> for Address {
+    #[inline(always)]
+    fn from(line: Line) -> Address {
+        line.0
+    }
+}
+
+impl Region for Line {
+    const LOG_BYTES: usize = 8;
+}
+
 #[allow(clippy::assertions_on_constants)]
 impl Line {
-    /// Log bytes in block
-    pub const LOG_BYTES: usize = 8;
-    /// Bytes in block
-    pub const BYTES: usize = 1 << Self::LOG_BYTES;
-
     pub const RESET_MARK_STATE: u8 = 1;
     pub const MAX_MARK_STATE: u8 = 127;
 
@@ -119,10 +136,11 @@ impl Line {
         let start_line = Line::from(Line::align(start));
         let mut end_line = Line::from(Line::align(end));
         if !Line::is_aligned(end) {
-            end_line = Line::forward(end_line, 1)
+            end_line = end_line.next();
         }
         let mut marked_lines = 0;
-        for line in start_line..end_line {
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
             if !line.is_marked(state) {
                 marked_lines += 1;
             }
@@ -154,7 +172,7 @@ impl Line {
     }
 
     #[inline(always)]
-    pub fn update_validity(lines: Range<Line>) {
+    pub fn update_validity(lines: RegionIterator<Line>) {
         if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             return;
         }
@@ -227,49 +245,6 @@ impl Line {
     }
 }
 
-#[allow(clippy::assertions_on_constants)]
-impl Step for Line {
-    /// Get the number of lines between the given two lines.
-    #[inline(always)]
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        debug_assert!(!super::BLOCK_ONLY);
-        if start > end {
-            return None;
-        }
-        Some((end.start() - start.start()) >> Line::LOG_BYTES)
-    }
-    /// result = line_address + count * block_size
-    #[inline(always)]
-    fn forward(start: Self, count: usize) -> Self {
-        debug_assert!(!super::BLOCK_ONLY);
-        Self::from(start.start() + (count << Self::LOG_BYTES))
-    }
-    /// result = line_address + count * block_size
-    #[inline(always)]
-    fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        debug_assert!(!super::BLOCK_ONLY);
-        if start.start().as_usize() > usize::MAX - (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::forward(start, count))
-    }
-    /// result = line_address + count * block_size
-    #[inline(always)]
-    fn backward(start: Self, count: usize) -> Self {
-        debug_assert!(!super::BLOCK_ONLY);
-        Self::from(start.start() - (count << Self::LOG_BYTES))
-    }
-    /// result = line_address - count * block_size
-    #[inline(always)]
-    fn backward_checked(start: Self, count: usize) -> Option<Self> {
-        debug_assert!(!super::BLOCK_ONLY);
-        if start.start().as_usize() < (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::backward(start, count))
-    }
-}
-
 // type UInt<const BITS: usize> =
 
 pub trait UintType: 'static + Sized {
@@ -279,7 +254,7 @@ pub trait UintType: 'static + Sized {
 
 pub struct Uint<const BITS: usize> {}
 
-impl const UintType for Uint<8> {
+impl UintType for Uint<8> {
     type Type = u8;
     #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
@@ -287,7 +262,7 @@ impl const UintType for Uint<8> {
     }
 }
 
-impl const UintType for Uint<16> {
+impl UintType for Uint<16> {
     type Type = u16;
     #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
@@ -295,7 +270,7 @@ impl const UintType for Uint<16> {
     }
 }
 
-impl const UintType for Uint<32> {
+impl UintType for Uint<32> {
     type Type = u32;
     #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
@@ -303,7 +278,7 @@ impl const UintType for Uint<32> {
     }
 }
 
-impl const UintType for Uint<64> {
+impl UintType for Uint<64> {
     type Type = u64;
     #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
@@ -311,7 +286,7 @@ impl const UintType for Uint<64> {
     }
 }
 
-impl const UintType for Uint<128> {
+impl UintType for Uint<128> {
     type Type = u128;
     #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {

@@ -18,13 +18,8 @@ pub fn zero(start: Address, len: usize) {
 }
 
 #[inline(always)]
-fn memset_nt_impl<T: Copy>(start: *mut T, len: usize, zero: T) {
-    for _ in 0..len {
-        unsafe {
-            let ptr = start.add(len);
-            std::intrinsics::nontemporal_store::<T>(ptr, zero);
-        }
-    }
+fn memset_nt_impl<T: Copy>(_start: *mut T, _len: usize, _zero: T) {
+    unimplemented!()
 }
 
 #[inline(always)]
@@ -48,13 +43,8 @@ pub fn zero_nt(start: Address, bytes: usize) {
 
 #[inline(always)]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn write_nt<T: Copy>(ptr: *mut T, count: usize, v: T) {
-    for i in 0..count {
-        unsafe {
-            let ptr = ptr.add(i);
-            std::intrinsics::nontemporal_store::<T>(ptr, v);
-        }
-    }
+pub fn write_nt<T: Copy>(_ptr: *mut T, _count: usize, _v: T) {
+    unimplemented!()
 }
 
 /// Demand-zero mmap:

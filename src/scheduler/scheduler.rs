@@ -177,7 +177,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        self.postponed_concurrent_work.read().push(box w)
+        self.postponed_concurrent_work.read().push(Box::new(w))
     }
 
     #[inline]
@@ -185,7 +185,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized
             .read()
-            .push(box w)
+            .push(Box::new(w))
     }
 
     #[inline]
@@ -411,7 +411,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn add_coordinator_work(&self, work: impl CoordinatorWork<VM>, worker: &GCWorker<VM>) {
         worker
             .sender
-            .send(CoordinatorMessage::Work(box work))
+            .send(CoordinatorMessage::Work(Box::new(work)))
             .unwrap();
     }
 

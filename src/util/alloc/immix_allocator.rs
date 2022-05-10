@@ -9,6 +9,7 @@ use crate::policy::space::Space;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::alloc::Allocator;
+use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::VMThread;
 use crate::util::Address;
 use crate::vm::*;
@@ -161,14 +162,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
-            mutator_recycled_blocks: box vec![],
+            mutator_recycled_blocks: Box::new(vec![]),
             retry: false,
         }
     }
 
     pub fn flush(&mut self) {
         if !self.mutator_recycled_blocks.is_empty() {
-            let mut v = box vec![];
+            let mut v = Box::new(vec![]);
             std::mem::swap(&mut v, &mut self.mutator_recycled_blocks);
             self.immix_space().mutator_recycled_blocks.push(*v);
             // self.immix_space().scheduler().work_buckets[WorkBucketStage::Initial]
@@ -219,15 +220,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: isize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
-            if let Some(lines) = self.immix_space().get_next_available_lines(self.copy, line) {
+            if let Some((start_line, end_line)) =
+                self.immix_space().get_next_available_lines(self.copy, line)
+            {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
-                self.cursor = lines.start.start();
-                self.limit = adjust_thread_local_buffer_limit::<VM>(lines.end.start());
+                self.cursor = start_line.start();
+                self.limit = adjust_thread_local_buffer_limit::<VM>(end_line.start());
                 trace!(
-                    "{:?}: acquire_recyclable_lines -> {:?} {:?} {:?}",
+                    "{:?}: acquire_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
                     self.tls,
                     self.line,
-                    lines,
+                    start_line,
+                    end_line,
                     self.tls
                 );
                 #[cfg(feature = "global_alloc_bit")]
@@ -237,12 +241,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     align_allocation_no_fill::<VM>(self.cursor, align, offset) + size <= self.limit
                 );
                 let block = line.block();
-                self.line = if lines.end == block.lines().end {
+                self.line = if end_line == block.end_line() {
                     // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
                     None
                 } else {
                     // Update the hole-searching cursor to None.
-                    Some(lines.end)
+                    Some(end_line)
                 };
                 return true;
             } else {
@@ -265,7 +269,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // }
                 }
                 // Set the hole-searching cursor to the start of this block.
-                self.line = Some(block.lines().start);
+                self.line = Some(block.start_line());
                 true
             }
             _ => false,

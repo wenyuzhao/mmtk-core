@@ -16,6 +16,7 @@ use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{
     self, compare_exchange_metadata, load_metadata, store_metadata, MetadataSpec,
@@ -37,11 +38,7 @@ use atomic::Ordering;
 use crossbeam_queue::SegQueue;
 use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
-use std::{
-    iter::Step,
-    ops::Range,
-    sync::{atomic::AtomicU8, Arc},
-};
+use std::sync::{atomic::AtomicU8, Arc};
 use std::{mem, ptr};
 
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
@@ -355,12 +352,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        let tasks = self
-            .chunk_map
-            .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
+        let tasks = self.chunk_map.generate_tasks(|chunk| {
+            Box::new(SelectDefragBlocksInChunk {
                 chunk,
                 defrag_threshold: 1,
-            });
+            })
+        });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
         self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
@@ -470,11 +467,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             while let Some(blocks) = self.mutator_recycled_blocks.pop() {
                 if !blocks.is_empty() {
                     for chunk in blocks.chunks(256) {
-                        packets.push(box RCSweepNurseryBlocks {
+                        packets.push(Box::new(RCSweepNurseryBlocks {
                             space,
                             blocks: chunk.to_vec(),
                             mutator_reused_blocks: true,
-                        });
+                        }));
                     }
                 }
             }
@@ -948,11 +945,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Hole searching.
     ///
     /// Linearly scan lines in a block to search for the next
-    /// hole, starting from the given line.
+    /// hole, starting from the given line. If we find available lines,
+    /// return a tuple of the start line and the end line (non-inclusive).
     ///
     /// Returns None if the search could not find any more holes.
     #[allow(clippy::assertions_on_constants)]
-    pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<Range<Line>> {
+    pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         if super::REF_COUNT {
             self.rc_get_next_available_lines(copy, search_start)
@@ -968,7 +966,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         copy: bool,
         search_start: Line,
-    ) -> Option<Range<Line>> {
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(super::REF_COUNT);
         let block = search_start.block();
@@ -1019,19 +1017,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
-            Line::update_validity(start..end);
+            Line::update_validity(RegionIterator::<Line>::new(start, end));
         }
         block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);
         // }
-        Some(start..end)
+        Some((start, end))
     }
 
     #[allow(clippy::assertions_on_constants)]
     #[inline]
-    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
+    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(!super::REF_COUNT);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
@@ -1051,7 +1049,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if cursor == Block::LINES {
             return None;
         }
-        let start = Line::forward(search_start, cursor - start_cursor);
+        let start = search_start.next_nth(cursor - start_cursor);
         // Find limit
         while cursor < Block::LINES {
             let mark = mark_data.get(cursor);
@@ -1063,11 +1061,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             cursor += 1;
         }
-        let end = Line::forward(search_start, cursor - start_cursor);
+        let end = search_start.next_nth(cursor - start_cursor);
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
         }
-        Some(start..end)
+        Some((start, end))
     }
 
     pub fn is_last_gc_exhaustive(did_defrag_for_last_gc: bool) -> bool {
@@ -1110,12 +1108,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let packets = bins
             .into_iter()
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
-                box SweepBlocksAfterDecs::new(blocks, counter.clone())
+                Box::new(SweepBlocksAfterDecs::new(blocks, counter.clone()))
             })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            .add_prioritized(box RCReleaseMatureLOS::new(counter.clone()));
+            .add_prioritized(Box::new(RCReleaseMatureLOS::new(counter.clone())));
     }
 }
 
@@ -1152,7 +1150,7 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         }
     }
 
-    const fn worker(&self) -> &mut GCWorker<E::VM> {
+    fn worker(&self) -> &mut GCWorker<E::VM> {
         unsafe { &mut *self.worker }
     }
 

@@ -11,7 +11,6 @@ use crate::vm::*;
 use atomic::{Atomic, Ordering};
 use spin::rwlock::RwLock;
 use std::fmt::Debug;
-use std::intrinsics::{likely, unlikely};
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -176,7 +175,7 @@ impl<Block: Copy> BlockArray<Block> {
     }
 
     #[inline(always)]
-    const fn data(&self) -> &mut Vec<Block> {
+    fn data(&self) -> &mut Vec<Block> {
         unsafe { &mut (*(self as *const Self as *mut Self)).data }
     }
 
@@ -197,7 +196,7 @@ impl<Block: Copy> BlockArray<Block> {
         let i = self
             .cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |i| {
-                if likely(i > 0) {
+                if i > 0 {
                     Some(i - 1)
                 } else {
                     None
@@ -263,7 +262,7 @@ impl<Block: Debug + Copy> BlockQueue<Block> {
             .read()
             .push_relaxed(block)
             .is_err();
-        if unlikely(failed) {
+        if failed {
             let mut queue = BlockArray::new();
             {
                 let mut lock = self.worker_local_freed_blocks[id].write();

@@ -534,7 +534,7 @@ pub trait ProcessEdgesWork:
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     #[inline]
-    default fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessEdgesWork");
         self.set_worker(worker);
         self.process_edges();
@@ -849,7 +849,8 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         let mut remset = vec![];
         mem::swap(&mut remset, &mut self.remset);
         let edges = remset
-            .drain_filter(|e| {
+            .into_iter()
+            .filter(|e| {
                 let (e, epoch) = Line::decode_validity_state(*e);
                 self.process_edge(e, epoch, immix)
             })

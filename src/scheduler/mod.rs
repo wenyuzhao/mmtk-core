@@ -19,7 +19,7 @@ pub use work_bucket::WorkBucketStage;
 
 mod worker;
 pub use worker::GCWorker;
-pub use worker::{IS_WORKER, WORKER_ID};
+pub use worker::WORKER_ID;
 
 mod controller;
 pub use controller::GCController;

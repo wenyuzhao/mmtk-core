@@ -4,6 +4,7 @@ use super::immixspace::ImmixSpace;
 use super::line::Line;
 use crate::plan::immix::Immix;
 use crate::plan::EdgeIterator;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::rc::{self, ProcessDecs};
 use crate::util::ObjectReference;
@@ -15,50 +16,46 @@ use crate::{
     MMTK,
 };
 use spin::Mutex;
-use std::intrinsics::unlikely;
-use std::{iter::Step, ops::Range, sync::atomic::Ordering};
+use std::{ops::Range, sync::atomic::Ordering};
 
 /// Data structure to reference a MMTk 4 MB chunk.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
 pub struct Chunk(Address);
 
+impl From<Address> for Chunk {
+    #[inline(always)]
+    fn from(address: Address) -> Chunk {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+}
+
+impl From<Chunk> for Address {
+    #[inline(always)]
+    fn from(chunk: Chunk) -> Address {
+        chunk.0
+    }
+}
+
+impl Region for Chunk {
+    const LOG_BYTES: usize = LOG_BYTES_IN_CHUNK;
+}
+
 impl Chunk {
     /// Chunk constant with zero address
     const ZERO: Self = Self(Address::ZERO);
-    /// Log bytes in chunk
-    pub const LOG_BYTES: usize = LOG_BYTES_IN_CHUNK;
-    /// Bytes in chunk
-    pub const BYTES: usize = 1 << Self::LOG_BYTES;
     /// Log blocks in chunk
     pub const LOG_BLOCKS: usize = Self::LOG_BYTES - Block::LOG_BYTES;
     /// Blocks in chunk
     pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
 
-    /// Align the give address to the chunk boundary.
-    pub const fn align(address: Address) -> Address {
-        address.align_down(Self::BYTES)
-    }
-
-    /// Get the chunk from a given address.
-    /// The address must be chunk-aligned.
-    #[inline(always)]
-    pub fn from(address: Address) -> Self {
-        debug_assert!(address.is_aligned_to(Self::BYTES));
-        Self(address)
-    }
-
-    /// Get chunk start address
-    pub const fn start(&self) -> Address {
-        self.0
-    }
-
     /// Get a range of blocks within this chunk.
     #[inline(always)]
-    pub fn blocks(&self) -> Range<Block> {
+    pub fn blocks(&self) -> RegionIterator<Block> {
         let start = Block::from(Block::align(self.0));
         let end = Block::from(start.start() + (Self::BLOCKS << Block::LOG_BYTES));
-        start..end
+        RegionIterator::<Block>::new(start, end)
     }
 
     #[inline(always)]
@@ -98,43 +95,6 @@ impl Chunk {
             _ => unreachable!(),
         };
         state == ChunkState::Allocated
-    }
-}
-
-impl Step for Chunk {
-    /// Get the number of chunks between the given two chunks.
-    #[inline(always)]
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        if start > end {
-            return None;
-        }
-        Some((end.start() - start.start()) >> Self::LOG_BYTES)
-    }
-    /// result = chunk_address + count * block_size
-    #[inline(always)]
-    fn forward(start: Self, count: usize) -> Self {
-        Self::from(start.start() + (count << Self::LOG_BYTES))
-    }
-    /// result = chunk_address + count * block_size
-    #[inline(always)]
-    fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() > usize::MAX - (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::forward(start, count))
-    }
-    /// result = chunk_address + count * block_size
-    #[inline(always)]
-    fn backward(start: Self, count: usize) -> Self {
-        Self::from(start.start() - (count << Self::LOG_BYTES))
-    }
-    /// result = chunk_address - count * block_size
-    #[inline(always)]
-    fn backward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() < (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::backward(start, count))
     }
 }
 
@@ -178,11 +138,11 @@ impl ChunkMap {
             let mut range = self.chunk_range.lock();
             if range.start == Chunk::ZERO {
                 range.start = chunk;
-                range.end = Chunk::forward(chunk, 1);
+                range.end = chunk.next();
             } else if chunk < range.start {
                 range.start = chunk;
             } else if range.end <= chunk {
-                range.end = Chunk::forward(chunk, 1);
+                range.end = chunk.next();
             }
         }
     }
@@ -198,8 +158,9 @@ impl ChunkMap {
     }
 
     /// A range of all chunks in the heap.
-    pub fn all_chunks(&self) -> Range<Chunk> {
-        self.chunk_range.lock().clone()
+    pub fn all_chunks(&self) -> RegionIterator<Chunk> {
+        let chunk_range = self.chunk_range.lock();
+        RegionIterator::<Chunk>::new(chunk_range.start, chunk_range.end)
     }
 
     pub fn committed_chunks(&self) -> impl Iterator<Item = Chunk> {
@@ -235,9 +196,11 @@ impl ChunkMap {
         _space: &'static ImmixSpace<VM>,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| box PrepareChunk {
-            chunk,
-            defrag_threshold,
+        self.generate_tasks(|chunk| {
+            Box::new(PrepareChunk {
+                chunk,
+                defrag_threshold,
+            })
         })
     }
 
@@ -245,7 +208,7 @@ impl ChunkMap {
         &self,
         _space: &'static ImmixSpace<VM>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| box ConcurrentChunkMetadataZeroing { chunk })
+        self.generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
     }
 
     /// Generate chunk sweep work packets.
@@ -257,17 +220,22 @@ impl ChunkMap {
         if !rc {
             space.defrag.mark_histograms.lock().clear();
         }
-        self.generate_tasks(|chunk| box SweepChunk {
-            space,
-            chunk,
-            nursery_only: rc,
+        self.generate_tasks(|chunk| {
+            Box::new(SweepChunk {
+                space,
+                chunk,
+                nursery_only: rc,
+            })
         })
     }
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
         self.generate_tasks(|chunk| {
-            box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new_desc())
+            Box::new(SweepDeadCyclesChunk::new(
+                chunk,
+                LazySweepingJobsCounter::new_desc(),
+            ))
         })
     }
 }
@@ -383,7 +351,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 
     #[inline(always)]
-    const fn immix(&self) -> &Immix<VM> {
+    fn immix(&self) -> &Immix<VM> {
         unsafe { &*self.immix }
     }
 
@@ -425,7 +393,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                 debug_assert!(x.is_in_any_space());
                 x = x.fix_start_address::<VM>();
                 debug_assert!(x.class_is_valid());
-                if unlikely(self.recursive_dec_objects.is_empty()) {
+                if self.recursive_dec_objects.is_empty() {
                     self.recursive_dec_objects
                         .reserve(ProcessDecs::<VM>::CAPACITY);
                 }
@@ -468,10 +436,11 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
         let mut has_dead_object = false;
         let mut has_live = false;
-        for o in (block.start()..block.end())
-            .step_by(rc::MIN_OBJECT_SIZE)
-            .map(|a| unsafe { a.to_object_reference() })
-        {
+        let mut cursor = block.start();
+        let limit = block.end();
+        while cursor < limit {
+            let o = unsafe { cursor.to_object_reference() };
+            cursor = cursor + rc::MIN_OBJECT_SIZE;
             let c = rc::count(o);
             if c != 0 && !immix_space.is_marked(o) {
                 if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address()) {

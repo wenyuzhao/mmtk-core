@@ -1,27 +1,3 @@
-#![allow(incomplete_features)]
-#![feature(integer_atomics)]
-#![feature(is_sorted)]
-#![feature(drain_filter)]
-#![feature(nll)]
-#![feature(box_syntax)]
-#![feature(arbitrary_self_types)]
-#![feature(associated_type_defaults)]
-#![feature(specialization)]
-#![feature(trait_alias)]
-#![feature(step_trait)]
-#![feature(once_cell)]
-#![feature(const_trait_impl)]
-#![feature(const_option)]
-#![feature(const_fn_trait_bound)]
-#![feature(core_intrinsics)]
-#![feature(adt_const_params)]
-#![feature(generic_const_exprs)]
-#![feature(const_mut_refs)]
-#![feature(hash_drain_filter)]
-#![feature(const_for)]
-#![feature(const_ptr_offset)]
-#![feature(thread_local)]
-#![feature(get_mut_unchecked)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 
@@ -90,7 +66,8 @@ pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
 use plan::immix::Pause;
 use scheduler::WorkBucketStage;
-use spin::Mutex;
+use spin::{Lazy, Mutex};
+type RwLock<T> = spin::rwlock::RwLock<T, spin::Yield>;
 
 #[macro_use]
 mod policy;
@@ -118,27 +95,25 @@ pub struct LazySweepingJobsCounter {
 impl LazySweepingJobsCounter {
     #[inline(always)]
     pub fn new() -> Self {
-        unsafe {
-            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
-            counter.fetch_add(1, Ordering::SeqCst);
-            Self {
-                decs_counter: None,
-                counter: counter.clone(),
-            }
+        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
+        let counter = lazy_sweeping_jobs.curr_counter.as_ref().unwrap();
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self {
+            decs_counter: None,
+            counter: counter.clone(),
         }
     }
 
     #[inline(always)]
     pub fn new_desc() -> Self {
-        unsafe {
-            let decs_counter = LAZY_SWEEPING_JOBS.curr_decs_counter.as_ref().unwrap();
-            decs_counter.fetch_add(1, Ordering::SeqCst);
-            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
-            counter.fetch_add(1, Ordering::SeqCst);
-            Self {
-                decs_counter: Some(decs_counter.clone()),
-                counter: counter.clone(),
-            }
+        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
+        let decs_counter = lazy_sweeping_jobs.curr_decs_counter.as_ref().unwrap();
+        decs_counter.fetch_add(1, Ordering::SeqCst);
+        let counter = lazy_sweeping_jobs.curr_counter.as_ref().unwrap();
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self {
+            decs_counter: Some(decs_counter.clone()),
+            counter: counter.clone(),
         }
     }
 
@@ -169,19 +144,16 @@ impl LazySweepingJobsCounter {
 impl Drop for LazySweepingJobsCounter {
     #[inline(always)]
     fn drop(&mut self) {
+        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         if let Some(decs) = self.decs_counter.as_ref() {
             if decs.fetch_sub(1, Ordering::SeqCst) == 1 {
-                unsafe {
-                    let f = LAZY_SWEEPING_JOBS.end_of_decs.as_ref().unwrap();
-                    f(self.clone())
-                }
+                let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
+                f(self.clone())
             }
         }
         if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            unsafe {
-                if let Some(f) = LAZY_SWEEPING_JOBS.end_of_lazy.as_ref() {
-                    f()
-                }
+            if let Some(f) = lazy_sweeping_jobs.end_of_lazy.as_ref() {
+                f()
             }
         }
     }
@@ -192,12 +164,12 @@ pub struct LazySweepingJobs {
     curr_decs_counter: Option<Arc<AtomicUsize>>,
     prev_counter: Option<Arc<AtomicUsize>>,
     curr_counter: Option<Arc<AtomicUsize>>,
-    pub end_of_decs: Option<Box<dyn Fn(LazySweepingJobsCounter)>>,
-    pub end_of_lazy: Option<Box<dyn Fn()>>,
+    pub end_of_decs: Option<Box<dyn Send + Sync + Fn(LazySweepingJobsCounter)>>,
+    pub end_of_lazy: Option<Box<dyn Send + Sync + Fn()>>,
 }
 
 impl LazySweepingJobs {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             prev_decs_counter: None,
             curr_decs_counter: None,
@@ -210,17 +182,14 @@ impl LazySweepingJobs {
 
     #[inline(always)]
     pub fn all_finished() -> bool {
-        unsafe {
-            LAZY_SWEEPING_JOBS
-                .prev_counter
-                .as_ref()
-                .map(|c| c.load(Ordering::SeqCst))
-                .unwrap_or(0)
-                == 0
-        }
+        LAZY_SWEEPING_JOBS
+            .read()
+            .prev_counter
+            .as_ref()
+            .map(|c| c.load(Ordering::SeqCst))
+            .unwrap_or(0)
+            == 0
     }
-
-    pub fn init(&mut self) {}
 
     pub fn swap(&mut self) {
         self.prev_decs_counter = self.curr_decs_counter.take();
@@ -230,7 +199,8 @@ impl LazySweepingJobs {
     }
 }
 
-static mut LAZY_SWEEPING_JOBS: LazySweepingJobs = LazySweepingJobs::new();
+static LAZY_SWEEPING_JOBS: Lazy<RwLock<LazySweepingJobs>> =
+    Lazy::new(|| RwLock::new(LazySweepingJobs::new()));
 
 #[inline(always)]
 fn concurrent_marking_in_progress() -> bool {
@@ -571,11 +541,7 @@ static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 pub fn gc_worker_id() -> Option<usize> {
-    if !crate::scheduler::IS_WORKER.load(Ordering::Relaxed) {
-        return None;
-    }
-    let id = crate::scheduler::WORKER_ID.load(Ordering::SeqCst);
-    Some(id)
+    crate::scheduler::WORKER_ID.with(|x| x.load(Ordering::SeqCst))
 }
 
 static CALC_WORKERS: spin::Lazy<usize> = spin::Lazy::new(|| {

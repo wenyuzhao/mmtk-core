@@ -140,7 +140,7 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
             let data = VM::VMScanning::obj_array_data(object);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                packets.push((box Self::new_slice(chunk, self.mmtk)) as Box<dyn GCWork<VM>>);
+                packets.push((Box::new(Self::new_slice(chunk, self.mmtk))) as Box<dyn GCWork<VM>>);
             }
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);

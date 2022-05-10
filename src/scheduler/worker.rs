@@ -5,6 +5,7 @@ use crate::mmtk::MMTK;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::{Collection, GCThreadContext, VMBinding};
+use atomic::Atomic;
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use crossbeam_deque::{Stealer, Worker};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -108,10 +109,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         if !self.scheduler().work_buckets[bucket].is_activated()
             || !self.shared.local_work_buffer.is_empty()
         {
-            self.scheduler.work_buckets[bucket].add_prioritized(box work);
+            self.scheduler.work_buckets[bucket].add_prioritized(Box::new(work));
             return;
         }
-        self.shared.local_work_buffer.push(box work);
+        self.shared.local_work_buffer.push(Box::new(work));
     }
 
     #[inline]
@@ -122,7 +123,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             self.scheduler.work_buckets[bucket].add(work);
             return;
         }
-        self.shared.local_work_buffer.push(box work);
+        self.shared.local_work_buffer.push(Box::new(work));
     }
 
     pub fn is_coordinator(&self) -> bool {
@@ -153,8 +154,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
         self.shared.parked.store(false, Ordering::SeqCst);
-        IS_WORKER.store(true, Ordering::SeqCst);
-        WORKER_ID.store(self.ordinal, Ordering::SeqCst);
+        WORKER_ID.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
         let lower_priority_for_concurrent_work = *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY;
         let mut low_priority = false;
         loop {
@@ -198,11 +198,9 @@ impl<VM: VMBinding> GCWorker<VM> {
     }
 }
 
-#[thread_local]
-pub static IS_WORKER: AtomicBool = AtomicBool::new(false);
-
-#[thread_local]
-pub static WORKER_ID: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    pub static WORKER_ID: Atomic<Option<usize>> = Atomic::new(None);
+}
 
 pub struct WorkerGroup<VM: VMBinding> {
     pub workers_shared: Vec<Arc<GCWorkerShared<VM>>>,

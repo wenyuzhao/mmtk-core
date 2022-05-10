@@ -97,26 +97,28 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let space = self.space();
         let mut packets: Vec<Box<dyn GCWork<VM>>> = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks {
-                space,
-                blocks,
-                mutator_reused_blocks: false,
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
+                Box::new(RCSweepNurseryBlocks {
+                    space,
+                    blocks,
+                    mutator_reused_blocks: false,
+                })
             })
             .collect();
         let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
         for i in blocks..high_water {
             unallocated_nursery_blocks.push(self.buffer[i].load(Ordering::Relaxed));
         }
-        packets.push(box RCReleaseUnallocatedNurseryBlocks {
+        packets.push(Box::new(RCReleaseUnallocatedNurseryBlocks {
             space,
             blocks: unallocated_nursery_blocks,
-        });
+        }));
         self.high_water.store(0, Ordering::SeqCst);
         self.cursor.store(0, Ordering::SeqCst);
         (packets, blocks)
     }
 
-    const fn space(&self) -> &'static ImmixSpace<VM> {
+    fn space(&self) -> &'static ImmixSpace<VM> {
         self.space.unwrap()
     }
 

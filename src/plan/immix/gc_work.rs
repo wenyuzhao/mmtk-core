@@ -3,17 +3,19 @@ use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::{gc_work::*, WorkBucketStage};
 use crate::util::copy::CopySemantics;
-use crate::util::rc::{EdgeKind, ProcessIncs};
+use crate::util::rc::{ProcessIncs, EDGE_KIND_ROOT};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
 use std::ops::{Deref, DerefMut};
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-pub enum TraceKind {
-    Fast,
-    Defrag,
-}
+// It would be better if we use an enum for this. However, we use this as
+// a constant type parameter, and Rust only accepts integer and bool for
+// constant type parameters for now. We need to wait until `adt_const_params` is
+// stablized.
+pub(in crate::plan) type TraceKind = u8;
+pub(in crate::plan) const TRACE_KIND_FAST: TraceKind = 0;
+pub(in crate::plan) const TRACE_KIND_DEFRAG: TraceKind = 1;
 
 /// Object tracing for Immix.
 /// Note that it is possible to use [`SFTProcessEdges`](mmtk/scheduler/gc_work/SFTProcessEdges) for immix.
@@ -60,7 +62,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdges<VM, KIND> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
-        && if let TraceKind::Defrag = KIND {
+        && if KIND == TRACE_KIND_DEFRAG {
             true
         } else {
             false
@@ -93,7 +95,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             return object;
         }
         if self.immix().immix_space.in_space(object) {
-            if KIND == TraceKind::Fast {
+            if KIND == TRACE_KIND_FAST {
                 self.immix().immix_space.fast_trace_object(self, object)
             } else {
                 self.immix().immix_space.trace_object(
@@ -110,7 +112,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     #[inline]
     fn process_edges(&mut self) {
-        if KIND == TraceKind::Fast {
+        if KIND == TRACE_KIND_FAST {
             for i in 0..self.edges.len() {
                 // Use fast_process_edge since we don't need to forward any objects.
                 self.fast_process_edge(self.edges[i])
@@ -125,7 +127,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             std::mem::swap(&mut roots, &mut self.edges);
             let bucket = WorkBucketStage::rc_process_incs_stage();
             self.mmtk().scheduler.work_buckets[bucket]
-                .add(ProcessIncs::<_, { EdgeKind::Root }>::new(roots));
+                .add(ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots));
         }
         self.flush();
     }

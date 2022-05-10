@@ -1,4 +1,5 @@
 use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
+use super::gc_work::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::Pause;
 use crate::plan::global::BasePlan;
@@ -93,9 +94,9 @@ pub static IMMIX_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstrain
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     barrier: *ACTIVE_BARRIER,
     needs_log_bit: crate::args::BARRIER_MEASUREMENT
-        || *ACTIVE_BARRIER != BarrierSelector::NoBarrier,
-    needs_field_log_bit: *ACTIVE_BARRIER == BarrierSelector::FieldLoggingBarrier
-        || (crate::args::BARRIER_MEASUREMENT && *ACTIVE_BARRIER == BarrierSelector::NoBarrier),
+        || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier),
+    needs_field_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::FieldLoggingBarrier)
+        || (crate::args::BARRIER_MEASUREMENT && ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)),
     ..PlanConstraints::default()
 });
 
@@ -249,13 +250,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.common.gc_init(heap_size, vm_map);
         self.immix_space.init(vm_map);
         unsafe {
-            crate::LAZY_SWEEPING_JOBS.init();
-            crate::LAZY_SWEEPING_JOBS.swap();
+            let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
+            lazy_sweeping_jobs.swap();
             let me = &*(self as *const Self);
-            crate::LAZY_SWEEPING_JOBS.end_of_decs = Some(box move |c| {
+            lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
                 me.immix_space.schedule_rc_block_sweeping_tasks(c);
-            });
-            crate::LAZY_SWEEPING_JOBS.end_of_lazy = Some(box move || {
+            }));
+            lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
                 // me.immix_space.reusable_blocks.flush_all();
                 if crate::args::LOG_PER_GC_STATE {
                     println!(
@@ -292,7 +293,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
                 }
                 me.decide_next_gc_may_perform_cycle_collection();
-            });
+            }));
         }
         if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
             let total_blocks = heap_size >> Block::LOG_BYTES;
@@ -334,15 +335,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         match pause {
             Pause::FullTraceFast => {
                 if crate::args::REF_COUNT {
-                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TraceKind::Fast }>(scheduler)
+                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TRACE_KIND_FAST }>(scheduler)
                 } else {
-                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Fast }>, { TraceKind::Fast }>(
+                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>, { TRACE_KIND_FAST }>(
                         scheduler,
                     )
                 }
             }
             Pause::FullTraceDefrag => self
-                .schedule_immix_collection::<ImmixProcessEdges<VM, { TraceKind::Defrag }>, { TraceKind::Defrag }>(
+                .schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_DEFRAG }>, { TRACE_KIND_DEFRAG }>(
                     scheduler,
                 ),
             Pause::RefCount => self.schedule_rc_collection(scheduler),
@@ -505,9 +506,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // }
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
-        unsafe {
-            crate::LAZY_SWEEPING_JOBS.swap();
-        };
+        crate::LAZY_SWEEPING_JOBS.write().swap();
         if !crate::args::REF_COUNT || crate::args::LAZY_DECREMENTS {
             let perform_cycle_collection =
                 self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
@@ -534,16 +533,17 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
-        let immix_specs =
-            if crate::args::BARRIER_MEASUREMENT || *ACTIVE_BARRIER != BarrierSelector::NoBarrier {
-                metadata::extract_side_metadata(&[
-                    RC_LOCK_BIT_SPEC,
-                    MetadataSpec::OnSide(RC_TABLE),
-                    *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-                ])
-            } else {
-                vec![]
-            };
+        let immix_specs = if crate::args::BARRIER_MEASUREMENT
+            || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)
+        {
+            metadata::extract_side_metadata(&[
+                RC_LOCK_BIT_SPEC,
+                MetadataSpec::OnSide(RC_TABLE),
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            ])
+        } else {
+            vec![]
+        };
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let immix = Immix {
             immix_space: ImmixSpace::new(
@@ -849,11 +849,11 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
     }
 
@@ -869,10 +869,10 @@ impl<VM: VMBinding> Immix<VM> {
                 .add(StopMutators::<CMImmixCollectRootEdges<VM>>::new())
         };
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
     }
 
@@ -886,18 +886,18 @@ impl<VM: VMBinding> Immix<VM> {
                 .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
         } else {
             scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+                .add(StopMutators::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>>::new());
         }
 
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         if super::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
     }
 
@@ -907,13 +907,13 @@ impl<VM: VMBinding> Immix<VM> {
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
             let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
-            work_packets.push(box w);
+            work_packets.push(Box::new(w));
         }
         if work_packets.is_empty() {
-            work_packets.push(box ProcessDecs::new(
+            work_packets.push(Box::new(ProcessDecs::new(
                 vec![],
                 LazySweepingJobsCounter::new_desc(),
-            ));
+            )));
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
@@ -979,7 +979,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     #[inline(always)]
-    pub const fn los(&self) -> &LargeObjectSpace<VM> {
+    pub fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
     }
 }

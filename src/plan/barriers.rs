@@ -13,9 +13,9 @@ use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
-use crate::util::rc::EdgeKind;
 use crate::util::rc::ProcessDecs;
 use crate::util::rc::ProcessIncs;
+use crate::util::rc::EDGE_KIND_MATURE;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::vm::*;
@@ -36,21 +36,6 @@ pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
     FieldLoggingBarrier,
-}
-
-impl const PartialEq for BarrierSelector {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (BarrierSelector::NoBarrier, BarrierSelector::NoBarrier) => true,
-            (BarrierSelector::ObjectBarrier, BarrierSelector::ObjectBarrier) => true,
-            (BarrierSelector::FieldLoggingBarrier, BarrierSelector::FieldLoggingBarrier) => true,
-            _ => false,
-        }
-    }
-
-    fn ne(&self, other: &Self) -> bool {
-        !self.eq(other)
-    }
 }
 
 impl BarrierSelector {
@@ -413,7 +398,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
             std::mem::swap(&mut incs, &mut self.incs);
             let bucket = WorkBucketStage::rc_process_incs_stage();
             self.mmtk.scheduler.work_buckets[bucket]
-                .add(ProcessIncs::<_, { EdgeKind::Mature }>::new(incs));
+                .add(ProcessIncs::<_, { EDGE_KIND_MATURE }>::new(incs));
             // Dec buffer
             let mut decs = Vec::with_capacity(Self::CAPACITY);
             std::mem::swap(&mut decs, &mut self.decs);
