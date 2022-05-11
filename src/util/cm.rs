@@ -154,7 +154,6 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
                     && crate::args::RC_MATURE_EVACUATION
                     && should_check_remset
                     && self.plan.in_defrag(t)
-                    && crate::util::rc::count(t) != 0
                 {
                     self.plan
                         .immix_space
