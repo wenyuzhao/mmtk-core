@@ -3,7 +3,7 @@ use super::line::*;
 use super::remset::RemSet;
 use super::{block::*, chunk::ChunkMap, defrag::Defrag};
 use crate::plan::immix::{Immix, Pause};
-use crate::plan::EdgeIterator;
+use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
 use crate::policy::immix::chunk::Chunk;
@@ -1154,19 +1154,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         unsafe { &mut *self.worker }
     }
 
-    #[inline(always)]
-    fn process_node(&mut self, o: ObjectReference) {
-        EdgeIterator::<E::VM>::iterate(o, |e| {
-            let t = unsafe { e.load::<ObjectReference>() };
-            if !t.is_null() {
-                self.edges.push(e);
-            }
-        });
-        if self.edges.len() >= E::CAPACITY {
-            self.flush();
-        }
-    }
-
     fn flush(&mut self) {
         if !self.edges.is_empty() {
             let mut new_edges = Vec::new();
@@ -1186,8 +1173,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
         self.worker = worker;
         let mut buffer = vec![];
         mem::swap(&mut buffer, &mut self.buffer);
+        let tls = worker.tls;
+        let mut closure = ObjectsClosure::<E>::new(worker);
         for object in buffer {
-            self.process_node(object);
+            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
             if super::MARK_LINE_AT_SCAN_TIME
                 && !super::BLOCK_ONLY
                 && self.immix_space.in_space(object)

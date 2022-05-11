@@ -3,6 +3,7 @@ use super::*;
 use crate::plan::immix::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::GcStatus;
+use crate::plan::ObjectsClosure;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
@@ -622,7 +623,11 @@ impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        <E::VM as VMBinding>::VMScanning::scan_objects::<E>(&self.buffer, worker);
+        {
+            let tls = worker.tls;
+            let mut closure = ObjectsClosure::<E>::new(worker);
+            <E::VM as VMBinding>::VMScanning::scan_objects(tls, &self.buffer, &mut closure);
+        }
         trace!("ScanObjects End");
     }
 }

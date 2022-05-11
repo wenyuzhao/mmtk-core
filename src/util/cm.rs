@@ -118,11 +118,6 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
 }
 
 impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
-    #[inline(always)]
-    fn process_edge(&mut self, _: Address) {
-        unreachable!()
-    }
-
     #[inline]
     fn process_node(&mut self, object: ObjectReference) {
         if !crate::args::REF_COUNT
