@@ -6,7 +6,6 @@ use std::sync::Mutex;
 
 use super::blockpageresource::BlockPageResource;
 use super::layout::map::Map;
-use super::FreeListPageResource;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::PageAccounting;
@@ -97,10 +96,6 @@ pub trait PageResource<VM: VMBinding>: 'static {
     fn common_mut(&mut self) -> &mut CommonPageResource;
     fn vm_map(&self) -> &'static VMMap {
         self.common().vm_map
-    }
-
-    fn flpr(&self) -> Option<&FreeListPageResource<VM>> {
-        None
     }
 
     fn bpr(&self) -> Option<&BlockPageResource<VM>> {

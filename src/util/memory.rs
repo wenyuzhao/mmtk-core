@@ -12,39 +12,8 @@ pub fn result_is_mapped(result: Result<()>) -> bool {
     }
 }
 
-#[inline(always)]
 pub fn zero(start: Address, len: usize) {
     unsafe { std::ptr::write_bytes::<u8>(start.to_mut_ptr(), 0, len) }
-}
-
-#[inline(always)]
-fn memset_nt_impl<T: Copy>(_start: *mut T, _len: usize, _zero: T) {
-    unimplemented!()
-}
-
-#[inline(always)]
-pub fn zero_nt(start: Address, bytes: usize) {
-    match bytes {
-        _ if bytes & (16 - 1) == 0 && start.is_aligned_to(16) => {
-            write_nt::<u128>(start.to_mut_ptr(), bytes >> 4, 0)
-        }
-        _ if bytes & (8 - 1) == 0 && start.is_aligned_to(8) => {
-            write_nt::<u64>(start.to_mut_ptr(), bytes >> 3, 0)
-        }
-        _ if bytes & (4 - 1) == 0 && start.is_aligned_to(4) => {
-            write_nt::<u32>(start.to_mut_ptr(), bytes >> 2, 0)
-        }
-        _ if bytes & (2 - 1) == 0 && start.is_aligned_to(2) => {
-            write_nt::<u16>(start.to_mut_ptr(), bytes >> 1, 0)
-        }
-        _ => write_nt::<u8>(start.to_mut_ptr(), bytes, 0),
-    }
-}
-
-#[inline(always)]
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn write_nt<T: Copy>(_ptr: *mut T, _count: usize, _v: T) {
-    unimplemented!()
 }
 
 /// Demand-zero mmap:

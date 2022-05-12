@@ -279,7 +279,7 @@ impl Address {
 
     /// is this address zero?
     #[inline(always)]
-    pub const fn is_zero(self) -> bool {
+    pub fn is_zero(self) -> bool {
         self.0 == 0
     }
 
@@ -315,7 +315,7 @@ impl Address {
 
     /// converts the Address to a pointer
     #[inline(always)]
-    pub const fn to_ptr<T>(self) -> *const T {
+    pub fn to_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
@@ -652,18 +652,6 @@ impl ObjectReference {
         }
         let a = VM::VMObjectModel::object_start_ref(self);
         a..a + self.get_size::<VM>()
-    }
-
-    #[inline(always)]
-    pub fn dump<VM: VMBinding>(self) {
-        debug_assert!(!self.is_null());
-        VM::VMObjectModel::dump_object(self)
-    }
-
-    #[inline(always)]
-    pub fn dump_s<VM: VMBinding>(self) -> String {
-        debug_assert!(!self.is_null());
-        VM::VMObjectModel::dump_object_s(self)
     }
 
     #[inline(always)]

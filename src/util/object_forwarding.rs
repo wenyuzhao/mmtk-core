@@ -62,8 +62,6 @@ pub fn spin_and_get_forwarded_object<VM: VMBinding>(
 
     if forwarding_bits == FORWARDED {
         read_forwarding_pointer::<VM>(object)
-    } else if forwarding_bits == FORWARDING_NOT_TRIGGERED_YET {
-        object
     } else {
         // For some policies (such as Immix), we can have interleaving such that one thread clears
         // the forwarding word while another thread was stuck spinning in the above loop.
@@ -106,32 +104,6 @@ pub fn forward_object<VM: VMBinding>(
     }
     #[cfg(debug_assertions)]
     crate::mmtk::SFT_MAP.assert_valid_entries_for_object::<VM>(new_object);
-    new_object
-}
-
-#[inline]
-pub fn set_forwarding_pointer<VM: VMBinding>(
-    object: ObjectReference,
-    new_object: ObjectReference,
-) -> ObjectReference {
-    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
-        store_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
-            object,
-            new_object.to_address().as_usize() | (FORWARDED << shift),
-            None,
-            Some(Ordering::SeqCst),
-        )
-    } else {
-        write_forwarding_pointer::<VM>(object, new_object);
-        store_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
-            object,
-            FORWARDED,
-            None,
-            Some(Ordering::SeqCst),
-        );
-    }
     new_object
 }
 

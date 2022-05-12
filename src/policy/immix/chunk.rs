@@ -252,7 +252,7 @@ impl PrepareChunk {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
             chunk.start(),
             Chunk::BYTES,
@@ -496,7 +496,7 @@ impl ConcurrentChunkMetadataZeroing {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
             chunk.start(),
             Chunk::BYTES,

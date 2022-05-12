@@ -35,22 +35,12 @@ pub trait Scanning<VM: VMBinding> {
     );
 
     #[inline(always)]
-    fn is_oop_field(_o: ObjectReference, _e: Address) -> bool {
-        unreachable!()
-    }
-
-    #[inline(always)]
     fn obj_array_data(_o: ObjectReference) -> &'static [ObjectReference] {
         unreachable!()
     }
 
     #[inline(always)]
     fn is_obj_array(_o: ObjectReference) -> bool {
-        unreachable!()
-    }
-
-    #[inline(always)]
-    fn is_type_array(_o: ObjectReference) -> bool {
         unreachable!()
     }
 

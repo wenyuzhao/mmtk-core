@@ -787,34 +787,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
-            if cfg!(feature = "slow_edge_check") {
-                let mut cursor = e - 16;
-                while cursor >= block.start() {
-                    // Skip straddle lines
-                    if rc::address_is_in_straddle_line(cursor) {
-                        cursor = Line::align(cursor);
-                        cursor = cursor - rc::MIN_OBJECT_SIZE;
-                        continue;
-                    }
-                    // Check if the edge points to a real oop
-                    let mut o = unsafe { cursor.to_object_reference() };
-                    if rc::count(o) != 0 {
-                        o = o.fix_start_address::<VM>();
-                        let end = o.to_address() + o.get_size::<VM>();
-                        if end <= e {
-                            return false;
-                        }
-                        return VM::VMScanning::is_oop_field(o, e);
-                    }
-                    cursor = cursor - rc::MIN_OBJECT_SIZE;
-                }
-                return false;
-            } else {
-                if Line::of(e).pointer_is_valid(epoch) {
-                    return true;
-                }
-                false
+            if Line::of(e).pointer_is_valid(epoch) {
+                return true;
             }
+            false
         } else {
             if immix.los().pointer_is_valid(e, epoch) {
                 return true;

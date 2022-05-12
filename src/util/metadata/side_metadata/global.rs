@@ -1026,24 +1026,6 @@ pub fn bzero_metadata(metadata_spec: &SideMetadataSpec, start: Address, size: us
     }
 }
 
-#[inline(always)]
-pub fn bzero_metadata_nt(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
-    let meta_start = address_to_meta_address(metadata_spec, start);
-    memory::zero_nt(
-        meta_start,
-        address_to_meta_address(metadata_spec, start + size) - meta_start,
-    );
-}
-
-#[inline(always)]
-pub fn bzero_x(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
-    if !crate::args::ENABLE_NON_TEMPORAL_MEMSET {
-        bzero_metadata(metadata_spec, start, size)
-    } else {
-        bzero_metadata_nt(metadata_spec, start, size)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

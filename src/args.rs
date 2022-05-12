@@ -24,7 +24,6 @@ pub const BUFFER_SIZE: usize = {
 };
 
 pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
-pub const ENABLE_NON_TEMPORAL_MEMSET: bool = cfg!(feature = "nontemporal");
 pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
     env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
 });
@@ -236,7 +235,6 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
-    dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
     dump_feature!("max_mature_defrag_percent", *MAX_MATURE_DEFRAG_PERCENT);
     dump_feature!(
         "no_gc_until_lazy_sweeping_finished",

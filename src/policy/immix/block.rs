@@ -209,7 +209,8 @@ impl Block {
 
     pub const ZERO: Self = Self(Address::ZERO);
 
-    pub const fn is_zero(&self) -> bool {
+    #[inline(always)]
+    pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
 
@@ -451,17 +452,17 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_line_validity_states(&self) {
-        side_metadata::bzero_x(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
+        side_metadata::bzero_metadata(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_x(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
+        side_metadata::bzero_metadata(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_striddle_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             &crate::util::rc::RC_STRADDLE_LINES,
             self.start(),
             Block::BYTES,
@@ -503,7 +504,7 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             self.start(),
             Block::BYTES,
@@ -528,16 +529,7 @@ impl Block {
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {
             let bytes = limit.offset_from(start) as usize;
-            if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
-                debug_assert_eq!(bytes & ((1 << 4) - 1), 0);
-                crate::util::memory::write_nt(
-                    start as *mut u128,
-                    bytes >> 4,
-                    0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff_u128,
-                );
-            } else {
-                std::ptr::write_bytes(start, 0xffu8, bytes);
-            }
+            std::ptr::write_bytes(start, 0xffu8, bytes);
         }
     }
 
@@ -758,7 +750,7 @@ impl Block {
     }
 
     #[inline(always)]
-    pub const fn rc_table_start(&self) -> Address {
+    pub fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 

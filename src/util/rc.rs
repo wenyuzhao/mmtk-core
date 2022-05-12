@@ -356,9 +356,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         in_place_promotion: bool,
         depth: usize,
     ) {
-        // if VM::VMScanning::is_type_array(o) {
-        //     return;
-        // }
         if los {
             let start = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
@@ -371,18 +368,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             )
             .to_mut_ptr::<u8>();
             let bytes = unsafe { limit.offset_from(start) as usize };
-            if crate::args::ENABLE_NON_TEMPORAL_MEMSET {
-                let bytes = (bytes + 15usize) & !15usize;
-                debug_assert_eq!(bytes & 15usize, 0);
-                crate::util::memory::write_nt(
-                    start as *mut u128,
-                    bytes >> 4,
-                    0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff_u128,
-                );
-            } else {
-                unsafe {
-                    std::ptr::write_bytes(start, 0xffu8, bytes);
-                }
+            unsafe {
+                std::ptr::write_bytes(start, 0xffu8, bytes);
             }
         } else if in_place_promotion {
             let size = o.get_size::<VM>();
