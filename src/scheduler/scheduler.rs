@@ -65,10 +65,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             WorkBucketStage::Initial => WorkBucket::new(false, worker_monitor.clone(), false),
             WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone(), false),
             WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone(), false),
-            WorkBucketStage::RefClosure => WorkBucket::new(false, worker_monitor.clone(), false),
+            WorkBucketStage::SoftRefClosure => WorkBucket::new(false, worker_monitor.clone(),false),
+            WorkBucketStage::WeakRefClosure => WorkBucket::new(false, worker_monitor.clone(),false),
+            WorkBucketStage::FinalRefClosure => WorkBucket::new(false, worker_monitor.clone(),false),
+            WorkBucketStage::PhantomRefClosure => WorkBucket::new(false, worker_monitor.clone(),false),
             WorkBucketStage::CalculateForwarding => WorkBucket::new(false, worker_monitor.clone(), false),
             WorkBucketStage::SecondRoots => WorkBucket::new(false, worker_monitor.clone(),false),
             WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone(), false),
+            WorkBucketStage::FinalizableForwarding => WorkBucket::new(false, worker_monitor.clone(), false),
             WorkBucketStage::Compact => WorkBucket::new(false, worker_monitor.clone(), false),
             WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone(), false),
             WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone(), false),
@@ -96,14 +100,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     let should_open = scheduler.are_buckets_drained(&cur_stages);
                     // && self.worker_group.all_parked();
                     // Additional check before the `RefClosure` bucket opens.
-                    // if should_open && s == WorkBucketStage::RefClosure {
-                    //     if let Some(closure_end) = scheduler.closure_end.lock().unwrap().as_ref() {
-                    //         if closure_end() {
-                    //             // Don't open `RefClosure` if `closure_end` added more works to `Closure`.
-                    //             return false;
-                    //         }
-                    //     }
-                    // }
+                    if should_open && s == crate::scheduler::work_bucket::LAST_CLOSURE_BUCKET {
+                        if let Some(closure_end) = scheduler.closure_end.lock().unwrap().as_ref() {
+                            if closure_end() {
+                                // Don't open `LAST_CLOSURE_BUCKET` if `closure_end` added more works to `Closure`.
+                                return false;
+                            }
+                        }
+                    }
                     should_open
                 });
                 open_stages.push(s);
@@ -259,10 +263,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Prepare global/collectors/mutators
         self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new(plan));
 
-        // VM-specific weak ref processing
-        self.work_buckets[WorkBucketStage::RefClosure]
-            .add(ProcessWeakRefs::<C::ProcessEdgesWorkType>::new());
-
         // Release global/collectors/mutators
         self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new(plan));
 
@@ -281,15 +281,41 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 .add(ScheduleSanityGC::<C::PlanType>::new(plan));
         }
 
+        // Reference processing
+        if !*plan.base().options.no_reference_types {
+            use crate::util::reference_processor::{
+                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            };
+            self.work_buckets[WorkBucketStage::SoftRefClosure]
+                .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
+            self.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
+            self.work_buckets[WorkBucketStage::PhantomRefClosure]
+                .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
+
+            // VM-specific weak ref processing
+            self.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add(VMProcessWeakRefs::<C::ProcessEdgesWorkType>::new());
+
+            use crate::util::reference_processor::RefForwarding;
+            if plan.constraints().needs_forward_after_liveness {
+                self.work_buckets[WorkBucketStage::RefForwarding]
+                    .add(RefForwarding::<C::ProcessEdgesWorkType>::new());
+            }
+
+            use crate::util::reference_processor::RefEnqueue;
+            self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+        }
+
         // Finalization
         if !*plan.base().options.no_finalizer {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
-            self.work_buckets[WorkBucketStage::RefClosure]
+            self.work_buckets[WorkBucketStage::FinalRefClosure]
                 .add(Finalization::<C::ProcessEdgesWorkType>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::RefForwarding]
+                self.work_buckets[WorkBucketStage::FinalizableForwarding]
                     .add(ForwardFinalization::<C::ProcessEdgesWorkType>::new());
             }
         }

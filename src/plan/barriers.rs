@@ -367,7 +367,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 std::mem::swap(&mut decs, &mut self.decs);
                 let mut incs = vec![];
                 std::mem::swap(&mut incs, &mut self.incs);
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RefClosure]
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
                     .add(UnlogEdges::new(incs));
             }
             return;

@@ -274,10 +274,14 @@ pub enum WorkBucketStage {
     Initial,
     Prepare,
     Closure,
-    RefClosure,
+    SoftRefClosure,
+    WeakRefClosure,
+    FinalRefClosure,
+    PhantomRefClosure,
     CalculateForwarding,
     SecondRoots,
     RefForwarding,
+    FinalizableForwarding,
     Compact,
     Release,
     Final,
@@ -310,3 +314,5 @@ impl WorkBucketStage {
         }
     }
 }
+
+pub const LAST_CLOSURE_BUCKET: WorkBucketStage = WorkBucketStage::PhantomRefClosure;
