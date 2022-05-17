@@ -49,61 +49,76 @@ pub struct WorkBucket<VM: VMBinding> {
     prioritized_queue: Option<BucketQueue<VM>>,
     monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send>>,
-    group: Arc<WorkerGroup<VM>>,
+    group: Option<Arc<WorkerGroup<VM>>>,
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
     pub const DEFAULT_PRIORITY: usize = 1000;
 
-    pub fn new(
-        active: bool,
-        monitor: Arc<(Mutex<()>, Condvar)>,
-        group: Arc<WorkerGroup<VM>>,
-    ) -> Self {
+    pub fn new(active: bool, monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
         Self {
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
             prioritized_queue: None,
             monitor,
             can_open: None,
-            group,
+            group: None,
         }
+    }
+
+    pub fn set_group(&mut self, group: Arc<WorkerGroup<VM>>) {
+        self.group = Some(group)
+    }
+
+    #[inline(always)]
+    fn parked_workers(&self) -> Option<usize> {
+        Some(self.group.as_ref()?.parked_workers())
     }
 
     #[inline(always)]
     fn notify_one_worker(&self) {
-        // If the bucket is not activated, don't notify anyone.
         if !self.is_activated() {
             return;
         }
-        // Notify one if there're any parked workers.
-        if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
-            self.monitor.1.notify_one()
+        if let Some(parked) = self.parked_workers() {
+            if parked > 0 {
+                let _guard = self.monitor.0.lock().unwrap();
+                self.monitor.1.notify_one()
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn force_notify_all_workers(&self) {
+        if let Some(parked) = self.parked_workers() {
+            if parked > 0 {
+                let _guard = self.monitor.0.lock().unwrap();
+                self.monitor.1.notify_all()
+            }
         }
     }
 
     #[inline(always)]
     pub fn notify_all_workers(&self) {
-        // If the bucket is not activated, don't notify anyone.
         if !self.is_activated() {
             return;
         }
-        // Notify all if there're any parked workers.
-        if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
-            self.monitor.1.notify_all()
+        if let Some(parked) = self.parked_workers() {
+            if parked > 0 {
+                let _guard = self.monitor.0.lock().unwrap();
+                self.monitor.1.notify_all()
+            }
         }
     }
 
     #[inline(always)]
     pub fn is_activated(&self) -> bool {
-        self.active.load(Ordering::Relaxed)
+        self.active.load(Ordering::SeqCst)
     }
 
     /// Enable the bucket
     pub fn activate(&self) {
-        self.active.store(true, Ordering::Relaxed);
+        self.active.store(true, Ordering::SeqCst);
     }
 
     /// Test if the bucket is drained
@@ -125,33 +140,34 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Disable the bucket
     pub fn deactivate(&self) {
         debug_assert!(self.queue.is_empty(), "Bucket not drained before close");
-        self.active.store(false, Ordering::Relaxed);
+        self.active.store(false, Ordering::SeqCst);
     }
 
-    /// Add a work packet to this bucket
-    /// Panic if this bucket cannot receive prioritized packets.
     #[inline(always)]
     pub fn add_prioritized(&self, work: Box<dyn GCWork<VM>>) {
         self.prioritized_queue.as_ref().unwrap().push(work);
-        self.notify_one_worker();
+        if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
+            self.notify_one_worker();
+        }
     }
 
     /// Add a work packet to this bucket
     #[inline(always)]
     pub fn add<W: GCWork<VM>>(&self, work: W) {
         self.queue.push(Box::new(work));
-        self.notify_one_worker();
+        if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
+            self.notify_one_worker();
+        }
     }
 
-    /// Add a work packet to this bucket
     #[inline(always)]
     pub fn add_dyn(&self, work: Box<dyn GCWork<VM>>) {
         self.queue.push(work);
-        self.notify_one_worker();
+        if self.is_activated() && self.parked_workers().map(|c| c > 0).unwrap_or(true) {
+            self.notify_one_worker();
+        }
     }
 
-    /// Add multiple packets with a higher priority.
-    /// Panic if this bucket cannot receive prioritized packets.
     #[inline(always)]
     pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         self.prioritized_queue.as_ref().unwrap().push_all(work_vec);
@@ -160,7 +176,6 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
 
-    /// Add multiple packets
     #[inline(always)]
     pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
         if work_vec.is_empty() {
@@ -175,7 +190,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Get a work packet from this bucket
     #[inline(always)]
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
-        if !self.is_activated() || self.is_empty() {
+        if !self.active.load(Ordering::SeqCst) || self.is_empty() {
             return Steal::Empty;
         }
         if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
