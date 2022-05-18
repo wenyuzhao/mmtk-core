@@ -55,14 +55,18 @@ pub struct WorkBucket<VM: VMBinding> {
 impl<VM: VMBinding> WorkBucket<VM> {
     pub const DEFAULT_PRIORITY: usize = 1000;
 
-    pub fn new(active: bool, monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
+    pub fn new(
+        active: bool,
+        monitor: Arc<(Mutex<()>, Condvar)>,
+        group: Arc<WorkerGroup<VM>>,
+    ) -> Self {
         Self {
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
             prioritized_queue: None,
             monitor,
             can_open: None,
-            group: None,
+            group: Some(group),
         }
     }
 
