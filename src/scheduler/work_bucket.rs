@@ -58,7 +58,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn new(
         active: bool,
         monitor: Arc<(Mutex<()>, Condvar)>,
-        group: Arc<WorkerGroup<VM>>,
+        _group: Arc<WorkerGroup<VM>>,
     ) -> Self {
         Self {
             active: AtomicBool::new(active),
@@ -66,7 +66,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
             prioritized_queue: None,
             monitor,
             can_open: None,
-            group: Some(group),
+            group: None,
         }
     }
 
