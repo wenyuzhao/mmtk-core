@@ -47,7 +47,6 @@ unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
 impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn new(num_workers: usize) -> Arc<Self> {
         let worker_monitor: Arc<(Mutex<()>, Condvar)> = Default::default();
-        let worker_group = WorkerGroup::new(num_workers);
 
         // Create work buckets for workers.
         let mut work_buckets = enum_map! {
@@ -105,9 +104,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         let coordinator_worker_shared = Arc::new(GCWorkerShared::<VM>::new());
 
+        let worker_group = WorkerGroup::new(num_workers);
         work_buckets.values_mut().for_each(|bucket| {
             bucket.set_group(worker_group.clone());
         });
+
         Arc::new(Self {
             work_buckets,
             worker_group,
