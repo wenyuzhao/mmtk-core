@@ -374,7 +374,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.forwarded_roots);
             unsafe {
-                crate::plan::immix::CURR_ROOTS.push(roots);
+                crate::plan::lxr::CURR_ROOTS.push(roots);
             }
         }
     }

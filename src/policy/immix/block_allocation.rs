@@ -127,7 +127,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
         }
-        if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY && !super::REF_COUNT {
+        if crate::args::CONCURRENT_MARKING && !super::BLOCK_ONLY && !crate::args::REF_COUNT {
             let current_state = self.space().line_mark_state.load(Ordering::Acquire);
             for line in block.lines() {
                 line.mark(current_state);

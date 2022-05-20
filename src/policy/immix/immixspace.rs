@@ -6,7 +6,7 @@ use super::{
     chunk::{Chunk, ChunkMap},
     defrag::Defrag,
 };
-use crate::plan::immix::{Immix, Pause};
+use crate::plan::immix::Pause;
 use crate::plan::lxr::rc::{self, SweepBlocksAfterDecs};
 use crate::plan::lxr::LXR;
 use crate::plan::ObjectsClosure;
@@ -94,7 +94,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             return crate::plan::lxr::rc::count(object) > 0
                 || ForwardingWord::is_forwarded::<VM>(object);
         }
@@ -212,7 +212,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
-        if crate::plan::immix::REF_COUNT {
+        if crate::args::REF_COUNT {
             return metadata::extract_side_metadata(&vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
@@ -1032,7 +1032,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             self.rc_get_next_available_lines(copy, search_start)
         } else {
             self.normal_get_next_available_lines(search_start)
@@ -1048,7 +1048,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         search_start: Line,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(super::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         let block = search_start.block();
         let rc_array = RCArray::of(block);
         let limit = Block::LINES;
@@ -1111,7 +1111,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(!super::REF_COUNT);
+        debug_assert!(!crate::args::REF_COUNT);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();
@@ -1136,7 +1136,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if mark == unavail_state || mark == current_state {
                 break;
             }
-            if crate::plan::immix::CONCURRENT_MARKING {
+            if crate::args::CONCURRENT_MARKING {
                 mark_data.set(cursor, current_state);
             }
             cursor += 1;

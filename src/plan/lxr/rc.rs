@@ -208,8 +208,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     incs: Vec<Address>,
     /// Recursively generated new increments
     new_incs: Vec<Address>,
-    /// Delayed nursery increments
-    remset: Vec<Address>,
     /// Execution worker
     worker: *mut GCWorker<VM>,
     lxr: *const LXR<VM>,
@@ -263,7 +261,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Self {
             incs: vec![],
             new_incs: vec![],
-            remset: vec![],
             worker: std::ptr::null_mut(),
             lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
@@ -285,7 +282,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Self {
             incs,
             new_incs: vec![],
-            remset: vec![],
             worker: std::ptr::null_mut(),
             lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
@@ -318,7 +314,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         });
         if !los {
             self::promote::<VM>(o);
-            crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL
+            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL
                 .with(|x| x.record_promotion(o.get_size::<VM>()));
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
@@ -422,11 +418,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 }
             });
         }
-    }
-
-    #[inline(always)]
-    fn add_remset(&mut self, e: Address) {
-        self.remset.push(e);
     }
 
     #[cold]
@@ -732,7 +723,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 )
             } else {
                 unsafe {
-                    crate::plan::immix::CURR_ROOTS.push(roots);
+                    crate::plan::lxr::CURR_ROOTS.push(roots);
                 }
             }
         }
@@ -749,7 +740,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 depth,
             );
         }
-        crate::plan::immix::SURVIVAL_RATIO_PREDICTOR_LOCAL.with(|x| x.sync())
+        crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL.with(|x| x.sync())
     }
 }
 

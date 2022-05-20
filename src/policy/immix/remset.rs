@@ -1,7 +1,7 @@
 use atomic::{Atomic, Ordering};
 
 use crate::{
-    plan::{immix::Immix, lxr::LXR},
+    plan::lxr::LXR,
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker},
     util::Address,

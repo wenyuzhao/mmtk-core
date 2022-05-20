@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
-use crate::plan::immix::Immix;
 use crate::plan::lxr::cm::ProcessModBufSATB;
 use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
@@ -320,7 +319,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             }
         }
         // Reference counting
-        if crate::args::BARRIER_MEASUREMENT || crate::plan::immix::REF_COUNT {
+        if crate::args::BARRIER_MEASUREMENT || crate::args::REF_COUNT {
             if !old.is_null() {
                 self.decs.push(old);
             }
@@ -375,7 +374,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         }
         // Concurrent Marking: Flush satb buffer
         #[allow(clippy::collapsible_if)]
-        if crate::plan::immix::CONCURRENT_MARKING
+        if crate::args::CONCURRENT_MARKING
             && (crate::concurrent_marking_in_progress()
                 || self.lxr.current_pause() == Some(Pause::FinalMark))
         {

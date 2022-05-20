@@ -1,6 +1,5 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::immix::Immix;
 use crate::plan::immix::Pause;
 use crate::plan::lxr::cm::LXRStopTheWorldProcessEdges;
 use crate::plan::lxr::rc;
