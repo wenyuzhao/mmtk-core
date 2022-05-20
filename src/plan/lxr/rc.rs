@@ -1,4 +1,4 @@
-use super::cm::ImmixConcurrentTraceObjects;
+use super::cm::LXRConcurrentTraceObjects;
 use super::cm::LXRStopTheWorldProcessEdges;
 use super::LXR;
 use crate::policy::immix::block::BlockState;
@@ -713,7 +713,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
-                    .postpone(ImmixConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
+                    .postpone(LXRConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
@@ -841,7 +841,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         if !self.mark_objects.is_empty() {
             let mut objects = vec![];
             std::mem::swap(&mut objects, &mut self.mark_objects);
-            let w = ImmixConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
+            let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {

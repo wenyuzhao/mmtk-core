@@ -22,6 +22,10 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     fn should_move_to_stw(&self) -> Option<WorkBucketStage> {
         None
     }
+    #[inline(always)]
+    fn is_concurrent_marking_work(&self) -> bool {
+        false
+    }
     /// Define the work for this packet. However, this is not supposed to be called directly.
     /// Usually `do_work_with_stat()` should be used.
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>);

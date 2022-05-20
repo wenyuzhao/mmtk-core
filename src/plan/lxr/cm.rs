@@ -20,7 +20,7 @@ use std::{
 
 use super::LXR;
 
-pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
+pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
     mmtk: &'static MMTK<VM>,
     objects: Vec<ObjectReference>,
@@ -29,9 +29,9 @@ pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
     slice: Option<&'static [ObjectReference]>,
 }
 
-unsafe impl<VM: VMBinding> Send for ImmixConcurrentTraceObjects<VM> {}
+unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
 
-impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
+impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
@@ -72,7 +72,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             mem::swap(&mut new_nodes, &mut self.next_objects);
             // This packet is executed in concurrent.
             debug_assert!(crate::args::CONCURRENT_MARKING);
-            let w = ImmixConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
+            let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
     }
@@ -119,7 +119,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
     }
 }
 
-impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
+impl<VM: VMBinding> TransitiveClosure for LXRConcurrentTraceObjects<VM> {
     #[inline]
     fn process_node(&mut self, object: ObjectReference) {
         if !crate::args::REF_COUNT
@@ -169,7 +169,7 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
+impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
@@ -180,6 +180,10 @@ impl<VM: VMBinding> GCWork<VM> for ImmixConcurrentTraceObjects<VM> {
         } else {
             None
         }
+    }
+    #[inline(always)]
+    fn is_concurrent_marking_work(&self) -> bool {
+        true
     }
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
@@ -233,7 +237,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
             for e in &self.edges {
                 roots.push(unsafe { e.load() })
             }
-            let w = ImmixConcurrentTraceObjects::<VM>::new(roots, self.mmtk());
+            let w = LXRConcurrentTraceObjects::<VM>::new(roots, self.mmtk());
             self.mmtk().scheduler.postpone(w);
         }
     }
@@ -289,7 +293,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
             }
         }
         GCWork::do_work(
-            &mut ImmixConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
+            &mut LXRConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
             worker,
             mmtk,
         );

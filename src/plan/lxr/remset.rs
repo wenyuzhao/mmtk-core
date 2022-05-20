@@ -3,13 +3,15 @@ use atomic::{Atomic, Ordering};
 use crate::{
     plan::lxr::LXR,
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
-    scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker},
+    scheduler::{GCWork, GCWorker},
     util::Address,
     vm::VMBinding,
     MMTK,
 };
 
-use super::{line::Line, ImmixSpace};
+use crate::policy::immix::{line::Line, ImmixSpace};
+
+use super::mature_evac::EvacuateMatureObjects;
 
 pub struct RemSet {
     pub gc_buffers: Vec<Atomic<*mut Vec<Address>>>,

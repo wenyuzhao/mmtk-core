@@ -4,11 +4,11 @@ use std::sync::atomic::AtomicUsize;
 
 use atomic::Ordering;
 
-use crate::plan::lxr::cm::ProcessModBufSATB;
 use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::lxr::rc::RC_LOCK_BIT_SPEC;
+use crate::plan::lxr::ProcessModBufSATB;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;

@@ -3,13 +3,11 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, GCWorkerShared, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
-use crate::plan::lxr::cm::ImmixConcurrentTraceObjects;
 use crate::util::opaque_pointer::*;
 use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam_deque::{Injector, Steal};
 use enum_map::{enum_map, EnumMap};
-use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
@@ -162,7 +160,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             match postponed_concurrent_work.steal() {
                 Steal::Success(w) => {
-                    if w.type_id() != TypeId::of::<ImmixConcurrentTraceObjects<VM>>() {
+                    if !w.is_concurrent_marking_work() {
                         no_postpone.push(w)
                     } else {
                         cm_packets.push(w)

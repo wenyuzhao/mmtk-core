@@ -1,6 +1,5 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
-use super::remset::RemSet;
 use super::{
     block::*,
     chunk::{Chunk, ChunkMap},
@@ -8,7 +7,7 @@ use super::{
 };
 use crate::plan::immix::Pause;
 use crate::plan::lxr::rc::{self, SweepBlocksAfterDecs};
-use crate::plan::lxr::LXR;
+use crate::plan::lxr::{RemSet, LXR};
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::gc_work::TraceKind;

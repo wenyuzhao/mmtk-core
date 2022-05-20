@@ -1,14 +1,18 @@
-pub mod cm;
+mod cm;
 pub mod gc_work;
 pub(super) mod global;
+mod mature_evac;
 pub(super) mod mutator;
 pub mod rc;
+mod remset;
 
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 
+pub use self::cm::ProcessModBufSATB;
 pub use self::global::LXR;
 pub use self::global::LXR_CONSTRAINTS;
+pub use self::remset::RemSet;
 
 use atomic::Atomic;
 use atomic::Ordering;
