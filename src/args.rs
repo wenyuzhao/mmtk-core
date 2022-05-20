@@ -34,7 +34,6 @@ pub static INC_BUFFER_LIMIT: Lazy<Option<usize>> =
     Lazy::new(|| env::var("INCS_LIMIT").map(|x| x.parse().unwrap()).ok());
 
 // ---------- Immix flags ---------- //
-pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
 pub const REF_COUNT: bool = cfg!(feature = "ix_ref_count");
 pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
 /// Mark/sweep memory for block-level only
@@ -270,9 +269,7 @@ fn dump_features(active_barrier: BarrierSelector) {
 pub fn validate_features(active_barrier: BarrierSelector) {
     dump_features(active_barrier);
     validate!(DEFRAG => !BLOCK_ONLY);
-    validate!(DEFRAG => !CONCURRENT_MARKING);
     validate!(DEFRAG => !REF_COUNT);
-    validate!(CONCURRENT_MARKING => !DEFRAG);
     validate!(REF_COUNT => !DEFRAG);
     validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
     validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);
@@ -280,6 +277,5 @@ pub fn validate_features(active_barrier: BarrierSelector) {
         assert!(!EAGER_INCREMENTS);
         assert!(!LAZY_DECREMENTS);
         assert!(!REF_COUNT);
-        assert!(!CONCURRENT_MARKING);
     }
 }

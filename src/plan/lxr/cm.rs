@@ -71,7 +71,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let mut new_nodes = vec![];
             mem::swap(&mut new_nodes, &mut self.next_objects);
             // This packet is executed in concurrent.
-            debug_assert!(crate::args::CONCURRENT_MARKING);
+            debug_assert!(self.plan.concurrent_marking_enabled());
             let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -231,7 +231,6 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
 
     #[inline]
     fn process_edges(&mut self) {
-        debug_assert!(crate::args::CONCURRENT_MARKING);
         if !self.edges.is_empty() {
             let mut roots = vec![];
             for e in &self.edges {

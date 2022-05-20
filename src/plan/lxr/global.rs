@@ -36,7 +36,6 @@ use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
-use std::env;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
@@ -74,22 +73,10 @@ pub struct LXR<VM: VMBinding> {
     cm_threshold: usize,
     zeroing_packets_scheduled: AtomicBool,
     next_gc_selected: (Mutex<bool>, Condvar),
+    in_concurrent_marking: AtomicBool,
 }
 
-pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
-    if crate::plan::barriers::BARRIER_MEASUREMENT {
-        match env::var("BARRIER") {
-            Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
-            Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
-            Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
-            _ => unreachable!("Please explicitly specify barrier"),
-        }
-    } else if super::CONCURRENT_MARKING || super::REF_COUNT {
-        BarrierSelector::FieldLoggingBarrier
-    } else {
-        BarrierSelector::NoBarrier
-    }
-});
+pub static ACTIVE_BARRIER: BarrierSelector = BarrierSelector::FieldLoggingBarrier;
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
     moves_objects: true,
@@ -98,7 +85,7 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     num_specialized_scans: 1,
     /// Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-    barrier: *ACTIVE_BARRIER,
+    barrier: ACTIVE_BARRIER,
     needs_log_bit: crate::args::BARRIER_MEASUREMENT
         || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier),
     needs_field_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::FieldLoggingBarrier)
@@ -184,8 +171,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // Concurrent tracing finished
         if !crate::args::LXR_RC_ONLY
             && !crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::CONCURRENT_MARKING
-            && crate::concurrent_marking_in_progress()
+            && self.concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
         {
             return true;
@@ -195,7 +181,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             && !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
-            && !(crate::concurrent_marking_in_progress()
+            && !(self.concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
             && (self
                 .nursery_blocks
@@ -219,9 +205,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if !LazySweepingJobs::all_finished() {
             return false;
         }
-        super::CONCURRENT_MARKING
+        self.concurrent_marking_enabled()
             && !crate::plan::barriers::BARRIER_MEASUREMENT
-            && !crate::concurrent_marking_in_progress()
+            && !self.concurrent_marking_in_progress()
             && self.base().gc_status() == GcStatus::NotInGC
             && self.get_reserved_pages()
                 >= self.get_total_pages() * *crate::args::CONCURRENT_MARKING_THRESHOLD / 100
@@ -252,9 +238,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
-        crate::args::validate_features(*ACTIVE_BARRIER);
+        crate::args::validate_features(ACTIVE_BARRIER);
         self.common.gc_init(heap_size, vm_map);
         self.immix_space.init(vm_map);
+        self.immix_space.cm_enabled = !*self.base().options.lxr_no_cm;
         unsafe {
             let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
             lazy_sweeping_jobs.swap();
@@ -324,7 +311,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         let pause =
             self.select_collection_kind(self.base().gc_requester.is_concurrent_collection());
-        if crate::concurrent_marking_in_progress() && pause == Pause::RefCount {
+        if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
             crate::COUNTERS
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
@@ -377,7 +364,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 s.rc_pauses += 1
             }
         });
-        if !super::REF_COUNT {
+        if !crate::args::REF_COUNT {
             if pause != Pause::FinalMark {
                 self.common.prepare(tls, true);
                 self.immix_space.prepare(true, true);
@@ -402,7 +389,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn release(&mut self, tls: VMWorkerThread) {
         let pause = self.current_pause().unwrap();
-        if !super::REF_COUNT {
+        if !crate::args::REF_COUNT {
             if pause != Pause::InitialMark {
                 self.common.release(tls, true);
                 self.immix_space.release(true);
@@ -414,7 +401,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             );
             self.immix_space.release_rc(pause);
         }
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             unsafe {
                 std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
                 debug_assert!(super::CURR_ROOTS.is_empty());
@@ -467,7 +454,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
         }
         if pause == Pause::FinalMark {
-            crate::IN_CONCURRENT_GC.store(false, Ordering::SeqCst);
+            self.in_concurrent_marking.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START
                     .load(Ordering::SeqCst)
@@ -478,7 +465,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
-            && crate::concurrent_marking_in_progress()
+            && self.concurrent_marking_in_progress()
         {
             let t = crate::SATB_START
                 .load(Ordering::SeqCst)
@@ -496,14 +483,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.immix_space.pr.flush_all();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
-            crate::IN_CONCURRENT_GC.store(true, Ordering::SeqCst);
+            self.in_concurrent_marking.store(true, Ordering::SeqCst);
             crate::REMSET_RECORDING.store(true, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
-            && crate::concurrent_marking_in_progress()
+            && self.concurrent_marking_in_progress()
         {
             crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
         }
@@ -551,16 +538,18 @@ impl<VM: VMBinding> LXR<VM> {
             vec![]
         };
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
+        let mut immix_space = ImmixSpace::new(
+            "immix",
+            vm_map,
+            mmapper,
+            &mut heap,
+            scheduler,
+            global_metadata_specs.clone(),
+            &LXR_CONSTRAINTS,
+        );
+        immix_space.cm_enabled = true;
         let immix = LXR {
-            immix_space: ImmixSpace::new(
-                "immix",
-                vm_map,
-                mmapper,
-                &mut heap,
-                scheduler,
-                global_metadata_specs.clone(),
-                &LXR_CONSTRAINTS,
-            ),
+            immix_space,
             common: CommonPlan::new(
                 vm_map,
                 mmapper,
@@ -581,6 +570,7 @@ impl<VM: VMBinding> LXR<VM> {
             cm_threshold: 0,
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
+            in_concurrent_marking: AtomicBool::new(false),
         };
 
         {
@@ -594,6 +584,16 @@ impl<VM: VMBinding> LXR<VM> {
         }
 
         immix
+    }
+
+    #[inline(always)]
+    pub fn concurrent_marking_enabled(&self) -> bool {
+        self.immix_space.cm_enabled
+    }
+
+    #[inline(always)]
+    pub fn concurrent_marking_in_progress(&self) -> bool {
+        self.concurrent_marking_enabled() && self.in_concurrent_marking.load(Ordering::Relaxed)
     }
 
     fn decide_next_gc_may_perform_cycle_collection(&self) {
@@ -635,7 +635,7 @@ impl<VM: VMBinding> LXR<VM> {
         //     live_mature_pages,
         //     (garbage as f64) / (total_pages as f64)
         // );
-        if !crate::concurrent_marking_in_progress()
+        if !self.concurrent_marking_in_progress()
             && garbage * 100 >= threshold as usize * total_pages
             || available_blocks < *crate::args::CM_STOP_BLOCKS
         {
@@ -650,7 +650,7 @@ impl<VM: VMBinding> LXR<VM> {
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-            if crate::args::CONCURRENT_MARKING && !crate::concurrent_marking_in_progress() {
+            if self.concurrent_marking_enabled() && !self.concurrent_marking_in_progress() {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
                 self.immix_space
                     .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
@@ -674,7 +674,7 @@ impl<VM: VMBinding> LXR<VM> {
             }
             *gc_selection_done = false;
         }
-        let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
             println!(
@@ -684,7 +684,7 @@ impl<VM: VMBinding> LXR<VM> {
             );
         }
         // If CM is finished, do a final mark pause
-        if crate::args::CONCURRENT_MARKING
+        if self.concurrent_marking_enabled()
             && concurrent_marking_in_progress
             && concurrent_marking_packets_drained
         {
@@ -692,7 +692,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
         // Either final mark pause or full pause for emergency GC
         if emergency {
-            return if crate::args::CONCURRENT_MARKING && concurrent_marking_in_progress {
+            return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {
                 Pause::FullTraceFast
@@ -711,7 +711,7 @@ impl<VM: VMBinding> LXR<VM> {
             .load(Ordering::Relaxed)
             && !concurrent_marking_in_progress
         {
-            return if crate::args::CONCURRENT_MARKING {
+            return if self.concurrent_marking_enabled() {
                 Pause::InitialMark
             } else {
                 Pause::FullTraceFast
@@ -740,25 +740,11 @@ impl<VM: VMBinding> LXR<VM> {
         }
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
-        let in_defrag = self.immix_space.decide_whether_to_defrag(
-            self.is_emergency_collection(),
-            true,
-            self.base().cur_collection_attempts.load(Ordering::SeqCst),
-            self.base().is_user_triggered_collection(),
-            *self.base().options.full_heap_system_gc,
-        );
-        let full_trace = || {
-            if in_defrag {
-                Pause::FullTraceDefrag
-            } else {
-                Pause::FullTraceFast
-            }
-        };
         let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
             || self.is_emergency_collection()
             || *self.base().options.full_heap_system_gc;
 
-        let concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         let force_no_rc = self
             .next_gc_may_perform_cycle_collection
@@ -784,21 +770,21 @@ impl<VM: VMBinding> LXR<VM> {
             if concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {
-                full_trace()
+                Pause::FullTraceFast
             }
         } else if concurrent_marking_in_progress && concurrent_marking_packets_drained {
             Pause::FinalMark
         } else if concurrent {
             Pause::InitialMark
         } else {
-            if (!super::REF_COUNT || crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
+            if (!crate::args::REF_COUNT || crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
                 && concurrent_marking_in_progress
             {
                 Pause::FinalMark
-            } else if super::REF_COUNT && (!force_no_rc || concurrent_marking_in_progress) {
+            } else if crate::args::REF_COUNT && (!force_no_rc || concurrent_marking_in_progress) {
                 Pause::RefCount
             } else {
-                full_trace()
+                Pause::FullTraceFast
             }
         };
         if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
@@ -823,7 +809,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler: &GCWorkScheduler<VM>,
     ) {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             Self::process_prev_roots(scheduler);
             scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         }
@@ -833,7 +819,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<ImmixGCWorkContext<VM, KIND>>::new(self));
         // Release global/collectors/mutators
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
         scheduler.work_buckets[WorkBucketStage::Release]
@@ -842,12 +828,13 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         #[allow(clippy::collapsible_if)]
-        if crate::args::CONCURRENT_MARKING && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
-            if crate::concurrent_marking_in_progress() {
+        if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+        {
+            if self.concurrent_marking_in_progress() {
                 scheduler.pause_concurrent_work_packets_during_gc();
             }
         }
-        debug_assert!(super::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         Self::process_prev_roots(scheduler);
@@ -864,7 +851,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             Self::process_prev_roots(scheduler);
         }
         if crate::args::REF_COUNT {
@@ -883,8 +870,8 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if super::REF_COUNT {
-            if crate::concurrent_marking_in_progress() {
+        if crate::args::REF_COUNT {
+            if self.concurrent_marking_in_progress() {
                 crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
             }
             Self::process_prev_roots(scheduler);
@@ -899,7 +886,7 @@ impl<VM: VMBinding> LXR<VM> {
             ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
-        if super::REF_COUNT {
+        if crate::args::REF_COUNT {
             scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         }
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
@@ -908,7 +895,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
-        debug_assert!(super::REF_COUNT);
+        debug_assert!(crate::args::REF_COUNT);
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {

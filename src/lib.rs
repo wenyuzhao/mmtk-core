@@ -85,7 +85,6 @@ pub use crate::plan::{
 };
 pub use crate::policy::copy_context::PolicyCopyContext;
 
-static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct LazySweepingJobsCounter {
@@ -201,11 +200,6 @@ impl LazySweepingJobs {
 
 static LAZY_SWEEPING_JOBS: Lazy<RwLock<LazySweepingJobs>> =
     Lazy::new(|| RwLock::new(LazySweepingJobs::new()));
-
-#[inline(always)]
-fn concurrent_marking_in_progress() -> bool {
-    cfg!(feature = "ix_concurrent_marking") && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
-}
 
 #[inline(always)]
 fn concurrent_marking_packets_drained() -> bool {

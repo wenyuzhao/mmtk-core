@@ -123,11 +123,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     #[inline(always)]
-    fn initialize_new_clean_block(&self, block: Block, copy: bool) {
+    fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
         }
-        if crate::args::CONCURRENT_MARKING && !super::BLOCK_ONLY && !crate::args::REF_COUNT {
+        if cm_enabled && !super::BLOCK_ONLY && !crate::args::REF_COUNT {
             let current_state = self.space().line_mark_state.load(Ordering::Acquire);
             for line in block.lines() {
                 line.mark(current_state);
@@ -248,7 +248,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
             Block::from(block_address)
         };
-        self.initialize_new_clean_block(block, copy);
+        self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
         Some(block)
     }
 

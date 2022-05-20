@@ -665,7 +665,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.current_pause = self.lxr().current_pause().unwrap();
-        self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
+        self.concurrent_marking_in_progress = self.lxr().concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
@@ -710,7 +710,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         };
         if let Some(roots) = roots {
-            if crate::args::CONCURRENT_MARKING && self.current_pause == Pause::InitialMark {
+            if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
                     .postpone(LXRConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
@@ -978,8 +978,8 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         self.mmtk = mmtk;
-        self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
             || lxr.previous_pause() == Some(Pause::FullTraceFast);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);

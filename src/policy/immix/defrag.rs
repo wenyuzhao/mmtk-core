@@ -58,6 +58,7 @@ impl Defrag {
         user_triggered: bool,
         exhausted_reusable_space: bool,
         full_heap_system_gc: bool,
+        concurrent_marking_enabled: bool,
     ) {
         let in_defrag = super::DEFRAG
             && (emergency_collection
@@ -66,7 +67,7 @@ impl Defrag {
                 || Self::DEFRAG_STRESS
                 || (collect_whole_heap && user_triggered && full_heap_system_gc))
             && !crate::args::REF_COUNT
-            && !crate::args::CONCURRENT_MARKING;
+            && !concurrent_marking_enabled;
         // println!("Defrag: {}", in_defrag);
         self.in_defrag_collection
             .store(in_defrag, Ordering::Release)

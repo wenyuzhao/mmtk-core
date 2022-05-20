@@ -193,13 +193,14 @@ impl ChunkMap {
     /// Generate chunk sweep work packets.
     pub fn generate_prepare_tasks<VM: VMBinding>(
         &self,
-        _space: &'static ImmixSpace<VM>,
+        space: &'static ImmixSpace<VM>,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
         self.generate_tasks(|chunk| {
             Box::new(PrepareChunk {
                 chunk,
                 defrag_threshold,
+                cm_enabled: space.cm_enabled,
             })
         })
     }
@@ -244,6 +245,7 @@ impl ChunkMap {
 /// Performs the action on a range of chunks.
 struct PrepareChunk {
     chunk: Chunk,
+    cm_enabled: bool,
     defrag_threshold: Option<usize>,
 }
 
@@ -277,10 +279,8 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             if state == BlockState::Unallocated {
                 continue;
             }
-            // FIXME: Don't need this when doing RC
-            if crate::args::BARRIER_MEASUREMENT
-                || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)
-            {
+            // Clear unlog table on CM
+            if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !crate::args::REF_COUNT) {
                 block.initialize_log_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.

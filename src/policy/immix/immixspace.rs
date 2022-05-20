@@ -84,6 +84,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub remset: RemSet,
+    pub cm_enabled: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -100,7 +101,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.initial_mark_pause {
             return true;
         }
-        if crate::args::CONCURRENT_MARKING {
+        if self.cm_enabled {
             let block_state = Block::containing::<VM>(object).get_state();
             if block_state == BlockState::Nursery {
                 return true;
@@ -302,6 +303,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
             remset: RemSet::new(),
+            cm_enabled: false,
         }
     }
 
@@ -336,6 +338,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             user_triggered_collection,
             self.reusable_blocks.len() == 0,
             full_heap_system_gc,
+            self.cm_enabled,
         );
         self.defrag.in_defrag()
     }
@@ -1135,7 +1138,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if mark == unavail_state || mark == current_state {
                 break;
             }
-            if crate::args::CONCURRENT_MARKING {
+            if self.cm_enabled {
                 mark_data.set(cursor, current_state);
             }
             cursor += 1;

@@ -98,9 +98,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 Some(Ordering::SeqCst),
             );
             // CM: Alloc as marked
-            if crate::args::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
-                self.test_and_mark(object, self.mark_state);
-            }
+            // TODO: Only mark during concurrent marking
+            self.test_and_mark(object, self.mark_state);
             self.update_validity(
                 object.to_address(),
                 (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
@@ -129,11 +128,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         // if !alloc && self.common.needs_log_bit {
         //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         // }
-
-        // Concurrent marking: allocate as marked
-        if crate::args::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
-            self.test_and_mark(object, self.mark_state);
-        }
+        // TODO: Only mark during concurrent marking
+        self.test_and_mark(object, self.mark_state);
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit(object);
         let cell = VM::VMObjectModel::object_start_ref(object);

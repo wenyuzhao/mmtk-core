@@ -309,10 +309,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             old
         );
         // Concurrent Marking
-        if !crate::args::REF_COUNT
-            && crate::args::CONCURRENT_MARKING
-            && crate::concurrent_marking_in_progress()
-        {
+        if !crate::args::REF_COUNT && self.lxr.concurrent_marking_in_progress() {
             self.edges.push(edge);
             if !old.is_null() {
                 self.nodes.push(old);
@@ -374,8 +371,8 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         }
         // Concurrent Marking: Flush satb buffer
         #[allow(clippy::collapsible_if)]
-        if crate::args::CONCURRENT_MARKING
-            && (crate::concurrent_marking_in_progress()
+        if self.lxr.concurrent_marking_enabled()
+            && (self.lxr.concurrent_marking_in_progress()
                 || self.lxr.current_pause() == Some(Pause::FinalMark))
         {
             if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
