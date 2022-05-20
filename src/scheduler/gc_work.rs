@@ -52,7 +52,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.prepare(worker.tls);
 
-        if !crate::args::REF_COUNT {
+        if !plan_mut.no_mutator_prepare_release() {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
@@ -123,7 +123,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.release(worker.tls);
 
-        if !crate::args::REF_COUNT {
+        if !plan_mut.no_mutator_prepare_release() {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Release]
                     .add(ReleaseMutator::<C::VM>::new(mutator));

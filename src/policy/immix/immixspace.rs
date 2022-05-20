@@ -85,6 +85,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub remset: RemSet,
     pub cm_enabled: bool,
+    pub rc_enabled: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -94,7 +95,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return crate::plan::lxr::rc::count(object) > 0
                 || ForwardingWord::is_forwarded::<VM>(object);
         }
@@ -211,8 +212,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     const MARKED_STATE: u8 = 1;
 
     /// Get side metadata specs
-    fn side_metadata_specs() -> Vec<SideMetadataSpec> {
-        if crate::args::REF_COUNT {
+    fn side_metadata_specs(rc_enabled: bool) -> Vec<SideMetadataSpec> {
+        if rc_enabled {
             return metadata::extract_side_metadata(&vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
@@ -250,6 +251,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
         global_side_metadata_specs: Vec<SideMetadataSpec>,
         constraints: &'static PlanConstraints,
+        rc_enabled: bool,
     ) -> Self {
         let common = CommonSpace::new(
             SpaceOptions {
@@ -260,7 +262,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 vmrequest: VMRequest::discontiguous(),
                 side_metadata_specs: SideMetadataContext {
                     global: global_side_metadata_specs,
-                    local: Self::side_metadata_specs(),
+                    local: Self::side_metadata_specs(rc_enabled),
                 },
                 needs_log_bit: constraints.needs_log_bit,
                 needs_field_log_bit: constraints.needs_field_log_bit,
@@ -304,6 +306,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             num_clean_blocks_released_lazy: Default::default(),
             remset: RemSet::new(),
             cm_enabled: false,
+            rc_enabled,
         }
     }
 
@@ -339,6 +342,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.reusable_blocks.len() == 0,
             full_heap_system_gc,
             self.cm_enabled,
+            self.rc_enabled,
         );
         self.defrag.in_defrag()
     }
@@ -580,7 +584,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
         self.initial_mark_pause = initial_mark_pause;
-        debug_assert!(!crate::args::REF_COUNT);
+        debug_assert!(!self.rc_enabled);
         self.block_allocation.reset();
         if major_gc {
             // Update mark_state
@@ -622,7 +626,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release for the immix space. This is called when a GC finished.
     /// Return whether this GC was a defrag GC, as a plan may want to know this.
     pub fn release(&mut self, major_gc: bool) -> bool {
-        debug_assert!(!crate::args::REF_COUNT);
+        debug_assert!(!self.rc_enabled);
         self.block_allocation.reset();
         let did_defrag = self.defrag.in_defrag();
         if major_gc {
@@ -669,7 +673,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
-        block.deinit();
+        block.deinit(self);
         crate::stat(|s| {
             if nursery {
                 s.reclaimed_blocks_nursery += 1;
@@ -746,14 +750,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
-            if crate::args::REF_COUNT {
+            if self.rc_enabled {
                 let straddle = rc::is_straddle_line(Line::from(Line::align(object.to_address())));
                 if straddle {
                     return object;
                 }
             }
             // println!("Mark {:?}", object.range::<VM>());
-            if !crate::args::REF_COUNT {
+            if !self.rc_enabled {
                 // Mark block and lines
                 if !super::BLOCK_ONLY {
                     if !super::MARK_LINE_AT_SCAN_TIME {
@@ -855,7 +859,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         mark: bool,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        debug_assert!(crate::args::REF_COUNT);
+        debug_assert!(self.rc_enabled);
         if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
             self.trace_forward_rc_mature_object(trace, object, semantics, pause, worker)
         } else if crate::args::RC_MATURE_EVACUATION {
@@ -930,7 +934,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return;
         }
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
@@ -1034,7 +1038,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             self.rc_get_next_available_lines(copy, search_start)
         } else {
             self.normal_get_next_available_lines(search_start)
@@ -1050,7 +1054,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         search_start: Line,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(crate::args::REF_COUNT);
+        debug_assert!(self.rc_enabled);
         let block = search_start.block();
         let rc_array = RCArray::of(block);
         let limit = Block::LINES;
@@ -1113,7 +1117,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(!crate::args::REF_COUNT);
+        debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();
@@ -1387,20 +1391,21 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
     }
     #[inline(always)]
     fn post_copy(&mut self, obj: ObjectReference, _bytes: usize) {
-        if crate::args::REF_COUNT {
+        let space = self.get_space();
+        if space.rc_enabled {
             return;
         }
         // Mark the object
         store_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             obj,
-            self.get_space().mark_state as usize,
+            space.mark_state as usize,
             None,
             Some(Ordering::SeqCst),
         );
         // Mark the line
         if !super::MARK_LINE_AT_SCAN_TIME {
-            self.get_space().mark_lines(obj);
+            space.mark_lines(obj);
         }
     }
 }

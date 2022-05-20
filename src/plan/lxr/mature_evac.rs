@@ -32,7 +32,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     pub const CAPACITY: usize = 512;
 
     pub fn new(remset: Vec<Address>) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         Self {
             remset,

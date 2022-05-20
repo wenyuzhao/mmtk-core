@@ -335,6 +335,10 @@ pub trait Plan: 'static + Sync + Downcast {
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<Self::VM>) {}
     fn gc_pause_end(&self) {}
+    #[inline(always)]
+    fn no_mutator_prepare_release(&self) -> bool {
+        false
+    }
 }
 
 impl_downcast!(Plan assoc VM);

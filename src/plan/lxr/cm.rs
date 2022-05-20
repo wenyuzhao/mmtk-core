@@ -6,7 +6,6 @@ use crate::util::{Address, ObjectReference};
 use crate::{
     plan::EdgeIterator,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
-    util::metadata::side_metadata::address_to_meta_address,
     vm::*,
     TransitiveClosure, MMTK,
 };
@@ -82,7 +81,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if object.is_null() || !object.is_in_any_space() {
             return object;
         }
-        let no_trace = crate::args::REF_COUNT && super::rc::count(object) == 0;
+        let no_trace = super::rc::count(object) == 0;
         if no_trace {
             return object;
         }
@@ -122,13 +121,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 impl<VM: VMBinding> TransitiveClosure for LXRConcurrentTraceObjects<VM> {
     #[inline]
     fn process_node(&mut self, object: ObjectReference) {
-        if !crate::args::REF_COUNT
-            && crate::args::MARK_LINE_AT_SCAN_TIME
-            && !crate::args::BLOCK_ONLY
-            && self.plan.immix_space.in_space(object)
-        {
-            self.plan.immix_space.mark_lines(object);
-        }
         let should_check_remset = !self.plan.in_defrag(object);
         if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
             && VM::VMScanning::is_obj_array(object)
@@ -147,8 +139,7 @@ impl<VM: VMBinding> TransitiveClosure for LXRConcurrentTraceObjects<VM> {
                 if t.is_null() || super::rc::count(t) == 0 {
                     return;
                 }
-                if crate::args::REF_COUNT
-                    && crate::args::RC_MATURE_EVACUATION
+                if crate::args::RC_MATURE_EVACUATION
                     && should_check_remset
                     && self.plan.in_defrag(t)
                 {
@@ -279,17 +270,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         if self.edges.is_empty() && self.nodes.is_empty() {
             return;
-        }
-        if !crate::args::REF_COUNT {
-            for edge in &self.edges {
-                let ptr = address_to_meta_address(
-                    <E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                    *edge,
-                );
-                unsafe {
-                    ptr.store(0b11111111u8);
-                }
-            }
         }
         GCWork::do_work(
             &mut LXRConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),

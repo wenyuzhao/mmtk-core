@@ -186,7 +186,6 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
 
 #[inline(always)]
 pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
-    debug_assert!(crate::args::REF_COUNT);
     let size = VM::VMObjectModel::get_current_size(o);
     for i in (0..size).step_by(MIN_OBJECT_SIZE) {
         let a = o.to_address() + i;
@@ -257,7 +256,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[inline]
     pub fn new_array_slice(slice: &'static [ObjectReference]) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         Self {
             incs: vec![],
             new_incs: vec![],
@@ -278,7 +276,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[inline]
     pub fn new(incs: Vec<Address>) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         Self {
             incs,
             new_incs: vec![],
@@ -771,7 +768,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     #[inline]
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         Self {
             decs,
             new_decs: vec![],
@@ -791,7 +787,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         not_marked: bool,
         counter: LazySweepingJobsCounter,
     ) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         Self {
             decs: vec![],
             new_decs: vec![],

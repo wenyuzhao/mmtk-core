@@ -390,7 +390,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, _space: &ImmixSpace<VM>) {
+    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         #[cfg(feature = "sanity")]
         if !copy && !reuse {
@@ -405,7 +405,7 @@ impl Block {
             if reuse {
                 debug_assert!(!self.is_defrag_source());
             }
-            self.set_state(if crate::args::REF_COUNT {
+            self.set_state(if space.rc_enabled {
                 BlockState::Unmarked
             } else {
                 BlockState::Marked
@@ -419,15 +419,15 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     #[inline]
-    pub fn deinit(&self) {
-        if !crate::args::HOLE_COUNTING && crate::args::REF_COUNT {
+    pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
         }
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
         self.set_as_defrag_source(false);
-        if crate::args::REF_COUNT {
+        if space.rc_enabled {
             Line::update_validity(self.lines());
         }
     }
@@ -565,7 +565,6 @@ impl Block {
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
-        debug_assert!(!crate::args::REF_COUNT);
         if super::BLOCK_ONLY {
             match self.get_state() {
                 BlockState::Unallocated => false,
@@ -630,7 +629,6 @@ impl Block {
         space: &ImmixSpace<VM>,
         mutator_reused_blocks: bool,
     ) {
-        debug_assert!(crate::args::REF_COUNT);
         if mutator_reused_blocks {
             if self.rc_dead() {
                 space.release_block(*self, true, true);
@@ -695,7 +693,6 @@ impl Block {
 
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        debug_assert!(crate::args::REF_COUNT);
         if self.get_state() == BlockState::Unallocated {
             return false;
         }

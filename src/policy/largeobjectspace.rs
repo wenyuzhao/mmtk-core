@@ -55,6 +55,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_mature_objects: Mutex<HashSet<ObjectReference>>,
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
+    pub rc_enabled: bool,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -62,7 +63,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return crate::plan::lxr::rc::count(object) > 0;
         }
         if self.trace_in_progress {
@@ -78,7 +79,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             debug_assert!(alloc);
             // Add to object set
             self.rc_nursery_objects.push(object);
@@ -242,6 +243,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_mature_objects: Default::default(),
             rc_dead_objects: Default::default(),
             num_pages_released_lazy: AtomicUsize::new(0),
+            rc_enabled: false,
         }
     }
 
@@ -279,7 +281,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
-            if crate::args::REF_COUNT {
+            if self.rc_enabled {
                 rc::set(unsafe { start.to_object_reference() }, 0);
             }
             self.pr.release_pages_and_reset_unlog_bits(start)
@@ -294,7 +296,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             debug_assert!(self.treadmill.is_from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return;
         }
         self.treadmill.flip(full_heap);
@@ -304,7 +306,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     pub fn release(&mut self, full_heap: bool) {
         self.trace_in_progress = false;
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             // promote nursery objects or release dead nursery
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
@@ -336,7 +338,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "{:x}: alloc bit not set",
             object
         );
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             if self.test_and_mark(object, self.mark_state) {
                 trace.process_node(object);
             }
@@ -350,7 +352,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 self.treadmill.copy(cell, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
-                if !crate::args::REF_COUNT && nursery_object && self.common.needs_log_bit {
+                if !self.rc_enabled && nursery_object && self.common.needs_log_bit {
                     if self.common.needs_field_log_bit {
                         for i in (0..object.get_size::<VM>()).step_by(8) {
                             let a = object.to_address() + i;
@@ -417,7 +419,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[inline(always)]
     fn test_and_mark(&self, object: ObjectReference, value: usize) -> bool {
         loop {
-            let mask = if crate::args::REF_COUNT {
+            let mask = if self.rc_enabled {
                 MARK_BIT
             } else if self.in_nursery_gc {
                 LOS_BIT_MASK

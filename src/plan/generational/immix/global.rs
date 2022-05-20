@@ -223,6 +223,7 @@ impl<VM: VMBinding> GenImmix<VM> {
             scheduler,
             global_metadata_specs.clone(),
             &GENIMMIX_CONSTRAINTS,
+            false,
         );
 
         let genimmix = GenImmix {

@@ -23,7 +23,7 @@ pub const BUFFER_SIZE: usize = {
     }
 };
 
-pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
+pub const HEAP_HEALTH_GUIDED_GC: bool = true;
 pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
     env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
 });
@@ -34,7 +34,6 @@ pub static INC_BUFFER_LIMIT: Lazy<Option<usize>> =
     Lazy::new(|| env::var("INCS_LIMIT").map(|x| x.parse().unwrap()).ok());
 
 // ---------- Immix flags ---------- //
-pub const REF_COUNT: bool = cfg!(feature = "ix_ref_count");
 pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = cfg!(feature = "ix_block_only");
@@ -269,13 +268,10 @@ fn dump_features(active_barrier: BarrierSelector) {
 pub fn validate_features(active_barrier: BarrierSelector) {
     dump_features(active_barrier);
     validate!(DEFRAG => !BLOCK_ONLY);
-    validate!(DEFRAG => !REF_COUNT);
-    validate!(REF_COUNT => !DEFRAG);
     validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
     validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);
     if BARRIER_MEASUREMENT {
         assert!(!EAGER_INCREMENTS);
         assert!(!LAZY_DECREMENTS);
-        assert!(!REF_COUNT);
     }
 }

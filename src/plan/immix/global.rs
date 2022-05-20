@@ -151,6 +151,7 @@ impl<VM: VMBinding> Immix<VM> {
                 scheduler,
                 global_metadata_specs.clone(),
                 &IMMIX_CONSTRAINTS,
+                false,
             ),
             common: CommonPlan::new(
                 vm_map,

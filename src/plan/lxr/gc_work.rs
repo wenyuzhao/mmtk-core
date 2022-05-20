@@ -121,7 +121,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 ProcessEdgesWork::process_edge(self, self.edges[i])
             }
         }
-        if crate::args::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
+        if !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
             let mut roots = vec![];
             std::mem::swap(&mut roots, &mut self.edges);
             let bucket = WorkBucketStage::rc_process_incs_stage();

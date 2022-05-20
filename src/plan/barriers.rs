@@ -309,20 +309,20 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             old
         );
         // Concurrent Marking
-        if !crate::args::REF_COUNT && self.lxr.concurrent_marking_in_progress() {
-            self.edges.push(edge);
-            if !old.is_null() {
-                self.nodes.push(old);
-            }
-        }
+        // if !crate::args::REF_COUNT && self.lxr.concurrent_marking_in_progress() {
+        //     self.edges.push(edge);
+        //     if !old.is_null() {
+        //         self.nodes.push(old);
+        //     }
+        // }
         // Reference counting
-        if crate::args::BARRIER_MEASUREMENT || crate::args::REF_COUNT {
-            if !old.is_null() {
-                self.decs.push(old);
-            }
-            self.incs.push(edge);
-            crate::plan::lxr::rc::inc_inc_buffer_size();
+        // if crate::args::BARRIER_MEASUREMENT || crate::args::REF_COUNT {
+        if !old.is_null() {
+            self.decs.push(old);
         }
+        self.incs.push(edge);
+        crate::plan::lxr::rc::inc_inc_buffer_size();
+        // }
         // Flush
         if self.edges.len() >= Self::CAPACITY
             || self.incs.len() >= Self::CAPACITY
@@ -376,14 +376,14 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 || self.lxr.current_pause() == Some(Pause::FinalMark))
         {
             if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
-                let mut edges = vec![];
-                let mut nodes = vec![];
-                if !crate::args::REF_COUNT {
-                    std::mem::swap(&mut edges, &mut self.edges);
-                    std::mem::swap(&mut nodes, &mut self.nodes);
-                } else {
-                    nodes = self.decs.clone();
-                }
+                let edges = vec![];
+                // let mut nodes = vec![];
+                // if !crate::args::REF_COUNT {
+                //     std::mem::swap(&mut edges, &mut self.edges);
+                //     std::mem::swap(&mut nodes, &mut self.nodes);
+                // } else {
+                let nodes = self.decs.clone();
+                // }
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
                     .add(ProcessModBufSATB::<E>::new(edges, nodes));
             }

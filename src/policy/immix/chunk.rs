@@ -200,6 +200,7 @@ impl ChunkMap {
             Box::new(PrepareChunk {
                 chunk,
                 defrag_threshold,
+                rc_enabled: space.rc_enabled,
                 cm_enabled: space.cm_enabled,
             })
         })
@@ -246,6 +247,7 @@ impl ChunkMap {
 struct PrepareChunk {
     chunk: Chunk,
     cm_enabled: bool,
+    rc_enabled: bool,
     defrag_threshold: Option<usize>,
 }
 
@@ -272,7 +274,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
-            if crate::args::REF_COUNT {
+            if self.rc_enabled {
                 block.clear_line_validity_states();
             }
             // Skip unallocated blocks.
@@ -280,13 +282,13 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
                 continue;
             }
             // Clear unlog table on CM
-            if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !crate::args::REF_COUNT) {
+            if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
                 block.initialize_log_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
                 block.set_as_defrag_source(true);
-            } else if !crate::args::REF_COUNT {
+            } else if !self.rc_enabled {
                 block.set_as_defrag_source(false);
             }
             // Clear block mark data.
@@ -356,7 +358,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         Self {
             chunk,
             worker: std::ptr::null_mut(),

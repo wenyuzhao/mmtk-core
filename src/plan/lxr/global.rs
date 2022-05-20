@@ -1,4 +1,3 @@
-use super::cm::CMImmixCollectRootEdges;
 use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{self, ProcessDecs, RCImmixCollectRootEdges};
@@ -110,15 +109,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        if crate::args::REF_COUNT
-            && self
-                .max_survival_mb
-                .map(|x| {
-                    self.immix_space.block_allocation.nursery_mb() as f64
-                        * super::SURVIVAL_RATIO_PREDICTOR.ratio()
-                        >= x as f64
-                })
-                .unwrap_or(false)
+        if self
+            .max_survival_mb
+            .map(|x| {
+                self.immix_space.block_allocation.nursery_mb() as f64
+                    * super::SURVIVAL_RATIO_PREDICTOR.ratio()
+                    >= x as f64
+            })
+            .unwrap_or(false)
         {
             // println!(
             //     "Survival limits {} * {} > {} blocks={}",
@@ -160,7 +158,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // inc limits
         if !crate::args::LXR_RC_ONLY
             && crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::REF_COUNT
             && self
                 .inc_buffer_limit
                 .map(|x| rc::inc_buffer_size() >= x)
@@ -179,7 +176,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // RC nursery full
         if !crate::args::LXR_RC_ONLY
             && !crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::REF_COUNT
             && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(self.concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
@@ -242,6 +238,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.common.gc_init(heap_size, vm_map);
         self.immix_space.init(vm_map);
         self.immix_space.cm_enabled = !*self.base().options.lxr_no_cm;
+        self.common.los.rc_enabled = true;
         unsafe {
             let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
             lazy_sweeping_jobs.swap();
@@ -327,13 +324,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         match pause {
             Pause::FullTraceFast => {
-                if crate::args::REF_COUNT {
-                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TRACE_KIND_FAST }>(scheduler)
-                } else {
-                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>, { TRACE_KIND_FAST }>(
-                        scheduler,
-                    )
-                }
+                self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TRACE_KIND_FAST }>(scheduler)
             }
             Pause::FullTraceDefrag => self
                 .schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_DEFRAG }>, { TRACE_KIND_DEFRAG }>(
@@ -364,48 +355,31 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 s.rc_pauses += 1
             }
         });
-        if !crate::args::REF_COUNT {
-            if pause != Pause::FinalMark {
-                self.common.prepare(tls, true);
-                self.immix_space.prepare(true, true);
-            }
-        } else {
-            super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
-            self.common.prepare(
-                tls,
-                pause == Pause::FullTraceFast || pause == Pause::InitialMark,
-            );
-            if crate::args::REF_COUNT
-                && crate::args::RC_MATURE_EVACUATION
-                && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
-            {
-                self.immix_space.process_mature_evacuation_remset();
-                self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                    .add(FlushMatureEvacRemsets);
-            }
-            self.immix_space.prepare_rc(pause);
+        super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
+        self.common.prepare(
+            tls,
+            pause == Pause::FullTraceFast || pause == Pause::InitialMark,
+        );
+        if crate::args::RC_MATURE_EVACUATION
+            && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
+        {
+            self.immix_space.process_mature_evacuation_remset();
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
+                .add(FlushMatureEvacRemsets);
         }
+        self.immix_space.prepare_rc(pause);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
         let pause = self.current_pause().unwrap();
-        if !crate::args::REF_COUNT {
-            if pause != Pause::InitialMark {
-                self.common.release(tls, true);
-                self.immix_space.release(true);
-            }
-        } else {
-            self.common.release(
-                tls,
-                pause == Pause::FullTraceFast || pause == Pause::FinalMark,
-            );
-            self.immix_space.release_rc(pause);
-        }
-        if crate::args::REF_COUNT {
-            unsafe {
-                std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
-                debug_assert!(super::CURR_ROOTS.is_empty());
-            }
+        self.common.release(
+            tls,
+            pause == Pause::FullTraceFast || pause == Pause::FinalMark,
+        );
+        self.immix_space.release_rc(pause);
+        unsafe {
+            std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
+            debug_assert!(super::CURR_ROOTS.is_empty());
         }
         // release the collected region
         self.last_gc_was_defrag.store(
@@ -436,23 +410,21 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.immix_space.pr.flush_all();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
-        if crate::args::REF_COUNT {
-            super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
-                self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES,
-            );
-            super::SURVIVAL_RATIO_PREDICTOR
-                .pause_start
-                .store(SystemTime::now(), Ordering::SeqCst);
-            let me = unsafe { &mut *(self as *const _ as *mut Self) };
-            me.immix_space.rc_eager_prepare(pause);
+
+        super::SURVIVAL_RATIO_PREDICTOR
+            .set_alloc_size(self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES);
+        super::SURVIVAL_RATIO_PREDICTOR
+            .pause_start
+            .store(SystemTime::now(), Ordering::SeqCst);
+        let me = unsafe { &mut *(self as *const _ as *mut Self) };
+        me.immix_space.rc_eager_prepare(pause);
+
+        scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
+        if pause == Pause::RefCount {
+            // scheduler.work_buckets[WorkBucketStage::Initial].activate();
         }
-        if crate::args::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
-            if pause == Pause::RefCount {
-                // scheduler.work_buckets[WorkBucketStage::Initial].activate();
-            }
-            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
-        }
+        scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
+
         if pause == Pause::FinalMark {
             self.in_concurrent_marking.store(false, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
@@ -477,9 +449,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_end(&self) {
-        if !crate::args::REF_COUNT {
-            self.immix_space.reusable_blocks.flush_all();
-        }
         self.immix_space.pr.flush_all();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
@@ -500,7 +469,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
         crate::LAZY_SWEEPING_JOBS.write().swap();
-        if !crate::args::REF_COUNT || crate::args::LAZY_DECREMENTS {
+        if crate::args::LAZY_DECREMENTS {
             let perform_cycle_collection =
                 self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
             self.next_gc_may_perform_cycle_collection
@@ -515,6 +484,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     #[cfg(feature = "nogc_no_zeroing")]
     fn handle_user_collection_request(&self, _tls: crate::util::VMMutatorThread, _force: bool) {
         println!("Warning: User attempted a collection request. The request is ignored.");
+    }
+
+    fn no_mutator_prepare_release(&self) -> bool {
+        true
     }
 }
 
@@ -546,6 +519,7 @@ impl<VM: VMBinding> LXR<VM> {
             scheduler,
             global_metadata_specs.clone(),
             &LXR_CONSTRAINTS,
+            true,
         );
         immix_space.cm_enabled = true;
         let immix = LXR {
@@ -751,7 +725,7 @@ impl<VM: VMBinding> LXR<VM> {
             .load(Ordering::SeqCst);
         let pause = if crate::args::LXR_RC_ONLY {
             Pause::RefCount
-        } else if crate::args::HEAP_HEALTH_GUIDED_GC && crate::args::REF_COUNT {
+        } else if crate::args::HEAP_HEALTH_GUIDED_GC {
             let pause = self.select_lxr_collection_kind(emergency_collection);
             if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
@@ -777,11 +751,11 @@ impl<VM: VMBinding> LXR<VM> {
         } else if concurrent {
             Pause::InitialMark
         } else {
-            if (!crate::args::REF_COUNT || crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
+            if (crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
                 && concurrent_marking_in_progress
             {
                 Pause::FinalMark
-            } else if crate::args::REF_COUNT && (!force_no_rc || concurrent_marking_in_progress) {
+            } else if !force_no_rc || concurrent_marking_in_progress {
                 Pause::RefCount
             } else {
                 Pause::FullTraceFast
@@ -809,19 +783,15 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler: &GCWorkScheduler<VM>,
     ) {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        if crate::args::REF_COUNT {
-            Self::process_prev_roots(scheduler);
-            scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
-        }
+        Self::process_prev_roots(scheduler);
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<ImmixGCWorkContext<VM, KIND>>::new(self));
         // Release global/collectors/mutators
-        if crate::args::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
-        }
+        scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<ImmixGCWorkContext<VM, KIND>>::new(self));
     }
@@ -834,7 +804,6 @@ impl<VM: VMBinding> LXR<VM> {
                 scheduler.pause_concurrent_work_packets_during_gc();
             }
         }
-        debug_assert!(crate::args::REF_COUNT);
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         Self::process_prev_roots(scheduler);
@@ -851,16 +820,9 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if crate::args::REF_COUNT {
-            Self::process_prev_roots(scheduler);
-        }
-        if crate::args::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new())
-        } else {
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<CMImmixCollectRootEdges<VM>>::new())
-        };
+        Self::process_prev_roots(scheduler);
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
             ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
@@ -870,32 +832,24 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if crate::args::REF_COUNT {
-            if self.concurrent_marking_in_progress() {
-                crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
-            }
-            Self::process_prev_roots(scheduler);
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
-        } else {
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(StopMutators::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>>::new());
+        if self.concurrent_marking_in_progress() {
+            crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
+        Self::process_prev_roots(scheduler);
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
 
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
             ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
-        if crate::args::REF_COUNT {
-            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
-        }
+        scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
-        debug_assert!(crate::args::REF_COUNT);
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
