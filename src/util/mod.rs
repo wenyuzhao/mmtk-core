@@ -11,7 +11,6 @@ pub mod address;
 /// Allocators
 // This module is made public so the binding could implement allocator slowpaths if they would like to.
 pub mod alloc;
-pub mod cm;
 /// Constants used in MMTk
 pub mod constants;
 /// Calculation, conversion and rounding for memory related numbers.
@@ -24,7 +23,6 @@ pub mod linear_scan;
 pub mod memory;
 /// Opaque pointers used in MMTk, e.g. VMThread.
 pub mod opaque_pointer;
-pub mod rc;
 /// Reference processing implementation.
 pub mod reference_processor;
 

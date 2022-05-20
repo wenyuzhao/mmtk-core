@@ -1,4 +1,6 @@
-use crate::plan::immix::Immix;
+use crate::plan::lxr::rc;
+use crate::plan::lxr::rc::ProcessDecs;
+use crate::plan::lxr::LXR;
 use crate::plan::EdgeIterator;
 use crate::plan::PlanConstraints;
 use crate::plan::TransitiveClosure;
@@ -23,8 +25,6 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
-use crate::util::rc;
-use crate::util::rc::ProcessDecs;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
@@ -63,7 +63,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if crate::args::REF_COUNT {
-            return crate::util::rc::count(object) > 0;
+            return crate::plan::lxr::rc::count(object) > 0;
         }
         if self.trace_in_progress {
             return true;
@@ -505,7 +505,7 @@ fn get_super_page(cell: Address) -> Address {
 
 pub struct RCSweepMatureLOS<VM: VMBinding> {
     counter: LazySweepingJobsCounter,
-    immix: *const Immix<VM>,
+    lxr: *const LXR<VM>,
     worker: *mut GCWorker<VM>,
     recursive_dec_objects: Vec<ObjectReference>,
 }
@@ -515,7 +515,7 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
         Self {
             counter,
             recursive_dec_objects: vec![],
-            immix: std::ptr::null_mut(),
+            lxr: std::ptr::null_mut(),
             worker: std::ptr::null_mut(),
         }
     }
@@ -526,8 +526,8 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
     }
 
     #[inline(always)]
-    fn immix(&self) -> &Immix<VM> {
-        unsafe { &*self.immix }
+    fn lxr(&self) -> &LXR<VM> {
+        unsafe { &*self.lxr }
     }
 
     #[cold]
@@ -537,11 +537,11 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
         }
         let mut recursive_dec_objects = vec![];
         std::mem::swap(&mut recursive_dec_objects, &mut self.recursive_dec_objects);
-        let immix = self.immix();
+        let lxr = self.lxr();
         let w = ProcessDecs::new(recursive_dec_objects, self.counter.clone_with_decs());
         if end {
             self.worker().do_work(w)
-        } else if immix.current_pause().is_none() {
+        } else if lxr.current_pause().is_none() {
             self.worker()
                 .add_work_prioritized(WorkBucketStage::Unconstrained, w);
         } else {
@@ -553,7 +553,7 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
     fn scan_and_recursively_dec_objects(&mut self, dead: ObjectReference) {
         EdgeIterator::<VM>::iterate(dead, |edge| {
             let mut x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() && !rc::is_dead(x) && self.immix().is_marked(x) {
+            if !x.is_null() && !rc::is_dead(x) && self.lxr().is_marked(x) {
                 debug_assert!(x.is_in_any_space());
                 x = x.fix_start_address::<VM>();
                 debug_assert!(x.class_is_valid());
@@ -578,7 +578,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS<VM> {
         mmtk: &'static crate::MMTK<VM>,
     ) {
         self.worker = worker;
-        self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {

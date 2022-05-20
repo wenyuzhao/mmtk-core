@@ -1,9 +1,12 @@
+use super::cm::CMImmixCollectRootEdges;
 use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
-use super::Pause;
+use super::rc::{self, ProcessDecs, RCImmixCollectRootEdges};
+use super::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
+use crate::plan::immix::Pause;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
@@ -51,7 +54,7 @@ static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 use mmtk_macros::PlanTraceObject;
 
 #[derive(PlanTraceObject)]
-pub struct Immix<VM: VMBinding> {
+pub struct LXR<VM: VMBinding> {
     #[post_scan]
     #[trace(CopySemantics::DefaultCopy)]
     pub immix_space: ImmixSpace<VM>,
@@ -88,7 +91,7 @@ pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
     }
 });
 
-pub static IMMIX_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
+pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
     moves_objects: true,
     gc_header_bits: 2,
     gc_header_words: 0,
@@ -103,7 +106,7 @@ pub static IMMIX_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstrain
     ..PlanConstraints::default()
 });
 
-impl<VM: VMBinding> Plan for Immix<VM> {
+impl<VM: VMBinding> Plan for LXR<VM> {
     type VM = VM;
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
@@ -140,12 +143,68 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
         }
+        if crate::args::LXR_RC_ONLY {
+            let inc_overflow = self
+                .inc_buffer_limit
+                .map(|x| rc::inc_buffer_size() >= x)
+                .unwrap_or(false);
+            let alloc_overflow = self
+                .nursery_blocks
+                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                .unwrap_or(false);
+            if alloc_overflow || inc_overflow {
+                if inc_overflow {
+                    INCS_TRIGGERED.store(true, Ordering::SeqCst);
+                }
+                if alloc_overflow {
+                    ALLOC_TRIGGERED.store(true, Ordering::SeqCst);
+                }
+                return true;
+            }
+
+            if crate::args::ENABLE_INITIAL_ALLOC_LIMIT
+                && !INITIAL_GC_TRIGGERED.load(Ordering::SeqCst)
+            {
+                if self.immix_space.block_allocation.nursery_blocks() >= 1024 {
+                    return true;
+                }
+            }
+        }
+        // inc limits
+        if !crate::args::LXR_RC_ONLY
+            && crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args::REF_COUNT
+            && self
+                .inc_buffer_limit
+                .map(|x| rc::inc_buffer_size() >= x)
+                .unwrap_or(false)
+        {
+            return true;
+        }
         // Concurrent tracing finished
         if !crate::args::LXR_RC_ONLY
             && !crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args::CONCURRENT_MARKING
             && crate::concurrent_marking_in_progress()
             && crate::concurrent_marking_packets_drained()
+        {
+            return true;
+        }
+        // RC nursery full
+        if !crate::args::LXR_RC_ONLY
+            && !crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args::REF_COUNT
+            && crate::args::LOCK_FREE_BLOCK_ALLOCATION
+            && !(crate::concurrent_marking_in_progress()
+                && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
+            && (self
+                .nursery_blocks
+                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                .unwrap_or(false)
+                || self
+                    .inc_buffer_limit
+                    .map(|x| rc::inc_buffer_size() >= x)
+                    .unwrap_or(false))
         {
             return true;
         }
@@ -177,7 +236,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
-        &IMMIX_CONSTRAINTS
+        &LXR_CONSTRAINTS
     }
 
     fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
@@ -188,7 +247,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 _ => CopySelector::Unused,
             },
             space_mapping: vec![(CopySelector::Immix(0), &self.immix_space)],
-            constraints: &IMMIX_CONSTRAINTS,
+            constraints: &LXR_CONSTRAINTS,
         }
     }
 
@@ -270,19 +329,32 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
+        if crate::args::LOG_PER_GC_STATE {
+            let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
+            println!(
+                "[{:.3}s][pause] {:?} {}",
+                boot_time,
+                pause,
+                super::rc::inc_buffer_size()
+            );
+        }
         match pause {
             Pause::FullTraceFast => {
-                self.schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>, { TRACE_KIND_FAST }>(
-                    scheduler,
-                )
+                if crate::args::REF_COUNT {
+                    self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TRACE_KIND_FAST }>(scheduler)
+                } else {
+                    self.schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>, { TRACE_KIND_FAST }>(
+                        scheduler,
+                    )
+                }
             }
             Pause::FullTraceDefrag => self
                 .schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_DEFRAG }>, { TRACE_KIND_DEFRAG }>(
                     scheduler,
                 ),
-            Pause::RefCount => unreachable!(),
-            Pause::InitialMark => unreachable!(),
-            Pause::FinalMark =>unreachable!(),
+            Pause::RefCount => self.schedule_rc_collection(scheduler),
+            Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
+            Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
         }
 
         // Analysis routine that is ran. It is generally recommended to take advantage
@@ -459,7 +531,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 }
 
-impl<VM: VMBinding> Immix<VM> {
+impl<VM: VMBinding> LXR<VM> {
     pub fn new(
         vm_map: &'static VMMap,
         mmapper: &'static Mmapper,
@@ -470,12 +542,16 @@ impl<VM: VMBinding> Immix<VM> {
         let immix_specs = if crate::args::BARRIER_MEASUREMENT
             || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)
         {
-            unreachable!()
+            metadata::extract_side_metadata(&[
+                RC_LOCK_BIT_SPEC,
+                MetadataSpec::OnSide(RC_TABLE),
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            ])
         } else {
             vec![]
         };
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
-        let immix = Immix {
+        let immix = LXR {
             immix_space: ImmixSpace::new(
                 "immix",
                 vm_map,
@@ -483,14 +559,14 @@ impl<VM: VMBinding> Immix<VM> {
                 &mut heap,
                 scheduler,
                 global_metadata_specs.clone(),
-                &IMMIX_CONSTRAINTS,
+                &LXR_CONSTRAINTS,
             ),
             common: CommonPlan::new(
                 vm_map,
                 mmapper,
                 options,
                 heap,
-                &IMMIX_CONSTRAINTS,
+                &LXR_CONSTRAINTS,
                 global_metadata_specs,
             ),
             perform_cycle_collection: AtomicBool::new(false),
@@ -746,6 +822,11 @@ impl<VM: VMBinding> Immix<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
+        // Before start yielding, wrap all the roots from the previous GC with work-packets.
+        if super::REF_COUNT {
+            Self::process_prev_roots(scheduler);
+            scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
+        }
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
@@ -757,6 +838,95 @@ impl<VM: VMBinding> Immix<VM> {
         }
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<ImmixGCWorkContext<VM, KIND>>::new(self));
+    }
+
+    fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        #[allow(clippy::collapsible_if)]
+        if crate::args::CONCURRENT_MARKING && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
+            if crate::concurrent_marking_in_progress() {
+                scheduler.pause_concurrent_work_packets_during_gc();
+            }
+        }
+        debug_assert!(super::REF_COUNT);
+        type E<VM> = RCImmixCollectRootEdges<VM>;
+        // Before start yielding, wrap all the roots from the previous GC with work-packets.
+        Self::process_prev_roots(scheduler);
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+    }
+
+    fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if super::REF_COUNT {
+            Self::process_prev_roots(scheduler);
+        }
+        if crate::args::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new())
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<CMImmixCollectRootEdges<VM>>::new())
+        };
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+    }
+
+    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if super::REF_COUNT {
+            if crate::concurrent_marking_in_progress() {
+                crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
+            }
+            Self::process_prev_roots(scheduler);
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
+        } else {
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<ImmixProcessEdges<VM, { TRACE_KIND_FAST }>>::new());
+        }
+
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
+        if super::REF_COUNT {
+            scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
+        }
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+    }
+
+    fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
+        debug_assert!(super::REF_COUNT);
+        let prev_roots = unsafe { &super::PREV_ROOTS };
+        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
+        while let Some(decs) = prev_roots.pop() {
+            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
+            work_packets.push(Box::new(w));
+        }
+        if work_packets.is_empty() {
+            work_packets.push(Box::new(ProcessDecs::new(
+                vec![],
+                LazySweepingJobsCounter::new_desc(),
+            )));
+        }
+        if crate::args::LAZY_DECREMENTS {
+            debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+            scheduler.postpone_all_prioritized(work_packets);
+        } else {
+            scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);
+        }
     }
 
     #[inline(always)]

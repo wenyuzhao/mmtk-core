@@ -1,23 +1,21 @@
-use super::copy::GCWorkerCopyContext;
-use super::metadata::MetadataSpec;
-use super::{metadata::side_metadata::address_to_meta_address, Address};
+use super::cm::ImmixConcurrentTraceObjects;
+use super::cm::LXRStopTheWorldProcessEdges;
+use super::LXR;
 use crate::policy::immix::block::BlockState;
-use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::util::copy::CopySemantics;
+use crate::util::copy::GCWorkerCopyContext;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::MetadataSpec;
+use crate::util::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::LazySweepingJobsCounter;
 use crate::{
-    plan::{
-        immix::{Immix, Pause},
-        EdgeIterator,
-    },
+    plan::{immix::Pause, EdgeIterator},
     policy::{
         immix::{block::Block, line::Line},
         space::Space,
     },
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     util::{
-        cm::ImmixConcurrentTraceObjects,
         metadata::side_metadata::{self, SideMetadataSpec},
         object_forwarding, ObjectReference,
     },
@@ -113,12 +111,11 @@ pub fn count(o: ObjectReference) -> usize {
 pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
     debug_assert!({
         let log_bits_in_uint: usize = (std::mem::size_of::<UInt>() << 3).trailing_zeros() as usize;
-        Block::LOG_BYTES - crate::util::rc::LOG_MIN_OBJECT_SIZE
-            + crate::util::rc::LOG_REF_COUNT_BITS
+        Block::LOG_BYTES - super::rc::LOG_MIN_OBJECT_SIZE + super::rc::LOG_REF_COUNT_BITS
             >= log_bits_in_uint
     });
-    let start = address_to_meta_address(&crate::util::rc::RC_TABLE, b.start()).to_ptr::<UInt>();
-    let limit = address_to_meta_address(&crate::util::rc::RC_TABLE, b.end()).to_ptr::<UInt>();
+    let start = address_to_meta_address(&super::rc::RC_TABLE, b.start()).to_ptr::<UInt>();
+    let limit = address_to_meta_address(&super::rc::RC_TABLE, b.end()).to_ptr::<UInt>();
     let rc_table = unsafe { std::slice::from_raw_parts(start, limit.offset_from(start) as _) };
     rc_table
 }
@@ -215,7 +212,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     remset: Vec<Address>,
     /// Execution worker
     worker: *mut GCWorker<VM>,
-    immix: *const Immix<VM>,
+    lxr: *const LXR<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     no_evac: bool,
@@ -256,8 +253,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline(always)]
-    fn immix(&self) -> &'static Immix<VM> {
-        unsafe { &*self.immix }
+    fn lxr(&self) -> &'static LXR<VM> {
+        unsafe { &*self.lxr }
     }
 
     #[inline]
@@ -268,7 +265,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             new_incs: vec![],
             remset: vec![],
             worker: std::ptr::null_mut(),
-            immix: std::ptr::null(),
+            lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
@@ -290,7 +287,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             new_incs: vec![],
             remset: vec![],
             worker: std::ptr::null_mut(),
-            immix: std::ptr::null(),
+            lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
@@ -310,7 +307,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
-            if self.immix().los().in_space(o) {
+            if self.lxr().los().in_space(o) {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
             }
@@ -328,7 +325,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-            self.immix().mark2(o, los);
+            self.lxr().mark2(o, los);
         }
         self.scan_nursery_object(o, los, !copied, depth);
     }
@@ -340,11 +337,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return;
         }
-        if force || (!self.immix().address_in_defrag(e) && self.immix().in_defrag(o)) {
-            self.immix()
+        if force || (!self.lxr().address_in_defrag(e) && self.lxr().in_defrag(o)) {
+            self.lxr()
                 .immix_space
                 .remset
-                .record(e, &self.immix().immix_space);
+                .record(e, &self.lxr().immix_space);
         }
     }
 
@@ -488,7 +485,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_volume += o.get_size::<VM>();
         });
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
-        let los = self.immix().los().in_space(o);
+        let los = self.lxr().los().in_space(o);
         if self.dont_evacuate(o, los) {
             if let Ok(0) = self::inc(o) {
                 self.promote(o, false, los, depth);
@@ -675,8 +672,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        self.current_pause = self.immix().current_pause().unwrap();
+        self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.current_pause = self.lxr().current_pause().unwrap();
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
         if crate::NO_EVAC.load(Ordering::Relaxed) {
@@ -829,8 +826,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[inline]
-    fn new_work(&self, immix: &Immix<VM>, w: ProcessDecs<VM>) {
-        if immix.current_pause().is_none() {
+    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
+        if lxr.current_pause().is_none() {
             self.worker()
                 .add_work_prioritized(WorkBucketStage::Unconstrained, w);
         } else {
@@ -844,9 +841,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let mut new_decs = vec![];
             std::mem::swap(&mut new_decs, &mut self.new_decs);
             let mmtk = unsafe { &*self.mmtk };
-            let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+            let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
-                immix,
+                lxr,
                 ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
             );
         }
@@ -863,7 +860,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[cold]
-    fn process_dead_object(&mut self, o: ObjectReference, immix: &Immix<VM>) {
+    fn process_dead_object(&mut self, o: ObjectReference, immix: &LXR<VM>) {
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -943,7 +940,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     fn process_decs(
         &mut self,
         decs: &[ObjectReference],
-        immix: &Immix<VM>,
+        lxr: &LXR<VM>,
         slice: bool,
         not_marked: bool,
     ) {
@@ -953,12 +950,12 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 continue;
             }
             if slice {
-                if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(*o) {
+                if not_marked && self.concurrent_marking_in_progress && !lxr.is_marked(*o) {
                     self.mark_objects.push(*o);
                 }
             }
             if self::is_dead_or_stick(*o)
-                || (self.mature_sweeping_in_progress && !immix.is_marked(*o))
+                || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
             {
                 continue;
             }
@@ -972,7 +969,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let _ = self::fetch_update(o, |c| {
                 if c == 1 && !dead {
                     dead = true;
-                    self.process_dead_object(o, immix);
+                    self.process_dead_object(o, lxr);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if c == 0 || c == MAX_REF_COUNT {
@@ -991,22 +988,22 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         self.worker = worker;
         self.mmtk = mmtk;
         self.concurrent_marking_in_progress = crate::concurrent_marking_in_progress();
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        self.mature_sweeping_in_progress = immix.previous_pause() == Some(Pause::FinalMark)
-            || immix.previous_pause() == Some(Pause::FullTraceFast);
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
+            || lxr.previous_pause() == Some(Pause::FullTraceFast);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         if let Some((not_marked, slice)) = self.slice {
-            self.process_decs(slice, immix, true, not_marked);
+            self.process_decs(slice, lxr, true, not_marked);
         } else {
             let mut decs = vec![];
             std::mem::swap(&mut decs, &mut self.decs);
-            self.process_decs(&decs, immix, false, false);
+            self.process_decs(&decs, lxr, false, false);
         }
         let mut decs = vec![];
         while !self.new_decs.is_empty() {
             decs.clear();
             std::mem::swap(&mut decs, &mut self.new_decs);
-            self.process_decs(&decs, immix, false, false);
+            self.process_decs(&decs, lxr, false, false);
         }
         self.flush();
     }
@@ -1028,14 +1025,14 @@ impl SweepBlocksAfterDecs {
 
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         if self.blocks.is_empty() {
             return;
         }
         let mut count = 0;
         for (block, defrag) in &self.blocks {
             block.unlog();
-            if block.rc_sweep_mature::<VM>(&immix.immix_space, *defrag) {
+            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
                 count += 1;
             } else {
                 assert!(
@@ -1047,9 +1044,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                 );
             }
         }
-        if count != 0 && immix.current_pause().is_none() {
-            immix
-                .immix_space
+        if count != 0 && lxr.current_pause().is_none() {
+            lxr.immix_space
                 .num_clean_blocks_released_lazy
                 .fetch_add(count, Ordering::Relaxed);
         }

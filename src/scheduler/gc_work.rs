@@ -2,13 +2,15 @@ use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::immix::Immix;
 use crate::plan::immix::Pause;
+use crate::plan::lxr::cm::LXRStopTheWorldProcessEdges;
+use crate::plan::lxr::rc;
+use crate::plan::lxr::LXR;
 use crate::plan::GcStatus;
 use crate::plan::ObjectsClosure;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
-use crate::util::cm::LXRStopTheWorldProcessEdges;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::*;
 use crate::util::*;
@@ -256,7 +258,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         crate::add_copy_bytes(unsafe { crate::SLOPPY_COPY_BYTES });
         let pause = mmtk
             .plan
-            .downcast_ref::<Immix<VM>>()
+            .downcast_ref::<LXR<VM>>()
             .map(|ix| ix.current_pause().unwrap())
             .unwrap_or(Pause::FullTraceFast);
         crate::add_pause_time(pause, pause_time.as_nanos());
@@ -782,20 +784,20 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     #[inline(always)]
-    fn address_is_valid_oop_edge(&self, e: Address, epoch: u8, immix: &Immix<VM>) -> bool {
+    fn address_is_valid_oop_edge(&self, e: Address, epoch: u8, lxr: &LXR<VM>) -> bool {
         // Skip edges not in the mmtk heap
-        if !immix.immix_space.address_in_space(e) && !immix.los().address_in_space(e) {
+        if !lxr.immix_space.address_in_space(e) && !lxr.los().address_in_space(e) {
             return false;
         }
         // Skip edges in collection set
-        if immix.address_in_defrag(e) {
+        if lxr.address_in_defrag(e) {
             return false;
         }
         if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             return true;
         }
         // Check if it is a real oop field
-        if immix.immix_space.address_in_space(e) {
+        if lxr.immix_space.address_in_space(e) {
             let block = Block::of(e);
             if block.get_state() == BlockState::Unallocated {
                 return false;
@@ -805,7 +807,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             }
             false
         } else {
-            if immix.los().pointer_is_valid(e, epoch) {
+            if lxr.los().pointer_is_valid(e, epoch) {
                 return true;
             }
             false
@@ -813,15 +815,15 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     #[inline]
-    fn process_edge(&mut self, e: Address, epoch: u8, immix: &Immix<VM>) -> bool {
+    fn process_edge(&mut self, e: Address, epoch: u8, lxr: &LXR<VM>) -> bool {
         debug_assert!(e.is_mapped());
         // Skip edges that does not contain a real oop
-        if !self.address_is_valid_oop_edge(e, epoch, immix) {
+        if !self.address_is_valid_oop_edge(e, epoch, lxr) {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
         let o = unsafe { e.load::<ObjectReference>() };
-        if !immix.immix_space.in_space(o) || !o.is_in_any_space() {
+        if !lxr.immix_space.in_space(o) || !o.is_in_any_space() {
             return false;
         }
         if rc::count(o) != 0 && Block::in_defrag_block::<VM>(o) {
@@ -839,10 +841,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
-            immix.current_pause() == Some(Pause::FinalMark)
-                || immix.current_pause() == Some(Pause::FullTraceFast)
+            lxr.current_pause() == Some(Pause::FinalMark)
+                || lxr.current_pause() == Some(Pause::FullTraceFast)
         );
         // cleanup edges
         let mut remset = vec![];
@@ -851,7 +853,7 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             .into_iter()
             .filter(|e| {
                 let (e, epoch) = Line::decode_validity_state(*e);
-                self.process_edge(e, epoch, immix)
+                self.process_edge(e, epoch, lxr)
             })
             .map(|e| Line::decode_validity_state(e).0)
             .collect::<Vec<_>>();

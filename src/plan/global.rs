@@ -59,6 +59,7 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::MarkCompact => {
             crate::plan::markcompact::mutator::create_markcompact_mutator(tls, &*mmtk.plan)
         }
+        PlanSelector::LXR => crate::plan::lxr::mutator::create_lxr_mutator(tls, mmtk),
     })
 }
 
@@ -91,6 +92,9 @@ pub fn create_plan<VM: VMBinding>(
         )),
         PlanSelector::MarkCompact => Box::new(crate::plan::markcompact::MarkCompact::new(
             vm_map, mmapper, options,
+        )),
+        PlanSelector::LXR => Box::new(crate::plan::lxr::LXR::new(
+            vm_map, mmapper, options, scheduler,
         )),
     }
 }

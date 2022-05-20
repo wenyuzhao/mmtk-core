@@ -3,7 +3,7 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, GCWorkerShared, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
-use crate::util::cm::ImmixConcurrentTraceObjects;
+use crate::plan::lxr::cm::ImmixConcurrentTraceObjects;
 use crate::util::opaque_pointer::*;
 use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};

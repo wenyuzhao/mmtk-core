@@ -1,10 +1,10 @@
-use super::copy::CopySemantics;
-use super::{Address, ObjectReference};
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::ScanObjects;
+use crate::util::copy::CopySemantics;
+use crate::util::{Address, ObjectReference};
 use crate::{
-    plan::{immix::Immix, EdgeIterator},
+    plan::EdgeIterator,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     util::metadata::side_metadata::address_to_meta_address,
     vm::*,
@@ -18,8 +18,10 @@ use std::{
     ptr,
 };
 
+use super::LXR;
+
 pub struct ImmixConcurrentTraceObjects<VM: VMBinding> {
-    plan: &'static Immix<VM>,
+    plan: &'static LXR<VM>,
     mmtk: &'static MMTK<VM>,
     objects: Vec<ObjectReference>,
     next_objects: Vec<ObjectReference>,
@@ -33,7 +35,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
-        let plan = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -46,7 +48,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
     }
 
     pub fn new_slice(slice: &'static [ObjectReference], mmtk: &'static MMTK<VM>) -> Self {
-        let plan = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -80,7 +82,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
         if object.is_null() || !object.is_in_any_space() {
             return object;
         }
-        let no_trace = crate::args::REF_COUNT && crate::util::rc::count(object) == 0;
+        let no_trace = crate::args::REF_COUNT && super::rc::count(object) == 0;
         if no_trace {
             return object;
         }
@@ -100,7 +102,7 @@ impl<VM: VMBinding> ImmixConcurrentTraceObjects<VM> {
             for o in objects {
                 if !self.plan.address_in_defrag(Address::from_ref(o))
                     && self.plan.in_defrag(*o)
-                    && crate::util::rc::count(*o) != 0
+                    && super::rc::count(*o) != 0
                 {
                     self.plan
                         .immix_space
@@ -142,7 +144,7 @@ impl<VM: VMBinding> TransitiveClosure for ImmixConcurrentTraceObjects<VM> {
         } else {
             EdgeIterator::<VM>::iterate(object, |e| {
                 let t: ObjectReference = unsafe { e.load() };
-                if t.is_null() || crate::util::rc::count(t) == 0 {
+                if t.is_null() || super::rc::count(t) == 0 {
                     return;
                 }
                 if crate::args::REF_COUNT
@@ -295,7 +297,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
 }
 
 pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
-    immix: &'static Immix<VM>,
+    lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
     forwarded_roots: Vec<ObjectReference>,
@@ -307,9 +309,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
-        let immix = base.plan().downcast_ref::<Immix<VM>>().unwrap();
+        let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
-            immix,
+            lxr,
             base,
             pause: Pause::RefCount,
             forwarded_roots: vec![],
@@ -334,8 +336,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         {
             return object;
         }
-        let x = if self.immix.immix_space.in_space(object) {
-            self.immix.immix_space.rc_trace_object(
+        let x = if self.lxr.immix_space.in_space(object) {
+            self.lxr.immix_space.rc_trace_object(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -354,7 +356,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 
     #[inline]
     fn process_edges(&mut self) {
-        self.pause = self.immix.current_pause().unwrap();
+        self.pause = self.lxr.current_pause().unwrap();
         if self.roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
@@ -388,8 +390,8 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         {
             return object;
         }
-        let x = if self.immix.immix_space.in_space(object) {
-            self.immix.immix_space.rc_trace_object(
+        let x = if self.lxr.immix_space.in_space(object) {
+            self.lxr.immix_space.rc_trace_object(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -398,7 +400,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 self.worker(),
             )
         } else {
-            self.immix.los().trace_object(self, object)
+            self.lxr.los().trace_object(self, object)
         };
         if self.roots {
             self.forwarded_roots.push(x)

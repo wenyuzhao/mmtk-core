@@ -60,7 +60,7 @@ define_side_metadata_specs!(
     // Track chunks used by (malloc) marksweep
     MS_ACTIVE_CHUNK = (global: true, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_CHUNK as usize),
     // Reference counts
-    RC_TABLE = (global: true, log_num_of_bits: crate::util::rc::LOG_REF_COUNT_BITS, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
+    RC_TABLE = (global: true, log_num_of_bits: crate::plan::lxr::rc::LOG_REF_COUNT_BITS, log_bytes_in_region: crate::plan::lxr::rc::LOG_MIN_OBJECT_SIZE),
     // Field barrier lock bits
     RC_LOCK_BITS = (global: true, log_num_of_bits: 0, log_bytes_in_region: crate::args::LOG_BYTES_PER_RC_LOCK_BIT),
 );

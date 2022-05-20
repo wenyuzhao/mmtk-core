@@ -2,11 +2,11 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::immix::Immix;
+use crate::plan::lxr::rc::{self, ProcessDecs};
+use crate::plan::lxr::LXR;
 use crate::plan::EdgeIterator;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
-use crate::util::rc::{self, ProcessDecs};
 use crate::util::ObjectReference;
 use crate::LazySweepingJobsCounter;
 use crate::{
@@ -335,7 +335,7 @@ struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
     worker: *mut GCWorker<VM>,
     counter: LazySweepingJobsCounter,
-    immix: *const Immix<VM>,
+    lxr: *const LXR<VM>,
     recursive_dec_objects: Vec<ObjectReference>,
 }
 
@@ -351,8 +351,8 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 
     #[inline(always)]
-    fn immix(&self) -> &Immix<VM> {
-        unsafe { &*self.immix }
+    fn lxr(&self) -> &LXR<VM> {
+        unsafe { &*self.lxr }
     }
 
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
@@ -360,7 +360,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         Self {
             chunk,
             worker: std::ptr::null_mut(),
-            immix: std::ptr::null_mut(),
+            lxr: std::ptr::null_mut(),
             counter,
             recursive_dec_objects: vec![],
         }
@@ -373,11 +373,11 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         }
         let mut recursive_dec_objects = vec![];
         std::mem::swap(&mut recursive_dec_objects, &mut self.recursive_dec_objects);
-        let immix = self.immix();
+        let lxr = self.lxr();
         let w = ProcessDecs::new(recursive_dec_objects, self.counter.clone_with_decs());
         if end {
             self.worker().do_work(w)
-        } else if immix.current_pause().is_none() {
+        } else if lxr.current_pause().is_none() {
             self.worker()
                 .add_work_prioritized(WorkBucketStage::Unconstrained, w);
         } else {
@@ -389,7 +389,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     fn scan_and_recursively_dec_objects(&mut self, dead: ObjectReference) {
         EdgeIterator::<VM>::iterate(dead, |edge| {
             let mut x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() && !rc::is_dead_or_stick(x) && self.immix().is_marked(x) {
+            if !x.is_null() && !rc::is_dead_or_stick(x) && self.lxr().is_marked(x) {
                 debug_assert!(x.is_in_any_space());
                 x = x.fix_start_address::<VM>();
                 debug_assert!(x.class_is_valid());
@@ -471,9 +471,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        self.immix = immix;
-        let immix_space = &immix.immix_space;
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.lxr = lxr;
+        let immix_space = &lxr.immix_space;
         for block in self.chunk.committed_blocks() {
             if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
                 continue;

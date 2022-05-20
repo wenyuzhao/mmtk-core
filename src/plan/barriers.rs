@@ -5,24 +5,25 @@ use std::sync::atomic::AtomicUsize;
 use atomic::Ordering;
 
 use crate::plan::immix::Immix;
+use crate::plan::lxr::cm::ProcessModBufSATB;
+use crate::plan::lxr::rc::ProcessDecs;
+use crate::plan::lxr::rc::ProcessIncs;
+use crate::plan::lxr::rc::EDGE_KIND_MATURE;
+use crate::plan::lxr::rc::RC_LOCK_BIT_SPEC;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
-use crate::util::cm::ProcessModBufSATB;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
-use crate::util::rc::ProcessDecs;
-use crate::util::rc::ProcessIncs;
-use crate::util::rc::EDGE_KIND_MATURE;
-use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::vm::*;
 use crate::LazySweepingJobsCounter;
 use crate::MMTK;
 
 use super::immix::Pause;
+use super::lxr::LXR;
 use super::EdgeIterator;
 
 pub const BARRIER_MEASUREMENT: bool = crate::args::BARRIER_MEASUREMENT;
@@ -187,7 +188,7 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
     nodes: Vec<ObjectReference>,
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
-    immix: &'static Immix<E::VM>,
+    lxr: &'static LXR<E::VM>,
 }
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
@@ -204,7 +205,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             nodes: vec![],
             incs: Vec::with_capacity(Self::CAPACITY),
             decs: Vec::with_capacity(Self::CAPACITY),
-            immix: mmtk.plan.downcast_ref::<Immix<E::VM>>().unwrap(),
+            lxr: mmtk.plan.downcast_ref::<LXR<E::VM>>().unwrap(),
         }
     }
 
@@ -304,7 +305,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     fn slow(&mut self, _src: ObjectReference, edge: Address, old: ObjectReference) {
         #[cfg(any(feature = "sanity", debug_assertions))]
         assert!(
-            old.is_null() || rc::count(old) != 0,
+            old.is_null() || crate::plan::lxr::rc::count(old) != 0,
             "zero rc count {:?}",
             old
         );
@@ -324,7 +325,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 self.decs.push(old);
             }
             self.incs.push(edge);
-            crate::util::rc::inc_inc_buffer_size();
+            crate::plan::lxr::rc::inc_inc_buffer_size();
         }
         // Flush
         if self.edges.len() >= Self::CAPACITY
@@ -376,7 +377,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         #[allow(clippy::collapsible_if)]
         if crate::plan::immix::CONCURRENT_MARKING
             && (crate::concurrent_marking_in_progress()
-                || self.immix.current_pause() == Some(Pause::FinalMark))
+                || self.lxr.current_pause() == Some(Pause::FinalMark))
         {
             if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
                 let mut edges = vec![];

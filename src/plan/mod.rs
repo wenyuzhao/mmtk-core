@@ -43,6 +43,7 @@ pub use transitive_closure::{EdgeIterator, ObjectsClosure, TransitiveClosure};
 
 mod generational;
 pub mod immix;
+pub mod lxr;
 mod markcompact;
 mod marksweep;
 mod nogc;

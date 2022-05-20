@@ -1,7 +1,7 @@
 use atomic::{Atomic, Ordering};
 
 use crate::{
-    plan::immix::Immix,
+    plan::{immix::Immix, lxr::LXR},
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{gc_work::EvacuateMatureObjects, GCWork, GCWorker},
     util::Address,
@@ -70,7 +70,7 @@ pub struct FlushMatureEvacRemsets;
 
 impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix_space = &mmtk.plan.downcast_ref::<Immix<VM>>().unwrap().immix_space;
+        let immix_space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
         immix_space.remset.flush_all(immix_space);
         immix_space.process_mature_evacuation_remset();
     }

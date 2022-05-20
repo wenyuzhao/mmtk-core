@@ -1,4 +1,5 @@
-use super::global::Immix;
+use super::rc::{ProcessIncs, EDGE_KIND_ROOT};
+use super::LXR;
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
 use crate::scheduler::{gc_work::*, WorkBucketStage};
@@ -24,12 +25,12 @@ pub(in crate::plan) const TRACE_KIND_DEFRAG: TraceKind = 1;
 pub struct ImmixProcessEdges<VM: VMBinding, const KIND: TraceKind> {
     // Use a static ref to the specific plan to avoid overhead from dynamic dispatch or
     // downcast for each traced object.
-    plan: &'static Immix<VM>,
+    plan: &'static LXR<VM>,
     base: ProcessEdgesBase<VM>,
 }
 
 impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
-    fn immix(&self) -> &'static Immix<VM> {
+    fn lxr(&self) -> &'static LXR<VM> {
         self.plan
     }
 
@@ -38,15 +39,15 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
         if object.is_null() {
             return object;
         }
-        if self.immix().immix_space.in_space(object) {
+        if self.lxr().immix_space.in_space(object) {
             debug_assert!(
                 self.plan.current_pause() == Some(Pause::FinalMark)
                     || self.plan.current_pause() == Some(Pause::FullTraceFast)
             );
-            self.immix().immix_space.fast_trace_object(self, object);
+            self.lxr().immix_space.fast_trace_object(self, object);
             object
         } else {
-            self.immix().common.trace_object(self, object)
+            self.lxr().common.trace_object(self, object)
         }
     }
 
@@ -69,18 +70,18 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
-        let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
+        let plan = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self { plan, base }
     }
 
     #[cold]
     fn flush(&mut self) {
         if !self.nodes.is_empty() {
-            debug_assert_ne!(self.immix().current_pause(), Some(Pause::InitialMark));
+            debug_assert_ne!(self.lxr().current_pause(), Some(Pause::InitialMark));
             let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
                 self.pop_nodes(),
                 false,
-                &self.immix().immix_space,
+                &self.lxr().immix_space,
             );
             self.start_or_dispatch_scan_work(Box::new(scan_objects_work));
         }
@@ -92,11 +93,11 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         if object.is_null() {
             return object;
         }
-        if self.immix().immix_space.in_space(object) {
+        if self.lxr().immix_space.in_space(object) {
             if KIND == TRACE_KIND_FAST {
-                self.immix().immix_space.fast_trace_object(self, object)
+                self.lxr().immix_space.fast_trace_object(self, object)
             } else {
-                self.immix().immix_space.trace_object(
+                self.lxr().immix_space.trace_object(
                     self,
                     object,
                     CopySemantics::DefaultCopy,
@@ -104,7 +105,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 )
             }
         } else {
-            self.immix().common.trace_object::<Self>(self, object)
+            self.lxr().common.trace_object::<Self>(self, object)
         }
     }
 
@@ -119,6 +120,13 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             for i in 0..self.edges.len() {
                 ProcessEdgesWork::process_edge(self, self.edges[i])
             }
+        }
+        if super::REF_COUNT && !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
+            let mut roots = vec![];
+            std::mem::swap(&mut roots, &mut self.edges);
+            let bucket = WorkBucketStage::rc_process_incs_stage();
+            self.mmtk().scheduler.work_buckets[bucket]
+                .add(ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots));
         }
         self.flush();
     }
@@ -146,6 +154,6 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     for ImmixGCWorkContext<VM, KIND>
 {
     type VM = VM;
-    type PlanType = Immix<VM>;
-    type ProcessEdgesWorkType = PlanProcessEdges<VM, Immix<VM>, KIND>;
+    type PlanType = LXR<VM>;
+    type ProcessEdgesWorkType = PlanProcessEdges<VM, LXR<VM>, KIND>;
 }
