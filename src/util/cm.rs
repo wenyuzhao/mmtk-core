@@ -320,7 +320,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     fn flush(&mut self) {
         if !self.nodes.is_empty() {
             let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false);
-            self.new_scan_work(scan_objects_work);
+            self.start_or_dispatch_scan_work(Box::new(scan_objects_work))
         }
     }
 

@@ -1,5 +1,4 @@
 use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
-use super::gc_work::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::Pause;
 use crate::plan::global::BasePlan;
@@ -11,6 +10,7 @@ use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::remset::FlushMatureEvacRemsets;
 use crate::policy::immix::{MatureSweeping, UpdateWeakProcessor};
+use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -51,8 +51,14 @@ static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static SURVIVAL_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 
+use mmtk_macros::PlanTraceObject;
+
+#[derive(PlanTraceObject)]
 pub struct Immix<VM: VMBinding> {
+    #[post_scan]
+    #[trace(CopySemantics::DefaultCopy)]
     pub immix_space: ImmixSpace<VM>,
+    #[fallback_trace]
     pub common: CommonPlan<VM>,
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.

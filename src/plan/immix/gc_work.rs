@@ -84,7 +84,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 Some(self.immix()),
                 &self.immix().immix_space,
             );
-            self.new_scan_work(scan_objects_work);
+            self.start_or_dispatch_scan_work(Box::new(scan_objects_work));
         }
     }
 
@@ -156,5 +156,5 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
 {
     type VM = VM;
     type PlanType = Immix<VM>;
-    type ProcessEdgesWorkType = ImmixProcessEdges<VM, KIND>;
+    type ProcessEdgesWorkType = PlanProcessEdges<VM, Immix<VM>, KIND>;
 }

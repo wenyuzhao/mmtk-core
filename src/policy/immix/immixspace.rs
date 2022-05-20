@@ -1,16 +1,21 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
 use super::remset::RemSet;
-use super::{block::*, chunk::ChunkMap, defrag::Defrag};
+use super::{
+    block::*,
+    chunk::{Chunk, ChunkMap},
+    defrag::Defrag,
+};
 use crate::plan::immix::{Immix, Pause};
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
+use crate::policy::gc_work::TraceKind;
 use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
-use crate::policy::immix::chunk::Chunk;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
+use crate::scheduler::ProcessEdgesWork;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
@@ -26,7 +31,7 @@ use crate::util::{object_forwarding as ForwardingWord, rc};
 use crate::util::{Address, ObjectReference};
 use crate::{
     plan::TransitiveClosure,
-    scheduler::{gc_work::ProcessEdgesWork, GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
+    scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::{
         heap::blockpageresource::BlockPageResource,
         opaque_pointer::{VMThread, VMWorkerThread},
@@ -43,6 +48,9 @@ use std::{mem, ptr};
 
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
+pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -156,6 +164,44 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
     fn set_copy_for_sft_trace(&mut self, _semantics: Option<CopySemantics>) {
         panic!("We do not use SFT to trace objects for Immix. set_copy_context() cannot be used.")
+    }
+}
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace<VM> {
+    #[inline(always)]
+    fn trace_object<T: TransitiveClosure, const KIND: TraceKind>(
+        &self,
+        trace: &mut T,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        if KIND == TRACE_KIND_DEFRAG {
+            self.trace_object(trace, object, copy.unwrap(), worker)
+        } else if KIND == TRACE_KIND_FAST {
+            self.fast_trace_object(trace, object)
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[inline(always)]
+    fn post_scan_object(&self, object: ObjectReference) {
+        if super::MARK_LINE_AT_SCAN_TIME && !super::BLOCK_ONLY {
+            debug_assert!(self.in_space(object));
+            self.mark_lines(object);
+        }
+    }
+
+    #[inline(always)]
+    fn may_move_objects<const KIND: TraceKind>() -> bool {
+        if KIND == TRACE_KIND_DEFRAG {
+            true
+        } else if KIND == TRACE_KIND_FAST {
+            false
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -748,7 +794,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             {
                 if new_object == object {
                     debug_assert!(
-                        self.is_marked(object, self.mark_state) || self.defrag.space_exhausted() || Self::is_pinned(object),
+                        self.is_marked(object) || self.defrag.space_exhausted() || Self::is_pinned(object),
                         "Forwarded object is the same as original object {} even though it should have been copied",
                         object,
                     );

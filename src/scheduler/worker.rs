@@ -126,6 +126,17 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.shared.local_work_buffer.push(Box::new(work));
     }
 
+    #[inline]
+    pub fn add_boxed_work(&mut self, bucket: WorkBucketStage, work: Box<dyn GCWork<VM>>) {
+        if !self.scheduler().work_buckets[bucket].is_activated()
+            || !self.shared.local_work_buffer.is_empty()
+        {
+            self.scheduler.work_buckets[bucket].add_dyn(work);
+            return;
+        }
+        self.shared.local_work_buffer.push(work);
+    }
+
     pub fn is_coordinator(&self) -> bool {
         self.is_coordinator
     }
@@ -139,6 +150,10 @@ impl<VM: VMBinding> GCWorker<VM> {
     }
 
     pub fn do_work(&'static mut self, mut work: impl GCWork<VM>) {
+        work.do_work(self, self.mmtk);
+    }
+
+    pub fn do_boxed_work(&'static mut self, mut work: Box<dyn GCWork<VM>>) {
         work.do_work(self, self.mmtk);
     }
 
