@@ -387,12 +387,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             me.defrag_blocks.push(block);
             live_bytes += (Block::BYTES - dead_bytes) >> 1;
             num_blocks += 1;
-            if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
-                if live_bytes >= defrag_bytes {
-                    break;
-                }
-            } else {
-                unreachable!();
+            if live_bytes >= defrag_bytes {
+                break;
             }
         }
         if crate::args::LOG_PER_GC_STATE {
@@ -687,7 +683,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Allocate a clean block.
     #[inline(always)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        self.block_allocation.get_clean_block(tls, copy)
+        self.block_allocation
+            .get_clean_block(tls, copy, self.rc_enabled)
     }
 
     /// Pop a reusable block from the reusable block list.

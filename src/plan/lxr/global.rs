@@ -176,7 +176,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // RC nursery full
         if !crate::args::LXR_RC_ONLY
             && !crate::args::HEAP_HEALTH_GUIDED_GC
-            && crate::args::LOCK_FREE_BLOCK_ALLOCATION
             && !(self.concurrent_marking_in_progress()
                 && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
             && (self
@@ -237,7 +236,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         crate::args::validate_features(ACTIVE_BARRIER);
         self.common.gc_init(heap_size, vm_map);
         self.immix_space.init(vm_map);
-        self.immix_space.cm_enabled = !*self.base().options.lxr_no_cm;
+        self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
         self.common.los.rc_enabled = true;
         unsafe {
             let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();

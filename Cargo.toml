@@ -61,11 +61,13 @@ survival_ratio = []
 log_gc = []
 log_stages = ["log_gc"]
 log_work_packets = ["log_stages"]
+no_meta_counting = []
+
 # IX Features
-ix_concurrent_marking = []
-ix_lock_free_block_allocation = []
 ix_block_only = []
 ix_defrag = []
+
+# LXR Paraleters
 lxr_los_16k = []
 lxr_los_32k = []
 lxr_block_16k = []
@@ -89,40 +91,19 @@ lxr_buf_2048 = []
 lxr_rc_bits_2 = []
 lxr_rc_bits_4 = []
 lxr_rc_bits_8 = []
+
+# LXR Features
 lxr_hole_counting = []
 lxr_no_rc_in_cm = []
-# LXR Features
-ix_ref_count = ["ix_lock_free_block_allocation"]
-lxr_heap_health_guided_gc = ["ix_ref_count"]
-lxr_lazy_decrements = ["ix_ref_count"]
-lxr_nursery_evacuation = ["ix_ref_count"]
-lxr_mature_evacuation = ["ix_ref_count", "lxr_nursery_evacuation"]
-lxr_concurrent_marking = ["ix_ref_count", "ix_concurrent_marking"]
-lxr_block_only = ["ix_ref_count", "ix_block_only"]
+lxr_no_cm = []
+lxr_no_lazy = []
+lxr_no_nursery_evac = []
+lxr_no_mature_evac = []
+lxr_no_evac = ["lxr_no_nursery_evac", "lxr_no_mature_evac"]
 lxr_dec_on_satb_sweep = []
-# LXR Features (unused)
 lxr_evacuate_nursery_in_recycled_lines = []
 lxr_delayed_nursery_evacuation = []
-lxr_count_bytes_for_mature_evac = []
 lxr_enable_initial_alloc_limit = []
-no_meta_counting = []
-
-# Non-moving, Non-concurrent LXR
-lxr_basic = ["ix_ref_count", "lxr_heap_health_guided_gc"]
-# LXR (Concurrent marking)
-lxr_cm = ["lxr_basic", "lxr_concurrent_marking"]
-# LXR (Lazy RC processing)
-lxr_lazy = ["lxr_basic", "lxr_lazy_decrements"]
-# LXR (Concurrent)
-lxr_conc = ["lxr_basic", "lxr_concurrent_marking", "lxr_lazy_decrements"]
-# LXR (Evacuation)
-lxr_nevac = ["lxr_basic", "lxr_nursery_evacuation"]
-lxr_evac = ["lxr_basic", "lxr_nursery_evacuation", "lxr_mature_evacuation", "lxr_count_bytes_for_mature_evac"]
-# LXR (Block only)
-lxr_block = ["lxr_basic", "lxr_block_only"]
-lxr_rc_only = ["lxr"]
-# LXR (Default config with full features)
-lxr = ["lxr_basic", "lxr_cm", "lxr_lazy", "lxr_evac"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

@@ -44,11 +44,10 @@ pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
 // ---------- CM/RC Immix flags ---------- //
 pub const EAGER_INCREMENTS: bool = false;
-pub const LAZY_DECREMENTS: bool = cfg!(feature = "lxr_lazy_decrements");
-pub const LOCK_FREE_BLOCK_ALLOCATION: bool = cfg!(feature = "ix_lock_free_block_allocation");
+pub const LAZY_DECREMENTS: bool = !cfg!(feature = "lxr_no_evac");
 pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
-pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
-pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
+pub const RC_NURSERY_EVACUATION: bool = !cfg!(feature = "lxr_no_nursery_evac");
+pub const RC_MATURE_EVACUATION: bool = !cfg!(feature = "lxr_no_mature_evac");
 pub const ENABLE_INITIAL_ALLOC_LIMIT: bool = cfg!(feature = "lxr_enable_initial_alloc_limit");
 
 /// One more atomic-store per barrier slow-path if this value is smaller than 6.
@@ -118,8 +117,6 @@ pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(20f32)
 });
-pub const COUNT_BYTES_FOR_MATURE_EVAC: bool = cfg!(feature = "lxr_count_bytes_for_mature_evac");
-
 pub static MAX_MATURE_DEFRAG_PERCENT: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_PERCENT")
         .map(|x| x.parse().unwrap())
@@ -204,12 +201,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("instrumentation");
     dump_feature!("ix_block_only");
     dump_feature!("ix_defrag");
-    dump_feature!("ix_lock_free_block_allocation");
-    dump_feature!("ix_concurrent_marking");
     dump_feature!("ix_ref_count");
-    dump_feature!("lxr_lazy_decrements");
-    dump_feature!("lxr_nursery_evacuation");
-    dump_feature!("lxr_mature_evacuation");
     dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("lxr_enable_initial_alloc_limit");
@@ -240,7 +232,6 @@ fn dump_features(active_barrier: BarrierSelector) {
     );
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
-    dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
     dump_feature!("max_pause_millis", *MAX_PAUSE_MILLIS);
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
     dump_feature!("lxr_rc_only");

@@ -233,8 +233,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     /// Allocate a clean block.
     #[inline(never)]
-    pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block = if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
+    pub fn get_clean_block(&self, tls: VMThread, copy: bool, lock_free: bool) -> Option<Block> {
+        let block = if lock_free {
             self.alloc_clean_block(tls)?
         } else {
             let block_address = self.space().acquire(tls, Block::PAGES);
