@@ -1,6 +1,6 @@
+use super::barrier::FieldLoggingBarrier;
 use super::gc_work::TRACE_KIND_FAST;
 use super::LXR;
-use crate::plan::barriers::FieldLoggingBarrier;
 use crate::plan::barriers::ObjectRememberingBarrier;
 use crate::plan::lxr::gc_work::ImmixProcessEdges;
 use crate::plan::lxr::global::ACTIVE_BARRIER;

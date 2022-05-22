@@ -790,49 +790,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     }
 }
 
-pub struct SweepBlocksAfterDecs {
-    blocks: Vec<(Block, bool)>,
-    _counter: LazySweepingJobsCounter,
-}
-
-impl SweepBlocksAfterDecs {
-    pub fn new(blocks: Vec<(Block, bool)>, counter: LazySweepingJobsCounter) -> Self {
-        Self {
-            blocks,
-            _counter: counter,
-        }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        if self.blocks.is_empty() {
-            return;
-        }
-        let mut count = 0;
-        for (block, defrag) in &self.blocks {
-            block.unlog();
-            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
-                count += 1;
-            } else {
-                assert!(
-                    !*defrag,
-                    "defrag block is freed? {:?} {:?} {}",
-                    block,
-                    block.get_state(),
-                    block.is_defrag_source()
-                );
-            }
-        }
-        if count != 0 && lxr.current_pause().is_none() {
-            lxr.immix_space
-                .num_clean_blocks_released_lazy
-                .fetch_add(count, Ordering::Relaxed);
-        }
-    }
-}
-
 pub struct RCImmixCollectRootEdges<VM: VMBinding> {
     base: ProcessEdgesBase<VM>,
 }

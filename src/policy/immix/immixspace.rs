@@ -6,7 +6,6 @@ use super::{
     defrag::Defrag,
 };
 use crate::plan::immix::Pause;
-use crate::plan::lxr::rc::SweepBlocksAfterDecs;
 use crate::plan::lxr::{RemSet, LXR};
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
@@ -75,7 +74,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub mutator_recycled_blocks: SegQueue<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    last_defrag_blocks: Vec<Block>,
+    pub last_defrag_blocks: Vec<Block>,
     defrag_blocks: Vec<Block>,
     num_defrag_blocks: AtomicUsize,
     #[allow(dead_code)]
@@ -1429,5 +1428,48 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
         );
         // Just get the space from either allocator
         self.defrag_allocator.immix_space()
+    }
+}
+
+pub struct SweepBlocksAfterDecs {
+    blocks: Vec<(Block, bool)>,
+    _counter: LazySweepingJobsCounter,
+}
+
+impl SweepBlocksAfterDecs {
+    pub fn new(blocks: Vec<(Block, bool)>, counter: LazySweepingJobsCounter) -> Self {
+        Self {
+            blocks,
+            _counter: counter,
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        if self.blocks.is_empty() {
+            return;
+        }
+        let mut count = 0;
+        for (block, defrag) in &self.blocks {
+            block.unlog();
+            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
+                count += 1;
+            } else {
+                assert!(
+                    !*defrag,
+                    "defrag block is freed? {:?} {:?} {}",
+                    block,
+                    block.get_state(),
+                    block.is_defrag_source()
+                );
+            }
+        }
+        if count != 0 && lxr.current_pause().is_none() {
+            lxr.immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(count, Ordering::Relaxed);
+        }
     }
 }

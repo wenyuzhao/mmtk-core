@@ -2,9 +2,7 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::LXR;
-use crate::plan::EdgeIterator;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
 use crate::util::rc;
@@ -337,9 +335,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
     worker: *mut GCWorker<VM>,
-    counter: LazySweepingJobsCounter,
+    _counter: LazySweepingJobsCounter,
     lxr: *const LXR<VM>,
-    recursive_dec_objects: Vec<ObjectReference>,
 }
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
@@ -363,48 +360,8 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             chunk,
             worker: std::ptr::null_mut(),
             lxr: std::ptr::null_mut(),
-            counter,
-            recursive_dec_objects: vec![],
+            _counter: counter,
         }
-    }
-
-    #[cold]
-    fn flush_recursive_dec_objects(&mut self, end: bool) {
-        if self.recursive_dec_objects.is_empty() {
-            return;
-        }
-        let mut recursive_dec_objects = vec![];
-        std::mem::swap(&mut recursive_dec_objects, &mut self.recursive_dec_objects);
-        let lxr = self.lxr();
-        let w = ProcessDecs::new(recursive_dec_objects, self.counter.clone_with_decs());
-        if end {
-            self.worker().do_work(w)
-        } else if lxr.current_pause().is_none() {
-            self.worker()
-                .add_work_prioritized(WorkBucketStage::Unconstrained, w);
-        } else {
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
-        }
-    }
-
-    #[inline(never)]
-    fn scan_and_recursively_dec_objects(&mut self, dead: ObjectReference) {
-        EdgeIterator::<VM>::iterate(dead, |edge| {
-            let mut x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() && !rc::is_dead_or_stick(x) && self.lxr().is_marked(x) {
-                debug_assert!(x.is_in_any_space());
-                x = x.fix_start_address::<VM>();
-                debug_assert!(x.class_is_valid());
-                if self.recursive_dec_objects.is_empty() {
-                    self.recursive_dec_objects
-                        .reserve(ProcessDecs::<VM>::CAPACITY);
-                }
-                self.recursive_dec_objects.push(x);
-                if self.recursive_dec_objects.len() >= ProcessDecs::<VM>::CAPACITY {
-                    self.flush_recursive_dec_objects(false);
-                }
-            }
-        });
     }
 
     #[inline(never)]
@@ -424,9 +381,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         });
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
-        }
-        if crate::args::SATB_SWEEP_APPLY_DECS {
-            self.scan_and_recursively_dec_objects(o);
         }
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {
@@ -482,9 +436,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             } else {
                 self.process_block(block, immix_space)
             }
-        }
-        if crate::args::SATB_SWEEP_APPLY_DECS {
-            self.flush_recursive_dec_objects(true);
         }
     }
 }
