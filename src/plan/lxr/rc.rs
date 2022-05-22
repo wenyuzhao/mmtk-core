@@ -215,8 +215,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.new_incs.is_empty() {
-            let mut new_incs = vec![];
-            std::mem::swap(&mut new_incs, &mut self.new_incs);
+            let new_incs = std::mem::take(&mut self.new_incs);
             let mut w = ProcessIncs::<VM, { EDGE_KIND_NURSERY }>::new(new_incs);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
@@ -496,8 +495,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 assert_eq!(KIND, EDGE_KIND_NURSERY);
                 self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
             } else {
-                let mut incs = vec![];
-                std::mem::swap(&mut incs, &mut self.incs);
+                let incs = std::mem::take(&mut self.incs);
                 self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context, self.depth)
             }
         };
@@ -619,8 +617,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     #[inline]
     pub fn flush(&mut self) {
         if !self.new_decs.is_empty() {
-            let mut new_decs = vec![];
-            std::mem::swap(&mut new_decs, &mut self.new_decs);
+            let new_decs = std::mem::take(&mut self.new_decs);
             let mmtk = unsafe { &*self.mmtk };
             let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
@@ -629,8 +626,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             );
         }
         if !self.mark_objects.is_empty() {
-            let mut objects = vec![];
-            std::mem::swap(&mut objects, &mut self.mark_objects);
+            let objects = std::mem::take(&mut self.mark_objects);
             let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
@@ -776,8 +772,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         if let Some((not_marked, slice)) = self.slice {
             self.process_decs(slice, lxr, true, not_marked);
         } else {
-            let mut decs = vec![];
-            std::mem::swap(&mut decs, &mut self.decs);
+            let decs = std::mem::take(&mut self.decs);
             self.process_decs(&decs, lxr, false, false);
         }
         let mut decs = vec![];
@@ -814,8 +809,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     #[inline(always)]
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
-            let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.edges);
+            let roots = std::mem::take(&mut self.edges);
             let w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
             // if crate::args::LAZY_DECREMENTS {
             //     GCWork::do_work(&mut w, self.worker(), self.mmtk())

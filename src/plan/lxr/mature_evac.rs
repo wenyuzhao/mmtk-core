@@ -101,8 +101,7 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
                 || lxr.current_pause() == Some(Pause::FullTraceFast)
         );
         // cleanup edges
-        let mut remset = vec![];
-        std::mem::swap(&mut remset, &mut self.remset);
+        let remset = std::mem::take(&mut self.remset);
         let edges = remset
             .into_iter()
             .filter(|e| {

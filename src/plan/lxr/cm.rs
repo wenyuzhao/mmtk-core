@@ -182,8 +182,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         if let Some(slice) = self.slice {
             self.process_objects(slice, true)
         } else {
-            let mut objects = vec![];
-            std::mem::swap(&mut objects, &mut self.objects);
+            let objects = std::mem::take(&mut self.objects);
             self.process_objects(&objects, false)
         }
         let mut objects = vec![];
@@ -354,8 +353,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         }
         self.flush();
         if self.roots {
-            let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.forwarded_roots);
+            let roots = std::mem::take(&mut self.forwarded_roots);
             unsafe {
                 crate::plan::lxr::CURR_ROOTS.push(roots);
             }

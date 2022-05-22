@@ -36,8 +36,7 @@ impl RemSet {
         let mut mature_evac_remsets = space.mature_evac_remsets.lock();
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
-                let mut remset = vec![];
-                std::mem::swap(&mut remset, self.gc_buffer(id));
+                let remset = std::mem::take(self.gc_buffer(id));
                 mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
             }
         }
@@ -46,8 +45,7 @@ impl RemSet {
     #[cold]
     fn flush<VM: VMBinding>(&self, id: usize, space: &ImmixSpace<VM>) {
         if self.gc_buffer(id).len() > 0 {
-            let mut remset = vec![];
-            std::mem::swap(&mut remset, self.gc_buffer(id));
+            let remset = std::mem::take(self.gc_buffer(id));
             let w = EvacuateMatureObjects::new(remset);
             space.mature_evac_remsets.lock().push(Box::new(w));
         }

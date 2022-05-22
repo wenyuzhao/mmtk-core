@@ -122,8 +122,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             }
         }
         if !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
-            let mut roots = vec![];
-            std::mem::swap(&mut roots, &mut self.edges);
+            let roots = std::mem::take(&mut self.edges);
             let bucket = WorkBucketStage::rc_process_incs_stage();
             self.mmtk().scheduler.work_buckets[bucket]
                 .add(ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots));
