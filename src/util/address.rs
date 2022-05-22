@@ -9,9 +9,9 @@ use crate::plan::barriers::LOCKED_VALUE;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
-use crate::plan::lxr::rc::RC_LOCK_BIT_SPEC;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
+use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
 use super::constants::BYTES_IN_WORD;

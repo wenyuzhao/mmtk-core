@@ -7,7 +7,6 @@ use atomic::Ordering;
 use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
-use crate::plan::lxr::rc::RC_LOCK_BIT_SPEC;
 use crate::plan::lxr::ProcessModBufSATB;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
@@ -16,6 +15,7 @@ use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
+use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::vm::*;
 use crate::LazySweepingJobsCounter;
@@ -304,7 +304,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     fn slow(&mut self, _src: ObjectReference, edge: Address, old: ObjectReference) {
         #[cfg(any(feature = "sanity", debug_assertions))]
         assert!(
-            old.is_null() || crate::plan::lxr::rc::count(old) != 0,
+            old.is_null() || crate::util::rc::count(old) != 0,
             "zero rc count {:?}",
             old
         );
@@ -321,7 +321,7 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
             self.decs.push(old);
         }
         self.incs.push(edge);
-        crate::plan::lxr::rc::inc_inc_buffer_size();
+        crate::util::rc::inc_inc_buffer_size();
         // }
         // Flush
         if self.edges.len() >= Self::CAPACITY

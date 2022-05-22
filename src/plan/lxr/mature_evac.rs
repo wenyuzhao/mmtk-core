@@ -1,10 +1,8 @@
 use std::marker::PhantomData;
 
+use crate::util::rc;
 use crate::{
-    plan::{
-        immix::Pause,
-        lxr::{cm::LXRStopTheWorldProcessEdges, rc},
-    },
+    plan::{immix::Pause, lxr::cm::LXRStopTheWorldProcessEdges},
     policy::{
         immix::{
             block::{Block, BlockState},

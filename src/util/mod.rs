@@ -23,6 +23,8 @@ pub mod linear_scan;
 pub mod memory;
 /// Opaque pointers used in MMTk, e.g. VMThread.
 pub mod opaque_pointer;
+/// Reference counting support.
+pub mod rc;
 /// Reference processing implementation.
 pub mod reference_processor;
 

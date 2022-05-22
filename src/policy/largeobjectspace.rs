@@ -1,4 +1,3 @@
-use crate::plan::lxr::rc;
 use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::LXR;
 use crate::plan::EdgeIterator;
@@ -25,6 +24,7 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::store_metadata;
 use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
+use crate::util::rc;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
@@ -64,7 +64,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            return crate::plan::lxr::rc::count(object) > 0;
+            return crate::util::rc::count(object) > 0;
         }
         if self.trace_in_progress {
             return true;
@@ -567,6 +567,7 @@ impl<VM: VMBinding> RCSweepMatureLOS<VM> {
         });
     }
 }
+
 unsafe impl<VM: VMBinding> Send for RCSweepMatureLOS<VM> {}
 
 impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS<VM> {

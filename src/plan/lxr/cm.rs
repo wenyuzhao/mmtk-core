@@ -81,7 +81,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if object.is_null() || !object.is_in_any_space() {
             return object;
         }
-        let no_trace = super::rc::count(object) == 0;
+        let no_trace = crate::util::rc::count(object) == 0;
         if no_trace {
             return object;
         }
@@ -101,7 +101,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             for o in objects {
                 if !self.plan.address_in_defrag(Address::from_ref(o))
                     && self.plan.in_defrag(*o)
-                    && super::rc::count(*o) != 0
+                    && crate::util::rc::count(*o) != 0
                 {
                     self.plan
                         .immix_space
@@ -136,7 +136,7 @@ impl<VM: VMBinding> TransitiveClosure for LXRConcurrentTraceObjects<VM> {
         } else {
             EdgeIterator::<VM>::iterate(object, |e| {
                 let t: ObjectReference = unsafe { e.load() };
-                if t.is_null() || super::rc::count(t) == 0 {
+                if t.is_null() || crate::util::rc::count(t) == 0 {
                     return;
                 }
                 if crate::args::RC_MATURE_EVACUATION

@@ -6,7 +6,7 @@ use super::{
     defrag::Defrag,
 };
 use crate::plan::immix::Pause;
-use crate::plan::lxr::rc::{self, SweepBlocksAfterDecs};
+use crate::plan::lxr::rc::SweepBlocksAfterDecs;
 use crate::plan::lxr::{RemSet, LXR};
 use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
@@ -28,6 +28,7 @@ use crate::util::metadata::{
     self, compare_exchange_metadata, load_metadata, store_metadata, MetadataSpec,
 };
 use crate::util::object_forwarding as ForwardingWord;
+use crate::util::rc;
 use crate::util::{Address, ObjectReference};
 use crate::{
     plan::TransitiveClosure,
@@ -96,7 +97,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            return crate::plan::lxr::rc::count(object) > 0
+            return crate::util::rc::count(object) > 0
                 || ForwardingWord::is_forwarded::<VM>(object);
         }
         if self.initial_mark_pause {
@@ -219,7 +220,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                MetadataSpec::OnSide(crate::plan::lxr::rc::RC_STRADDLE_LINES),
+                MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
                 MetadataSpec::OnSide(Line::VALIDITY_STATE),

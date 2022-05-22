@@ -3,11 +3,11 @@ use std::ops::Range;
 use atomic::Ordering;
 
 use super::block::Block;
-use crate::plan::lxr::rc;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, *};
 use crate::util::metadata::store_metadata;
+use crate::util::rc;
 use crate::{
     util::{Address, ObjectReference},
     vm::*,

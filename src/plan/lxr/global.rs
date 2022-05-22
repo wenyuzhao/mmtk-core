@@ -1,7 +1,6 @@
 use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
 use super::mutator::ALLOCATOR_MAPPING;
-use super::rc::{self, ProcessDecs, RCImmixCollectRootEdges};
-use super::rc::{RC_LOCK_BIT_SPEC, RC_TABLE};
+use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -29,6 +28,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
 use crate::util::options::UnsafeOptionsWrapper;
+use crate::util::rc::{self, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
@@ -318,7 +318,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 "[{:.3}s][pause] {:?} {}",
                 boot_time,
                 pause,
-                super::rc::inc_buffer_size()
+                crate::util::rc::inc_buffer_size()
             );
         }
         match pause {

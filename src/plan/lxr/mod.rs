@@ -1,5 +1,5 @@
 mod cm;
-pub mod gc_work;
+mod gc_work;
 pub(super) mod global;
 mod mature_evac;
 pub(super) mod mutator;

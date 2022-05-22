@@ -2,11 +2,12 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::lxr::rc::{self, ProcessDecs};
+use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::LXR;
 use crate::plan::EdgeIterator;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
+use crate::util::rc;
 use crate::util::ObjectReference;
 use crate::LazySweepingJobsCounter;
 use crate::{
