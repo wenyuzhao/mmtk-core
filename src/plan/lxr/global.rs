@@ -580,13 +580,15 @@ impl<VM: VMBinding> LXR<VM> {
             notify();
             return;
         }
-        let pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst).saturating_sub
-            (self
-                .immix_space
-                .num_clean_blocks_released_lazy
-                .load(Ordering::SeqCst)
-                << Block::LOG_PAGES)
-                .saturating_sub(self.los().num_pages_released_lazy.load(Ordering::SeqCst));
+        let pages_after_gc = HEAP_AFTER_GC
+            .load(Ordering::SeqCst)
+            .saturating_sub(
+                self.immix_space
+                    .num_clean_blocks_released_lazy
+                    .load(Ordering::SeqCst)
+                    << Block::LOG_PAGES,
+            )
+            .saturating_sub(self.los().num_pages_released_lazy.load(Ordering::SeqCst));
         if self.previous_pause() == Some(Pause::FinalMark)
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {

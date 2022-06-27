@@ -40,7 +40,7 @@ use crate::{
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{atomic::AtomicU8, Arc};

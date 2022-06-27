@@ -58,7 +58,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
                     .add(PrepareMutator::<C::VM>::new(mutator));
             }
             for w in &mmtk.scheduler.worker_group.workers_shared {
-                w.local_work_bucket.add(PrepareCollector);
+                let result = w.designated_work.push(Box::new(PrepareCollector));
+                debug_assert!(result.is_ok());
             }
         }
     }
@@ -130,10 +131,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             }
         }
         for w in &mmtk.scheduler.worker_group.workers_shared {
-            // FIXME: Performance
-            w.local_work_bucket.add(ReleaseCollector);
-            // let w = unsafe { &mut *(w as *const _ as *mut GCWorkerShared<C::VM>) };
-            // w.get_copy_context_mut().release()
+            let result = w.designated_work.push(Box::new(ReleaseCollector));
+            debug_assert!(result.is_ok());
         }
     }
 }

@@ -39,7 +39,7 @@ extern crate log;
 #[cfg(target = "x86_64-unknown-linux-gnu")]
 extern crate atomic;
 extern crate atomic_traits;
-extern crate crossbeam_deque;
+extern crate crossbeam;
 extern crate num_cpus;
 #[macro_use]
 extern crate downcast_rs;
@@ -56,7 +56,7 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;

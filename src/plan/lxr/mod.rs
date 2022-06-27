@@ -16,7 +16,7 @@ pub use self::remset::RemSet;
 
 use atomic::Atomic;
 use atomic::Ordering;
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 
 use crate::util::ObjectReference;
 

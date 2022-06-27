@@ -27,7 +27,7 @@ use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
 use atomic::Ordering;
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
