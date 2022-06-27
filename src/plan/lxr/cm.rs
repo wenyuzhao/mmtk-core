@@ -4,10 +4,10 @@ use crate::scheduler::gc_work::ScanObjects;
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
 use crate::{
-    plan::EdgeIterator,
+    plan::{EdgeIterator, ObjectQueue},
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     vm::*,
-    TransitiveClosure, MMTK,
+    MMTK,
 };
 use atomic::Ordering;
 use std::{
@@ -118,9 +118,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 }
 
-impl<VM: VMBinding> TransitiveClosure for LXRConcurrentTraceObjects<VM> {
+impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
     #[inline]
-    fn process_node(&mut self, object: ObjectReference) {
+    fn enqueue(&mut self, object: ObjectReference) {
         let should_check_remset = !self.plan.in_defrag(object);
         if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
             && VM::VMScanning::is_obj_array(object)
@@ -319,13 +319,15 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             return object;
         }
         let x = if self.lxr.immix_space.in_space(object) {
+            let pause = self.pause;
+            let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
-                self,
+                &mut self.nodes,
                 object,
                 CopySemantics::DefaultCopy,
-                self.pause,
+                pause,
                 false,
-                self.worker(),
+                worker,
             )
         } else {
             object
@@ -372,16 +374,18 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
             return object;
         }
         let x = if self.lxr.immix_space.in_space(object) {
+            let pause = self.pause;
+            let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
-                self,
+                &mut self.nodes,
                 object,
                 CopySemantics::DefaultCopy,
-                self.pause,
+                pause,
                 true,
-                self.worker(),
+                worker,
             )
         } else {
-            self.lxr.los().trace_object(self, object)
+            self.lxr.los().trace_object(&mut self.nodes, object)
         };
         if self.roots {
             self.forwarded_roots.push(x)

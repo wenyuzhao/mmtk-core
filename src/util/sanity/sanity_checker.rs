@@ -9,6 +9,7 @@ use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use crate::MMTK;
+use crate::{scheduler::*, ObjectQueue};
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
@@ -269,7 +270,8 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
                 object_forwarding::read_forwarding_pointer::<VM>(object),
             );
             // Object is not "marked"
-            ProcessEdgesWork::process_node(self, object);
+            sanity_checker.refs.insert(object); // "Mark" it
+            self.nodes.enqueue(object);
         }
         object
     }

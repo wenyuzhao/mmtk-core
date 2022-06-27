@@ -44,10 +44,12 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
                 self.plan.current_pause() == Some(Pause::FinalMark)
                     || self.plan.current_pause() == Some(Pause::FullTraceFast)
             );
-            self.lxr().immix_space.fast_trace_object(self, object);
+            self.lxr()
+                .immix_space
+                .fast_trace_object(&mut self.nodes, object);
             object
         } else {
-            self.lxr().common.trace_object(self, object)
+            self.lxr().common.trace_object(&mut self.nodes, object)
         }
     }
 
@@ -95,17 +97,20 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         }
         if self.lxr().immix_space.in_space(object) {
             if KIND == TRACE_KIND_FAST {
-                self.lxr().immix_space.fast_trace_object(self, object)
+                self.lxr()
+                    .immix_space
+                    .fast_trace_object(&mut self.nodes, object)
             } else {
+                let worker = self.worker();
                 self.lxr().immix_space.trace_object(
-                    self,
+                    &mut self.nodes,
                     object,
                     CopySemantics::DefaultCopy,
-                    self.worker(),
+                    worker,
                 )
             }
         } else {
-            self.lxr().common.trace_object::<Self>(self, object)
+            self.lxr().common.trace_object(&mut self.nodes, object)
         }
     }
 

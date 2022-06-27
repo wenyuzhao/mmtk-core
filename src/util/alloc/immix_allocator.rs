@@ -301,6 +301,28 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
+    /// Return whether the TLAB has been exhausted and we need to acquire a new block. Assumes that
+    /// the buffer limits have been restored using [`ImmixAllocator::restore_limit_for_stress`].
+    /// Note that this function may implicitly change the limits of the allocator.
+    fn require_new_block(&mut self, size: usize, align: usize, offset: isize) -> bool {
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+        let insufficient_space = new_cursor > self.limit;
+
+        // We want this function to behave as if `alloc()` has been called. Hence, we perform a
+        // size check and then return the conditions where `alloc_slow_inline()` would be called
+        // in an `alloc()` call, namely when both `overflow_alloc()` and `alloc_slow_hot()` fail
+        // to service the allocation request
+        if insufficient_space && size > Line::BYTES {
+            let start = align_allocation_no_fill::<VM>(self.large_cursor, align, offset);
+            let end = start + size;
+            end > self.large_limit
+        } else {
+            // We try to acquire recyclable lines here just like `alloc_slow_hot()`
+            insufficient_space && !self.acquire_recyclable_lines(size, align, offset)
+        }
+    }
+
     /// Set fake limits for the bump allocation for stress tests. The fake limit is the remaining
     /// thread local buffer size, which should be always smaller than the bump cursor. This method
     /// may be reentrant. We need to check before setting the values.

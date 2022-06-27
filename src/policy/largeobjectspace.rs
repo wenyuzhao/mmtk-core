@@ -1,5 +1,8 @@
+use atomic::Ordering;
+
+use crate::plan::ObjectQueue;
 use crate::plan::PlanConstraints;
-use crate::plan::TransitiveClosure;
+use crate::plan::VectorObjectQueue;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
@@ -26,7 +29,6 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
-use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
@@ -135,12 +137,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     #[inline(always)]
     fn sft_trace_object(
         &self,
-        trace: SFTProcessEdgesMutRef,
+        queue: &mut VectorObjectQueue,
         object: ObjectReference,
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {
-        let trace = trace.into_mut::<VM>();
-        self.trace_object(trace, object)
+        self.trace_object(queue, object)
     }
 }
 
@@ -173,14 +174,14 @@ use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjectSpace<VM> {
     #[inline(always)]
-    fn trace_object<T: TransitiveClosure, const KIND: crate::policy::gc_work::TraceKind>(
+    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        self.trace_object(trace, object)
+        self.trace_object(queue, object)
     }
     #[inline(always)]
     fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
@@ -323,9 +324,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
-    pub fn trace_object<T: TransitiveClosure>(
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
@@ -336,7 +337,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         );
         if self.rc_enabled {
             if self.test_and_mark(object, self.mark_state) {
-                trace.process_node(object);
+                queue.enqueue(object);
             }
             return object;
         }
@@ -362,7 +363,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                             .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                     }
                 }
-                trace.process_node(object);
+                queue.enqueue(object);
             }
         }
         object
