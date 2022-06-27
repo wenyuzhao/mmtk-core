@@ -95,13 +95,13 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
 impl<VM: VMBinding> Plan for LXR<VM> {
     type VM = VM;
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
         // Don't do a GC until we finished the lazy reclaimation.
         // if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
         //     return false;
         // }
         // Spaces or heap full
-        if self.base().collection_required(self, space_full, space) {
+        if self.base().collection_required(self, space_full) {
             if !crate::args::HEAP_HEALTH_GUIDED_GC {
                 self.next_gc_may_perform_cycle_collection
                     .store(true, Ordering::SeqCst);

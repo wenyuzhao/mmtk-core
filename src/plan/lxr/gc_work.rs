@@ -49,7 +49,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
                 .fast_trace_object(&mut self.nodes, object);
             object
         } else {
-            self.lxr().common.trace_object(&mut self.nodes, object)
+            let worker = self.worker();
+            self.lxr()
+                .common
+                .trace_object(&mut self.nodes, object, worker)
         }
     }
 
@@ -110,7 +113,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 )
             }
         } else {
-            self.lxr().common.trace_object(&mut self.nodes, object)
+            let worker = self.worker();
+            self.lxr()
+                .common
+                .trace_object(&mut self.nodes, object, worker)
         }
     }
 

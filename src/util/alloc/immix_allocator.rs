@@ -40,13 +40,6 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     mutator_recycled_blocks: Box<Vec<Block>>,
-    /// Are we doing alloc slow when stress test is turned on. This is only set to true,
-    /// during the allow_slow_once_stress_test() call. In the call, we will restore the correct
-    /// limit for bump allocation, and call alloc() to try resolve the allocation request with
-    /// the thread local buffer. If we cannot do the allocation from the thread local buffer,
-    /// we will eventually call allow_slow_once_stress_test(). With this flag set to true, we know
-    /// we are resolving an allocation request and have failed the thread local allocation. In
-    /// this case, we will acquire new block from the space.
     retry: bool,
 }
 

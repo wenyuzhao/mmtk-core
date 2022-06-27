@@ -92,7 +92,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             self.plan.immix_space.fast_trace_object(self, object);
             object
         } else {
-            self.plan.common.trace_object(self, object)
+            let worker = self.worker();
+            let queue = unsafe { &mut *(self as *const Self as *mut Self) };
+            self.plan.common.trace_object(queue, object, worker)
         }
     }
 
