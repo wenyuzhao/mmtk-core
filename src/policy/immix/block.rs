@@ -668,10 +668,7 @@ impl Block {
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
                 // println!("reuse N {:?}", self);
-                space.reusable_blocks.push_x(
-                    *self,
-                    (Block::LINES - self.calc_dead_lines()) << Line::LOG_BYTES,
-                );
+                space.reusable_blocks.push(*self);
             } else if mutator_reused_blocks {
                 // debug_assert_eq!(self.get_state(), BlockState::Reusing);
                 self.set_state(BlockState::Marked);
@@ -737,10 +734,7 @@ impl Block {
             };
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
-                space.reusable_blocks.push_x(
-                    *self,
-                    (Block::LINES - self.calc_dead_lines()) << Line::LOG_BYTES,
-                );
+                space.reusable_blocks.push(*self);
             }
         }
         false
@@ -826,35 +820,35 @@ impl Block {
 
 /// A non-block single-linked list to store blocks.
 pub struct BlockList {
-    prioritized_queue: BlockQueue<Block>,
     queue: BlockQueue<Block>,
+    num_workers: usize,
+}
+
+impl Default for BlockList {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BlockList {
+    /// Create empty block list
     pub fn new() -> Self {
         Self {
-            prioritized_queue: BlockQueue::new(),
             queue: BlockQueue::new(),
+            num_workers: 0,
         }
     }
+
+    /// Initialize block queue
+    pub fn init(&mut self, num_workers: usize) {
+        self.queue.init(num_workers);
+        self.num_workers = num_workers;
+    }
+
     /// Get number of blocks in this list.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.queue.len() + self.prioritized_queue.len()
-    }
-
-    #[inline(always)]
-    pub fn push_x(&self, block: Block, live: usize) {
-        if live > (Block::BYTES >> 1) {
-            self.push_prioritized(block)
-        } else {
-            self.push(block)
-        }
-    }
-
-    #[inline(always)]
-    pub fn push_prioritized(&self, block: Block) {
-        self.prioritized_queue.push(block)
+        self.queue.len()
     }
 
     /// Add a block to the list.
@@ -866,27 +860,23 @@ impl BlockList {
     /// Pop a block out of the list.
     #[inline(always)]
     pub fn pop(&self) -> Option<Block> {
-        if let Some(b) = self.prioritized_queue.pop() {
-            return Some(b);
-        }
         self.queue.pop()
     }
 
     /// Clear the list.
-    #[inline(always)]
     pub fn reset(&mut self) {
-        self.prioritized_queue = BlockQueue::new();
         self.queue = BlockQueue::new();
+        self.init(self.num_workers);
     }
 
+    /// Iterate all the blocks in the queue. Call the visitor for each reported block.
     #[inline]
     pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
-        self.prioritized_queue.iterate_blocks(&mut f);
         self.queue.iterate_blocks(&mut f);
     }
 
+    /// Flush the block queue
     pub fn flush_all(&self) {
-        self.prioritized_queue.flush_all();
         self.queue.flush_all();
     }
 }

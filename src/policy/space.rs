@@ -530,11 +530,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         pages: usize,
         poll_on_failure: bool,
     ) -> Option<Address> {
-        let pr = self.get_page_resource().bpr().unwrap();
+        let pr = self.get_page_resource();
         let pages_reserved = pr.reserve_pages(pages);
         let should_poll = VM::VMActivePlan::is_mutator(tls);
         let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();
-        match pr.alloc_pages_no_lock(self.common().descriptor, pages_reserved, pages, tls) {
+        match pr.alloc_pages(self.common().descriptor, pages_reserved, pages, tls) {
             Ok(res) => {
                 // The following code was guarded by a page resource lock in Java MMTk.
                 // I think they are thread safe and we do not need a lock. So they

@@ -247,6 +247,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }));
             lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
                 // me.immix_space.reusable_blocks.flush_all();
+                me.immix_space.flush_page_resource();
                 if crate::args::LOG_PER_GC_STATE {
                     println!(
                         " - lazy jobs done, heap {:?}M {:?}",
@@ -406,7 +407,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, scheduler: &GCWorkScheduler<VM>) {
-        self.immix_space.pr.flush_all();
+        self.immix_space.flush_page_resource();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
 
@@ -448,7 +449,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_end(&self) {
-        self.immix_space.pr.flush_all();
+        self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
             self.in_concurrent_marking.store(true, Ordering::SeqCst);

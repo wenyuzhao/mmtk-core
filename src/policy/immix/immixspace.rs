@@ -32,10 +32,7 @@ use crate::util::{Address, ObjectReference};
 use crate::{
     plan::ObjectQueue,
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
-    util::{
-        heap::blockpageresource::BlockPageResource,
-        opaque_pointer::{VMThread, VMWorkerThread},
-    },
+    util::opaque_pointer::{VMThread, VMWorkerThread},
     MMTK,
 };
 use crate::{vm::*, LazySweepingJobsCounter};
@@ -49,12 +46,20 @@ use std::{mem, ptr};
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
+// For 32-bit platforms, we still use FreeListPageResource
+#[cfg(target_pointer_width = "32")]
+use crate::util::heap::FreeListPageResource as ImmixPageResource;
+
+// BlockPageResource is for 64-bit platforms only
+#[cfg(target_pointer_width = "64")]
+use crate::util::heap::BlockPageResource as ImmixPageResource;
+
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pub pr: BlockPageResource<VM>,
+    pub pr: ImmixPageResource<VM>,
     /// Allocation status for all chunks in immix space
     pub chunk_map: ChunkMap,
     /// Current line mark state
@@ -157,6 +162,10 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
     fn init(&mut self, _vm_map: &'static VMMap) {
         super::validate_features();
+        // Initialize the block queues in `reusable_blocks` and `pr`.
+        self.reusable_blocks.init(self.scheduler.num_workers());
+        #[cfg(target_pointer_width = "64")]
+        self.pr.init(self.scheduler.num_workers());
         self.common().init(self.as_space());
         self.block_allocation
             .init(unsafe { &*(self as *const Self) })
@@ -272,17 +281,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             heap,
         );
         ImmixSpace {
+            #[cfg(target_pointer_width = "32")]
             pr: if common.vmrequest.is_discontiguous() {
-                unreachable!()
-                // BlockPageResource::new_discontiguous(Block::LOG_PAGES, vm_map)
+                ImmixPageResource::new_discontiguous(0, vm_map)
             } else {
-                BlockPageResource::new_contiguous(
-                    Block::LOG_PAGES,
-                    common.start,
-                    common.extent,
-                    vm_map,
-                )
+                ImmixPageResource::new_contiguous(common.start, common.extent, 0, vm_map)
             },
+            #[cfg(target_pointer_width = "64")]
+            pr: ImmixPageResource::new_contiguous(
+                Block::LOG_PAGES,
+                common.start,
+                common.extent,
+                vm_map,
+            ),
             common,
             chunk_map: ChunkMap::new(),
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
@@ -308,6 +319,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             cm_enabled: false,
             rc_enabled,
         }
+    }
+
+    /// Flush the thread-local queues in BlockPageResource
+    pub fn flush_page_resource(&self) {
+        self.reusable_blocks.flush_all();
+        #[cfg(target_pointer_width = "64")]
+        self.pr.flush_all()
     }
 
     /// Get the number of defrag headroom pages.

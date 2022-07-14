@@ -530,7 +530,7 @@ static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 pub fn gc_worker_id() -> Option<usize> {
-    crate::scheduler::WORKER_ID.with(|x| x.load(Ordering::SeqCst))
+    crate::scheduler::current_worker_ordinal()
 }
 
 static CALC_WORKERS: spin::Lazy<usize> = spin::Lazy::new(|| {
