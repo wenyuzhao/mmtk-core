@@ -4,7 +4,6 @@ use crate::util::opaque_pointer::*;
 use crate::vm::ActivePlan;
 use std::sync::Mutex;
 
-use super::blockpageresource::BlockPageResource;
 use super::layout::map::Map;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
@@ -96,10 +95,6 @@ pub trait PageResource<VM: VMBinding>: 'static {
     fn common_mut(&mut self) -> &mut CommonPageResource;
     fn vm_map(&self) -> &'static VMMap {
         self.common().vm_map
-    }
-
-    fn bpr(&self) -> Option<&BlockPageResource<VM>> {
-        None
     }
 }
 
