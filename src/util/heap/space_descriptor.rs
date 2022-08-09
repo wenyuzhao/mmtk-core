@@ -1,6 +1,6 @@
-use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout_constants;
 use crate::util::Address;
+use crate::util::{constants::*, heap::layout::vm_layout_constants::HEAP_START};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const TYPE_BITS: usize = 2;
@@ -41,7 +41,7 @@ impl SpaceDescriptor {
             let space_index = if start > vm_layout_constants::HEAP_END {
                 ::std::usize::MAX
             } else {
-                start >> vm_layout_constants::SPACE_SHIFT_64
+                (start - HEAP_START) >> vm_layout_constants::SPACE_SHIFT_64
             };
             return SpaceDescriptor(
                 space_index << INDEX_SHIFT

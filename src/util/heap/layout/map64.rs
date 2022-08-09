@@ -52,7 +52,6 @@ impl Map for Map64 {
     }
 
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        debug_assert!(Self::is_space_start(start));
         debug_assert!(extent <= SPACE_SIZE_64);
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
@@ -75,6 +74,7 @@ impl Map for Map64 {
         // This is only called during creating a page resource/space/plan/mmtk instance, which is single threaded.
         let self_mut = unsafe { self.mut_self() };
         let start = pr.get_start();
+        assert!(start < HEAP_END, "{:?} {:?}", start, HEAP_END);
         let index = Self::space_index(start).unwrap();
 
         units = (units as f64 * NON_MAP_FRACTION) as _;
@@ -226,7 +226,7 @@ impl Map64 {
         if addr > HEAP_END {
             return None;
         }
-        Some(addr >> SPACE_SHIFT_64)
+        Some((addr - HEAP_START) >> SPACE_SHIFT_64)
     }
 
     fn is_space_start(base: Address) -> bool {

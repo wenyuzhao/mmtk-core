@@ -3,6 +3,7 @@ use super::*;
 use crate::plan::GcStatus;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
+use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::metadata::*;
 use crate::util::*;
 use crate::vm::*;
@@ -469,6 +470,7 @@ pub trait ProcessEdgesWork:
         if Self::OVERWRITE_REFERENCE {
             unsafe { slot.store(new_object) };
         }
+        unreachable!()
     }
 
     #[inline]
@@ -855,10 +857,41 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
+        let object = unsafe {
+            if self.roots {
+                let o = slot.load::<ObjectReference>();
+
+                println!("R {:?} ->  {:?}", slot, o);
+                o
+            } else {
+                let v = slot.load::<u32>();
+                let o = if v == 0 {
+                    ObjectReference::NULL
+                } else {
+                    (HEAP_START + ((slot.load::<u32>() as usize) << 3)).to_object_reference()
+                };
+                println!("E {:?} -> {} {:?}", slot, v, o);
+                o
+            }
+        };
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
-            unsafe { slot.store(new_object) };
+            if self.roots {
+                unsafe { slot.store(new_object) };
+            } else {
+                if new_object.is_null() {
+                    unsafe { slot.store(0u32) };
+                } else {
+                    unsafe {
+                        slot.store((new_object.to_address() - (HEAP_START)) >> 3);
+                        assert_eq!(
+                            (HEAP_START + ((slot.load::<u32>() as usize) << 3))
+                                .to_object_reference(),
+                            new_object
+                        );
+                    }
+                }
+            }
         }
     }
 }

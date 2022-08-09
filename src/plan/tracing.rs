@@ -88,6 +88,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> EdgeVisitor for ObjectsClosure<'a, E> {
     #[inline(always)]
     fn visit_edge(&mut self, slot: Address) {
+        println!("report edge {:?}", slot);
         if self.buffer.is_empty() {
             self.buffer.reserve(E::CAPACITY);
         }
