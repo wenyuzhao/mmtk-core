@@ -262,12 +262,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 {
                     let o = Ordering::Relaxed;
                     let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
-                    let lazy_released_pages = (me
+                    let lazy_released_pages = me
                         .immix_space
                         .num_clean_blocks_released_lazy
                         .load(Ordering::SeqCst)
-                        << Block::LOG_PAGES)
-                        + me.los().num_pages_released_lazy.load(Ordering::SeqCst);
+                        << Block::LOG_PAGES;
                     let x = if used_pages_after_gc >= lazy_released_pages {
                         used_pages_after_gc - lazy_released_pages
                     } else {
@@ -581,15 +580,12 @@ impl<VM: VMBinding> LXR<VM> {
             notify();
             return;
         }
-        let pages_after_gc = HEAP_AFTER_GC
-            .load(Ordering::SeqCst)
-            .saturating_sub(
-                self.immix_space
-                    .num_clean_blocks_released_lazy
-                    .load(Ordering::SeqCst)
-                    << Block::LOG_PAGES,
-            )
-            .saturating_sub(self.los().num_pages_released_lazy.load(Ordering::SeqCst));
+        let pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst).saturating_sub(
+            self.immix_space
+                .num_clean_blocks_released_lazy
+                .load(Ordering::SeqCst)
+                << Block::LOG_PAGES,
+        );
         if self.previous_pause() == Some(Pause::FinalMark)
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {
