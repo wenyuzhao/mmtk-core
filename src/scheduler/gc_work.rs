@@ -860,25 +860,29 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         let object = unsafe {
             if self.roots {
                 let o = slot.load::<ObjectReference>();
-
-                println!("R {:?} ->  {:?}", slot, o);
+                // println!("R {:?} ->  {:?}", slot, o);
+                if o.is_null() {
+                    return;
+                }
                 o
             } else {
                 let v = slot.load::<u32>();
                 let o = if v == 0 {
-                    ObjectReference::NULL
+                    return;
                 } else {
                     (HEAP_START + ((slot.load::<u32>() as usize) << 3)).to_object_reference()
                 };
-                println!("E {:?} -> {} {:?}", slot, v, o);
+                // println!("E {:?} -> {} {:?}", slot, v, o);
                 o
             }
         };
+        debug_assert!(!object.is_null());
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
             if self.roots {
                 unsafe { slot.store(new_object) };
             } else {
+                debug_assert!(!new_object.is_null());
                 if new_object.is_null() {
                     unsafe { slot.store(0u32) };
                 } else {

@@ -832,7 +832,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             self.allocation_bytes.store(0, Ordering::SeqCst);
         }
 
-        debug!(
+        println!(
             "self.get_reserved_pages()={}, self.get_total_pages()={}",
             plan.get_reserved_pages(),
             plan.get_total_pages()
