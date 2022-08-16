@@ -567,11 +567,11 @@ impl<VM: VMBinding> BasePlan<VM> {
     /// The application code has requested a collection.
     pub fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
         if force || !*self.options.ignore_system_g_c {
-            info!("User triggering collection");
-            self.user_triggered_collection
-                .store(true, Ordering::Relaxed);
-            self.gc_requester.request();
-            VM::VMCollection::block_for_gc(tls);
+            // info!("User triggering collection");
+            // self.user_triggered_collection
+            //     .store(true, Ordering::Relaxed);
+            // self.gc_requester.request();
+            // VM::VMCollection::block_for_gc(tls);
         }
     }
 
@@ -832,7 +832,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             self.allocation_bytes.store(0, Ordering::SeqCst);
         }
 
-        println!(
+        debug!(
             "self.get_reserved_pages()={}, self.get_total_pages()={}",
             plan.get_reserved_pages(),
             plan.get_total_pages()

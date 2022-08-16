@@ -12,6 +12,7 @@ pub trait EdgeVisitor {
 /// This lets us use closures as EdgeVisitor.
 impl<F: FnMut(Address)> EdgeVisitor for F {
     fn visit_edge(&mut self, edge: Address) {
+        println!(" . {:?}", edge);
         self(edge)
     }
 }

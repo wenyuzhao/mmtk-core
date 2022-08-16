@@ -465,12 +465,11 @@ pub trait ProcessEdgesWork:
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
+        let object = load_and_decode(slot, self.roots);
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            unsafe { slot.store(new_object) };
+            encode_and_store(slot, new_object, self.roots);
         }
-        unreachable!()
     }
 
     #[inline]
@@ -812,6 +811,35 @@ use crate::plan::Plan;
 use crate::plan::PlanTraceObject;
 use crate::policy::gc_work::TraceKind;
 
+pub fn load_and_decode(slot: Address, root: bool) -> ObjectReference {
+    let narrow_root = slot.as_usize() & (1usize << 63) != 0;
+    let slot = unsafe { Address::from_usize(slot.as_usize() << 1 >> 1) };
+    if !narrow_root {
+        unsafe { slot.load::<ObjectReference>() }
+    } else {
+        let v = unsafe { slot.load::<u32>() };
+        if v == 0 {
+            ObjectReference::NULL
+        } else {
+            unsafe { (HEAP_START + ((v as usize) << 3)).to_object_reference() }
+        }
+    }
+}
+
+fn encode_and_store(slot: Address, object: ObjectReference, root: bool) {
+    let narrow_root = slot.as_usize() & (1usize << 63) != 0;
+    let slot = unsafe { Address::from_usize(slot.as_usize() << 1 >> 1) };
+    if !narrow_root {
+        unsafe { slot.store(object) }
+    } else {
+        if object.is_null() {
+            unsafe { slot.store(0u32) };
+        } else {
+            unsafe { slot.store(((object.to_address() - HEAP_START) >> 3) as u32) }
+        }
+    }
+}
+
 /// This provides an implementation of [`ProcessEdgesWork`](scheduler/gc_work/ProcessEdgesWork). A plan that implements
 /// `PlanTraceObject` can use this work packet for tracing objects.
 pub struct PlanProcessEdges<
@@ -857,45 +885,43 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
-        let object = unsafe {
-            if self.roots {
-                let o = slot.load::<ObjectReference>();
-                // println!("R {:?} ->  {:?}", slot, o);
-                if o.is_null() {
-                    return;
-                }
-                o
-            } else {
-                let v = slot.load::<u32>();
-                let o = if v == 0 {
-                    return;
-                } else {
-                    (HEAP_START + ((slot.load::<u32>() as usize) << 3)).to_object_reference()
-                };
-                // println!("E {:?} -> {} {:?}", slot, v, o);
-                o
-            }
-        };
-        debug_assert!(!object.is_null());
+        let object = load_and_decode(slot, self.roots);
+        if !object.is_null() {
+            let klass = unsafe { (object.to_address() + 8usize).load::<Address>() };
+            assert!(
+                !klass.is_zero(),
+                "Invalid edge {:?} -> {:?} (klass is null)",
+                slot,
+                object
+            );
+            // println!(
+            //     "+ {:?}: {:?} root={} klass=0x{:x}",
+            //     slot,
+            //     object,
+            //     self.roots,
+            //     unsafe { (object.to_address() + 8usize).load::<u32>() }
+            // );
+            // assert!(unsafe { (object.to_address() + 8usize).load::<u32>() } <= 0x10000000u32);
+        }
         let new_object = self.trace_object(object);
+        if new_object == object {
+            return;
+        }
+        // println!(
+        //     "- {:?}: {:?} -> {:?} (klass={:?})",
+        //     slot,
+        //     object,
+        //     new_object,
+        //     unsafe { (object.to_address() + 8usize).load::<Address>() }
+        // );
+        // if !object.is_null() {
+        //     println!(
+        //         "- {:?}: {:?} => {:?} root={}",
+        //         slot, object, new_object, self.roots,
+        //     );
+        // }
         if P::may_move_objects::<KIND>() {
-            if self.roots {
-                unsafe { slot.store(new_object) };
-            } else {
-                debug_assert!(!new_object.is_null());
-                if new_object.is_null() {
-                    unsafe { slot.store(0u32) };
-                } else {
-                    unsafe {
-                        slot.store((new_object.to_address() - (HEAP_START)) >> 3);
-                        assert_eq!(
-                            (HEAP_START + ((slot.load::<u32>() as usize) << 3))
-                                .to_object_reference(),
-                            new_object
-                        );
-                    }
-                }
-            }
+            encode_and_store(slot, new_object, self.roots);
         }
     }
 }
