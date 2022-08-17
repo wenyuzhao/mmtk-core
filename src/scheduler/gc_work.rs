@@ -817,6 +817,7 @@ pub fn load_and_decode(slot: Address, root: bool) -> ObjectReference {
     if root && !narrow_root {
         unsafe { slot.load::<ObjectReference>() }
     } else {
+        debug_assert!(root || !narrow_root);
         let v = unsafe { slot.load::<u32>() };
         if v == 0 {
             ObjectReference::NULL
@@ -832,6 +833,7 @@ fn encode_and_store(slot: Address, object: ObjectReference, root: bool) {
     if root && !narrow_root {
         unsafe { slot.store(object) }
     } else {
+        debug_assert!(root || !narrow_root);
         if object.is_null() {
             unsafe { slot.store(0u32) };
         } else {
@@ -887,39 +889,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     fn process_edge(&mut self, slot: Address) {
         let object = load_and_decode(slot, self.roots);
         if !object.is_null() {
-            let klass = unsafe { (object.to_address() + 8usize).load::<Address>() };
             assert!(
-                !klass.is_zero(),
+                !unsafe { (object.to_address() + 8usize).load::<Address>() }.is_zero(),
                 "Invalid edge {:?} -> {:?} (klass is null)",
                 slot,
                 object
             );
-            // println!(
-            //     "+ {:?}: {:?} root={} klass=0x{:x}",
-            //     slot,
-            //     object,
-            //     self.roots,
-            //     unsafe { (object.to_address() + 8usize).load::<u32>() }
-            // );
-            // assert!(unsafe { (object.to_address() + 8usize).load::<u32>() } <= 0x10000000u32);
         }
         let new_object = self.trace_object(object);
-        if new_object == object {
-            return;
-        }
-        // println!(
-        //     "- {:?}: {:?} -> {:?} (klass={:?})",
-        //     slot,
-        //     object,
-        //     new_object,
-        //     unsafe { (object.to_address() + 8usize).load::<Address>() }
-        // );
-        // if !object.is_null() {
-        //     println!(
-        //         "- {:?}: {:?} => {:?} root={}",
-        //         slot, object, new_object, self.roots,
-        //     );
-        // }
         if P::may_move_objects::<KIND>() {
             encode_and_store(slot, new_object, self.roots);
         }
