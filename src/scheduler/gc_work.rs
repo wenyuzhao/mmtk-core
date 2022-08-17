@@ -814,7 +814,7 @@ use crate::policy::gc_work::TraceKind;
 pub fn load_and_decode(slot: Address, root: bool) -> ObjectReference {
     let narrow_root = slot.as_usize() & (1usize << 63) != 0;
     let slot = unsafe { Address::from_usize(slot.as_usize() << 1 >> 1) };
-    if !narrow_root {
+    if root && !narrow_root {
         unsafe { slot.load::<ObjectReference>() }
     } else {
         let v = unsafe { slot.load::<u32>() };
@@ -829,7 +829,7 @@ pub fn load_and_decode(slot: Address, root: bool) -> ObjectReference {
 fn encode_and_store(slot: Address, object: ObjectReference, root: bool) {
     let narrow_root = slot.as_usize() & (1usize << 63) != 0;
     let slot = unsafe { Address::from_usize(slot.as_usize() << 1 >> 1) };
-    if !narrow_root {
+    if root && !narrow_root {
         unsafe { slot.store(object) }
     } else {
         if object.is_null() {
