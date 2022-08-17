@@ -28,7 +28,6 @@ use enum_map::EnumMap;
 #[derive(PlanTraceObject)]
 pub struct SemiSpace<VM: VMBinding> {
     pub hi: AtomicBool,
-    pub placeholder: CopySpace<VM>,
     #[trace(CopySemantics::DefaultCopy)]
     pub copyspace0: CopySpace<VM>,
     #[trace(CopySemantics::DefaultCopy)]
@@ -70,7 +69,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
 
     fn get_spaces(&self) -> Vec<&dyn Space<Self::VM>> {
         let mut ret = self.common.get_spaces();
-        ret.push(&self.placeholder);
         ret.push(&self.copyspace0);
         ret.push(&self.copyspace1);
         ret
@@ -138,16 +136,6 @@ impl<VM: VMBinding> SemiSpace<VM> {
 
         let res = SemiSpace {
             hi: AtomicBool::new(false),
-            placeholder: CopySpace::new(
-                "placeholder",
-                true,
-                true,
-                VMRequest::discontiguous(),
-                global_metadata_specs.clone(),
-                vm_map,
-                mmapper,
-                &mut heap,
-            ),
             copyspace0: CopySpace::new(
                 "copyspace0",
                 false,

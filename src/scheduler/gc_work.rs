@@ -822,7 +822,7 @@ pub fn load_and_decode(slot: Address, root: bool) -> ObjectReference {
         if v == 0 {
             ObjectReference::NULL
         } else {
-            unsafe { (HEAP_START + ((v as usize) << 3)).to_object_reference() }
+            unsafe { (HEAP_START + ((v as usize) << 3) - 4096).to_object_reference() }
         }
     }
 }
@@ -837,7 +837,7 @@ fn encode_and_store(slot: Address, object: ObjectReference, root: bool) {
         if object.is_null() {
             unsafe { slot.store(0u32) };
         } else {
-            unsafe { slot.store(((object.to_address() - HEAP_START) >> 3) as u32) }
+            unsafe { slot.store(((object.to_address() - HEAP_START + 4096) >> 3) as u32) }
         }
     }
 }
