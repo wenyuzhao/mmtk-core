@@ -88,12 +88,6 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> EdgeVisitor for ObjectsClosure<'a, E> {
     #[inline(always)]
     fn visit_edge(&mut self, slot: Address) {
-        // println!(
-        //     " . {:?} => {:?} (0x{:x})",
-        //     slot,
-        //     crate::scheduler::gc_work::load_and_decode(slot, false),
-        //     unsafe { slot.load::<u32>() }
-        // );
         if self.buffer.is_empty() {
             self.buffer.reserve(E::CAPACITY);
         }

@@ -255,9 +255,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             let bucket = &self.work_buckets[id];
             let bucket_opened = bucket.update(self);
-            if bucket_opened {
-                println!("Open {:?}", id);
-            }
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
                 new_packets = new_packets || !bucket.is_drained();
