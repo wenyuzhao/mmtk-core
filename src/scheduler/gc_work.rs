@@ -3,7 +3,6 @@ use super::*;
 use crate::plan::GcStatus;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
-use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::metadata::*;
 use crate::util::*;
 use crate::vm::*;
@@ -465,10 +464,12 @@ pub trait ProcessEdgesWork:
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
-        let object = load_and_decode(slot, self.roots);
+        let object = <Self::VM as VMBinding>::VMObjectModel::load_reference_field(slot, self.roots);
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            encode_and_store(slot, new_object, self.roots);
+            <Self::VM as VMBinding>::VMObjectModel::store_reference_field(
+                slot, new_object, self.roots,
+            );
         }
     }
 
@@ -811,37 +812,6 @@ use crate::plan::Plan;
 use crate::plan::PlanTraceObject;
 use crate::policy::gc_work::TraceKind;
 
-pub fn load_and_decode(slot: Address, root: bool) -> ObjectReference {
-    let narrow_root = slot.as_usize() & (1usize << 63) != 0;
-    let slot = unsafe { Address::from_usize(slot.as_usize() << 1 >> 1) };
-    if root && !narrow_root {
-        unsafe { slot.load::<ObjectReference>() }
-    } else {
-        debug_assert!(root || !narrow_root);
-        let v = unsafe { slot.load::<u32>() };
-        if v == 0 {
-            ObjectReference::NULL
-        } else {
-            unsafe { (HEAP_START + ((v as usize) << 3) - 4096).to_object_reference() }
-        }
-    }
-}
-
-fn encode_and_store(slot: Address, object: ObjectReference, root: bool) {
-    let narrow_root = slot.as_usize() & (1usize << 63) != 0;
-    let slot = unsafe { Address::from_usize(slot.as_usize() << 1 >> 1) };
-    if root && !narrow_root {
-        unsafe { slot.store(object) }
-    } else {
-        debug_assert!(root || !narrow_root);
-        if object.is_null() {
-            unsafe { slot.store(0u32) };
-        } else {
-            unsafe { slot.store(((object.to_address() - HEAP_START + 4096) >> 3) as u32) }
-        }
-    }
-}
-
 /// This provides an implementation of [`ProcessEdgesWork`](scheduler/gc_work/ProcessEdgesWork). A plan that implements
 /// `PlanTraceObject` can use this work packet for tracing objects.
 pub struct PlanProcessEdges<
@@ -887,18 +857,10 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
-        let object = load_and_decode(slot, self.roots);
-        if !object.is_null() {
-            assert!(
-                !unsafe { (object.to_address() + 8usize).load::<Address>() }.is_zero(),
-                "Invalid edge {:?} -> {:?} (klass is null)",
-                slot,
-                object
-            );
-        }
+        let object = VM::VMObjectModel::load_reference_field(slot, self.roots);
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
-            encode_and_store(slot, new_object, self.roots);
+            VM::VMObjectModel::store_reference_field(slot, new_object, self.roots);
         }
     }
 }
