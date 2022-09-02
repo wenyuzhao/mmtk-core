@@ -1,5 +1,4 @@
 use crate::plan::Mutator;
-use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
 use crate::vm::edge_shape::Edge;
@@ -57,12 +56,6 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     /// Arguments:
     /// * `edges`: A vector of edges.
     fn create_process_edge_roots_work(&mut self, edges: Vec<ES>);
-
-    fn create_process_edge_roots_work_with_finalizer(
-        &mut self,
-        edges: Vec<Address>,
-        on_finish: Box<dyn Fn()>,
-    );
 
     /// Create work packets to handle nodes pointed by root edges.
     ///

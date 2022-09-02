@@ -84,10 +84,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// The metadata specification for the mark-and-nursery bits, used by most plans that has large object allocation. 2 bits.
     const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec;
 
-    fn load_reference_field(slot: Address, root: bool) -> ObjectReference;
-
-    fn store_reference_field(slot: Address, obj: ObjectReference, root: bool);
-
     /// A function to load the specified per-object metadata's content.
     ///
     /// # Arguments:

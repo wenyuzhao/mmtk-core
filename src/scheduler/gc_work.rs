@@ -339,7 +339,6 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     // Because a copying gc will dereference this pointer at least once for every object copy.
     worker: *mut GCWorker<VM>,
     pub roots: bool,
-    pub on_finish: Option<Box<dyn Fn()>>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
@@ -361,7 +360,6 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             mmtk,
             worker: std::ptr::null_mut(),
             roots,
-            on_finish: None,
         }
     }
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
@@ -483,9 +481,6 @@ pub trait ProcessEdgesWork:
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])
         }
-        if let Some(on_finish) = self.on_finish.take() {
-            on_finish()
-        }
     }
 }
 
@@ -569,14 +564,6 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
             WorkBucketStage::Closure,
             E::new(edges, true, self.mmtk),
         );
-    }
-
-    fn create_process_edge_roots_work_with_finalizer(
-        &mut self,
-        edges: Vec<Address>,
-        on_finish: Box<dyn Fn()>,
-    ) {
-        unimplemented!()
     }
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
