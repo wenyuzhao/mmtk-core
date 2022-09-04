@@ -25,7 +25,7 @@ pub struct RawMemoryFreeList {
     pages_per_block: i32,
 }
 
-impl GenericFreeList for RawMemoryFreeList {
+impl FreeList for RawMemoryFreeList {
     fn head(&self) -> i32 {
         self.head
     }
@@ -229,7 +229,7 @@ impl Drop for RawMemoryFreeList {
  */
 #[cfg(test)]
 mod tests {
-    use super::GenericFreeList;
+    use super::FreeList;
     use super::*;
     use std::sync::{Mutex, MutexGuard};
 

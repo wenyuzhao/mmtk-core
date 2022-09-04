@@ -9,7 +9,7 @@ pub struct IntArrayFreeList {
     parent: Option<&'static IntArrayFreeList>,
 }
 
-impl GenericFreeList for IntArrayFreeList {
+impl FreeList for IntArrayFreeList {
     fn head(&self) -> i32 {
         self.head
     }
@@ -76,7 +76,7 @@ impl IntArrayFreeList {
 
 #[cfg(test)]
 mod tests {
-    use super::GenericFreeList;
+    use super::FreeList;
     use super::*;
 
     const LIST_SIZE: usize = 5;

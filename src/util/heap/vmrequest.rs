@@ -26,6 +26,7 @@ impl VMRequest {
     }
 
     pub fn common64bit(top: bool) -> Self {
+        unreachable!();
         VMRequest::Extent {
             extent: MAX_SPACE_EXTENT,
             top,
@@ -33,9 +34,9 @@ impl VMRequest {
     }
 
     pub fn discontiguous() -> Self {
-        if cfg!(target_pointer_width = "64") {
-            return Self::common64bit(false);
-        }
+        // if cfg!(target_pointer_width = "64") {
+        //     return Self::common64bit(false);
+        // }
         VMRequest::Discontiguous
     }
 

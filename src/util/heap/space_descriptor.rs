@@ -11,11 +11,11 @@ const TYPE_CONTIGUOUS_HI: usize = 3;
 const TYPE_MASK: usize = (1 << TYPE_BITS) - 1;
 const SIZE_SHIFT: usize = TYPE_BITS;
 const SIZE_BITS: usize = 10;
-#[cfg(target_pointer_width = "32")]
+// #[cfg(target_pointer_width = "32")]
 const SIZE_MASK: usize = ((1 << SIZE_BITS) - 1) << SIZE_SHIFT;
 const EXPONENT_SHIFT: usize = SIZE_SHIFT + SIZE_BITS;
 const EXPONENT_BITS: usize = 5;
-#[cfg(target_pointer_width = "32")]
+// #[cfg(target_pointer_width = "32")]
 const EXPONENT_MASK: usize = ((1 << EXPONENT_BITS) - 1) << EXPONENT_SHIFT;
 const MANTISSA_SHIFT: usize = EXPONENT_SHIFT + EXPONENT_BITS;
 const MANTISSA_BITS: usize = 14;
@@ -37,21 +37,21 @@ impl SpaceDescriptor {
 
     pub fn create_descriptor_from_heap_range(start: Address, end: Address) -> SpaceDescriptor {
         let top = end == vm_layout_constants::HEAP_END;
-        if cfg!(target_pointer_width = "64") {
-            let space_index = if start > vm_layout_constants::HEAP_END {
-                ::std::usize::MAX
-            } else {
-                (start - HEAP_START) >> vm_layout_constants::SPACE_SHIFT_64
-            };
-            return SpaceDescriptor(
-                space_index << INDEX_SHIFT
-                    | (if top {
-                        TYPE_CONTIGUOUS_HI
-                    } else {
-                        TYPE_CONTIGUOUS
-                    }),
-            );
-        }
+        // if cfg!(target_pointer_width = "64") {
+        //     let space_index = if start > vm_layout_constants::HEAP_END {
+        //         ::std::usize::MAX
+        //     } else {
+        //         (start - HEAP_START) >> vm_layout_constants::SPACE_SHIFT_64
+        //     };
+        //     return SpaceDescriptor(
+        //         space_index << INDEX_SHIFT
+        //             | (if top {
+        //                 TYPE_CONTIGUOUS_HI
+        //             } else {
+        //                 TYPE_CONTIGUOUS
+        //             }),
+        //     );
+        // }
         let chunks = (end - start) >> vm_layout_constants::LOG_BYTES_IN_CHUNK;
         debug_assert!(!start.is_zero() && chunks > 0 && chunks < (1 << SIZE_BITS));
         let mut tmp = start >> BASE_EXPONENT;
@@ -94,13 +94,13 @@ impl SpaceDescriptor {
         (self.0 & TYPE_MASK) == TYPE_CONTIGUOUS_HI
     }
 
-    #[cfg(target_pointer_width = "64")]
-    pub fn get_start(self) -> Address {
-        use crate::util::heap::layout::heap_parameters;
-        unsafe { Address::from_usize(self.get_index() << heap_parameters::LOG_SPACE_SIZE_64) }
-    }
+    // #[cfg(target_pointer_width = "64")]
+    // pub fn get_start(self) -> Address {
+    //     use crate::util::heap::layout::heap_parameters;
+    //     unsafe { Address::from_usize(self.get_index() << heap_parameters::LOG_SPACE_SIZE_64) }
+    // }
 
-    #[cfg(target_pointer_width = "32")]
+    // #[cfg(target_pointer_width = "32")]
     pub fn get_start(self) -> Address {
         debug_assert!(self.is_contiguous());
 
@@ -110,19 +110,19 @@ impl SpaceDescriptor {
         unsafe { Address::from_usize(mantissa << (BASE_EXPONENT + exponent)) }
     }
 
-    #[cfg(target_pointer_width = "64")]
-    pub fn get_extent(self) -> usize {
-        vm_layout_constants::SPACE_SIZE_64
-    }
+    // #[cfg(target_pointer_width = "64")]
+    // pub fn get_extent(self) -> usize {
+    //     vm_layout_constants::SPACE_SIZE_64
+    // }
 
-    #[cfg(target_pointer_width = "32")]
+    // #[cfg(target_pointer_width = "32")]
     pub fn get_extent(self) -> usize {
         debug_assert!(self.is_contiguous());
         let chunks = (self.0 & SIZE_MASK) >> SIZE_SHIFT;
         chunks << vm_layout_constants::LOG_BYTES_IN_CHUNK
     }
 
-    #[cfg(target_pointer_width = "64")]
+    // #[cfg(target_pointer_width = "64")]
     pub fn get_index(self) -> usize {
         (self.0 & INDEX_MASK) >> INDEX_SHIFT
     }

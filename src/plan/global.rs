@@ -14,8 +14,8 @@ use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::AnalysisManager;
 use crate::util::copy::{CopyConfig, GCWorkerCopyContext};
+use crate::util::heap::layout::heap_layout::Map;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::HeapMeta;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
@@ -63,8 +63,8 @@ pub fn create_mutator<VM: VMBinding>(
 
 pub fn create_plan<VM: VMBinding>(
     plan: PlanSelector,
-    vm_map: &'static VMMap,
-    mmapper: &'static Mmapper,
+    vm_map: &'static dyn Map,
+    mmapper: &'static dyn Mmapper,
     options: Arc<Options>,
     scheduler: Arc<GCWorkScheduler<VM>>,
 ) -> Box<dyn Plan<VM = VM>> {
@@ -156,7 +156,7 @@ pub trait Plan: 'static + Sync + Downcast {
     fn generational(&self) -> &Gen<Self::VM> {
         panic!("This is not a generational plan.")
     }
-    fn mmapper(&self) -> &'static Mmapper {
+    fn mmapper(&self) -> &'static dyn Mmapper {
         self.base().mmapper
     }
     fn options(&self) -> &Options {
@@ -385,8 +385,8 @@ pub struct BasePlan<VM: VMBinding> {
     pub cur_collection_attempts: AtomicUsize,
     pub gc_requester: Arc<GCRequester<VM>>,
     pub stats: Stats,
-    mmapper: &'static Mmapper,
-    pub vm_map: &'static VMMap,
+    mmapper: &'static dyn Mmapper,
+    pub vm_map: &'static dyn Map,
     pub options: Arc<Options>,
     pub heap: HeapMeta,
     #[cfg(feature = "sanity")]
@@ -472,8 +472,8 @@ impl<VM: VMBinding> BasePlan<VM> {
     #[allow(unused_variables)] // 'constraints' is only needed for certain features
     #[allow(clippy::redundant_clone)] // depends on features, the last clone of side metadata specs is not necessary.
     pub fn new(
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         options: Arc<Options>,
         mut heap: HeapMeta,
         constraints: &'static PlanConstraints,
@@ -895,8 +895,8 @@ pub struct CommonPlan<VM: VMBinding> {
 
 impl<VM: VMBinding> CommonPlan<VM> {
     pub fn new(
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         options: Arc<Options>,
         mut heap: HeapMeta,
         constraints: &'static PlanConstraints,

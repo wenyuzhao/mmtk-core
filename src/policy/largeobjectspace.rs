@@ -7,7 +7,7 @@ use crate::policy::space::SpaceOptions;
 use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::util::constants::BYTES_IN_PAGE;
-use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
+use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::{FreeListPageResource, PageResource, VMRequest};
 use crate::util::metadata;
@@ -143,8 +143,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         zeroed: bool,
         vmrequest: VMRequest,
         global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         heap: &mut HeapMeta,
         constraints: &'static PlanConstraints,
         protect_memory_on_release: bool,

@@ -17,11 +17,9 @@ use crate::mmtk::SFT_MAP;
 use crate::scheduler::GCWorker;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::map::Map;
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
 use crate::util::heap::layout::vm_layout_constants::MAX_CHUNKS;
-use crate::util::heap::layout::Mmapper as IMmapper;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::HeapMeta;
 use crate::util::memory;
@@ -464,7 +462,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         // The start address SFT should be correct.
                         debug_assert_eq!(SFT_MAP.get(res.start).name(), self.get_name());
                         // The start address is in our space.
-                        debug_assert!(self.address_in_space(res.start));
+                        debug_assert!(
+                            self.address_in_space(res.start),
+                            "res.start {:?} not in space",
+                            res.start
+                        );
                         // The descriptor should be correct.
                         debug_assert_eq!(
                             self.common().vm_map().get_descriptor_for_address(res.start),
@@ -508,8 +510,21 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
 
     fn address_in_space(&self, start: Address) -> bool {
         if !self.common().descriptor.is_contiguous() {
-            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+            let x = self.common().vm_map().get_descriptor_for_address(start)
+                == self.common().descriptor;
+
+            if !x {
+                println!(
+                    "{:?} {:?} {:?}",
+                    start,
+                    self.common().vm_map().get_descriptor_for_address(start),
+                    self.common().descriptor
+                )
+            }
+
+            x
         } else {
+            unreachable!();
             start >= self.common().start && start < self.common().start + self.common().extent
         }
     }
@@ -703,8 +718,8 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
     pub head_discontiguous_region: Address,
 
-    pub vm_map: &'static VMMap,
-    pub mmapper: &'static Mmapper,
+    pub vm_map: &'static dyn Map,
+    pub mmapper: &'static dyn Mmapper,
 
     pub metadata: SideMetadataContext,
 
@@ -731,8 +746,8 @@ pub struct SpaceOptions {
 impl<VM: VMBinding> CommonSpace<VM> {
     pub fn new(
         opt: SpaceOptions,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         heap: &mut HeapMeta,
     ) -> Self {
         let mut rtn = CommonSpace {
@@ -835,7 +850,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         }
     }
 
-    pub fn vm_map(&self) -> &'static VMMap {
+    pub fn vm_map(&self) -> &'static dyn Map {
         self.vm_map
     }
 }

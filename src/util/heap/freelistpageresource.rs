@@ -10,8 +10,7 @@ use crate::util::alloc::embedded_meta_data::*;
 use crate::util::constants::*;
 use crate::util::conversions;
 use crate::util::generic_freelist;
-use crate::util::generic_freelist::GenericFreeList;
-use crate::util::heap::layout::heap_layout::VMMap;
+use crate::util::generic_freelist::FreeList;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
@@ -24,7 +23,7 @@ use std::mem::MaybeUninit;
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 
 pub struct CommonFreeListPageResource {
-    free_list: Box<<VMMap as Map>::FreeList>,
+    free_list: Box<dyn FreeList>,
     start: Address,
 }
 
@@ -168,7 +167,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         start: Address,
         bytes: usize,
         meta_data_pages_per_region: usize,
-        vm_map: &'static VMMap,
+        vm_map: &'static dyn Map,
     ) -> Self {
         let pages = conversions::bytes_to_pages(bytes);
         // We use MaybeUninit::uninit().assume_init(), which is nul, for a Box value, which cannot be null.
@@ -207,7 +206,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         flpr
     }
 
-    pub fn new_discontiguous(meta_data_pages_per_region: usize, vm_map: &'static VMMap) -> Self {
+    pub fn new_discontiguous(meta_data_pages_per_region: usize, vm_map: &'static dyn Map) -> Self {
         // We use MaybeUninit::uninit().assume_init(), which is nul, for a Box value, which cannot be null.
         // FIXME: We should try either remove this kind of circular dependency or use MaybeUninit<T> instead of Box<T>
         #[allow(invalid_value)]

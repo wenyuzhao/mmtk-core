@@ -7,8 +7,8 @@ use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::conversions;
 use crate::util::copy::CopySemantics;
+use crate::util::heap::layout::heap_layout::Map;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::HeapMeta;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
@@ -46,8 +46,8 @@ impl<VM: VMBinding> Gen<VM> {
         mut heap: HeapMeta,
         global_metadata_specs: Vec<SideMetadataSpec>,
         constraints: &'static PlanConstraints,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         options: Arc<Options>,
     ) -> Self {
         let nursery = CopySpace::new(
