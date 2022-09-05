@@ -13,10 +13,10 @@ use atomic::Atomic;
 use std::io::Result;
 use std::mem::transmute;
 
-const MMAP_NUM_CHUNKS: usize = if LOG_BYTES_IN_ADDRESS_SPACE == 32 {
+const MMAP_NUM_CHUNKS: usize = if LOG_BYTES_IN_ADDRESS_SPACE == 32 && false {
     1 << (LOG_BYTES_IN_ADDRESS_SPACE as usize - LOG_MMAP_CHUNK_BYTES)
 } else {
-    1 << (33 - LOG_MMAP_CHUNK_BYTES)
+    1 << (40 - LOG_MMAP_CHUNK_BYTES)
 };
 pub const VERBOSE: bool = true;
 

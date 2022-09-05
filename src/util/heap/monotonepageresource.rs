@@ -183,7 +183,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         let sentinel = start + bytes;
 
         MonotonePageResource {
-            common: CommonPageResource::new(true, false, vm_map),
+            common: CommonPageResource::new(true, cfg!(target_pointer_width = "64"), vm_map),
 
             meta_data_pages_per_region,
             sync: Mutex::new(MonotonePageResourceSync {

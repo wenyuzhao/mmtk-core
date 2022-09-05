@@ -36,6 +36,7 @@ lazy_static! {
     pub static ref VM_MAP: Box<dyn Map> =  if cfg!(target_pointer_width = "32") || unsafe{ USE_35BIT_ADDR_SPACE } {
         Box::new(Map32::new())
     } else {
+        unimplemented!();
         Box::new(Map64::new())
     };
 
@@ -43,6 +44,7 @@ lazy_static! {
     pub static ref MMAPPER: Box<dyn Mmapper> = if cfg!(target_pointer_width = "32") || unsafe{ USE_35BIT_ADDR_SPACE } {
         Box::new(Mmapper32::new())
     } else {
+        unimplemented!();
         Box::new(Mmapper64::new())
     };
 }

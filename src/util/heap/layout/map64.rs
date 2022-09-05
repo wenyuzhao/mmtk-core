@@ -234,7 +234,8 @@ impl Map64 {
         if addr > HEAP_END {
             return None;
         }
-        Some((addr - HEAP_START) >> SPACE_SHIFT_64)
+        Some(addr >> SPACE_SHIFT_64)
+        // Some((addr - HEAP_START) >> SPACE_SHIFT_64)
     }
 
     fn is_space_start(base: Address) -> bool {

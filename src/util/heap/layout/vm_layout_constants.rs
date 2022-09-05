@@ -30,7 +30,7 @@ pub const CHUNK_MASK: usize = (1 << LOG_BYTES_IN_CHUNK) - 1;
 pub const PAGES_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK as usize - LOG_BYTES_IN_PAGE as usize);
 
 /** log_2 of the maximum number of chunks we need to track.  Only used in 32-bit layout.*/
-pub const LOG_MAX_CHUNKS: usize = LOG_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK;
+pub const LOG_MAX_CHUNKS: usize = 47 - LOG_BYTES_IN_CHUNK;
 
 /** Maximum number of chunks we need to track.  Only used in 32-bit layout. */
 pub const MAX_CHUNKS: usize = 1 << LOG_MAX_CHUNKS;
@@ -53,14 +53,14 @@ pub const MAX_SPACE_EXTENT: usize = 1 << LOG_SPACE_EXTENT;
 // FIXME: HEAP_START, HEAP_END are VM-dependent
 /** Lowest virtual address used by the virtual machine */
 // #[cfg(target_pointer_width = "32")]
-pub const HEAP_START: Address = chunk_align_down(unsafe { Address::from_usize(0x6000_0000) });
+pub const HEAP_START: Address = chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) });
 // #[cfg(target_pointer_width = "64")]
 // pub const HEAP_START: Address =
 //     chunk_align_down(unsafe { Address::from_usize(0x0000_0200_0000_0000usize) });
 
 /** Highest virtual address used by the virtual machine */
 // #[cfg(target_pointer_width = "32")]
-pub const HEAP_END: Address = chunk_align_up(unsafe { Address::from_usize(0xb000_0000) });
+pub const HEAP_END: Address = chunk_align_up(unsafe { Address::from_usize(0x10_b000_0000) });
 // #[cfg(target_pointer_width = "64")]
 // pub const HEAP_END: Address =
 //     chunk_align_up(unsafe { Address::from_usize(0x0000_0202_0000_0000usize) });

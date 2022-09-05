@@ -60,11 +60,11 @@ impl Map for Map32 {
                 self.descriptor_map[index].is_empty(),
                 "Conflicting virtual address request"
             );
-            println!(
-                "Set descriptor {:?} for Chunk {}",
-                descriptor,
-                conversions::chunk_index_to_address(index)
-            );
+            // println!(
+            //     "Set descriptor {:?} for Chunk {}",
+            //     descriptor,
+            //     conversions::chunk_index_to_address(index)
+            // );
             self_mut.descriptor_map[index] = descriptor;
             //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
             e += BYTES_IN_CHUNK;

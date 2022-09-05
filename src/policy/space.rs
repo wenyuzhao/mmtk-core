@@ -514,12 +514,12 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 == self.common().descriptor;
 
             if !x {
-                println!(
-                    "{:?} {:?} {:?}",
-                    start,
-                    self.common().vm_map().get_descriptor_for_address(start),
-                    self.common().descriptor
-                )
+                // println!(
+                //     "{:?} {:?} {:?}",
+                //     start,
+                //     self.common().vm_map().get_descriptor_for_address(start),
+                //     self.common().descriptor
+                // )
             }
 
             x

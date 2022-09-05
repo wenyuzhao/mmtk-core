@@ -14,4 +14,4 @@ pub const MAX_SPACES: usize = 1 << LOG_MAX_SPACES;
  * pages in a space fit into a 32-bit signed int, so the maximum
  * size of this constant is 41 (assuming 4k pages).
  */
-pub const LOG_SPACE_SIZE_64: usize = 30;
+pub const LOG_SPACE_SIZE_64: usize = 41;
