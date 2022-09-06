@@ -109,6 +109,7 @@ pub struct MMTK<VM: VMBinding> {
 
 impl<VM: VMBinding> MMTK<VM> {
     pub fn new(options: Arc<Options>) -> Self {
+        crate::util::heap::layout::vm_layout_constants::init();
         // Initialize SFT first in case we need to use this in the constructor.
         // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
         SFT_MAP.initialize_once(&SFTMap::new);

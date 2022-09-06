@@ -1,6 +1,6 @@
-use crate::util::heap::layout::vm_layout_constants;
+use crate::util::constants::*;
+use crate::util::heap::layout::vm_layout_constants::{self, VM_LAYOUT_CONSTANTS};
 use crate::util::Address;
-use crate::util::{constants::*, heap::layout::vm_layout_constants::HEAP_START};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const TYPE_BITS: usize = 2;
@@ -36,7 +36,7 @@ impl SpaceDescriptor {
     pub const UNINITIALIZED: Self = SpaceDescriptor(0);
 
     pub fn create_descriptor_from_heap_range(start: Address, end: Address) -> SpaceDescriptor {
-        let top = end == vm_layout_constants::HEAP_END;
+        let top = end == VM_LAYOUT_CONSTANTS.heap_end;
         // if cfg!(target_pointer_width = "64") {
         //     let space_index = if start > vm_layout_constants::HEAP_END {
         //         ::std::usize::MAX
@@ -151,15 +151,15 @@ mod tests {
     #[test]
     fn create_contiguous_descriptor_at_heap_start() {
         let d = SpaceDescriptor::create_descriptor_from_heap_range(
-            HEAP_START,
-            HEAP_START + TEST_SPACE_SIZE,
+            VM_LAYOUT_CONSTANTS.heap_start,
+            VM_LAYOUT_CONSTANTS.heap_start + TEST_SPACE_SIZE,
         );
         assert!(!d.is_empty());
         assert!(d.is_contiguous());
         assert!(!d.is_contiguous_hi());
-        assert_eq!(d.get_start(), HEAP_START);
+        assert_eq!(d.get_start(), VM_LAYOUT_CONSTANTS.heap_start);
         if cfg!(target_pointer_width = "64") {
-            assert_eq!(d.get_extent(), SPACE_SIZE_64);
+            assert_eq!(d.get_extent(), VM_LAYOUT_CONSTANTS.space_size_64);
         } else {
             assert_eq!(d.get_extent(), TEST_SPACE_SIZE);
         }
@@ -168,17 +168,20 @@ mod tests {
     #[test]
     fn create_contiguous_descriptor_in_heap() {
         let d = SpaceDescriptor::create_descriptor_from_heap_range(
-            HEAP_START + TEST_SPACE_SIZE,
-            HEAP_START + TEST_SPACE_SIZE * 2,
+            VM_LAYOUT_CONSTANTS.heap_start + TEST_SPACE_SIZE,
+            VM_LAYOUT_CONSTANTS.heap_start + TEST_SPACE_SIZE * 2,
         );
         assert!(!d.is_empty());
         assert!(d.is_contiguous());
         assert!(!d.is_contiguous_hi());
         if cfg!(target_pointer_width = "64") {
-            assert_eq!(d.get_start(), HEAP_START);
-            assert_eq!(d.get_extent(), SPACE_SIZE_64);
+            assert_eq!(d.get_start(), VM_LAYOUT_CONSTANTS.heap_start);
+            assert_eq!(d.get_extent(), VM_LAYOUT_CONSTANTS.space_size_64);
         } else {
-            assert_eq!(d.get_start(), HEAP_START + TEST_SPACE_SIZE);
+            assert_eq!(
+                d.get_start(),
+                VM_LAYOUT_CONSTANTS.heap_start + TEST_SPACE_SIZE
+            );
             assert_eq!(d.get_extent(), TEST_SPACE_SIZE);
         }
     }
@@ -186,17 +189,23 @@ mod tests {
     #[test]
     fn create_contiguous_descriptor_at_heap_end() {
         let d = SpaceDescriptor::create_descriptor_from_heap_range(
-            HEAP_END - TEST_SPACE_SIZE,
-            HEAP_END,
+            VM_LAYOUT_CONSTANTS.heap_end - TEST_SPACE_SIZE,
+            VM_LAYOUT_CONSTANTS.heap_end,
         );
         assert!(!d.is_empty());
         assert!(d.is_contiguous());
         assert!(d.is_contiguous_hi());
         if cfg!(target_pointer_width = "64") {
-            assert_eq!(d.get_start(), HEAP_END - SPACE_SIZE_64);
-            assert_eq!(d.get_extent(), SPACE_SIZE_64);
+            assert_eq!(
+                d.get_start(),
+                VM_LAYOUT_CONSTANTS.heap_end - VM_LAYOUT_CONSTANTS.space_size_64
+            );
+            assert_eq!(d.get_extent(), VM_LAYOUT_CONSTANTS.space_size_64);
         } else {
-            assert_eq!(d.get_start(), HEAP_END - TEST_SPACE_SIZE);
+            assert_eq!(
+                d.get_start(),
+                VM_LAYOUT_CONSTANTS.heap_end - TEST_SPACE_SIZE
+            );
             assert_eq!(d.get_extent(), TEST_SPACE_SIZE);
         }
     }

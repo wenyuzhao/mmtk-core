@@ -1,5 +1,5 @@
 use crate::util::conversions;
-use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
+use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 use crate::util::options::Options;
 use crate::util::Address;
 
@@ -12,8 +12,8 @@ pub struct HeapMeta {
 impl HeapMeta {
     pub fn new(options: &Options) -> Self {
         HeapMeta {
-            heap_cursor: HEAP_START,
-            heap_limit: HEAP_END,
+            heap_cursor: VM_LAYOUT_CONSTANTS.heap_start,
+            heap_limit: VM_LAYOUT_CONSTANTS.heap_end,
             total_pages: conversions::bytes_to_pages(*options.heap_size),
         }
     }

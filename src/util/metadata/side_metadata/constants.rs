@@ -1,6 +1,6 @@
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-use crate::util::heap::layout::vm_layout_constants::LOG_ADDRESS_SPACE;
+use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 use crate::util::metadata::side_metadata::SideMetadataOffset;
 use crate::util::Address;
 
@@ -43,24 +43,30 @@ pub(super) const LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO: usize = 3;
 #[cfg(target_pointer_width = "64")]
 pub(super) const LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO: usize = 1;
 
-pub const LOG_MAX_GLOBAL_SIDE_METADATA_SIZE: usize =
-    LOG_ADDRESS_SPACE - LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO;
+lazy_static! {
+    pub static ref LOG_MAX_GLOBAL_SIDE_METADATA_SIZE: usize =
+        VM_LAYOUT_CONSTANTS.log_address_space - LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO;
+}
 // TODO - we should check this limit somewhere
 // pub(crate) const LOG_MAX_LOCAL_SIDE_METADATA_SIZE: usize =
 //     1 << (LOG_ADDRESS_SPACE - LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO);
 
 // Local side metadata start address
 
-pub(crate) const LOCAL_SIDE_METADATA_BASE_ADDRESS: Address =
-    GLOBAL_SIDE_METADATA_BASE_ADDRESS.add(1usize << LOG_MAX_GLOBAL_SIDE_METADATA_SIZE);
+lazy_static! {
+    pub(crate) static ref LOCAL_SIDE_METADATA_BASE_ADDRESS: Address =
+        GLOBAL_SIDE_METADATA_BASE_ADDRESS.add(1usize << *LOG_MAX_GLOBAL_SIDE_METADATA_SIZE);
+}
 
 // Local side metadata start offset
 
 #[cfg(target_pointer_width = "32")]
 pub(crate) const LOCAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset = SideMetadataOffset::rel(0);
 #[cfg(target_pointer_width = "64")]
-pub(crate) const LOCAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
-    SideMetadataOffset::addr(LOCAL_SIDE_METADATA_BASE_ADDRESS);
+lazy_static! {
+    pub(crate) static ref LOCAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
+        SideMetadataOffset::addr(*LOCAL_SIDE_METADATA_BASE_ADDRESS);
+}
 
 #[cfg(target_pointer_width = "32")]
 pub(super) const LOCAL_SIDE_METADATA_PER_CHUNK: usize =

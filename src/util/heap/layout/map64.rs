@@ -39,7 +39,7 @@ impl Map64 {
         }
 
         Self {
-            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; MAX_CHUNKS],
+            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; VM_LAYOUT_CONSTANTS.max_chunks()],
             high_water,
             base_address,
             fl_page_resources: vec![None; MAX_SPACES],
@@ -52,7 +52,7 @@ impl Map64 {
 
 impl Map for Map64 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        debug_assert!(extent <= SPACE_SIZE_64);
+        debug_assert!(extent <= VM_LAYOUT_CONSTANTS.space_size_64);
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
         let self_mut = unsafe { self.mut_self() };
@@ -61,7 +61,7 @@ impl Map for Map64 {
     }
 
     fn create_freelist(&self, pr: &CommonFreeListPageResource) -> Box<dyn FreeList> {
-        let units = SPACE_SIZE_64 >> LOG_BYTES_IN_PAGE;
+        let units = VM_LAYOUT_CONSTANTS.space_size_64 >> LOG_BYTES_IN_PAGE;
         self.create_parent_freelist(pr, units, units as _)
     }
 
@@ -74,7 +74,12 @@ impl Map for Map64 {
         // This is only called during creating a page resource/space/plan/mmtk instance, which is single threaded.
         let self_mut = unsafe { self.mut_self() };
         let start = pr.get_start();
-        assert!(start < HEAP_END, "{:?} {:?}", start, HEAP_END);
+        assert!(
+            start < VM_LAYOUT_CONSTANTS.heap_end,
+            "{:?} {:?}",
+            start,
+            VM_LAYOUT_CONSTANTS.heap_end
+        );
         let index = Self::space_index(start).unwrap();
 
         units = (units as f64 * NON_MAP_FRACTION) as _;
@@ -231,7 +236,7 @@ impl Map64 {
     }
 
     fn space_index(addr: Address) -> Option<usize> {
-        if addr > HEAP_END {
+        if addr > VM_LAYOUT_CONSTANTS.heap_end {
             return None;
         }
         Some(addr >> SPACE_SHIFT_64)

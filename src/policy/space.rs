@@ -4,8 +4,7 @@ use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSani
 use crate::util::Address;
 use crate::util::ObjectReference;
 
-use crate::util::heap::layout::vm_layout_constants::{AVAILABLE_BYTES, LOG_BYTES_IN_CHUNK};
-use crate::util::heap::layout::vm_layout_constants::{AVAILABLE_END, AVAILABLE_START};
+use crate::util::heap::layout::vm_layout_constants::{LOG_BYTES_IN_CHUNK, VM_LAYOUT_CONSTANTS};
 use crate::util::heap::{PageResource, VMRequest};
 use crate::vm::{ActivePlan, Collection, ObjectModel};
 
@@ -19,7 +18,6 @@ use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::map::Map;
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-use crate::util::heap::layout::vm_layout_constants::MAX_CHUNKS;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::HeapMeta;
 use crate::util::memory;
@@ -200,7 +198,7 @@ const EMPTY_SPACE_SFT: EmptySpaceSFT = EmptySpaceSFT {};
 impl<'a> SFTMap<'a> {
     pub fn new() -> Self {
         SFTMap {
-            sft: vec![&EMPTY_SPACE_SFT; MAX_CHUNKS],
+            sft: vec![&EMPTY_SPACE_SFT; VM_LAYOUT_CONSTANTS.max_chunks()],
         }
     }
     // This is a temporary solution to allow unsafe mut reference. We do not want several occurrence
@@ -213,7 +211,7 @@ impl<'a> SFTMap<'a> {
     }
 
     pub fn get(&self, address: Address) -> &'a dyn SFT {
-        debug_assert!(address.chunk_index() < MAX_CHUNKS);
+        debug_assert!(address.chunk_index() < VM_LAYOUT_CONSTANTS.max_chunks());
         let res = unsafe { *self.sft.get_unchecked(address.chunk_index()) };
         if DEBUG_SFT {
             trace!(
@@ -856,10 +854,15 @@ impl<VM: VMBinding> CommonSpace<VM> {
 }
 
 fn get_frac_available(frac: f32) -> usize {
-    trace!("AVAILABLE_START={}", AVAILABLE_START);
-    trace!("AVAILABLE_END={}", AVAILABLE_END);
-    let bytes = (frac * AVAILABLE_BYTES as f32) as usize;
-    trace!("bytes={}*{}={}", frac, AVAILABLE_BYTES, bytes);
+    trace!("AVAILABLE_START={}", VM_LAYOUT_CONSTANTS.available_start());
+    trace!("AVAILABLE_END={}", VM_LAYOUT_CONSTANTS.available_end());
+    let bytes = (frac * VM_LAYOUT_CONSTANTS.available_bytes() as f32) as usize;
+    trace!(
+        "bytes={}*{}={}",
+        frac,
+        VM_LAYOUT_CONSTANTS.available_bytes(),
+        bytes
+    );
     let mb = bytes >> LOG_BYTES_IN_MBYTE;
     let rtn = mb << LOG_BYTES_IN_MBYTE;
     trace!("rtn={}", rtn);

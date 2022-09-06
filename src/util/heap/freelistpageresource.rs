@@ -214,7 +214,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let common_flpr = unsafe {
             let mut common_flpr = Box::new(CommonFreeListPageResource {
                 free_list: MaybeUninit::uninit().assume_init(),
-                start: AVAILABLE_START,
+                start: VM_LAYOUT_CONSTANTS.available_start(),
             });
             ::std::ptr::write(
                 &mut common_flpr.free_list,

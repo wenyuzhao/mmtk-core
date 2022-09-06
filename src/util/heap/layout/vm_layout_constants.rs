@@ -1,3 +1,5 @@
+use once_cell::sync::OnceCell;
+
 use super::heap_parameters::*;
 use crate::util::constants::*;
 use crate::util::Address;
@@ -11,7 +13,7 @@ use crate::util::conversions::{chunk_align_down, chunk_align_up};
 // This affects how much address space we need to reserve for side metadata.
 // pub const LOG_ADDRESS_SPACE: usize = 47;
 // #[cfg(target_pointer_width = "32")]
-pub const LOG_ADDRESS_SPACE: usize = 32;
+// pub const LOG_ADDRESS_SPACE: usize = 32;
 /**
  * log_2 of the coarsest unit of address space allocation.
  * <p>
@@ -30,10 +32,10 @@ pub const CHUNK_MASK: usize = (1 << LOG_BYTES_IN_CHUNK) - 1;
 pub const PAGES_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK as usize - LOG_BYTES_IN_PAGE as usize);
 
 /** log_2 of the maximum number of chunks we need to track.  Only used in 32-bit layout.*/
-pub const LOG_MAX_CHUNKS: usize = 47 - LOG_BYTES_IN_CHUNK;
+// pub const LOG_MAX_CHUNKS: usize = 47 - LOG_BYTES_IN_CHUNK;
 
 /** Maximum number of chunks we need to track.  Only used in 32-bit layout. */
-pub const MAX_CHUNKS: usize = 1 << LOG_MAX_CHUNKS;
+// pub const MAX_CHUNKS: usize = 1 << LOG_MAX_CHUNKS;
 
 /**
  * An upper bound on the extent of any space in the
@@ -42,33 +44,33 @@ pub const MAX_CHUNKS: usize = 1 << LOG_MAX_CHUNKS;
 // #[cfg(target_pointer_width = "64")]
 // pub const LOG_SPACE_EXTENT: usize = LOG_SPACE_SIZE_64;
 // #[cfg(target_pointer_width = "32")]
-pub const LOG_SPACE_EXTENT: usize = 31;
+// pub const LOG_SPACE_EXTENT: usize = 31;
 
 /**
  * An upper bound on the extent of any space in the
  * current memory layout
  */
-pub const MAX_SPACE_EXTENT: usize = 1 << LOG_SPACE_EXTENT;
+// pub const MAX_SPACE_EXTENT: usize = 1 << LOG_SPACE_EXTENT;
 
 // FIXME: HEAP_START, HEAP_END are VM-dependent
 /** Lowest virtual address used by the virtual machine */
 // #[cfg(target_pointer_width = "32")]
-pub const HEAP_START: Address = chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) });
+// pub const HEAP_START: Address = chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) });
 // #[cfg(target_pointer_width = "64")]
 // pub const HEAP_START: Address =
 //     chunk_align_down(unsafe { Address::from_usize(0x0000_0200_0000_0000usize) });
 
 /** Highest virtual address used by the virtual machine */
 // #[cfg(target_pointer_width = "32")]
-pub const HEAP_END: Address = chunk_align_up(unsafe { Address::from_usize(0x10_b000_0000) });
+// pub const HEAP_END: Address = chunk_align_up(unsafe { Address::from_usize(0x10_b000_0000) });
 // #[cfg(target_pointer_width = "64")]
 // pub const HEAP_END: Address =
 //     chunk_align_up(unsafe { Address::from_usize(0x0000_0202_0000_0000usize) });
 
 /// vm-sapce size (currently only used by jikesrvm)
 // #[cfg(target_pointer_width = "32")]
-pub const VM_SPACE_SIZE: usize =
-    chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize();
+// pub const VM_SPACE_SIZE: usize =
+//     chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize();
 // #[cfg(target_pointer_width = "64")]
 // pub const VM_SPACE_SIZE: usize =
 //     chunk_align_up(unsafe { Address::from_usize(0xdc0_0000) }).as_usize();
@@ -78,20 +80,20 @@ pub const VM_SPACE_SIZE: usize =
  * HEAP_START and AVAILABLE_START comprises memory directly managed by the VM,
  * and not available to MMTk.
  */
-#[cfg(feature = "vm_space")]
-pub const AVAILABLE_START: Address = HEAP_START.add(VM_SPACE_SIZE);
-#[cfg(not(feature = "vm_space"))]
-pub const AVAILABLE_START: Address = HEAP_START;
+// #[cfg(feature = "vm_space")]
+// pub const AVAILABLE_START: Address = HEAP_START.add(VM_SPACE_SIZE);
+// #[cfg(not(feature = "vm_space"))]
+// pub const AVAILABLE_START: Address = HEAP_START;
 
 /**
  * Highest virtual address available for MMTk to manage.  The address space between
  * HEAP_END and AVAILABLE_END comprises memory directly managed by the VM,
  * and not available to MMTk.
 */
-pub const AVAILABLE_END: Address = HEAP_END;
+// pub const AVAILABLE_END: Address = HEAP_END;
 
 /** Size of the address space available to the MMTk heap. */
-pub const AVAILABLE_BYTES: usize = AVAILABLE_END.get_extent(AVAILABLE_START);
+// pub const AVAILABLE_BYTES: usize = AVAILABLE_END.get_extent(AVAILABLE_START);
 
 /** Granularity at which we map and unmap virtual address space in the heap */
 pub const LOG_MMAP_CHUNK_BYTES: usize = LOG_BYTES_IN_CHUNK;
@@ -148,4 +150,73 @@ pub const SPACE_MASK_64: usize = 0;
 // #[cfg(target_pointer_width = "64")]
 // pub const SPACE_SIZE_64: usize = 1 << LOG_SPACE_SIZE_64;
 // #[cfg(target_pointer_width = "32")]
-pub const SPACE_SIZE_64: usize = MAX_SPACE_EXTENT;
+// pub const SPACE_SIZE_64: usize = MAX_SPACE_EXTENT;
+
+pub struct VMLayoutConstants {
+    pub log_address_space: usize,
+    pub heap_start: Address,
+    /// log_2 of the maximum number of chunks we need to track.  Only used in 32-bit layout.
+    pub log_max_chunks: usize,
+    pub heap_end: Address,
+    pub log_space_extent: usize,
+    pub vm_space_size: usize,
+    pub space_shift_64: usize,
+    pub space_mask_64: usize,
+    pub space_size_64: usize,
+}
+
+impl VMLayoutConstants {
+    pub const fn max_space_extent(&self) -> usize {
+        1 << self.log_space_extent
+    }
+    pub const fn available_start(&self) -> Address {
+        if cfg!(feature = "vm_space") {
+            self.heap_start + self.vm_space_size
+        } else {
+            self.heap_start
+        }
+    }
+    pub const fn available_end(&self) -> Address {
+        self.heap_end
+    }
+    pub const fn available_bytes(&self) -> usize {
+        self.available_end().get_extent(self.available_start())
+    }
+    /// Maximum number of chunks we need to track.  Only used in 32-bit layout.
+    pub const fn max_chunks(&self) -> usize {
+        1 << self.log_max_chunks
+    }
+}
+
+impl VMLayoutConstants {
+    pub const fn new_32bit() -> Self {
+        unimplemented!()
+    }
+    pub const fn new_64bit() -> Self {
+        unimplemented!()
+    }
+    pub const fn new_64bit_with_pointer_compression() -> Self {
+        Self {
+            log_address_space: 32,
+            heap_start: chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(0x10_b000_0000) }),
+            vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
+            log_max_chunks: 47 - LOG_BYTES_IN_CHUNK,
+            log_space_extent: 31,
+            space_shift_64: 0,
+            space_mask_64: 0,
+            space_size_64: 0,
+        }
+    }
+}
+
+// pub static VM_LAYOUT_CONSTANTS: OnceCell<VMLayoutConstants> = OnceCell::new();
+
+lazy_static! {
+    pub static ref VM_LAYOUT_CONSTANTS: VMLayoutConstants =
+        VMLayoutConstants::new_64bit_with_pointer_compression();
+}
+
+pub fn init() {
+    // VM_LAYOUT_CONSTANTS.set(VMLayoutConstants::new_64bit_with_pointer_compression());
+}

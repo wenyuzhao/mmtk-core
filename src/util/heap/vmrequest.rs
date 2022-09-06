@@ -28,7 +28,7 @@ impl VMRequest {
     pub fn common64bit(top: bool) -> Self {
         unreachable!();
         VMRequest::Extent {
-            extent: MAX_SPACE_EXTENT,
+            extent: VM_LAYOUT_CONSTANTS.max_space_extent(),
             top,
         }
     }
