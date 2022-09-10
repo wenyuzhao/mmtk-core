@@ -123,7 +123,7 @@ pub(crate) const fn addr_rshift(metadata_spec: &SideMetadataSpec) -> i32 {
 #[allow(dead_code)]
 #[inline(always)]
 pub const fn metadata_address_range_size(metadata_spec: &SideMetadataSpec) -> usize {
-    1usize << (VM_LAYOUT_CONSTANTS.log_address_space - addr_rshift(metadata_spec) as usize)
+    1usize << (47 - addr_rshift(metadata_spec) as usize)
 }
 
 #[inline(always)]

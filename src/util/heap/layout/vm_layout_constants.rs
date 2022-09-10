@@ -1,5 +1,3 @@
-use once_cell::sync::OnceCell;
-
 use super::heap_parameters::*;
 use crate::util::constants::*;
 use crate::util::Address;
@@ -171,7 +169,7 @@ impl VMLayoutConstants {
     }
     pub const fn available_start(&self) -> Address {
         if cfg!(feature = "vm_space") {
-            self.heap_start + self.vm_space_size
+            unsafe { Address::from_usize(self.heap_start.as_usize() + self.vm_space_size) }
         } else {
             self.heap_start
         }
