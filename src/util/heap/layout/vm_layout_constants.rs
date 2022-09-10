@@ -1,3 +1,5 @@
+use spin::Mutex;
+
 use super::heap_parameters::*;
 use crate::util::constants::*;
 use crate::util::Address;
@@ -120,7 +122,7 @@ pub const PAGES_IN_SPACE64: usize = 1 << LOG_PAGES_IN_SPACE64;
  */
 /* In a 32-bit model, use a dummy value so that the compiler doesn't barf. */
 // #[cfg(target_pointer_width = "32")]
-pub const SPACE_SHIFT_64: usize = 0;
+// pub const SPACE_SHIFT_64: usize = 0;
 // #[cfg(target_pointer_width = "64")]
 // pub const SPACE_SHIFT_64: usize = LOG_SPACE_SIZE_64;
 
@@ -131,7 +133,7 @@ pub const SPACE_SHIFT_64: usize = 0;
  * conditional definition.
  */
 // #[cfg(target_pointer_width = "32")]
-pub const SPACE_MASK_64: usize = 0;
+// pub const SPACE_MASK_64: usize = 0;
 // #[cfg(target_pointer_width = "64")]
 // pub const SPACE_MASK_64: usize = ((1 << LOG_MAX_SPACES) - 1) << SPACE_SHIFT_64;
 
@@ -190,10 +192,24 @@ impl VMLayoutConstants {
     pub const fn new_32bit() -> Self {
         unimplemented!()
     }
-    pub const fn new_64bit() -> Self {
-        unimplemented!()
+    pub fn new_64bit() -> Self {
+        println!("VMLayoutConstants: 64bit");
+        Self {
+            log_address_space: 47,
+            heap_start: chunk_align_down(unsafe {
+                Address::from_usize(0x0000_0200_0000_0000usize)
+            }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2000_0000_0000usize) }),
+            vm_space_size: chunk_align_up(unsafe { Address::from_usize(0xdc0_0000) }).as_usize(),
+            log_max_chunks: 47 - LOG_BYTES_IN_CHUNK,
+            log_space_extent: 41,
+            space_shift_64: 41,
+            space_mask_64: ((1 << 4) - 1) << 41,
+            space_size_64: 1 << 41,
+        }
     }
-    pub const fn new_64bit_with_pointer_compression() -> Self {
+    pub fn new_64bit_with_pointer_compression() -> Self {
+        println!("VMLayoutConstants: 64bit (with pointer compression)");
         Self {
             log_address_space: 32,
             heap_start: chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) }),
@@ -206,13 +222,41 @@ impl VMLayoutConstants {
             space_size_64: 0,
         }
     }
+
+    pub fn set_address_space(kind: AddressSpaceKind) {
+        let mut guard = ADDRESS_SPACE_KIND.lock();
+        assert!(guard.is_none(), "Address space can only be set once");
+        *guard = Some(kind);
+    }
+
+    pub fn get_address_space() -> AddressSpaceKind {
+        ADDRESS_SPACE_KIND.lock().unwrap()
+    }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum AddressSpaceKind {
+    _32Bits,
+    _64Bits,
+    _64BitsWithPointerCompression,
+}
+
+static ADDRESS_SPACE_KIND: Mutex<Option<AddressSpaceKind>> = Mutex::new(None);
 // pub static VM_LAYOUT_CONSTANTS: OnceCell<VMLayoutConstants> = OnceCell::new();
 
 lazy_static! {
-    pub static ref VM_LAYOUT_CONSTANTS: VMLayoutConstants =
-        VMLayoutConstants::new_64bit_with_pointer_compression();
+    pub static ref VM_LAYOUT_CONSTANTS: VMLayoutConstants = {
+        let las = ADDRESS_SPACE_KIND
+            .lock()
+            .expect("Address space is not initialized");
+        match las {
+            AddressSpaceKind::_32Bits => unimplemented!(),
+            AddressSpaceKind::_64Bits => VMLayoutConstants::new_64bit(),
+            AddressSpaceKind::_64BitsWithPointerCompression => {
+                VMLayoutConstants::new_64bit_with_pointer_compression()
+            }
+        }
+    };
 }
 
 pub fn init() {

@@ -522,7 +522,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
 
             x
         } else {
-            unreachable!();
             start >= self.common().start && start < self.common().start + self.common().extent
         }
     }

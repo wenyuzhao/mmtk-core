@@ -9,6 +9,7 @@ use crate::util::finalizable_processor::FinalizableProcessor;
 use crate::util::heap::layout::heap_layout::{Map, Map64};
 use crate::util::heap::layout::heap_layout::{Mmapper, Mmapper32, Mmapper64};
 use crate::util::heap::layout::map32::Map32;
+use crate::util::heap::layout::vm_layout_constants::{AddressSpaceKind, VMLayoutConstants};
 use crate::util::opaque_pointer::*;
 use crate::util::options::Options;
 use crate::util::reference_processor::ReferenceProcessors;
@@ -21,8 +22,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-static mut USE_35BIT_ADDR_SPACE: bool = false;
-
 lazy_static! {
     // I am not sure if we should include these mmappers as part of MMTk struct.
     // The considerations are:
@@ -33,18 +32,16 @@ lazy_static! {
     // TODO: We should refactor this when we know more about how multiple MMTK instances work.
 
     /// A global VMMap that manages the mapping of spaces to virtual memory ranges.
-    pub static ref VM_MAP: Box<dyn Map> =  if cfg!(target_pointer_width = "32") || unsafe{ USE_35BIT_ADDR_SPACE } {
+    pub static ref VM_MAP: Box<dyn Map> =  if cfg!(target_pointer_width = "32") || VMLayoutConstants::get_address_space() == AddressSpaceKind::_64BitsWithPointerCompression {
         Box::new(Map32::new())
     } else {
-        unimplemented!();
         Box::new(Map64::new())
     };
 
     /// A global Mmapper for mmaping and protection of virtual memory.
-    pub static ref MMAPPER: Box<dyn Mmapper> = if cfg!(target_pointer_width = "32") || unsafe{ USE_35BIT_ADDR_SPACE } {
+    pub static ref MMAPPER: Box<dyn Mmapper> = if cfg!(target_pointer_width = "32") || VMLayoutConstants::get_address_space() == AddressSpaceKind::_64BitsWithPointerCompression {
         Box::new(Mmapper32::new())
     } else {
-        unimplemented!();
         Box::new(Mmapper64::new())
     };
 }
@@ -109,7 +106,16 @@ pub struct MMTK<VM: VMBinding> {
 
 impl<VM: VMBinding> MMTK<VM> {
     pub fn new(options: Arc<Options>) -> Self {
-        crate::util::heap::layout::vm_layout_constants::init();
+        if cfg!(target_pointer_width = "32") {
+            VMLayoutConstants::set_address_space(AddressSpaceKind::_32Bits);
+        } else if *options.use_35bit_address_space {
+            println!("Enable 35-bit address space");
+            VMLayoutConstants::set_address_space(AddressSpaceKind::_64BitsWithPointerCompression);
+        } else {
+            println!("Enable 47-bit address space");
+            VMLayoutConstants::set_address_space(AddressSpaceKind::_64Bits);
+        }
+
         // Initialize SFT first in case we need to use this in the constructor.
         // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
         SFT_MAP.initialize_once(&SFTMap::new);
@@ -119,10 +125,6 @@ impl<VM: VMBinding> MMTK<VM> {
         } else {
             *options.threads
         };
-
-        if *options.use_35bit_address_space {
-            unsafe { USE_35BIT_ADDR_SPACE = true }
-        }
 
         let scheduler = GCWorkScheduler::new(num_workers);
         let plan = crate::plan::create_plan(

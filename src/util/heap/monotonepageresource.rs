@@ -179,7 +179,6 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         meta_data_pages_per_region: usize,
         vm_map: &'static dyn Map,
     ) -> Self {
-        unreachable!();
         let sentinel = start + bytes;
 
         MonotonePageResource {

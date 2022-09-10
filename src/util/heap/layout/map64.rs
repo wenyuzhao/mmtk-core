@@ -239,12 +239,12 @@ impl Map64 {
         if addr > VM_LAYOUT_CONSTANTS.heap_end {
             return None;
         }
-        Some(addr >> SPACE_SHIFT_64)
+        Some(addr >> VM_LAYOUT_CONSTANTS.space_shift_64)
         // Some((addr - HEAP_START) >> SPACE_SHIFT_64)
     }
 
     fn is_space_start(base: Address) -> bool {
-        (base & !SPACE_MASK_64) == 0
+        (base & !VM_LAYOUT_CONSTANTS.space_mask_64) == 0
     }
 }
 
