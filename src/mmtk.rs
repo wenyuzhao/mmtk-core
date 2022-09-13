@@ -39,7 +39,7 @@ lazy_static! {
     };
 
     /// A global Mmapper for mmaping and protection of virtual memory.
-    pub static ref MMAPPER: Box<dyn Mmapper> = if cfg!(target_pointer_width = "32") || VMLayoutConstants::get_address_space() == AddressSpaceKind::_64BitsWithPointerCompression {
+    pub static ref MMAPPER: Box<dyn Mmapper> = if cfg!(target_pointer_width = "32") {
         Box::new(Mmapper32::new())
     } else {
         Box::new(Mmapper64::new())

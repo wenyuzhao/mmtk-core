@@ -213,7 +213,7 @@ impl VMLayoutConstants {
         Self {
             log_address_space: 32,
             heap_start: chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0x10_b000_0000) }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(0x11_6000_0000) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
             log_max_chunks: 47 - LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
