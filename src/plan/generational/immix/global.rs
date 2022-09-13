@@ -46,7 +46,8 @@ pub struct GenImmix<VM: VMBinding> {
     pub last_gc_was_full_heap: AtomicBool,
 }
 
-pub const GENIMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
+lazy_static! {
+pub static ref GENIMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     // The maximum object size that can be allocated without LOS is restricted by the max immix object size.
     // This might be too restrictive, as our default allocator is bump pointer (nursery allocator) which
     // can allocate objects larger than max immix object size. However, for copying, we haven't implemented
@@ -57,8 +58,9 @@ pub const GENIMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
         crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
         crate::plan::generational::GEN_CONSTRAINTS.max_non_los_default_alloc_bytes,
     ),
-    ..crate::plan::generational::GEN_CONSTRAINTS
+    ..*crate::plan::generational::GEN_CONSTRAINTS
 };
+}
 
 impl<VM: VMBinding> Plan for GenImmix<VM> {
     type VM = VM;

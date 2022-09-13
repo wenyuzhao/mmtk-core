@@ -1,6 +1,6 @@
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
+use crate::util::heap::layout::vm_layout_constants::{VMLayoutConstants, VM_LAYOUT_CONSTANTS};
 use crate::util::metadata::side_metadata::SideMetadataOffset;
 use crate::util::Address;
 
@@ -48,7 +48,8 @@ pub(super) const LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO: usize = 3;
 #[cfg(target_pointer_width = "64")]
 pub(super) const LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO: usize = 1;
 
-pub const LOG_MAX_GLOBAL_SIDE_METADATA_SIZE: usize = 47 - LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO;
+pub const LOG_MAX_GLOBAL_SIDE_METADATA_SIZE: usize =
+    VMLayoutConstants::LOG_ARCH_ADDRESS_SPACE - LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO;
 // TODO - we should check this limit somewhere
 // pub(crate) const LOG_MAX_LOCAL_SIDE_METADATA_SIZE: usize =
 //     1 << (LOG_ADDRESS_SPACE - LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO);

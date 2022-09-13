@@ -9,7 +9,7 @@ use super::constants::{
 use super::{SideMetadataContext, SideMetadataSpec};
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK;
-use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
+use crate::util::heap::layout::vm_layout_constants::{VMLayoutConstants, VM_LAYOUT_CONSTANTS};
 
 /// An internal enum to enhance code style for add/sub
 #[cfg(feature = "extreme_assertions")]
@@ -64,7 +64,8 @@ fn verify_global_specs_total_size(g_specs: &[SideMetadataSpec]) -> Result<()> {
 
     if total_size
         <= 1usize
-            << (VM_LAYOUT_CONSTANTS.log_address_space - LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO)
+            << (VMLayoutConstants::LOG_ARCH_ADDRESS_SPACE
+                - LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO)
     {
         Ok(())
     } else {

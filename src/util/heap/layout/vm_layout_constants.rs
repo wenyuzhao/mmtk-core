@@ -166,6 +166,11 @@ pub struct VMLayoutConstants {
 }
 
 impl VMLayoutConstants {
+    #[cfg(target_pointer_width = "32")]
+    pub const LOG_ARCH_ADDRESS_SPACE: usize = 32;
+    #[cfg(target_pointer_width = "64")]
+    pub const LOG_ARCH_ADDRESS_SPACE: usize = 47;
+
     pub const fn max_space_extent(&self) -> usize {
         1 << self.log_space_extent
     }
@@ -201,7 +206,7 @@ impl VMLayoutConstants {
             }),
             heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2000_0000_0000usize) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0xdc0_0000) }).as_usize(),
-            log_max_chunks: 47 - LOG_BYTES_IN_CHUNK,
+            log_max_chunks: Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK,
             log_space_extent: 41,
             space_shift_64: 41,
             space_mask_64: ((1 << 4) - 1) << 41,
@@ -215,7 +220,7 @@ impl VMLayoutConstants {
             heap_start: chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) }),
             heap_end: chunk_align_up(unsafe { Address::from_usize(0x11_6000_0000) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
-            log_max_chunks: 47 - LOG_BYTES_IN_CHUNK,
+            log_max_chunks: Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
             space_shift_64: 0,
             space_mask_64: 0,

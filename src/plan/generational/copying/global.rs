@@ -38,7 +38,10 @@ pub struct GenCopy<VM: VMBinding> {
     pub copyspace1: CopySpace<VM>,
 }
 
-pub const GENCOPY_CONSTRAINTS: PlanConstraints = crate::plan::generational::GEN_CONSTRAINTS;
+lazy_static! {
+    pub static ref GENCOPY_CONSTRAINTS: PlanConstraints =
+        crate::plan::generational::GEN_CONSTRAINTS.clone();
+}
 
 impl<VM: VMBinding> Plan for GenCopy<VM> {
     type VM = VM;
