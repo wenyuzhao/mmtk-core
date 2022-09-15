@@ -41,7 +41,7 @@ impl SpaceDescriptor {
             let space_index = if start > VM_LAYOUT_CONSTANTS.heap_end {
                 ::std::usize::MAX
             } else {
-                (start - VM_LAYOUT_CONSTANTS.heap_start) >> VM_LAYOUT_CONSTANTS.space_shift_64
+                start >> VM_LAYOUT_CONSTANTS.space_shift_64
             };
             return SpaceDescriptor(
                 space_index << INDEX_SHIFT
