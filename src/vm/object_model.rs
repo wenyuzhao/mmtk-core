@@ -281,6 +281,8 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Arguments:
     /// * `object`: The object to be dumped.
     fn dump_object(object: ObjectReference);
+
+    fn compressed_pointers_enabled() -> bool;
 }
 
 pub mod specs {

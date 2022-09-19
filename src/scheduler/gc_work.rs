@@ -468,18 +468,18 @@ pub trait ProcessEdgesWork:
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const ROOT: bool, const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<ROOT, COMPRESSED>();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store(new_object);
+            slot.store::<ROOT, COMPRESSED>(new_object);
         }
     }
 
     #[inline]
-    fn process_edges(&mut self) {
+    fn process_edges<const ROOT: bool, const COMPRESSED: bool>(&mut self) {
         for i in 0..self.edges.len() {
-            self.process_edge(self.edges[i])
+            self.process_edge::<ROOT, COMPRESSED>(self.edges[i])
         }
     }
 }
@@ -489,7 +489,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessEdgesWork");
         self.set_worker(worker);
-        self.process_edges();
+        let compressed = <<E::VM as VMBinding>::VMObjectModel as ObjectModel<E::VM>>::compressed_pointers_enabled();
+        match (self.roots, compressed) {
+            (true, true) => self.process_edges::<true, true>(),
+            (true, false) => self.process_edges::<true, false>(),
+            (false, true) => self.process_edges::<false, true>(),
+            (false, false) => self.process_edges::<false, false>(),
+        }
         if !self.nodes.is_empty() {
             self.flush();
         }
@@ -664,21 +670,22 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let mut scan_later = vec![];
         {
             let mut closure = ObjectsClosure::<Self::E>::new(worker);
-            for object in objects_to_scan.iter().copied() {
-                if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
-                    // If an object supports edge-enqueuing, we enqueue its edges.
-                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
-                    self.post_scan_object(object);
-                } else {
-                    // If an object does not support edge-enqueuing, we have to use
-                    // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
-                    // reference field to the VM.
-                    //
-                    // However, at this point, `closure` is borrowing `worker`.
-                    // So we postpone the processing of objects that needs object enqueuing
-                    scan_later.push(object);
-                }
-            }
+            <VM as VMBinding>::VMScanning::scan_objects(tls, objects_to_scan, &mut closure);
+            // for object in objects_to_scan.iter().copied() {
+            //     if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
+            //         // If an object supports edge-enqueuing, we enqueue its edges.
+            //         <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
+            //         self.post_scan_object(object);
+            //     } else {
+            //         // If an object does not support edge-enqueuing, we have to use
+            //         // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
+            //         // reference field to the VM.
+            //         //
+            //         // However, at this point, `closure` is borrowing `worker`.
+            //         // So we postpone the processing of objects that needs object enqueuing
+            //         scan_later.push(object);
+            //     }
+            // }
         }
 
         // If any object does not support edge-enqueuing, we process them now.
@@ -859,11 +866,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const ROOT: bool, const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<ROOT, COMPRESSED>();
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
-            slot.store(new_object);
+            slot.store::<ROOT, COMPRESSED>(new_object);
         }
     }
 }
