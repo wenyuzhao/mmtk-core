@@ -627,7 +627,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self;
 
     /// The common code for ScanObjects and PlanScanObjects.
-    fn do_work_common(
+    fn do_work_common<const COMPRESSED: bool>(
         &self,
         buffer: &[ObjectReference],
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
@@ -670,22 +670,25 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let mut scan_later = vec![];
         {
             let mut closure = ObjectsClosure::<Self::E>::new(worker);
-            <VM as VMBinding>::VMScanning::scan_objects(tls, objects_to_scan, &mut closure);
-            // for object in objects_to_scan.iter().copied() {
-            //     if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
-            //         // If an object supports edge-enqueuing, we enqueue its edges.
-            //         <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
-            //         self.post_scan_object(object);
-            //     } else {
-            //         // If an object does not support edge-enqueuing, we have to use
-            //         // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
-            //         // reference field to the VM.
-            //         //
-            //         // However, at this point, `closure` is borrowing `worker`.
-            //         // So we postpone the processing of objects that needs object enqueuing
-            //         scan_later.push(object);
-            //     }
-            // }
+            for object in objects_to_scan.iter().copied() {
+                if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
+                    // If an object supports edge-enqueuing, we enqueue its edges.
+                    <VM as VMBinding>::VMScanning::scan_object::<_, COMPRESSED>(
+                        tls,
+                        object,
+                        &mut closure,
+                    );
+                    self.post_scan_object(object);
+                } else {
+                    // If an object does not support edge-enqueuing, we have to use
+                    // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
+                    // reference field to the VM.
+                    //
+                    // However, at this point, `closure` is borrowing `worker`.
+                    // So we postpone the processing of objects that needs object enqueuing
+                    scan_later.push(object);
+                }
+            }
         }
 
         // If any object does not support edge-enqueuing, we process them now.
@@ -772,7 +775,12 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk);
+        let compressed = <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled();
+        if compressed {
+            self.do_work_common::<true>(&self.buffer, worker, mmtk);
+        } else {
+            self.do_work_common::<false>(&self.buffer, worker, mmtk);
+        }
         trace!("ScanObjects End");
     }
 }
@@ -947,7 +955,12 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk);
+        let compressed = <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled();
+        if compressed {
+            self.do_work_common::<true>(&self.buffer, worker, mmtk);
+        } else {
+            self.do_work_common::<false>(&self.buffer, worker, mmtk);
+        }
         trace!("PlanScanObjects End");
     }
 }
