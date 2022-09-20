@@ -1,14 +1,10 @@
 use super::SideMetadataSpec;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
+use crate::util::constants::{BITS_IN_WORD, BYTES_IN_PAGE, LOG_BITS_IN_BYTE};
 use crate::util::heap::layout::vm_layout_constants::VMLayoutConstants;
-use crate::util::heap::layout::Mmapper;
 #[cfg(target_pointer_width = "32")]
 use crate::util::metadata::side_metadata::address_to_chunked_meta_address;
 use crate::util::Address;
-use crate::util::{
-    constants::{BITS_IN_WORD, BYTES_IN_PAGE, LOG_BITS_IN_BYTE},
-    heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS,
-};
 use crate::MMAPPER;
 use std::io::Result;
 

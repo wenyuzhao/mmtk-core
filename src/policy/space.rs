@@ -589,7 +589,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
             panic!("failed to mmap meta memory");
         }
 
-        use crate::util::heap::layout::mmapper::Mmapper;
         self.common()
             .mmapper
             .mark_as_mapped(self.common().start, self.common().extent);

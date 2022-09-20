@@ -1,6 +1,6 @@
+use crate::util::heap::layout::vm_layout_constants::VMLayoutConstants;
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-use crate::util::heap::layout::vm_layout_constants::{VMLayoutConstants, VM_LAYOUT_CONSTANTS};
 use crate::util::metadata::side_metadata::SideMetadataOffset;
 use crate::util::Address;
 
