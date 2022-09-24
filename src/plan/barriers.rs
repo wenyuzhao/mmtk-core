@@ -51,6 +51,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     ) {
         self.object_reference_write_pre(src, slot, target);
         unimplemented!("compressed oops!");
+        // TODO: Check compressed pointers flag and either do a compressed or uncompressed store.
+        // Should be okay for now. mmtk-openjdk does not call this.
         slot.store::<false, true>(target);
         self.object_reference_write_post(src, slot, target);
     }
