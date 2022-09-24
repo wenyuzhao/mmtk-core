@@ -1,5 +1,4 @@
-use super::gc_work::{SSCopyContext, SSGCWorkContext};
-use crate::mmtk::MMTK;
+use super::gc_work::SSGCWorkContext;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
 use crate::plan::semispace::mutator::ALLOCATOR_MAPPING;
@@ -10,6 +9,7 @@ use crate::policy::copyspace::CopySpace;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -22,14 +22,18 @@ use crate::{plan::global::BasePlan, vm::VMBinding};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use mmtk_macros::PlanTraceObject;
+
 use enum_map::EnumMap;
 
-pub const ALLOC_SS: AllocationSemantics = AllocationSemantics::Default;
-
+#[derive(PlanTraceObject)]
 pub struct SemiSpace<VM: VMBinding> {
     pub hi: AtomicBool,
+    #[trace(CopySemantics::DefaultCopy)]
     pub copyspace0: CopySpace<VM>,
+    #[trace(CopySemantics::DefaultCopy)]
     pub copyspace1: CopySpace<VM>,
+    #[fallback_trace]
     pub common: CommonPlan<VM>,
 }
 
@@ -50,23 +54,23 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         &SS_CONSTRAINTS
     }
 
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = SSCopyContext::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
+    fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
+        use enum_map::enum_map;
+        CopyConfig {
+            copy_mapping: enum_map! {
+                CopySemantics::DefaultCopy => CopySelector::CopySpace(0),
+                _ => CopySelector::Unused,
+            },
+            space_mapping: vec![
+                // // The tospace argument doesn't matter, we will rebind before a GC anyway.
+                (CopySelector::CopySpace(0), &self.copyspace0),
+            ],
+            constraints: &SS_CONSTRAINTS,
+        }
     }
 
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
-        self.common.gc_init(heap_size, vm_map, scheduler);
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
+        self.common.gc_init(heap_size, vm_map);
 
         self.copyspace0.init(vm_map);
         self.copyspace1.init(vm_map);
@@ -91,6 +95,13 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         let hi = self.hi.load(Ordering::SeqCst);
         self.copyspace0.prepare(hi);
         self.copyspace1.prepare(!hi);
+        self.fromspace_mut()
+            .set_copy_for_sft_trace(Some(CopySemantics::DefaultCopy));
+        self.tospace_mut().set_copy_for_sft_trace(None);
+    }
+
+    fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
+        unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -99,16 +110,16 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         self.fromspace().release();
     }
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+        self.base().collection_required(self, space_full)
     }
 
-    fn get_collection_reserve(&self) -> usize {
+    fn get_collection_reserved_pages(&self) -> usize {
         self.tospace().reserved_pages()
     }
 
-    fn get_pages_used(&self) -> usize {
-        self.tospace().reserved_pages() + self.common.get_pages_used()
+    fn get_used_pages(&self) -> usize {
+        self.tospace().reserved_pages() + self.common.get_used_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -184,11 +195,27 @@ impl<VM: VMBinding> SemiSpace<VM> {
         }
     }
 
+    pub fn tospace_mut(&mut self) -> &mut CopySpace<VM> {
+        if self.hi.load(Ordering::SeqCst) {
+            &mut self.copyspace1
+        } else {
+            &mut self.copyspace0
+        }
+    }
+
     pub fn fromspace(&self) -> &CopySpace<VM> {
         if self.hi.load(Ordering::SeqCst) {
             &self.copyspace0
         } else {
             &self.copyspace1
+        }
+    }
+
+    pub fn fromspace_mut(&mut self) -> &mut CopySpace<VM> {
+        if self.hi.load(Ordering::SeqCst) {
+            &mut self.copyspace0
+        } else {
+            &mut self.copyspace1
         }
     }
 }

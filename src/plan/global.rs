@@ -1,10 +1,10 @@
 //! The global part of a plan implementation.
 
-use super::controller_collector_context::ControllerCollectorContext;
+use super::gc_requester::GCRequester;
 use super::PlanConstraints;
 use crate::mmtk::MMTK;
 use crate::plan::generational::global::Gen;
-use crate::plan::transitive_closure::TransitiveClosure;
+use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -14,6 +14,7 @@ use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::AnalysisManager;
 use crate::util::conversions::bytes_to_pages;
+use crate::util::copy::{CopyConfig, GCWorkerCopyContext};
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::map::Map;
@@ -24,100 +25,21 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::options::PlanSelector;
 use crate::util::options::{Options, UnsafeOptionsWrapper};
 use crate::util::statistics::stats::Stats;
-use crate::util::{Address, ObjectReference};
+use crate::util::ObjectReference;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::*;
+use crate::vm::ActivePlan;
 use downcast_rs::Downcast;
 use enum_map::EnumMap;
-use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// A GC worker's context for copying GCs.
-/// Each GC plan should provide their implementation of a CopyContext.
-/// For non-copying GC, NoCopy can be used.
-pub trait CopyContext: 'static + Send {
-    type VM: VMBinding;
-    fn constraints(&self) -> &'static PlanConstraints;
-    fn init(&mut self, tls: VMWorkerThread);
-    fn prepare(&mut self);
-    fn release(&mut self);
-    fn alloc_copy(
-        &mut self,
-        original: ObjectReference,
-        bytes: usize,
-        align: usize,
-        offset: isize,
-        semantics: AllocationSemantics,
-    ) -> Address;
-    fn post_copy(
-        &mut self,
-        _obj: ObjectReference,
-        _tib: Address,
-        _bytes: usize,
-        _semantics: AllocationSemantics,
-    ) {
-    }
-    fn copy_check_allocator(
-        &self,
-        _from: ObjectReference,
-        bytes: usize,
-        align: usize,
-        semantics: AllocationSemantics,
-    ) -> AllocationSemantics {
-        let large = crate::util::alloc::allocator::get_maximum_aligned_size::<Self::VM>(
-            bytes,
-            align,
-            Self::VM::MIN_ALIGNMENT,
-        ) > self.constraints().max_non_los_copy_bytes;
-        if large {
-            AllocationSemantics::Los
-        } else {
-            semantics
-        }
-    }
-}
-
-pub struct NoCopy<VM: VMBinding>(PhantomData<VM>);
-
-impl<VM: VMBinding> CopyContext for NoCopy<VM> {
-    type VM = VM;
-
-    fn init(&mut self, _tls: VMWorkerThread) {}
-    fn constraints(&self) -> &'static PlanConstraints {
-        unreachable!()
-    }
-    fn prepare(&mut self) {}
-    fn release(&mut self) {}
-    fn alloc_copy(
-        &mut self,
-        _original: ObjectReference,
-        _bytes: usize,
-        _align: usize,
-        _offset: isize,
-        _semantics: AllocationSemantics,
-    ) -> Address {
-        unreachable!()
-    }
-}
-
-impl<VM: VMBinding> NoCopy<VM> {
-    pub fn new(_mmtk: &'static MMTK<VM>) -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<VM: VMBinding> GCWorkerLocal for NoCopy<VM> {
-    fn init(&mut self, tls: VMWorkerThread) {
-        CopyContext::init(self, tls);
-    }
-}
+use mmtk_macros::PlanTraceObject;
 
 pub fn create_mutator<VM: VMBinding>(
     tls: VMMutatorThread,
     mmtk: &'static MMTK<VM>,
 ) -> Box<Mutator<VM>> {
-    Box::new(match mmtk.options.plan {
+    Box::new(match *mmtk.options.plan {
         PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, &*mmtk.plan),
         PlanSelector::SemiSpace => {
             crate::plan::semispace::mutator::create_ss_mutator(tls, &*mmtk.plan)
@@ -131,13 +53,14 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::MarkSweep => {
             crate::plan::marksweep::mutator::create_ms_mutator(tls, &*mmtk.plan)
         }
-        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, mmtk),
+        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, &*mmtk.plan),
         PlanSelector::PageProtect => {
             crate::plan::pageprotect::mutator::create_pp_mutator(tls, &*mmtk.plan)
         }
         PlanSelector::MarkCompact => {
             crate::plan::markcompact::mutator::create_markcompact_mutator(tls, &*mmtk.plan)
         }
+        PlanSelector::LXR => crate::plan::lxr::mutator::create_lxr_mutator(tls, mmtk),
     })
 }
 
@@ -171,7 +94,18 @@ pub fn create_plan<VM: VMBinding>(
         PlanSelector::MarkCompact => Box::new(crate::plan::markcompact::MarkCompact::new(
             vm_map, mmapper, options,
         )),
+        PlanSelector::LXR => Box::new(crate::plan::lxr::LXR::new(
+            vm_map, mmapper, options, scheduler,
+        )),
     }
+}
+
+/// Create thread local GC worker.
+pub fn create_gc_worker_context<VM: VMBinding>(
+    tls: VMWorkerThread,
+    mmtk: &'static MMTK<VM>,
+) -> GCWorkerCopyContext<VM> {
+    GCWorkerCopyContext::<VM>::new(tls, &*mmtk.plan, mmtk.plan.create_copy_config())
 }
 
 /// A plan describes the global core functionality for all memory management schemes.
@@ -203,11 +137,14 @@ pub trait Plan: 'static + Sync + Downcast {
     type VM: VMBinding;
 
     fn constraints(&self) -> &'static PlanConstraints;
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr;
+
+    /// Create a copy config for this plan. A copying GC plan MUST override this method,
+    /// and provide a valid config.
+    fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
+        // Use the empty default copy config for non copying GC.
+        CopyConfig::default()
+    }
+
     fn base(&self) -> &BasePlan<Self::VM>;
     fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
     fn common(&self) -> &CommonPlan<Self::VM> {
@@ -224,12 +161,7 @@ pub trait Plan: 'static + Sync + Downcast {
     }
 
     // unsafe because this can only be called once by the init thread
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<Self::VM>>,
-    );
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap);
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector>;
 
@@ -263,10 +195,26 @@ pub trait Plan: 'static + Sync + Downcast {
             .load(Ordering::SeqCst)
     }
 
+    /// Prepare the plan before a GC. This is invoked in an initial step in the GC.
+    /// This is invoked once per GC by one worker thread. 'tls' is the worker thread that executes this method.
     fn prepare(&mut self, tls: VMWorkerThread);
+
+    /// Prepare a worker for a GC. Each worker has its own prepare method. This hook is for plan-specific
+    /// per-worker preparation. This method is invoked once per worker by the worker thread passed as the argument.
+    fn prepare_worker(&self, _worker: &mut GCWorker<Self::VM>) {}
+
+    /// Release the plan after a GC. This is invoked at the end of a GC when most GC work is finished.
+    /// This is invoked once per GC by one worker thread. 'tls' is the worker thread that executes this method.
     fn release(&mut self, tls: VMWorkerThread);
 
-    fn poll(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
+    /// This method is called periodically by the allocation subsystem
+    /// (by default, each time a page is consumed), and provides the
+    /// collector with an opportunity to collect.
+    ///
+    /// Arguments:
+    /// * `space_full`: Space request failed, must recover pages within 'space'.
+    /// * `space`: The space that triggered the poll. This could `None` if the poll is not triggered by a space.
+    fn poll(&self, space_full: bool, space: Option<&dyn Space<Self::VM>>) -> bool {
         if self.collection_required(space_full, space) {
             // FIXME
             /*if space == META_DATA_SPACE {
@@ -279,7 +227,7 @@ pub trait Plan: 'static + Sync + Downcast {
                 return false;
             }*/
             self.log_poll(space, "Triggering collection");
-            self.base().control_collector_context.request(false);
+            self.base().gc_requester.request(false);
             return true;
         }
 
@@ -299,8 +247,12 @@ pub trait Plan: 'static + Sync + Downcast {
         false
     }
 
-    fn log_poll(&self, space: &dyn Space<Self::VM>, message: &'static str) {
-        info!("  [POLL] {}: {}", space.get_name(), message);
+    fn log_poll(&self, space: Option<&dyn Space<Self::VM>>, message: &'static str) {
+        if let Some(space) = space {
+            info!("  [POLL] {}: {}", space.get_name(), message);
+        } else {
+            info!("  [POLL] {}", message);
+        }
     }
 
     /**
@@ -311,42 +263,59 @@ pub trait Plan: 'static + Sync + Downcast {
      * @param space TODO
      * @return <code>true</code> if a collection is requested by the plan.
      */
-    fn collection_required(&self, space_full: bool, _space: &dyn Space<Self::VM>) -> bool;
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool;
 
     fn concurrent_collection_required(&self) -> bool {
         false
     }
+    // Note: The following methods are about page accounting. The default implementation should
+    // work fine for non-copying plans. For copying plans, the plan should override any of these methods
+    // if necessary.
 
-    fn get_pages_reserved(&self) -> usize {
-        self.get_pages_used() + self.get_collection_reserve()
+    /// Get the number of pages that are reserved, including used pages and pages that will
+    /// be used (e.g. for copying).
+    fn get_reserved_pages(&self) -> usize {
+        self.get_used_pages() + self.get_collection_reserved_pages()
     }
 
+    /// Get the total number of pages for the heap.
     fn get_total_pages(&self) -> usize {
         self.base().heap.get_total_pages()
     }
 
-    fn get_pages_avail(&self) -> usize {
-        let a = self.get_total_pages();
-        let b = self.get_pages_reserved();
-        if a > b {
-            a - b
-        } else {
-            0
-        }
+    /// Get the number of pages that are still available for use. The available pages
+    /// should always be positive or 0.
+    fn get_available_pages(&self) -> usize {
+        // It is possible that the reserved pages is larger than the total pages so we are doing
+        // a saturating substraction to make sure we return a non-negative number.
+        // For example,
+        // 1. our GC trigger checks if reserved pages is more than total pages.
+        // 2. when the heap is almost full of live objects (such as in the case of an OOM) and we are doing a copying GC, it is possible
+        //    the reserved pages is larger than total pages after the copying GC (the reserved pages after a GC
+        //    may be larger than the reserved pages before a GC, as we may end up using more memory for thread local
+        //    buffers for copy allocators).
+        self.get_total_pages()
+            .saturating_sub(self.get_reserved_pages())
     }
 
-    fn get_collection_reserve(&self) -> usize {
+    /// Get the number of pages that are reserved for collection. By default, we return 0.
+    /// For copying plans, they need to override this and calculate required pages to complete
+    /// a copying GC.
+    fn get_collection_reserved_pages(&self) -> usize {
         0
     }
 
-    fn get_pages_used(&self) -> usize;
+    /// Get the number of pages that are used.
+    fn get_used_pages(&self) -> usize;
+
+    /// Get the number of pages that are NOT used. This is clearly different from available pages.
+    /// Free pages are unused, but some of them may have been reserved for some reason.
+    fn get_free_pages(&self) -> usize {
+        self.get_total_pages() - self.get_used_pages()
+    }
 
     fn is_emergency_collection(&self) -> bool {
         self.base().emergency_collection.load(Ordering::Relaxed)
-    }
-
-    fn get_free_pages(&self) -> usize {
-        self.get_total_pages() - self.get_pages_used()
     }
 
     /// The application code has requested a collection.
@@ -376,8 +345,12 @@ pub trait Plan: 'static + Sync + Downcast {
         );
     }
 
-    fn gc_pause_start(&self) {}
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<Self::VM>) {}
     fn gc_pause_end(&self) {}
+    #[inline(always)]
+    fn no_mutator_prepare_release(&self) -> bool {
+        false
+    }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -392,6 +365,7 @@ pub enum GcStatus {
 /**
 BasePlan should contain all plan-related state and functions that are _fundamental_ to _all_ plans.  These include VM-specific (but not plan-specific) features such as a code space or vm space, which are fundamental to all plans for a given VM.  Features that are common to _many_ (but not intrinsically _all_) plans should instead be included in CommonPlan.
 */
+#[derive(PlanTraceObject)]
 pub struct BasePlan<VM: VMBinding> {
     /// Whether MMTk is now ready for collection. This is set to true when initialize_collection() is called.
     pub initialized: AtomicBool,
@@ -410,7 +384,7 @@ pub struct BasePlan<VM: VMBinding> {
     pub max_collection_attempts: AtomicUsize,
     // Current collection attempt
     pub cur_collection_attempts: AtomicUsize,
-    pub control_collector_context: ControllerCollectorContext<VM>,
+    pub gc_requester: Arc<GCRequester<VM>>,
     pub stats: Stats,
     mmapper: &'static Mmapper,
     pub vm_map: &'static VMMap,
@@ -423,20 +397,40 @@ pub struct BasePlan<VM: VMBinding> {
     /// Have we scanned all the stacks?
     stacks_prepared: AtomicBool,
     pub mutator_iterator_lock: Mutex<()>,
-    // A counter that keeps tracks of the number of bytes allocated since last stress test
+    /// A counter that keeps tracks of the number of bytes allocated since last stress test
     allocation_bytes: AtomicUsize,
-    // Wrapper around analysis counters
+    /// A counteer that keeps tracks of the number of bytes allocated by malloc
+    #[cfg(feature = "malloc_counted_size")]
+    malloc_bytes: AtomicUsize,
+    /// Wrapper around analysis counters
     #[cfg(feature = "analysis")]
     pub analysis_manager: AnalysisManager<VM>,
 
     // Spaces in base plan
     #[cfg(feature = "code_space")]
+    #[trace]
     pub code_space: ImmortalSpace<VM>,
     #[cfg(feature = "code_space")]
+    #[trace]
     pub code_lo_space: ImmortalSpace<VM>,
     #[cfg(feature = "ro_space")]
+    #[trace]
     pub ro_space: ImmortalSpace<VM>,
+
+    /// A VM space is a space allocated and populated by the VM.  Currently it is used by JikesRVM
+    /// for boot image.
+    ///
+    /// If VM space is present, it has some special interaction with the
+    /// `memory_manager::is_mmtk_object` and the `memory_manager::is_in_mmtk_spaces` functions.
+    ///
+    /// -   The `is_mmtk_object` funciton requires the alloc_bit side metadata to identify objects,
+    ///     but currently we do not require the boot image to provide it, so it will not work if the
+    ///     address argument is in the VM space.
+    ///
+    /// -   The `is_in_mmtk_spaces` currently returns `true` if the given object reference is in
+    ///     the VM space.
     #[cfg(feature = "vm_space")]
+    #[trace]
     pub vm_space: ImmortalSpace<VM>,
 }
 
@@ -524,7 +518,7 @@ impl<VM: VMBinding> BasePlan<VM> {
                 vm_map,
                 mmapper,
                 &mut heap,
-                options.vm_space_size,
+                *options.vm_space_size,
                 constraints,
                 global_side_metadata_specs,
             ),
@@ -541,7 +535,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             allocation_success: AtomicBool::new(false),
             max_collection_attempts: AtomicUsize::new(0),
             cur_collection_attempts: AtomicUsize::new(0),
-            control_collector_context: ControllerCollectorContext::new(),
+            gc_requester: Arc::new(GCRequester::new()),
             stats,
             mmapper,
             heap,
@@ -552,17 +546,14 @@ impl<VM: VMBinding> BasePlan<VM> {
             scanned_stacks: AtomicUsize::new(0),
             mutator_iterator_lock: Mutex::new(()),
             allocation_bytes: AtomicUsize::new(0),
+            #[cfg(feature = "malloc_counted_size")]
+            malloc_bytes: AtomicUsize::new(0),
             #[cfg(feature = "analysis")]
             analysis_manager,
         }
     }
 
-    pub fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
+    pub fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
         vm_map.boot();
         vm_map.finalize_static_space_map(
             self.heap.get_discontig_start(),
@@ -571,7 +562,6 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.heap
             .total_pages
             .store(bytes_to_pages(heap_size), Ordering::Relaxed);
-        self.control_collector_context.init(scheduler);
 
         #[cfg(feature = "code_space")]
         self.code_space.init(vm_map);
@@ -588,11 +578,11 @@ impl<VM: VMBinding> BasePlan<VM> {
 
     /// The application code has requested a collection.
     pub fn handle_user_collection_request(&self, _tls: VMMutatorThread, _force: bool) {
-        // if force || !self.options.ignore_system_g_c {
+        // if force || !*self.options.ignore_system_g_c {
         //     info!("User triggering collection");
         //     self.user_triggered_collection
         //         .store(true, Ordering::Relaxed);
-        //     self.control_collector_context.request(false);
+        //     self.gc_requester.request();
         //     VM::VMCollection::block_for_gc(tls);
         // }
     }
@@ -605,7 +595,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             .store(true, Ordering::Relaxed);
         self.internal_triggered_collection
             .store(true, Ordering::Relaxed);
-        self.control_collector_context.request(true);
+        self.gc_requester.request(true);
     }
 
     /// Reset collection state information.
@@ -621,7 +611,7 @@ impl<VM: VMBinding> BasePlan<VM> {
     }
 
     // Depends on what base spaces we use, unsync may be unused.
-    pub fn get_pages_used(&self) -> usize {
+    pub fn get_used_pages(&self) -> usize {
         // Depends on what base spaces we use, pages may be unchanged.
         #[allow(unused_mut)]
         let mut pages = 0;
@@ -636,40 +626,50 @@ impl<VM: VMBinding> BasePlan<VM> {
             pages += self.ro_space.reserved_pages();
         }
 
+        // If we need to count malloc'd size as part of our heap, we add it here.
+        #[cfg(feature = "malloc_counted_size")]
+        {
+            pages += crate::util::conversions::bytes_to_pages_up(
+                self.malloc_bytes.load(Ordering::SeqCst),
+            );
+        }
+
         // The VM space may be used as an immutable boot image, in which case, we should not count
         // it as part of the heap size.
         pages
     }
 
-    pub fn trace_object<T: TransitiveClosure, C: CopyContext>(
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
-        _trace: &mut T,
-        _object: ObjectReference,
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         #[cfg(feature = "code_space")]
-        if self.code_space.in_space(_object) {
+        if self.code_space.in_space(object) {
             trace!("trace_object: object in code space");
-            return self.code_space.trace_object::<T>(_trace, _object);
+            return self.code_space.trace_object::<Q>(queue, object);
         }
 
         #[cfg(feature = "code_space")]
-        if self.code_lo_space.in_space(_object) {
+        if self.code_lo_space.in_space(object) {
             trace!("trace_object: object in large code space");
-            return self.code_lo_space.trace_object::<T>(_trace, _object);
+            return self.code_lo_space.trace_object::<Q>(queue, object);
         }
 
         #[cfg(feature = "ro_space")]
-        if self.ro_space.in_space(_object) {
+        if self.ro_space.in_space(object) {
             trace!("trace_object: object in ro_space space");
-            return self.ro_space.trace_object(_trace, _object);
+            return self.ro_space.trace_object(queue, object);
         }
 
         #[cfg(feature = "vm_space")]
-        if self.vm_space.in_space(_object) {
+        if self.vm_space.in_space(object) {
             trace!("trace_object: object in boot space");
-            return self.vm_space.trace_object(_trace, _object);
+            return self.vm_space.trace_object(queue, object);
         }
-        _object
+
+        VM::VMActivePlan::vm_trace_object::<Q>(queue, object, worker)
     }
 
     pub fn prepare(&mut self, _tls: VMWorkerThread, _full_heap: bool) {
@@ -814,46 +814,43 @@ impl<VM: VMBinding> BasePlan<VM> {
     /// we should do stress GC.
     pub fn is_stress_test_gc_enabled(&self) -> bool {
         use crate::util::constants::DEFAULT_STRESS_FACTOR;
-        self.options.stress_factor != DEFAULT_STRESS_FACTOR
-            || self.options.analysis_factor != DEFAULT_STRESS_FACTOR
+        *self.options.stress_factor != DEFAULT_STRESS_FACTOR
+            || *self.options.analysis_factor != DEFAULT_STRESS_FACTOR
     }
 
     /// Check if we should do precise stress test. If so, we need to check for stress GCs for every allocation.
     /// Otherwise, we only check in the allocation slow path.
     pub fn is_precise_stress(&self) -> bool {
-        self.options.precise_stress
+        *self.options.precise_stress
     }
 
     /// Check if we should do a stress GC now. If GC is initialized and the allocation bytes exceeds
     /// the stress factor, we should do a stress GC.
     pub fn should_do_stress_gc(&self) -> bool {
         self.initialized.load(Ordering::SeqCst)
-            && (self.allocation_bytes.load(Ordering::SeqCst) > self.options.stress_factor)
+            && (self.allocation_bytes.load(Ordering::SeqCst) > *self.options.stress_factor)
     }
 
-    pub(super) fn collection_required<P: Plan>(
-        &self,
-        plan: &P,
-        space_full: bool,
-        _space: &dyn Space<VM>,
-    ) -> bool {
+    pub(super) fn collection_required<P: Plan>(&self, plan: &P, space_full: bool) -> bool {
         let stress_force_gc = self.should_do_stress_gc();
         if stress_force_gc {
             debug!(
                 "Stress GC: allocation_bytes = {}, stress_factor = {}",
                 self.allocation_bytes.load(Ordering::Relaxed),
-                self.options.stress_factor
+                *self.options.stress_factor
             );
             debug!("Doing stress GC");
             self.allocation_bytes.store(0, Ordering::SeqCst);
         }
 
         debug!(
-            "self.get_pages_reserved()={}, self.get_total_pages()={}",
-            plan.get_pages_reserved(),
+            "self.get_reserved_pages()={}, self.get_total_pages()={}",
+            plan.get_reserved_pages(),
             plan.get_total_pages()
         );
-        let heap_full = plan.get_pages_reserved() > plan.get_total_pages();
+        // Check if we reserved more pages (including the collection copy reserve)
+        // than the heap's total pages. In that case, we will have to do a GC.
+        let heap_full = plan.get_reserved_pages() > plan.get_total_pages();
 
         space_full || stress_force_gc || heap_full
     }
@@ -873,14 +870,31 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space
             .verify_side_metadata_sanity(side_metadata_sanity_checker);
     }
+
+    #[cfg(feature = "malloc_counted_size")]
+    pub(crate) fn increase_malloc_bytes_by(&self, size: usize) {
+        self.malloc_bytes.fetch_add(size, Ordering::SeqCst);
+    }
+    #[cfg(feature = "malloc_counted_size")]
+    pub(crate) fn decrease_malloc_bytes_by(&self, size: usize) {
+        self.malloc_bytes.fetch_sub(size, Ordering::SeqCst);
+    }
+    #[cfg(feature = "malloc_counted_size")]
+    pub fn get_malloc_bytes(&self) -> usize {
+        self.malloc_bytes.load(Ordering::SeqCst)
+    }
 }
 
 /**
 CommonPlan is for representing state and features used by _many_ plans, but that are not fundamental to _all_ plans.  Examples include the Large Object Space and an Immortal space.  Features that are fundamental to _all_ plans must be included in BasePlan.
 */
+#[derive(PlanTraceObject)]
 pub struct CommonPlan<VM: VMBinding> {
+    #[trace]
     pub immortal: ImmortalSpace<VM>,
+    #[trace]
     pub los: LargeObjectSpace<VM>,
+    #[fallback_trace]
     pub base: BasePlan<VM>,
 }
 
@@ -926,35 +940,31 @@ impl<VM: VMBinding> CommonPlan<VM> {
         }
     }
 
-    pub fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
-        self.base.gc_init(heap_size, vm_map, scheduler);
+    pub fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
+        self.base.gc_init(heap_size, vm_map);
         self.immortal.init(vm_map);
         self.los.init(vm_map);
     }
 
-    pub fn get_pages_used(&self) -> usize {
-        self.immortal.reserved_pages() + self.los.reserved_pages() + self.base.get_pages_used()
+    pub fn get_used_pages(&self) -> usize {
+        self.immortal.reserved_pages() + self.los.reserved_pages() + self.base.get_used_pages()
     }
 
-    pub fn trace_object<T: TransitiveClosure, C: CopyContext>(
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if self.immortal.in_space(object) {
             trace!("trace_object: object in immortal space");
-            return self.immortal.trace_object(trace, object);
+            return self.immortal.trace_object(queue, object);
         }
         if self.los.in_space(object) {
             trace!("trace_object: object in los");
-            return self.los.trace_object(trace, object);
+            return self.los.trace_object(queue, object);
         }
-        self.base.trace_object::<T, C>(trace, object)
+        self.base.trace_object::<Q>(queue, object, worker)
     }
 
     pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool) {
@@ -992,6 +1002,43 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.los
             .verify_side_metadata_sanity(side_metadata_sanity_checker);
     }
+}
+
+use crate::policy::gc_work::TraceKind;
+use crate::vm::VMBinding;
+
+/// A plan that uses `PlanProcessEdges` needs to provide an implementation for this trait.
+/// Generally a plan does not need to manually implement this trait. Instead, we provide
+/// a procedural macro that helps generate an implementation. Please check `macros/trace_object`.
+///
+/// A plan could also manually implement this trait. For the sake of performance, the implementation
+/// of this trait should mark methods as `[inline(always)]`.
+pub trait PlanTraceObject<VM: VMBinding> {
+    /// Trace objects in the plan. Generally one needs to figure out
+    /// which space an object resides in, and invokes the corresponding policy
+    /// trace object method.
+    ///
+    /// Arguments:
+    /// * `trace`: the current transitive closure
+    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `worker`: the GC worker that is tracing this object.
+    fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference;
+
+    /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function
+    /// will be called after the `VM::VMScanning::scan_object()` as a hook to invoke possible policy post scan method.
+    /// If a plan does not have any policy that needs post scan, this method can be implemented as empty.
+    /// If a plan has a policy that has some policy specific behaviors for scanning (e.g. mark lines in Immix),
+    /// this method should also invoke those policy specific methods for objects in that space.
+    fn post_scan_object(&self, object: ObjectReference);
+
+    /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
+    /// return true.
+    fn may_move_objects<const KIND: TraceKind>() -> bool;
 }
 
 use enum_map::Enum;

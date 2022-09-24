@@ -1,14 +1,22 @@
 use super::space::{CommonSpace, Space, SpaceOptions, SFT};
+use crate::plan::VectorObjectQueue;
+use crate::policy::gc_work::TraceKind;
+use crate::policy::space::*;
+use crate::scheduler::GCWorker;
 use crate::util::alloc::allocator::align_allocation_no_fill;
-use crate::util::constants::{LOG_BYTES_IN_WORD, MIN_OBJECT_SIZE};
+use crate::util::constants::LOG_BYTES_IN_WORD;
+use crate::util::copy::CopySemantics;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::{HeapMeta, MonotonePageResource, PageResource, VMRequest};
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::metadata::{compare_exchange_metadata, extract_side_metadata};
 use crate::util::{alloc_bit, Address, ObjectReference};
-use crate::{vm::*, TransitiveClosure};
+use crate::{vm::*, ObjectQueue};
 use atomic::Ordering;
+
+pub(crate) const TRACE_KIND_MARK: TraceKind = 0;
+pub(crate) const TRACE_KIND_FORWARD: TraceKind = 1;
 
 pub struct MarkCompactSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -17,6 +25,9 @@ pub struct MarkCompactSpace<VM: VMBinding> {
 
 const GC_MARK_BIT_MASK: usize = 1;
 
+/// For each MarkCompact object, we need one extra word for storing forwarding pointer (Lisp-2 implementation).
+/// Note that considering the object alignment, we may end up allocating/reserving more than one word per object.
+/// See [`MarkCompactSpace::HEADER_RESERVED_IN_BYTES`].
 pub const GC_EXTRA_HEADER_WORD: usize = 1;
 const GC_EXTRA_HEADER_BYTES: usize = GC_EXTRA_HEADER_WORD << LOG_BYTES_IN_WORD;
 
@@ -26,11 +37,13 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
     }
 
     #[inline(always)]
-    fn get_forwarded_object(&self, _object: ObjectReference) -> Option<ObjectReference> {
-        // the current forwarding pointer implementation will store forwarding pointers
-        // in dead objects' header, which is not the case in mark compact. Mark compact
-        // implements its own forwarding mechanism
-        unimplemented!()
+    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+        let forwarding_pointer = Self::get_header_forwarding_pointer(object);
+        if forwarding_pointer.is_null() {
+            None
+        } else {
+            Some(forwarding_pointer)
+        }
     }
 
     fn is_live(&self, object: ObjectReference) -> bool {
@@ -50,6 +63,18 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
     #[cfg(feature = "sanity")]
     fn is_sane(&self) -> bool {
         true
+    }
+
+    #[inline(always)]
+    fn sft_trace_object(
+        &self,
+        _queue: &mut VectorObjectQueue,
+        _object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        // We should not use trace_object for markcompact space.
+        // Depending on which trace it is, we should manually call either trace_mark or trace_forward.
+        panic!("sft_trace_object() cannot be used with mark compact space")
     }
 }
 
@@ -79,13 +104,84 @@ impl<VM: VMBinding> Space<VM> for MarkCompactSpace<VM> {
     }
 }
 
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MarkCompactSpace<VM> {
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        if KIND == TRACE_KIND_MARK {
+            self.trace_mark_object(queue, object)
+        } else if KIND == TRACE_KIND_FORWARD {
+            self.trace_forward_object(queue, object)
+        } else {
+            unreachable!()
+        }
+    }
+    #[inline(always)]
+    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        if KIND == TRACE_KIND_MARK {
+            false
+        } else if KIND == TRACE_KIND_FORWARD {
+            true
+        } else {
+            unreachable!()
+        }
+    }
+}
+
 impl<VM: VMBinding> MarkCompactSpace<VM> {
+    /// We need one extra header word for each object. Considering the alignment requirement, this is
+    /// the actual bytes we need to reserve for each allocation.
     pub const HEADER_RESERVED_IN_BYTES: usize = if VM::MAX_ALIGNMENT > GC_EXTRA_HEADER_BYTES {
         VM::MAX_ALIGNMENT
     } else {
         GC_EXTRA_HEADER_BYTES
     }
     .next_power_of_two();
+
+    // The following are a few functions for manipulating header forwarding poiner.
+    // Basically for each allocation request, we allocate extra bytes of [`HEADER_RESERVED_IN_BYTES`].
+    // From the allocation result we get (e.g. `alloc_res`), `alloc_res + HEADER_RESERVED_IN_BYTES` is the cell
+    // address we return to the binding. It ensures we have at least one word (`GC_EXTRA_HEADER_WORD`) before
+    // the cell address, and ensures the cell address is properly aligned.
+    // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
+
+    /// Get the address for header forwarding pointer
+    #[inline(always)]
+    fn header_forwarding_pointer_address(object: ObjectReference) -> Address {
+        VM::VMObjectModel::object_start_ref(object) - GC_EXTRA_HEADER_BYTES
+    }
+
+    /// Get header forwarding pointer for an object
+    #[inline(always)]
+    fn get_header_forwarding_pointer(object: ObjectReference) -> ObjectReference {
+        unsafe { Self::header_forwarding_pointer_address(object).load::<ObjectReference>() }
+    }
+
+    /// Store header forwarding pointer for an object
+    #[inline(always)]
+    fn store_header_forwarding_pointer(
+        object: ObjectReference,
+        forwarding_pointer: ObjectReference,
+    ) {
+        unsafe {
+            Self::header_forwarding_pointer_address(object)
+                .store::<ObjectReference>(forwarding_pointer);
+        }
+    }
+
+    // Clear header forwarding pointer for an object
+    #[inline(always)]
+    fn clear_header_forwarding_pointer(object: ObjectReference) {
+        crate::util::memory::zero(
+            Self::header_forwarding_pointer_address(object),
+            GC_EXTRA_HEADER_BYTES,
+        );
+    }
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -130,9 +226,9 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     pub fn release(&self) {}
 
-    pub fn trace_mark_object<T: TransitiveClosure>(
+    pub fn trace_mark_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
         debug_assert!(
@@ -141,14 +237,14 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             object
         );
         if MarkCompactSpace::<VM>::test_and_mark(object) {
-            trace.process_node(object);
+            queue.enqueue(object);
         }
         object
     }
 
-    pub fn trace_forward_object<T: TransitiveClosure>(
+    pub fn trace_forward_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
         debug_assert!(
@@ -159,16 +255,10 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         // from this stage and onwards, mark bit is no longer needed
         // therefore, it can be reused to save one extra bit in metadata
         if MarkCompactSpace::<VM>::test_and_clear_mark(object) {
-            trace.process_node(object);
+            queue.enqueue(object);
         }
 
-        // For markcompact, only one word is required to store the forwarding pointer
-        // and it is always stored in front of the object start address. However, the
-        // number of extra bytes required is determined by the object alignment
-        let forwarding_pointer =
-            unsafe { (object.to_address() - GC_EXTRA_HEADER_BYTES).load::<Address>() };
-
-        unsafe { (forwarding_pointer + Self::HEADER_RESERVED_IN_BYTES).to_object_reference() }
+        Self::get_header_forwarding_pointer(object)
     }
 
     pub fn test_and_mark(object: ObjectReference) -> bool {
@@ -242,70 +332,82 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
     }
 
     pub fn calculate_forwarding_pointer(&self) {
-        let mut from = self.common.start;
-        let mut to = self.common.start;
+        let start = self.common.start;
         let end = self.pr.cursor();
-        while from < end {
-            if alloc_bit::is_alloced_object(from) {
-                let obj = unsafe { from.to_object_reference() };
-                let size =
-                    VM::VMObjectModel::get_current_size(obj) + Self::HEADER_RESERVED_IN_BYTES;
+        let mut to = start;
 
-                if Self::to_be_compacted(obj) {
-                    let copied_size = VM::VMObjectModel::get_size_when_copied(obj)
-                        + Self::HEADER_RESERVED_IN_BYTES;
-                    let align = VM::VMObjectModel::get_align_when_copied(obj);
-                    let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
-                    to = align_allocation_no_fill::<VM>(to, align, offset);
-                    let forwarding_pointer_addr = from - GC_EXTRA_HEADER_BYTES;
-                    unsafe { forwarding_pointer_addr.store(to) }
-                    to += copied_size;
-                }
-                from += size;
-            } else {
-                from += MIN_OBJECT_SIZE
-            }
+        let linear_scan =
+            crate::util::linear_scan::ObjectIterator::<VM, MarkCompactObjectSize<VM>, true>::new(
+                start, end,
+            );
+        for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
+            let copied_size =
+                VM::VMObjectModel::get_size_when_copied(obj) + Self::HEADER_RESERVED_IN_BYTES;
+            let align = VM::VMObjectModel::get_align_when_copied(obj);
+            let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
+            to = align_allocation_no_fill::<VM>(to, align, offset);
+            let new_obj = VM::VMObjectModel::get_reference_when_copied_to(
+                obj,
+                to + Self::HEADER_RESERVED_IN_BYTES,
+            );
+
+            Self::store_header_forwarding_pointer(obj, new_obj);
+
+            trace!(
+                "Calculate forward: {} (size when copied = {}) ~> {} (size = {})",
+                obj,
+                VM::VMObjectModel::get_size_when_copied(obj),
+                to,
+                copied_size
+            );
+
+            to += copied_size;
         }
+        debug!("Calculate forward end: to = {}", to);
     }
 
     pub fn compact(&self) {
-        let mut from = self.common.start;
+        let start = self.common.start;
         let end = self.pr.cursor();
         let mut to = end;
-        while from < end {
-            if alloc_bit::is_alloced_object(from) {
-                // clear the alloc bit
-                alloc_bit::unset_addr_alloc_bit(from);
-                let obj = unsafe { from.to_object_reference() };
-                let size =
-                    VM::VMObjectModel::get_current_size(obj) + Self::HEADER_RESERVED_IN_BYTES;
 
-                let forwarding_pointer_addr = from - GC_EXTRA_HEADER_BYTES;
-                let forwarding_pointer = unsafe { forwarding_pointer_addr.load::<Address>() };
-                if forwarding_pointer != Address::ZERO {
-                    let copied_size = VM::VMObjectModel::get_size_when_copied(obj)
-                        + Self::HEADER_RESERVED_IN_BYTES;
-                    to = forwarding_pointer;
-                    let object_addr = forwarding_pointer + Self::HEADER_RESERVED_IN_BYTES;
-                    // clear forwarding pointer
-                    crate::util::memory::zero(
-                        forwarding_pointer + Self::HEADER_RESERVED_IN_BYTES - GC_EXTRA_HEADER_BYTES,
-                        GC_EXTRA_HEADER_BYTES,
-                    );
-                    crate::util::memory::zero(forwarding_pointer_addr, GC_EXTRA_HEADER_BYTES);
-                    // copy object
-                    let target = unsafe { object_addr.to_object_reference() };
-                    VM::VMObjectModel::copy_to(obj, target, Address::ZERO);
-                    // update alloc_bit,
-                    alloc_bit::set_alloc_bit(target);
-                    to += copied_size
-                }
-                from += size;
-            } else {
-                from += MIN_OBJECT_SIZE
+        let linear_scan =
+            crate::util::linear_scan::ObjectIterator::<VM, MarkCompactObjectSize<VM>, true>::new(
+                start, end,
+            );
+        for obj in linear_scan {
+            // clear the alloc bit
+            alloc_bit::unset_addr_alloc_bit(obj.to_address());
+
+            let forwarding_pointer = Self::get_header_forwarding_pointer(obj);
+
+            trace!("Compact {} to {}", obj, forwarding_pointer);
+            if !forwarding_pointer.is_null() {
+                let copied_size = VM::VMObjectModel::get_size_when_copied(obj);
+                let new_object = forwarding_pointer;
+                Self::clear_header_forwarding_pointer(new_object);
+
+                // copy object
+                trace!(" copy from {} to {}", obj, new_object);
+                let end_of_new_object = VM::VMObjectModel::copy_to(obj, new_object, Address::ZERO);
+                // update alloc_bit,
+                alloc_bit::set_alloc_bit(new_object);
+                to = new_object.to_address() + copied_size;
+                debug_assert_eq!(end_of_new_object, to);
             }
         }
+
+        debug!("Compact end: to = {}", to);
+
         // reset the bump pointer
         self.pr.reset_cursor(to);
+    }
+}
+
+struct MarkCompactObjectSize<VM>(std::marker::PhantomData<VM>);
+impl<VM: VMBinding> crate::util::linear_scan::LinearScanObjectSize for MarkCompactObjectSize<VM> {
+    #[inline(always)]
+    fn size(object: ObjectReference) -> usize {
+        VM::VMObjectModel::get_current_size(object)
     }
 }

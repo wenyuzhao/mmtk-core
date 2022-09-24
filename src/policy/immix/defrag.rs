@@ -4,6 +4,7 @@ use super::{
     ImmixSpace,
 };
 use crate::policy::space::Space;
+use crate::util::linear_scan::Region;
 use crate::{util::constants::LOG_BYTES_IN_PAGE, vm::*};
 use spin::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -57,6 +58,8 @@ impl Defrag {
         user_triggered: bool,
         exhausted_reusable_space: bool,
         full_heap_system_gc: bool,
+        concurrent_marking_enabled: bool,
+        rc_enabled: bool,
     ) {
         let in_defrag = super::DEFRAG
             && (emergency_collection
@@ -64,8 +67,8 @@ impl Defrag {
                 || !exhausted_reusable_space
                 || Self::DEFRAG_STRESS
                 || (collect_whole_heap && user_triggered && full_heap_system_gc))
-            && !crate::args::REF_COUNT
-            && !crate::args::CONCURRENT_MARKING;
+            && !rc_enabled
+            && !concurrent_marking_enabled;
         // println!("Defrag: {}", in_defrag);
         self.in_defrag_collection
             .store(in_defrag, Ordering::Release)
@@ -113,7 +116,7 @@ impl Defrag {
 
         let mut available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
             as isize
-            - VM::VMActivePlan::global().get_pages_reserved() as isize
+            - VM::VMActivePlan::global().get_reserved_pages() as isize
             + self.defrag_headroom_pages(space) as isize;
         if available_clean_pages_for_defrag < 0 {
             available_clean_pages_for_defrag = 0
@@ -128,7 +131,7 @@ impl Defrag {
 
         self.available_clean_pages_for_defrag.store(
             available_clean_pages_for_defrag as usize
-                + VM::VMActivePlan::global().get_collection_reserve(),
+                + VM::VMActivePlan::global().get_collection_reserved_pages(),
             Ordering::Release,
         );
     }

@@ -1,4 +1,5 @@
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
+use super::object_ref_guard::adjust_thread_local_buffer_limit;
 use crate::util::Address;
 
 use crate::util::alloc::Allocator;
@@ -15,17 +16,22 @@ const BLOCK_MASK: usize = BLOCK_SIZE - 1;
 
 #[repr(C)]
 pub struct BumpAllocator<VM: VMBinding> {
+    /// [`VMThread`] associated with this allocator instance
     pub tls: VMThread,
+    /// Current cursor for bump pointer
     cursor: Address,
+    /// Limit for bump pointer
     limit: Address,
+    /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
     space: &'static dyn Space<VM>,
+    /// [`Plan`] instance that this allocator instance is associated with.
     plan: &'static dyn Plan<VM = VM>,
 }
 
 impl<VM: VMBinding> BumpAllocator<VM> {
     pub fn set_limit(&mut self, cursor: Address, limit: Address) {
         self.cursor = cursor;
-        self.limit = limit;
+        self.limit = adjust_thread_local_buffer_limit::<VM>(limit);
     }
 
     pub fn reset(&mut self) {
@@ -43,12 +49,15 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
     fn get_space(&self) -> &'static dyn Space<VM> {
         self.space
     }
+
     fn get_plan(&self) -> &'static dyn Plan<VM = VM> {
         self.plan
     }
+
     fn does_thread_local_allocation(&self) -> bool {
         true
     }
+
     fn get_thread_local_buffer_granularity(&self) -> usize {
         BLOCK_SIZE
     }
@@ -80,11 +89,14 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
         self.acquire_block(size, align, offset, false)
     }
 
-    // Slow path for allocation if the precise stress test has been enabled.
-    // It works by manipulating the limit to be below the cursor always.
-    // Performs three kinds of allocations: (i) if the hard limit has been met;
-    // (ii) the bump pointer semantics from the fastpath; and (iii) if the stress
-    // factor has been crossed.
+    /// Slow path for allocation if precise stress testing has been enabled.
+    /// It works by manipulating the limit to be always below the cursor.
+    /// Can have three different cases:
+    ///  - acquires a new block if the hard limit has been met;
+    ///  - allocates an object using the bump pointer semantics from the
+    ///    fastpath if there is sufficient space; and
+    ///  - does not allocate an object but forces a poll for GC if the stress
+    ///    factor has been crossed.
     fn alloc_slow_once_precise_stress(
         &mut self,
         size: usize,
@@ -161,14 +173,18 @@ impl<VM: VMBinding> BumpAllocator<VM> {
             );
             if !stress_test {
                 self.set_limit(acquired_start, acquired_start + block_size);
+                self.alloc(size, align, offset)
             } else {
                 // For a stress test, we artificially make the fastpath fail by
                 // manipulating the limit as below.
                 // The assumption here is that we use an address range such that
                 // cursor > block_size always.
                 self.set_limit(acquired_start, unsafe { Address::from_usize(block_size) });
+                // Note that we have just acquired a new block so we know that we don't have to go
+                // through the entire allocation sequence again, we can directly call the slow path
+                // allocation.
+                self.alloc_slow_once_precise_stress(size, align, offset, false)
             }
-            self.alloc(size, align, offset)
         }
     }
 }

@@ -1,44 +1,38 @@
-//! The GC controller thread.
-
-use crate::scheduler::gc_work::ScheduleCollection;
-use crate::scheduler::*;
-use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 
 struct RequestSync {
     request_count: isize,
     last_request_count: isize,
 }
 
-pub struct ControllerCollectorContext<VM: VMBinding> {
+/// GC requester.  This object allows other threads to request (trigger) GC,
+/// and the GC coordinator thread waits for GC requests using this object.
+pub struct GCRequester<VM: VMBinding> {
     request_sync: Mutex<RequestSync>,
     request_condvar: Condvar,
-    scheduler: RwLock<Option<Arc<GCWorkScheduler<VM>>>>,
     request_flag: AtomicBool,
     concurrent: AtomicBool,
     phantom: PhantomData<VM>,
 }
 
 // Clippy says we need this...
-impl<VM: VMBinding> Default for ControllerCollectorContext<VM> {
+impl<VM: VMBinding> Default for GCRequester<VM> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<VM: VMBinding> ControllerCollectorContext<VM> {
+impl<VM: VMBinding> GCRequester<VM> {
     pub fn new() -> Self {
-        ControllerCollectorContext {
+        GCRequester {
             request_sync: Mutex::new(RequestSync {
                 request_count: 0,
                 last_request_count: -1,
             }),
             request_condvar: Condvar::new(),
-            scheduler: RwLock::new(None),
             request_flag: AtomicBool::new(false),
             concurrent: AtomicBool::new(false),
             phantom: PhantomData,
@@ -48,37 +42,6 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
     #[inline]
     pub fn is_concurrent_collection(&self) -> bool {
         self.concurrent.load(Ordering::SeqCst)
-    }
-
-    pub fn scheduler(&self) -> Arc<GCWorkScheduler<VM>> {
-        let scheduler_guard = self.scheduler.read().unwrap();
-        scheduler_guard.as_ref().unwrap().clone()
-    }
-
-    pub fn init(&self, scheduler: &Arc<GCWorkScheduler<VM>>) {
-        let mut scheduler_guard = self.scheduler.write().unwrap();
-        debug_assert!(scheduler_guard.is_none());
-        *scheduler_guard = Some(scheduler.clone());
-    }
-
-    pub fn run(&self, tls: VMWorkerThread) {
-        loop {
-            debug!("[STWController: Waiting for request...]");
-            self.wait_for_request();
-            debug!("[STWController: Request recieved.]");
-
-            // For heap growth logic
-            // FIXME: This is not used. However, we probably want to set a 'user_triggered' flag
-            // when GC is requested.
-            // let user_triggered_collection: bool = SelectedPlan::is_user_triggered_collection();
-
-            let scheduler = self.scheduler.read().unwrap();
-            let scheduler = scheduler.as_ref().unwrap();
-            scheduler.initialize_worker(tls);
-            scheduler.set_initializer(Some(ScheduleCollection));
-            scheduler.wait_for_completion();
-            debug!("[STWController: Worker threads complete!]");
-        }
     }
 
     pub fn request(&self, concurrent: bool) {
@@ -101,7 +64,7 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
         drop(guard);
     }
 
-    fn wait_for_request(&self) {
+    pub fn wait_for_request(&self) {
         let mut guard = self.request_sync.lock().unwrap();
         guard.last_request_count += 1;
         while guard.last_request_count == guard.request_count {

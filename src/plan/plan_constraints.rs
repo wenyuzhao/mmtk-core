@@ -32,6 +32,8 @@ pub struct PlanConstraints {
     pub needs_linear_scan: bool,
     pub needs_concurrent_workers: bool,
     pub generate_gc_trace: bool,
+    /// Some policies do object forwarding after the first liveness transitive closure, such as mark compact.
+    /// For plans that use those policies, they should set this as true.
     pub needs_forward_after_liveness: bool,
 }
 
@@ -55,6 +57,8 @@ impl PlanConstraints {
         }
     }
 }
+
+pub const DEFAULT_PLAN_CONSTRAINTS: PlanConstraints = PlanConstraints::default();
 
 // Use 16 pages as the size limit for non-LOS objects to avoid copying large objects
 pub const MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN: usize = 16 << LOG_BYTES_IN_PAGE;

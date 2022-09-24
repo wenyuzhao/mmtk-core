@@ -52,8 +52,13 @@ impl<VM: VMBinding> Allocator<VM> for MarkCompactAllocator<VM> {
         let rtn = self
             .bump_allocator
             .alloc(size + Self::HEADER_RESERVED_IN_BYTES, align, offset);
-        // return the actual object start address
-        rtn + Self::HEADER_RESERVED_IN_BYTES
+        // Check if the result is valid and return the actual object start address
+        // Note that `rtn` can be null in the case of OOM
+        if !rtn.is_zero() {
+            rtn + Self::HEADER_RESERVED_IN_BYTES
+        } else {
+            rtn
+        }
     }
 
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: isize) -> Address {
@@ -61,11 +66,14 @@ impl<VM: VMBinding> Allocator<VM> for MarkCompactAllocator<VM> {
         self.bump_allocator.alloc_slow_once(size, align, offset)
     }
 
-    // Slow path for allocation if the precise stress test has been enabled.
-    // It works by manipulating the limit to be below the cursor always.
-    // Performs three kinds of allocations: (i) if the hard limit has been met;
-    // (ii) the bump pointer semantics from the fastpath; and (iii) if the stress
-    // factor has been crossed.
+    /// Slow path for allocation if precise stress testing has been enabled.
+    /// It works by manipulating the limit to be always below the cursor.
+    /// Can have three different cases:
+    ///  - acquires a new block if the hard limit has been met;
+    ///  - allocates an object using the bump pointer semantics from the
+    ///    fastpath if there is sufficient space; and
+    ///  - does not allocate an object but forces a poll for GC if the stress
+    ///    factor has been crossed.
     fn alloc_slow_once_precise_stress(
         &mut self,
         size: usize,

@@ -1,3 +1,147 @@
+0.13.0 (2022-06-27)
+===
+
+Allocators
+---
+* Fixed a bug that in GC stress testing, the allocator slowpath may double count the allocated bytes.
+* Fixed a bug that in GC stress testing, the Immix allocator may miss the updates to the allocated bytes in some cases.
+
+Scheduler
+---
+* Added work stealing mechanisms to the scheduler: a GC worker may steal work packets from other workers.
+* Fixed a bug that work buckets may be incorrectly opened when there is still work left in workers' local bucket.
+
+API
+---
+* Added an associate type `Finalizable` to `ReferenceGlue`, with which, a binding can define their own finalizer type.
+* Added a set of malloc APIs that allows a binding to do malloc using MMTk.
+* Added `vm_trace_object()` to `ActivePlan`. When tracing an object that is not in any of MMTk spaces, MMTk will call this method
+  and allow bindings to handle the object.
+
+Misc
+---
+* `trait TransitiveClosure` is split into two different traits: `EdgeVisitor` and `ObjectQueue`, and `TransitiveClosure` is now removed.
+* Fixed a bug that the work packet statistics were not collected correctly if different work packets used the same display name.
+* Fixed a bug that the work packet statistics and the phase statistics use different time units. Now they both use milliseconds.
+* Fixed a bug that `acquire_lock` was used to lock a larger scope than what was necessary, which caused bad performance when we have many
+  allocation threads (e.g. more than 24 threads).
+
+0.12.0 (2022-05-13)
+===
+
+GC Plans
+---
+* Introduced `trait PlanTraceObject` and procedural macros to derive implementation for it for all the current plans.
+* Introduced a work packet type `PlanProcessEdges` that uses `PlanTraceObject`. All the current plans use this type for tracing objects.
+
+Policy
+---
+* Introduced `trait PolicyTraceObject`. Added an implementation for each policy.
+
+API
+---
+* Preliminary support for Java-style weak reference is added (set the option `no_reference_types=false` to enable it). Related APIs are slightly changed.
+* The type parameter `TransitiveClosure` in `Scanning::scan_object()/scan_objects()` is now replaced with `vm::EdgeVisitor`.
+* Minor changes to `Scanning::scan_object()/scan_objects()` so they are more consistent.
+
+Misc
+---
+* Fixed a bug in object forwarding: an object can leave the being-forwarded state without actually being forwarded, and this
+  now won't cause a panic.
+
+0.11.0 (2022-04-01)
+===
+
+GC Plans
+---
+* Introduced a new work packet type `SFTProcessEdges`. Most plans now use `SFTProcessEdges` for tracing objects,
+  and no longer need to implement any plan-specific work packet. Mark compact and immix plans still use their own
+  tracing work packet.
+
+Policies
+---
+* Fixed a bug that `ImmixCopyContext` did not set the mark bit after copying an object.
+* Fixed a bug that `MarkCompactSpace` used `ObjectReference` and `Address` interchangably. Now `MarkCompactSpace`
+  properly deals with `ObjectReference`.
+
+API
+---
+* `is_mapped_object()` is superseded by `is_in_mmtk_spaces()`. It returns true if the given object reference is in
+  MMTk spaces, but it does not guarantee that the object reference actually points to an object.
+* `is_mmtk_object()` is added. It can be used to check if an object reference points to an object (useful for conservative stack canning).
+  `is_mmtk_object()` is only availble when the `is_mmtk_object` feature is enabled.
+
+Misc
+---
+* MMTk core now builds with stable Rust toolchains (minimal supported Rust version 1.57.0).
+* Fixed a bug that MMTk may not map metadata and SFT for an object reference if the object reference is in a different
+  chunk from the allocated address.
+* Added `trait Region` and `struct RegionIterator<R>` to allow convenient iteration through memory regions.
+
+0.10.0 (2022-02-14)
+===
+
+GC Plans
+---
+* Removed plan-specific copy contexts. Now each plan needs to provide a configuration for
+  `GCWorkerCopyContext` (similar to how they config `Mutator`).
+* Fixed a bug that `needs_log_bit` was always set to `true` for generational plans, no matter
+  their barrier used the log bit or not.
+* Fixed a bug that we may overflow when calculating `get_available_pages()`.
+
+Policies
+---
+* Refactored copy context. Now a copying policy provides its copy context.
+* Mark sweep and mark compact now uses `ObjectIterator` for linear scan.
+
+Scheduler
+---
+* Introduced `GCController`, a counterpart of `GCWorker`, for the controller thread.
+* Refactored `GCWorker`. Now `GCWorker` is seperated into two parts, a thread local part `GCWorker`
+  which is owned by GC threads, and a shared part `GCWorkerShared` that is shared between GC threads
+  and the scheduler.
+* Refactored the creation of the scheduler and the workers to remove some unnecessary `Option<T>` and `RwLock<T>`.
+
+API
+---
+* Added `process_bulk()` that allows bindings to pass options as a string of key-value pairs.
+* `ObjectModel::copy()` now takes `CopySemantics` as a parameter.
+* Renamed `Collection::spawn_worker_thread()` to `spawn_gc_thread()`, which is now used to spawn both GC worker and
+  GC controller.
+* `Collection::out_of_memory()` now takes `AllocationError` as a parameter which hints the binding
+  on how to handle the OOM error.
+* `Collection::out_of_memory()` now allows a binding to return from the method in the case of a non-critical OOM.
+  If a binding returns, `alloc()` will return a zero address.
+
+Misc
+---
+* Added `ObjectIterator` that provides linear scanning through a region to iterate
+  objects using the alloc bit.
+* Added a feature `work_packet_stats` to optionally collect work packet statistics. Note that
+  MMTk used to always collect work packet statistics.
+* Optimized the access to the SFT map.
+* Fixed a few issues with documentation.
+* The example header file `mmtk.h` now uses the prefix `mmtk_` for all the functions.
+
+0.9.0 (2021-12-16)
+===
+
+GC Plans
+---
+* Added a Lisp2-style mark compact plan.
+* Added a GCWorkContext type for each plan which specifies the types used for this plan's GC work packet.
+* Changed the allocation semantics mapping for each plan. Now each plan has 1-to-1 mapping between allocation semantics and spaces.
+
+Policies
+---
+* Fixed a few bugs for Immix space when `DEFRAG` is disabled.
+
+Misc
+---
+* Added an option `precise_stress` (which defaults to `true`). For precise stress test, MMTk will check for stress GC in
+  each allocation (including thread local fastpath allocation). For non-precise stress test, MMTk only checks for stress GC in global allocation.
+* Refactored the code about counting scanned stacks to make it easier to read.
+
 0.8.0 (2021-11-01)
 ===
 

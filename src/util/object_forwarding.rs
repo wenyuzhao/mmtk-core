@@ -1,13 +1,12 @@
+use crate::util::copy::*;
 use crate::util::metadata::{
     compare_exchange_metadata, load_metadata, store_metadata, MetadataSpec,
 };
 /// https://github.com/JikesRVM/JikesRVM/blob/master/MMTk/src/org/mmtk/utility/ForwardingWord.java
 use crate::util::{constants, Address, ObjectReference};
 use crate::vm::ObjectModel;
-use std::sync::atomic::Ordering;
-
-use crate::plan::{AllocationSemantics, CopyContext};
 use crate::vm::VMBinding;
+use std::sync::atomic::Ordering;
 
 const FORWARDING_NOT_TRIGGERED_YET: usize = 0b00;
 const BEING_FORWARDED: usize = 0b10;
@@ -63,23 +62,24 @@ pub fn spin_and_get_forwarded_object<VM: VMBinding>(
 
     if forwarding_bits == FORWARDED {
         read_forwarding_pointer::<VM>(object)
-    } else if forwarding_bits == FORWARDING_NOT_TRIGGERED_YET {
-        object
     } else {
-        panic!(
-            "Invalid forwarding state 0x{:x} 0x{:x} for object {}",
+        // For some policies (such as Immix), we can have interleaving such that one thread clears
+        // the forwarding word while another thread was stuck spinning in the above loop.
+        // See: https://github.com/mmtk/mmtk-core/issues/579
+        debug_assert!(
+            forwarding_bits == FORWARDING_NOT_TRIGGERED_YET,
+            "Invalid/Corrupted forwarding word {:x} for object {}",
             forwarding_bits,
-            read_forwarding_pointer::<VM>(object),
-            object
-        )
+            object,
+        );
+        object
     }
 }
 
-/// Copy the object, mark it as forwarded and return a reference to the new object (copy).
-pub fn forward_object<VM: VMBinding, CC: CopyContext>(
+pub fn forward_object<VM: VMBinding>(
     object: ObjectReference,
-    semantics: AllocationSemantics,
-    copy_context: &mut CC,
+    semantics: CopySemantics,
+    copy_context: &mut GCWorkerCopyContext<VM>,
 ) -> ObjectReference {
     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
     #[cfg(feature = "global_alloc_bit")]
@@ -102,41 +102,8 @@ pub fn forward_object<VM: VMBinding, CC: CopyContext>(
             Some(Ordering::SeqCst),
         );
     }
-    new_object
-}
-
-#[inline]
-pub fn copy_object<VM: VMBinding, CC: CopyContext>(
-    object: ObjectReference,
-    semantics: AllocationSemantics,
-    copy_context: &mut CC,
-) -> ObjectReference {
-    VM::VMObjectModel::copy(object, semantics, copy_context)
-}
-
-#[inline]
-pub fn set_forwarding_pointer<VM: VMBinding>(
-    object: ObjectReference,
-    new_object: ObjectReference,
-) -> ObjectReference {
-    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
-        store_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
-            object,
-            new_object.to_address().as_usize() | (FORWARDED << shift),
-            None,
-            Some(Ordering::SeqCst),
-        )
-    } else {
-        write_forwarding_pointer::<VM>(object, new_object);
-        store_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
-            object,
-            FORWARDED,
-            None,
-            Some(Ordering::SeqCst),
-        );
-    }
+    #[cfg(debug_assertions)]
+    crate::mmtk::SFT_MAP.assert_valid_entries_for_object::<VM>(new_object);
     new_object
 }
 

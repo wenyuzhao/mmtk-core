@@ -2,10 +2,10 @@ use super::block::{Block, BlockState};
 use super::defrag::Histogram;
 use super::immixspace::ImmixSpace;
 use super::line::Line;
-use crate::plan::immix::Immix;
-use crate::plan::EdgeIterator;
+use crate::plan::lxr::LXR;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
-use crate::util::rc::{self, ProcessDecs};
+use crate::util::rc;
 use crate::util::ObjectReference;
 use crate::LazySweepingJobsCounter;
 use crate::{
@@ -15,50 +15,47 @@ use crate::{
     MMTK,
 };
 use spin::Mutex;
-use std::intrinsics::unlikely;
-use std::{iter::Step, ops::Range, sync::atomic::Ordering};
+use std::sync::Arc;
+use std::{ops::Range, sync::atomic::Ordering};
 
 /// Data structure to reference a MMTk 4 MB chunk.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
 pub struct Chunk(Address);
 
+impl From<Address> for Chunk {
+    #[inline(always)]
+    fn from(address: Address) -> Chunk {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+}
+
+impl From<Chunk> for Address {
+    #[inline(always)]
+    fn from(chunk: Chunk) -> Address {
+        chunk.0
+    }
+}
+
+impl Region for Chunk {
+    const LOG_BYTES: usize = LOG_BYTES_IN_CHUNK;
+}
+
 impl Chunk {
     /// Chunk constant with zero address
     const ZERO: Self = Self(Address::ZERO);
-    /// Log bytes in chunk
-    pub const LOG_BYTES: usize = LOG_BYTES_IN_CHUNK;
-    /// Bytes in chunk
-    pub const BYTES: usize = 1 << Self::LOG_BYTES;
     /// Log blocks in chunk
     pub const LOG_BLOCKS: usize = Self::LOG_BYTES - Block::LOG_BYTES;
     /// Blocks in chunk
     pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
 
-    /// Align the give address to the chunk boundary.
-    pub const fn align(address: Address) -> Address {
-        address.align_down(Self::BYTES)
-    }
-
-    /// Get the chunk from a given address.
-    /// The address must be chunk-aligned.
-    #[inline(always)]
-    pub fn from(address: Address) -> Self {
-        debug_assert!(address.is_aligned_to(Self::BYTES));
-        Self(address)
-    }
-
-    /// Get chunk start address
-    pub const fn start(&self) -> Address {
-        self.0
-    }
-
     /// Get a range of blocks within this chunk.
     #[inline(always)]
-    pub fn blocks(&self) -> Range<Block> {
+    pub fn blocks(&self) -> RegionIterator<Block> {
         let start = Block::from(Block::align(self.0));
         let end = Block::from(start.start() + (Self::BLOCKS << Block::LOG_BYTES));
-        start..end
+        RegionIterator::<Block>::new(start, end)
     }
 
     #[inline(always)]
@@ -98,43 +95,6 @@ impl Chunk {
             _ => unreachable!(),
         };
         state == ChunkState::Allocated
-    }
-}
-
-impl Step for Chunk {
-    /// Get the number of chunks between the given two chunks.
-    #[inline(always)]
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        if start > end {
-            return None;
-        }
-        Some((end.start() - start.start()) >> Self::LOG_BYTES)
-    }
-    /// result = chunk_address + count * block_size
-    #[inline(always)]
-    fn forward(start: Self, count: usize) -> Self {
-        Self::from(start.start() + (count << Self::LOG_BYTES))
-    }
-    /// result = chunk_address + count * block_size
-    #[inline(always)]
-    fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() > usize::MAX - (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::forward(start, count))
-    }
-    /// result = chunk_address + count * block_size
-    #[inline(always)]
-    fn backward(start: Self, count: usize) -> Self {
-        Self::from(start.start() - (count << Self::LOG_BYTES))
-    }
-    /// result = chunk_address - count * block_size
-    #[inline(always)]
-    fn backward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() < (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::backward(start, count))
     }
 }
 
@@ -178,11 +138,11 @@ impl ChunkMap {
             let mut range = self.chunk_range.lock();
             if range.start == Chunk::ZERO {
                 range.start = chunk;
-                range.end = Chunk::forward(chunk, 1);
+                range.end = chunk.next();
             } else if chunk < range.start {
                 range.start = chunk;
             } else if range.end <= chunk {
-                range.end = Chunk::forward(chunk, 1);
+                range.end = chunk.next();
             }
         }
     }
@@ -198,8 +158,9 @@ impl ChunkMap {
     }
 
     /// A range of all chunks in the heap.
-    pub fn all_chunks(&self) -> Range<Chunk> {
-        self.chunk_range.lock().clone()
+    pub fn all_chunks(&self) -> RegionIterator<Chunk> {
+        let chunk_range = self.chunk_range.lock();
+        RegionIterator::<Chunk>::new(chunk_range.start, chunk_range.end)
     }
 
     pub fn committed_chunks(&self) -> impl Iterator<Item = Chunk> {
@@ -232,12 +193,16 @@ impl ChunkMap {
     /// Generate chunk sweep work packets.
     pub fn generate_prepare_tasks<VM: VMBinding>(
         &self,
-        _space: &'static ImmixSpace<VM>,
+        space: &'static ImmixSpace<VM>,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| box PrepareChunk {
-            chunk,
-            defrag_threshold,
+        self.generate_tasks(|chunk| {
+            Box::new(PrepareChunk {
+                chunk,
+                defrag_threshold,
+                rc_enabled: space.rc_enabled,
+                cm_enabled: space.cm_enabled,
+            })
         })
     }
 
@@ -245,7 +210,7 @@ impl ChunkMap {
         &self,
         _space: &'static ImmixSpace<VM>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| box ConcurrentChunkMetadataZeroing { chunk })
+        self.generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
     }
 
     /// Generate chunk sweep work packets.
@@ -257,17 +222,24 @@ impl ChunkMap {
         if !rc {
             space.defrag.mark_histograms.lock().clear();
         }
-        self.generate_tasks(|chunk| box SweepChunk {
-            space,
-            chunk,
-            nursery_only: rc,
+        let epilogue = Arc::new(FlushPageResource { space });
+        self.generate_tasks(|chunk| {
+            Box::new(SweepChunk {
+                space,
+                chunk,
+                nursery_only: rc,
+                _epilogue: epilogue.clone(),
+            })
         })
     }
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
         self.generate_tasks(|chunk| {
-            box SweepDeadCyclesChunk::new(chunk, LazySweepingJobsCounter::new_desc())
+            Box::new(SweepDeadCyclesChunk::new(
+                chunk,
+                LazySweepingJobsCounter::new_desc(),
+            ))
         })
     }
 }
@@ -276,6 +248,8 @@ impl ChunkMap {
 /// Performs the action on a range of chunks.
 struct PrepareChunk {
     chunk: Chunk,
+    cm_enabled: bool,
+    rc_enabled: bool,
     defrag_threshold: Option<usize>,
 }
 
@@ -284,7 +258,7 @@ impl PrepareChunk {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
             chunk.start(),
             Chunk::BYTES,
@@ -302,23 +276,21 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         // Iterate over all blocks in this chunk
         for block in self.chunk.blocks() {
             let state = block.get_state();
-            if crate::args::REF_COUNT {
+            if self.rc_enabled {
                 block.clear_line_validity_states();
             }
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;
             }
-            // FIXME: Don't need this when doing RC
-            if crate::args::BARRIER_MEASUREMENT
-                || (crate::args::CONCURRENT_MARKING && !crate::args::REF_COUNT)
-            {
+            // Clear unlog table on CM
+            if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
                 block.initialize_log_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
                 block.set_as_defrag_source(true);
-            } else if !crate::args::REF_COUNT {
+            } else if !self.rc_enabled {
                 block.set_as_defrag_source(false);
             }
             // Clear block mark data.
@@ -332,11 +304,19 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     }
 }
 
+impl Default for ChunkMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Chunk sweeping work packet.
 struct SweepChunk<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     chunk: Chunk,
     nursery_only: bool,
+    /// A destructor invoked when all `SweepChunk` packets are finished.
+    _epilogue: Arc<FlushPageResource<VM>>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
@@ -360,9 +340,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
     worker: *mut GCWorker<VM>,
-    counter: LazySweepingJobsCounter,
-    immix: *const Immix<VM>,
-    recursive_dec_objects: Vec<ObjectReference>,
+    _counter: LazySweepingJobsCounter,
+    lxr: *const LXR<VM>,
 }
 
 unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
@@ -377,58 +356,17 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 
     #[inline(always)]
-    const fn immix(&self) -> &Immix<VM> {
-        unsafe { &*self.immix }
+    fn lxr(&self) -> &LXR<VM> {
+        unsafe { &*self.lxr }
     }
 
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
-        debug_assert!(crate::args::REF_COUNT);
         Self {
             chunk,
             worker: std::ptr::null_mut(),
-            immix: std::ptr::null_mut(),
-            counter,
-            recursive_dec_objects: vec![],
+            lxr: std::ptr::null_mut(),
+            _counter: counter,
         }
-    }
-
-    #[cold]
-    fn flush_recursive_dec_objects(&mut self, end: bool) {
-        if self.recursive_dec_objects.is_empty() {
-            return;
-        }
-        let mut recursive_dec_objects = vec![];
-        std::mem::swap(&mut recursive_dec_objects, &mut self.recursive_dec_objects);
-        let immix = self.immix();
-        let w = ProcessDecs::new(recursive_dec_objects, self.counter.clone_with_decs());
-        if end {
-            self.worker().do_work(w)
-        } else if immix.current_pause().is_none() {
-            self.worker()
-                .add_work_prioritized(WorkBucketStage::Unconstrained, w);
-        } else {
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
-        }
-    }
-
-    #[inline(never)]
-    fn scan_and_recursively_dec_objects(&mut self, dead: ObjectReference) {
-        EdgeIterator::<VM>::iterate(dead, |edge| {
-            let mut x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() && !rc::is_dead_or_stick(x) && self.immix().is_marked(x) {
-                debug_assert!(x.is_mapped());
-                x = x.fix_start_address::<VM>();
-                debug_assert!(x.class_is_valid());
-                if unlikely(self.recursive_dec_objects.is_empty()) {
-                    self.recursive_dec_objects
-                        .reserve(ProcessDecs::<VM>::CAPACITY);
-                }
-                self.recursive_dec_objects.push(x);
-                if self.recursive_dec_objects.len() >= ProcessDecs::<VM>::CAPACITY {
-                    self.flush_recursive_dec_objects(false);
-                }
-            }
-        });
     }
 
     #[inline(never)]
@@ -449,9 +387,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
-        if crate::args::SATB_SWEEP_APPLY_DECS {
-            self.scan_and_recursively_dec_objects(o);
-        }
         rc::set(o, 0);
         if !crate::args::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
@@ -462,10 +397,11 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
         let mut has_dead_object = false;
         let mut has_live = false;
-        for o in (block.start()..block.end())
-            .step_by(rc::MIN_OBJECT_SIZE)
-            .map(|a| unsafe { a.to_object_reference() })
-        {
+        let mut cursor = block.start();
+        let limit = block.end();
+        while cursor < limit {
+            let o = unsafe { cursor.to_object_reference() };
+            cursor = cursor + rc::MIN_OBJECT_SIZE;
             let c = rc::count(o);
             if c != 0 && !immix_space.is_marked(o) {
                 if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
@@ -496,18 +432,15 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        self.immix = immix;
-        let immix_space = &immix.immix_space;
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.lxr = lxr;
+        let immix_space = &lxr.immix_space;
         for block in self.chunk.committed_blocks() {
             if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
                 continue;
             } else {
                 self.process_block(block, immix_space)
             }
-        }
-        if crate::args::SATB_SWEEP_APPLY_DECS {
-            self.flush_recursive_dec_objects(true);
         }
     }
 }
@@ -521,7 +454,7 @@ impl ConcurrentChunkMetadataZeroing {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
             chunk.start(),
             Chunk::BYTES,
@@ -533,5 +466,19 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         Self::reset_object_mark::<VM>(self.chunk);
+    }
+}
+
+/// Flush page resource of the immix space when destructing.
+struct FlushPageResource<VM: VMBinding> {
+    space: &'static ImmixSpace<VM>,
+}
+
+impl<VM: VMBinding> Drop for FlushPageResource<VM> {
+    fn drop(&mut self) {
+        // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
+        // Now flush the BlockPageResource.
+        // Note: this is a no-op if ImmixSpace uses FreelistPageResource.
+        self.space.flush_page_resource()
     }
 }

@@ -1,8 +1,11 @@
-use crate::plan::TransitiveClosure;
-use crate::plan::{AllocationSemantics, CopyContext};
+use crate::plan::{ObjectQueue, VectorObjectQueue};
+use crate::policy::copy_context::PolicyCopyContext;
 use crate::policy::space::SpaceOptions;
+use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
+use crate::scheduler::GCWorker;
 use crate::util::constants::CARD_META_PAGES_PER_REGION;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 #[cfg(feature = "global_alloc_bit")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
@@ -32,7 +35,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
     }
 
     fn is_live(&self, object: ObjectReference) -> bool {
-        !self.from_space() || object_forwarding::is_forwarded::<VM>(object)
+        !self.is_from_space() || object_forwarding::is_forwarded::<VM>(object)
     }
 
     fn is_movable(&self) -> bool {
@@ -41,7 +44,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
 
     #[cfg(feature = "sanity")]
     fn is_sane(&self) -> bool {
-        !self.from_space()
+        !self.is_from_space()
     }
     fn initialize_object_metadata(&self, _object: ObjectReference, _bytes: usize, _alloc: bool) {
         #[cfg(feature = "global_alloc_bit")]
@@ -50,7 +53,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
 
     #[inline(always)]
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
-        if !self.from_space() {
+        if !self.is_from_space() {
             return None;
         }
 
@@ -59,6 +62,17 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         } else {
             None
         }
+    }
+
+    #[inline(always)]
+    fn sft_trace_object(
+        &self,
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        let worker = worker.into_mut::<VM>();
+        self.trace_object(queue, object, self.common.copy, worker)
     }
 }
 
@@ -85,6 +99,28 @@ impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
 
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("copyspace only releases pages enmasse")
+    }
+
+    fn set_copy_for_sft_trace(&mut self, semantics: Option<CopySemantics>) {
+        self.common.copy = semantics;
+    }
+}
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<VM> {
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.trace_object(queue, object, copy, worker)
+    }
+
+    #[inline(always)]
+    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        true
     }
 }
 
@@ -177,24 +213,28 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
     }
 
-    fn from_space(&self) -> bool {
+    fn is_from_space(&self) -> bool {
         self.from_space.load(Ordering::SeqCst)
     }
 
-    #[inline]
-    pub fn trace_object<T: TransitiveClosure, C: CopyContext>(
+    #[inline(always)]
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
-        semantics: AllocationSemantics,
-        copy_context: &mut C,
+        semantics: Option<CopySemantics>,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         trace!("copyspace.trace_object(, {:?}, {:?})", object, semantics,);
-        debug_assert!(
-            self.from_space(),
-            "Trace object called for object ({:?}) in to-space",
-            object
-        );
+
+        // If this is not from space, we do not need to trace it (the object has been copied to the tosapce)
+        if !self.is_from_space() {
+            // The copy semantics for tospace should be none.
+            return object;
+        }
+
+        // This object is in from space, we will copy. Make sure we have a valid copy semantic.
+        debug_assert!(semantics.is_some());
 
         #[cfg(feature = "global_alloc_bit")]
         debug_assert!(
@@ -215,10 +255,13 @@ impl<VM: VMBinding> CopySpace<VM> {
             new_object
         } else {
             trace!("... no it isn't. Copying");
-            let new_object =
-                object_forwarding::forward_object::<VM, _>(object, semantics, copy_context);
+            let new_object = object_forwarding::forward_object::<VM>(
+                object,
+                semantics.unwrap(),
+                worker.get_copy_context_mut(),
+            );
             trace!("Forwarding pointer");
-            trace.process_node(new_object);
+            queue.enqueue(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
             new_object
         }
@@ -256,5 +299,53 @@ impl<VM: VMBinding> CopySpace<VM> {
             );
         }
         trace!("Unprotect {:x} {:x}", start, start + extent);
+    }
+}
+
+use crate::plan::Plan;
+use crate::util::alloc::Allocator;
+use crate::util::alloc::BumpAllocator;
+use crate::util::opaque_pointer::VMWorkerThread;
+
+/// Copy allocator for CopySpace
+pub struct CopySpaceCopyContext<VM: VMBinding> {
+    copy_allocator: BumpAllocator<VM>,
+}
+
+impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
+    type VM = VM;
+
+    fn prepare(&mut self) {}
+
+    fn release(&mut self) {}
+
+    #[inline(always)]
+    fn alloc_copy(
+        &mut self,
+        _original: ObjectReference,
+        bytes: usize,
+        align: usize,
+        offset: isize,
+    ) -> Address {
+        self.copy_allocator.alloc(bytes, align, offset)
+    }
+}
+
+impl<VM: VMBinding> CopySpaceCopyContext<VM> {
+    pub fn new(
+        tls: VMWorkerThread,
+        plan: &'static dyn Plan<VM = VM>,
+        tospace: &'static CopySpace<VM>,
+    ) -> Self {
+        CopySpaceCopyContext {
+            copy_allocator: BumpAllocator::new(tls.0, tospace, plan),
+        }
+    }
+}
+
+impl<VM: VMBinding> CopySpaceCopyContext<VM> {
+    pub fn rebind(&mut self, space: &CopySpace<VM>) {
+        self.copy_allocator
+            .rebind(unsafe { &*{ space as *const _ } });
     }
 }

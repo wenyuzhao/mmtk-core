@@ -1,129 +1,35 @@
 # Collection: Implement garbage collection
 
 We need to add a few more things to get garbage collection working. 
-Specifically, we need to add a `CopyContext`, which a GC worker uses for 
+Specifically, we need to config the `GCWorkerCopyContext`, which a GC worker uses for 
 copying objects, and GC work packets that will be scheduled for a collection.
 
-## CopyContext
+## CopyConfig
 
-At the moment, none of the files in the plan are suited for garbage collection 
-operations. So, we need to add a new file to hold the `CopyContext` and other 
-structures and functions that will give the collector proper functionality.
+`CopyConfig` defines how a GC plan copies objects.
+Similar to the `MutatorConfig` struct, you would need to define `CopyConfig` for your plan.
 
-Make a new file under `mygc`, called `gc_work.rs`. 
-In `mod.rs`, import `gc_work` as a module by adding the line `mod gc_work`.
-In `gc_work.rs`, add the following import statements:
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:imports}}
-```
+In `impl<VM: VMBinding> Plan for MyGC<VM>`, override the method `create_copy_config()`.
+The default implementation provides a default `CopyConfig` for non-copying plans. So for non-copying plans,
+you do not need to override the method. But
+for copying plans, you would have to provide a proper copy configuration.
 
-Add a new structure, `MyGCCopyContext`, with the type parameter 
-`VM: VMBinding`. It should have the fields `plan: &'static MyGC<VM>`
-and `mygc: BumpAllocator`.
+In a semispace GC, objects will be copied between the two copy spaces. We will use one
+`CopySpaceCopyContext` for the copying, and will rebind the copy context to the proper tospace
+in the preparation step of a GC (which will be discussed later when we talk about preparing for collections).
 
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:mygc_copy_context}}
-```
-   
-Create an implementation block - 
-`impl<VM: VMBinding> CopyContext for MyGCCopyContext<VM>`.
-Define the associate type `VM` for `CopyContext` as the VMBinding type 
-given to the class as `VM`: `type VM = VM`. 
-
-Add the following skeleton functions (taken from `plan/global.rs`):
+We use `CopySemantics::DefaultCopy` for our copy
+operation, and bind it with the first `CopySpaceCopyContext` (`CopySemantics::DefaultCopy => CopySelector::CopySpace(0)`).
+Other copy semantics are unused in this plan. We also provide an initial space
+binding for `CopySpaceCopyContext`. However, we will flip tospace in every GC, and rebind the
+copy context to the new tospace in each GC, so it does not matter which space we use as the initial
+space here.
 
 ```rust
-fn constraints(&self) -> &'static PlanConstraints {
-    unimplemented!()
-}
-fn init(&mut self, tls: OpaquePointer) {
-    unimplemented!()
-}
-fn prepare(&mut self) {
-    unimplemented!()
-}
-fn release(&mut self) {
-    unimplemented!()
-}
-fn alloc_copy(
-    &mut self,
-    original: ObjectReference,
-    bytes: usize,
-    align: usize,
-    offset: isize,
-    semantics: AllocationSemantics,
-) -> Address {
-    unimplemented!()
-}
-fn post_copy(
-    &mut self,
-    _obj: ObjectReference,
-    _tib: Address,
-    _bytes: usize,
-    _semantics: AllocationSemantics,
-) {
-    unimplemented!()
-}
-```
-
-In `init()`, set the `tls` variable in the held instance of `mygc` to the one 
-passed to the function. In `constraints()`, return a reference of 
-`MYGC_CONSTRAINTS`.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:copycontext_constraints_init}}
-```
-
-We just leave the rest of the functions empty for now and will implement them 
-later.
-
-Add a constructor to `MyGCCopyContext` and implement the `WorkerLocal` trait 
-for `MyGCCopyContext`.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:constructor_and_workerlocal}}
-```
-
-## MyGCProcessEdges
-    
-Add a new public structure, `MyGCProcessEdges`, with the type parameter 
-`<VM:VMBinding>`. It will hold an instance of `ProcessEdgesBase` and 
-`MyGC`. This is the core part for tracing objects in the `MyGC` plan.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:mygc_process_edges}}
-```
-
-Add a new implementations block 
-`impl<VM:VMBinding> ProcessEdgesWork for MyGCProcessEdges<VM>`.
-Similarly to before, set `ProcessEdgesWork`'s associate type `VM` to 
-the type parameter of `MyGCProcessEdges`, `VM`: `type VM:VM`.
-Add a new constructor, `new()`.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:mygc_process_edges_new}}
+{{#include ../../../code/mygc_semispace/global.rs:create_copy_config}}
 ```
 
 ## Introduce collection to MyGC plan
-
-Now that they've been added, you should import `MyGCCopyContext` and
-`MyGCProcessEdges` into `mygc/global.rs`, which we will be working in for the
-next few steps. 
-
-```rust
-{{#include ../../../code/mygc_semispace/global.rs:imports_gc_work}}
-```
-
-In `create_worker_local()` in `impl Plan for MyGC`, create an instance of 
-`MyGCCopyContext`.
-
-```rust
-{{#include ../../../code/mygc_semispace/global.rs:create_worker_local}}
-```
-
-`NoCopy` is now no longer needed. Remove it from the import statement block. 
-For the next step, import `crate::scheduler::gc_work::*;`, and modify the
-line importing `MMTK` scheduler to read `use crate::scheduler::*;`.
 
 Add a new method to `Plan for MyGC`, `schedule_collection()`. This function 
 runs when a collection is triggered. It schedules GC work for the plan, i.e.,
@@ -136,10 +42,17 @@ Though you can add those work packets by yourself, `GCWorkScheduler` provides a
 method `schedule_common_work()` that will add common work packets for you.
 
 To use `schedule_common_work()`, first we need to create a type `MyGCWorkContext`
-and implement the trait `GCWorkContext` for it. We create this type in `gc_work.rs`.
+and implement the trait `GCWorkContext` for it. We create `gc_work.rs` and add the
+following implementation. Note that we will use the default
+[`SFTProcessEdges`](https://www.mmtk.io/mmtk-core/mmtk/scheduler/gc_work/struct.SFTProcessEdges.html),
+which is a general work packet that a plan can use to trace objects. For plans
+like semispace, `SFTProcessEdges` is sufficient. For more complex GC plans,
+one can create and write their own work packet that implements the `ProcessEdgesWork` trait.
+We will discuss about this later, and discuss the alternatives.
 
 ```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:workcontext}}
+{{#include ../../../code/mygc_semispace/gc_work.rs:workcontext_sft}}
+```
 
 Then we implement `schedule_collection()` using `MyGCWorkContext` and `schedule_common_work()`.
 
@@ -169,15 +82,24 @@ This function is called at the start of a collection. It prepares the two
 spaces in the common plan, flips the definitions for which space is 'to' 
 and which is 'from', then prepares the copyspaces with the new definition.
 
-### Prepare CopyContext
+Note that we call `set_copy_for_sft_trace()` for both spaces. This step is required
+when using `SFTProcessEdges` to tell the spaces which copy semantic to use for copying.
+For fromspace, we use the `DefaultCopy` semantic, which we have defined earlier in our `CopyConfig`.
+So for objects in fromspace that need to be copied, the policy will use the copy context that binds with
+`DefaultCopy` (which allocates to the tospace) in the GC worker. For tospace, we set its
+copy semantics to `None`, as we do not expect to copy objects from tospace, and if that ever happens,
+we will simply panic.
 
-First, fill in some more of the skeleton functions we added to the 
-`CopyContext` (in `gc_work.rs`) earlier.
-In `prepare()`, rebind the allocator to the tospace using the function
-   `self.mygc.rebind(Some(self.plan.tospace()))`.
+### Prepare worker
+
+As we flip tospace for the plan, we also need to rebind the copy context
+to the new tospace. We will override `prepare_worker()` in our `Plan` implementation.
+`Plan.prepare_worker()` is executed by each GC worker in the preparation phase of a GC. The code
+is straightforward -- we get the first `CopySpaceCopyContext`, and call `rebind()` on it with
+the new `tospace`.
 
 ```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:copycontext_prepare}}
+{{#include ../../../code/mygc_semispace/global.rs:prepare_worker}}
 ```
 
 ### Prepare mutator
@@ -189,54 +111,6 @@ This function will be called at the preparation stage of a collection
 there aren't any preparation steps for the mutator in this GC.
 In `create_mygc_mutator()`, find the field `prep_func` and change it from
 `mygc_mutator_noop()` to `mygc_mutator_prepare()`.
-
-
-## Scan objects
-
-Next, we'll add the code to allow the plan to collect garbage - filling out 
-functions for work packets.
-
-In `gc_work.rs`, add a new method to `ProcessEdgesWork for MyGCProcessEdges`,
-`trace_object(&mut self, object: ObjectReference)`.
-This method should return an ObjectReference, and use the 
-inline attribute.
-Check if the object passed into the function is null 
-(`object.is_null()`). If it is, return the object.
-Check if which space the object is in, and forward the call to the 
-policy-specific object tracing code. If it is in neither space, forward the 
-call to the common space and let the common space to handle object tracing in 
-its spaces (e.g. immortal or large object space):
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:trace_object}}
-```
-
-Add two new implementation blocks, `Deref` and `DerefMut` for 
-`MyGCProcessEdges`. These allow `MyGCProcessEdges` to be dereferenced to 
-`ProcessEdgesBase`, and allows easy access to fields in `ProcessEdgesBase`.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:deref}}
-```
-
-## Copying objects
-
-Go back to the `MyGCopyContext` in `gc_work.rs`. 
-In `alloc_copy()`, call the allocator's `alloc` function. Above the function, 
-   use an inline attribute (`#[inline(always)]`) to tell the Rust compiler 
-   to always inline the function.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:copycontext_alloc_copy}}
-```
-
-To `post_copy()`, in the `CopyContext` implementations block, add 
-`forwarding_word::clear_forwarding_bits::<VM>(obj);`. Also, add an 
-inline attribute.
-
-```rust
-{{#include ../../../code/mygc_semispace/gc_work.rs:copycontext_post_copy}}
-```
 
 ## Release
 
@@ -275,6 +149,91 @@ will then go to the new tospace.
 
 Delete `mygc_mutator_noop()`. It was a placeholder for the prepare and 
 release functions that you have now added, so it is now dead code.
+
+## ProcessEdgesWork for MyGC
+
+[`ProcessEdgesWork`](https://www.mmtk.io/mmtk-core/mmtk/scheduler/gc_work/trait.ProcessEdgesWork.html)
+is the key work packet for tracing objects in a GC. A `ProcessEdgesWork` implementation
+defines how to trace objects, and how to generate more work packets based on the current tracing
+to finish the object closure.
+
+`GCWorkContext` specifies a type
+that implements `ProcessEdgesWork`, and we used `SFTProcessEdges` earlier. In
+this section, we discuss what `SFTProcessEdges` does, and what the alternatives
+are.
+
+### Approach 1: Use `SFTProcessEdges`
+
+[`SFTProcessEdges`](https://www.mmtk.io/mmtk-core/mmtk/scheduler/gc_work/struct.SFTProcessEdges.html) dispatches
+the tracing of objects to their respective spaces through [Space Function Table (SFT)](https://www.mmtk.io/mmtk-core/mmtk/policy/space/trait.SFT.html).
+As long as all the policies in a plan provide an implementation of `sft_trace_object()` in their SFT implementations,
+the plan can use `SFTProcessEdges`. Currently most policies provide an implementation for `sft_trace_object()`, except
+mark compact and immix. Those two policies use multiple GC traces, and due to the limitation of SFT, SFT does not allow
+multiple `sft_trace_object()` for a policy.
+
+`SFTProcessEdges` is the simplest approach when all the policies support it. Fortunately, we can use it for our GC, semispace.
+
+### Approach 2: Derive `PlanTraceObject` and use `PlanProcessEdges`
+
+`PlanProcessEdges` is another general `ProcessEdgesWork` implementation that can be used by most plans. When a plan
+implements the [`PlanTraceObject`](https://www.mmtk.io/mmtk-core/mmtk/plan/transitive_closure/trait.PlanTraceObject.html),
+it can use `PlanProcessEdges`.
+
+You can manually provide an implementation of `PlanTraceObject` for `MyGC`. But you can also use the derive macro MMTK provides,
+and the macro will generate an implementation of `PlanTraceObject`:
+* add `#[derive(PlanTraceObject)]` for `MyGC` (import the macro properly: `use mmtk_macros::PlanTraceObject`)
+* add `#[trace(CopySemantics::Default)]` to both copy space fields, `copyspace0` and `copyspace1`. This tells the macro to generate
+  trace code for both spaces, and for any copying in the spaces, use `CopySemantics::DefaultCopy` that we have configured early.
+* add `#[fallback_trace]` to `common`. This tells the macro that if an object is not found in any space with `#[trace]` in ths plan,
+  try find the space for the object in the 'parent' plan. In our case, we fall back to the `CommonPlan`, as the object may be
+  in large object space or immortal space in the common plan. `CommonPlan` also implements `PlanTraceObject`, so it knows how to
+  find a space for the object and trace it in the same way.
+
+With the derive macro, your `MyGC` struct should look like this:
+```rust
+{{#include ../../../code/mygc_semispace/global.rs:plan_def}}
+```
+
+Once this is done, you can specify `PlanProcessEdges` as the `ProcessEdgesWorkType` in your GC work context:
+```rust
+{{#include ../../../code/mygc_semispace/gc_work.rs:workcontext_plan}}
+```
+
+### Approach 3: Implement your own `ProcessEdgesWork`
+
+Apart from the two approaches above, you can always implement your own `ProcessEdgesWork`. This is
+an overkill for simple plans like semi space, but might be necessary for more complex plans.
+We discuss how to implement it for `MyGC`.
+
+Create a struct `MyGCProcessEdges<VM: VMBinding>` in the `gc_work` module. It includes a reference
+back to the plan, and a `ProcessEdgesBase` field:
+```rust
+{{#include ../../../code/mygc_semispace/gc_work.rs:mygc_process_edges}}
+```
+
+Implement `ProcessEdgesWork` for `MyGCProcessEdges`. As most methods in the trait have a default
+implemetation, we only need to implement `new()` and `trace_object()` for our plan. However, this
+may not be true when you implement it for other GC plans. It would be better to check the default
+implementation of `ProcessEdgesWork`.
+
+For `trace_object()`, what we do is similar to the approach above (except that we need to write the code
+ourselves rather than letting the macro to generate it for us). We try to figure out
+which space the object is in, and invoke `trace_object()` for the object on that space. If the
+object is not in any of the semi spaces in the plan, we forward the call to `CommonPlan`.
+```rust
+{{#include ../../../code/mygc_semispace/gc_work.rs:mygc_process_edges_impl}}
+```
+
+We would also need to implement `Deref` and `DerefMut` to our `ProcessEdgesWork` impl to be
+dereferenced as `ProcessEdgesBase`.
+```rust
+{{#include ../../../code/mygc_semispace/gc_work.rs:mygc_process_edges_deref}}
+```
+
+In the end, use `MyGCProcessEdges` as `ProcessEdgesWorkType` in the `GCWorkContext`:
+```rust
+{{#include ../../../code/mygc_semispace/gc_work.rs:workcontext_mygc}}
+```
 
 ## Summary
 

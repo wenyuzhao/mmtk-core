@@ -1,11 +1,11 @@
 use atomic::Ordering;
 
 use self::specs::*;
-use crate::plan::AllocationSemantics;
-use crate::plan::CopyContext;
 use crate::util::metadata::header_metadata::HeaderMetadataSpec;
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
+
+use crate::util::copy::*;
 
 /// VM-specific methods for object model.
 ///
@@ -181,16 +181,17 @@ pub trait ObjectModel<VM: VMBinding> {
     ) -> usize;
 
     /// Copy an object and return the address of the new object. Usually in the implementation of this method,
-    /// `alloc_copy()` and `post_copy()` from a plan's [`CopyContext`](../trait.CopyContext.html) are used for copying.
+    /// `alloc_copy()` and `post_copy()` from [`GCWorkerCopyContext`](util/copy/struct.GCWorkerCopyContext.html)
+    /// are used for copying.
     ///
     /// Arguments:
     /// * `from`: The address of the object to be copied.
-    /// * `semantics`: The allocation semantic to use.
-    /// * `copy_context`: The `CopyContext` for the GC thread.
+    /// * `semantics`: The copy semantic to use.
+    /// * `copy_context`: The `GCWorkerCopyContext` for the GC thread.
     fn copy(
         from: ObjectReference,
-        semantics: AllocationSemantics,
-        copy_context: &mut impl CopyContext,
+        semantics: CopySemantics,
+        copy_context: &mut GCWorkerCopyContext<VM>,
     ) -> ObjectReference;
 
     /// Copy an object. This is required
@@ -247,6 +248,15 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `reference`: The object to be queried.
     fn get_type_descriptor(reference: ObjectReference) -> &'static [i8];
 
+    /// For our allocation result `[cell, cell + bytes)`, if a binding's
+    /// definition of `ObjectReference` may point outside the cell (i.e. `object_ref >= cell + bytes`),
+    /// the binding needs to provide a `Some` value for this constant and
+    /// the value is the maximum of `object_ref - cell`. If a binding's
+    /// `ObjectReference` always points to an address in the cell (i.e. `[cell, cell + bytes)`),
+    /// they can leave this as `None`.
+    /// MMTk allocators use this value to make sure that the metadata for object reference is properly set.
+    const OBJECT_REF_OFFSET_BEYOND_CELL: Option<usize> = None;
+
     /// Return the lowest address of the storage associated with an object.
     ///
     /// Arguments:
@@ -266,9 +276,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Arguments:
     /// * `object`: The object to be dumped.
     fn dump_object(object: ObjectReference);
-    fn dump_object_s(object: ObjectReference) -> String {
-        format!("{:?}", object)
-    }
 }
 
 pub mod specs {

@@ -1,5 +1,4 @@
 pub(super) use super::super::ALLOCATOR_MAPPING;
-use super::gc_work::GenImmixCopyContext;
 use crate::plan::barriers::ObjectRememberingBarrier;
 use crate::plan::generational::create_gen_space_mapping;
 use crate::plan::generational::gc_work::GenNurseryProcessEdges;
@@ -34,18 +33,17 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
     let genimmix = mmtk.plan.downcast_ref::<GenImmix<VM>>().unwrap();
     let config = MutatorConfig {
         allocator_mapping: &*ALLOCATOR_MAPPING,
-        space_mapping: box create_gen_space_mapping(&*mmtk.plan, &genimmix.gen.nursery),
+        space_mapping: Box::new(create_gen_space_mapping(&*mmtk.plan, &genimmix.gen.nursery)),
         prepare_func: &genimmix_mutator_prepare,
         release_func: &genimmix_mutator_release,
     };
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
-        barrier:
-            box ObjectRememberingBarrier::<GenNurseryProcessEdges<VM, GenImmixCopyContext<VM>>>::new(
-                mmtk,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            ),
+        barrier: Box::new(ObjectRememberingBarrier::<GenNurseryProcessEdges<VM>>::new(
+            mmtk,
+            *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+        )),
         mutator_tls,
         config,
         plan: genimmix,

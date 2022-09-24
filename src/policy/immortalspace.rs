@@ -8,10 +8,11 @@ use crate::util::constants::CARD_META_PAGES_PER_REGION;
 use crate::util::metadata::{compare_exchange_metadata, load_metadata, store_metadata};
 use crate::util::{metadata, ObjectReference};
 
-use crate::plan::TransitiveClosure;
+use crate::plan::{ObjectQueue, VectorObjectQueue};
 
 use crate::plan::PlanConstraints;
 use crate::policy::space::SpaceOptions;
+use crate::policy::space::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
@@ -87,6 +88,15 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit(object);
     }
+    #[inline(always)]
+    fn sft_trace_object(
+        &self,
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        self.trace_object(queue, object)
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for ImmortalSpace<VM> {
@@ -108,6 +118,26 @@ impl<VM: VMBinding> Space<VM> for ImmortalSpace<VM> {
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immortalspace only releases pages enmasse")
+    }
+}
+
+use crate::scheduler::GCWorker;
+use crate::util::copy::CopySemantics;
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSpace<VM> {
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.trace_object(queue, object)
+    }
+    #[inline(always)]
+    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        false
     }
 }
 
@@ -192,9 +222,9 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
 
     pub fn release(&mut self) {}
 
-    pub fn trace_object<T: TransitiveClosure>(
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
@@ -204,7 +234,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
             object
         );
         if ImmortalSpace::<VM>::test_and_mark(object, self.mark_state) {
-            trace.process_node(object);
+            queue.enqueue(object);
         }
         object
     }

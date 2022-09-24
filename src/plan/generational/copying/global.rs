@@ -1,6 +1,6 @@
-use super::gc_work::{GenCopyCopyContext, GenCopyMatureGCWorkContext, GenCopyNurseryGCWorkContext};
+use super::gc_work::GenCopyGCWorkContext;
+use super::gc_work::GenCopyNurseryGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
-use crate::mmtk::MMTK;
 use crate::plan::generational::global::Gen;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -12,6 +12,7 @@ use crate::policy::copyspace::CopySpace;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -26,12 +27,16 @@ use spin::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-pub const ALLOC_SS: AllocationSemantics = AllocationSemantics::Default;
+use mmtk_macros::PlanTraceObject;
 
+#[derive(PlanTraceObject)]
 pub struct GenCopy<VM: VMBinding> {
+    #[fallback_trace]
     pub gen: Gen<VM>,
     pub hi: AtomicBool,
+    #[trace(CopySemantics::Mature)]
     pub copyspace0: CopySpace<VM>,
+    #[trace(CopySemantics::Mature)]
     pub copyspace1: CopySpace<VM>,
 }
 
@@ -45,17 +50,23 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         &GENCOPY_CONSTRAINTS
     }
 
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = GenCopyCopyContext::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
+    fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
+        use enum_map::enum_map;
+        CopyConfig {
+            copy_mapping: enum_map! {
+                CopySemantics::Mature => CopySelector::CopySpace(0),
+                CopySemantics::PromoteToMature => CopySelector::CopySpace(0),
+                _ => CopySelector::Unused,
+            },
+            space_mapping: vec![
+                // The tospace argument doesn't matter, we will rebind before a GC anyway.
+                (CopySelector::CopySpace(0), self.tospace()),
+            ],
+            constraints: &GENCOPY_CONSTRAINTS,
+        }
     }
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool
+    fn collection_required(&self, space_full: bool, space: Option<&dyn Space<Self::VM>>) -> bool
     where
         Self: Sized,
     {
@@ -70,13 +81,8 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         self.gen.last_collection_full_heap()
     }
 
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
-        self.gen.gc_init(heap_size, vm_map, scheduler);
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
+        self.gen.gc_init(heap_size, vm_map);
         self.copyspace0.init(vm_map);
         self.copyspace1.init(vm_map);
     }
@@ -85,12 +91,10 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         let is_full_heap = self.request_full_heap_collection();
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
-        if !is_full_heap {
-            debug!("Nursery GC");
-            scheduler.schedule_common_work::<GenCopyNurseryGCWorkContext<VM>>(self);
+        if is_full_heap {
+            scheduler.schedule_common_work::<GenCopyGCWorkContext<VM>>(self);
         } else {
-            debug!("Full heap GC");
-            scheduler.schedule_common_work::<GenCopyMatureGCWorkContext<VM>>(self);
+            scheduler.schedule_common_work::<GenCopyNurseryGCWorkContext<VM>>(self);
         }
     }
 
@@ -108,6 +112,14 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         let hi = self.hi.load(Ordering::SeqCst);
         self.copyspace0.prepare(hi);
         self.copyspace1.prepare(!hi);
+
+        self.fromspace_mut()
+            .set_copy_for_sft_trace(Some(CopySemantics::Mature));
+        self.tospace_mut().set_copy_for_sft_trace(None);
+    }
+
+    fn prepare_worker(&self, worker: &mut GCWorker<Self::VM>) {
+        unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -121,18 +133,21 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
             .set_next_gc_full_heap(Gen::should_next_gc_be_full_heap(self));
     }
 
-    fn get_collection_reserve(&self) -> usize {
-        self.gen.get_collection_reserve() + self.tospace().reserved_pages()
+    fn get_collection_reserved_pages(&self) -> usize {
+        self.gen.get_collection_reserved_pages() + self.tospace().reserved_pages()
     }
 
-    fn get_pages_used(&self) -> usize {
-        self.gen.get_pages_used() + self.tospace().reserved_pages()
+    fn get_used_pages(&self) -> usize {
+        self.gen.get_used_pages() + self.tospace().reserved_pages()
     }
 
     /// Return the number of pages avilable for allocation. Assuming all future allocations goes to nursery.
-    fn get_pages_avail(&self) -> usize {
+    fn get_available_pages(&self) -> usize {
         // super.get_pages_avail() / 2 to reserve pages for copying
-        (self.get_total_pages() - self.get_pages_reserved()) >> 1
+        (self
+            .get_total_pages()
+            .saturating_sub(self.get_reserved_pages()))
+            >> 1
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -215,7 +230,7 @@ impl<VM: VMBinding> GenCopy<VM> {
 
     fn request_full_heap_collection(&self) -> bool {
         self.gen
-            .request_full_heap_collection(self.get_total_pages(), self.get_pages_reserved())
+            .request_full_heap_collection(self.get_total_pages(), self.get_reserved_pages())
     }
 
     pub fn tospace(&self) -> &CopySpace<VM> {
@@ -226,11 +241,27 @@ impl<VM: VMBinding> GenCopy<VM> {
         }
     }
 
+    pub fn tospace_mut(&mut self) -> &mut CopySpace<VM> {
+        if self.hi.load(Ordering::SeqCst) {
+            &mut self.copyspace1
+        } else {
+            &mut self.copyspace0
+        }
+    }
+
     pub fn fromspace(&self) -> &CopySpace<VM> {
         if self.hi.load(Ordering::SeqCst) {
             &self.copyspace0
         } else {
             &self.copyspace1
+        }
+    }
+
+    pub fn fromspace_mut(&mut self) -> &mut CopySpace<VM> {
+        if self.hi.load(Ordering::SeqCst) {
+            &mut self.copyspace0
+        } else {
+            &mut self.copyspace1
         }
     }
 }

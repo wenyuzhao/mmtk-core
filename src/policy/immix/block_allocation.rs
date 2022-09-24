@@ -12,13 +12,8 @@ use spin::Lazy;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
-static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> = Lazy::new(|| {
-    if crate::args::REF_COUNT {
-        32768 * 4
-    } else {
-        *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE << 2
-    }
-});
+static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> =
+    Lazy::new(|| usize::max(*LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE << 2, 32768 * 4));
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: Option<&'static ImmixSpace<VM>>,
@@ -97,41 +92,43 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let space = self.space();
         let mut packets: Vec<Box<dyn GCWork<VM>>> = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| box RCSweepNurseryBlocks {
-                space,
-                blocks,
-                mutator_reused_blocks: false,
+            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
+                Box::new(RCSweepNurseryBlocks {
+                    space,
+                    blocks,
+                    mutator_reused_blocks: false,
+                })
             })
             .collect();
         let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
         for i in blocks..high_water {
             unallocated_nursery_blocks.push(self.buffer[i].load(Ordering::Relaxed));
         }
-        packets.push(box RCReleaseUnallocatedNurseryBlocks {
+        packets.push(Box::new(RCReleaseUnallocatedNurseryBlocks {
             space,
             blocks: unallocated_nursery_blocks,
-        });
+        }));
         self.high_water.store(0, Ordering::SeqCst);
         self.cursor.store(0, Ordering::SeqCst);
         (packets, blocks)
     }
 
-    const fn space(&self) -> &'static ImmixSpace<VM> {
+    fn space(&self) -> &'static ImmixSpace<VM> {
         self.space.unwrap()
     }
 
     #[inline(always)]
-    fn initialize_new_clean_block(&self, block: Block, copy: bool) {
+    fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
         }
-        if crate::plan::immix::CONCURRENT_MARKING && !super::BLOCK_ONLY && !super::REF_COUNT {
+        if cm_enabled && !super::BLOCK_ONLY && !self.space().rc_enabled {
             let current_state = self.space().line_mark_state.load(Ordering::Acquire);
             for line in block.lines() {
                 line.mark(current_state);
             }
         }
-        if crate::args::REF_COUNT && copy {
+        if self.space().rc_enabled && copy {
             block.initialize_log_table_as_unlogged::<VM>();
         }
         // println!("Alloc {:?} {}", block, copy);
@@ -165,7 +162,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             return Some(block);
         }
         // Fill buffer with N blocks
-        if !crate::args::REF_COUNT {
+        if !self.space().rc_enabled {
             self.high_water.store(0, Ordering::SeqCst);
             self.cursor.store(0, Ordering::SeqCst);
         }
@@ -236,8 +233,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     /// Allocate a clean block.
     #[inline(never)]
-    pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block = if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
+    pub fn get_clean_block(&self, tls: VMThread, copy: bool, lock_free: bool) -> Option<Block> {
+        let block = if lock_free {
             self.alloc_clean_block(tls)?
         } else {
             let block_address = self.space().acquire(tls, Block::PAGES);
@@ -246,7 +243,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
             Block::from(block_address)
         };
-        self.initialize_new_clean_block(block, copy);
+        self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
         Some(block)
     }
 
@@ -264,7 +261,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
                     continue;
                 }
-                if crate::args::REF_COUNT {
+                if self.space().rc_enabled {
                     // Blocks in the `reusable_blocks` queue can be released after some RC collections.
                     // These blocks can either have `Unallocated` state, or be reallocated again.
                     // Skip these cases and only return the truly reusable blocks.

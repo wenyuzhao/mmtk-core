@@ -1,5 +1,4 @@
-use crate::mmtk::MMTK;
-use crate::plan::global::{BasePlan, NoCopy};
+use crate::plan::global::BasePlan;
 use crate::plan::nogc::mutator::ALLOCATOR_MAPPING;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
@@ -7,8 +6,6 @@ use crate::plan::PlanConstraints;
 use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::space::Space;
 use crate::scheduler::GCWorkScheduler;
-use crate::scheduler::GCWorkerLocal;
-use crate::scheduler::GCWorkerLocalPtr;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
@@ -44,30 +41,15 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
         &NOGC_CONSTRAINTS
     }
 
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = NoCopy::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
-    }
-
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
-        self.base.gc_init(heap_size, vm_map, scheduler);
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
+        self.base.gc_init(heap_size, vm_map);
 
         // FIXME correctly initialize spaces based on options
         self.nogc_space.init(vm_map);
     }
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+        self.base().collection_required(self, space_full)
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -90,11 +72,11 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
         unreachable!("GC triggered in nogc")
     }
 
-    fn get_pages_used(&self) -> usize {
+    fn get_used_pages(&self) -> usize {
         self.nogc_space.reserved_pages()
             + self.immortal.reserved_pages()
             + self.los.reserved_pages()
-            + self.base.get_pages_used()
+            + self.base.get_used_pages()
     }
 
     fn handle_user_collection_request(&self, _tls: VMMutatorThread, _force: bool) {

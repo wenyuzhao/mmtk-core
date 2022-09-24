@@ -1,12 +1,13 @@
-use crate::plan::immix::Immix;
-use crate::plan::EdgeIterator;
+use atomic::Ordering;
+
+use crate::plan::ObjectQueue;
 use crate::plan::PlanConstraints;
-use crate::plan::TransitiveClosure;
+use crate::plan::VectorObjectQueue;
 use crate::policy::space::SpaceOptions;
+use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
-use crate::scheduler::WorkBucketStage;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
@@ -23,17 +24,14 @@ use crate::util::metadata::store_metadata;
 use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::util::rc;
-use crate::util::rc::ProcessDecs;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
-use atomic::Ordering;
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashSet;
-use std::intrinsics::unlikely;
 use std::sync::atomic::AtomicUsize;
 
 #[allow(unused)]
@@ -55,6 +53,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_mature_objects: Mutex<HashSet<ObjectReference>>,
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
+    pub rc_enabled: bool,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -62,7 +61,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return crate::util::rc::count(object) > 0;
         }
         if self.trace_in_progress {
@@ -78,7 +77,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             debug_assert!(alloc);
             // Add to object set
             self.rc_nursery_objects.push(object);
@@ -98,9 +97,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 Some(Ordering::SeqCst),
             );
             // CM: Alloc as marked
-            if crate::args::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
-                self.test_and_mark(object, self.mark_state);
-            }
+            // TODO: Only mark during concurrent marking
+            self.test_and_mark(object, self.mark_state);
             self.update_validity(
                 object.to_address(),
                 (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
@@ -129,15 +127,21 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         // if !alloc && self.common.needs_log_bit {
         //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         // }
-
-        // Concurrent marking: allocate as marked
-        if crate::args::CONCURRENT_MARKING && crate::concurrent_marking_in_progress() {
-            self.test_and_mark(object, self.mark_state);
-        }
+        // TODO: Only mark during concurrent marking
+        self.test_and_mark(object, self.mark_state);
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit(object);
         let cell = VM::VMObjectModel::object_start_ref(object);
         self.treadmill.add_to_treadmill(cell, alloc);
+    }
+    #[inline(always)]
+    fn sft_trace_object(
+        &self,
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        self.trace_object(queue, object)
     }
 }
 
@@ -163,6 +167,25 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
 
     fn release_multiple_pages(&mut self, _start: Address) {
         unreachable!()
+    }
+}
+
+use crate::util::copy::CopySemantics;
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjectSpace<VM> {
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.trace_object(queue, object)
+    }
+    #[inline(always)]
+    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        false
     }
 }
 
@@ -217,13 +240,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_mature_objects: Default::default(),
             rc_dead_objects: Default::default(),
             num_pages_released_lazy: AtomicUsize::new(0),
+            rc_enabled: false,
         }
     }
 
     #[inline(always)]
     fn update_validity(&self, start: Address, pages: usize) {
         if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
-            side_metadata::bzero_x(&LOS_PAGE_VALIDITY, start, pages << LOG_BYTES_IN_PAGE);
+            side_metadata::bzero_metadata(&LOS_PAGE_VALIDITY, start, pages << LOG_BYTES_IN_PAGE);
             return;
         }
         for i in 0..pages {
@@ -254,7 +278,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
-            if crate::args::REF_COUNT {
+            if self.rc_enabled {
                 rc::set(unsafe { start.to_object_reference() }, 0);
             }
             self.pr.release_pages_and_reset_unlog_bits(start)
@@ -266,10 +290,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn prepare(&mut self, full_heap: bool) {
         self.trace_in_progress = true;
         if full_heap {
-            debug_assert!(self.treadmill.from_space_empty());
+            debug_assert!(self.treadmill.is_from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return;
         }
         self.treadmill.flip(full_heap);
@@ -279,7 +303,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     pub fn release(&mut self, full_heap: bool) {
         self.trace_in_progress = false;
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             // promote nursery objects or release dead nursery
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
@@ -292,7 +316,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             return;
         }
         self.sweep_large_pages(true);
-        debug_assert!(self.treadmill.nursery_empty());
+        debug_assert!(self.treadmill.is_nursery_empty());
         if full_heap {
             self.sweep_large_pages(false);
         }
@@ -300,9 +324,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
-    pub fn trace_object<T: TransitiveClosure>(
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
-        trace: &mut T,
+        queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
@@ -311,9 +335,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "{:x}: alloc bit not set",
             object
         );
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             if self.test_and_mark(object, self.mark_state) {
-                trace.process_node(object);
+                queue.enqueue(object);
             }
             return object;
         }
@@ -325,7 +349,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 self.treadmill.copy(cell, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
-                if !crate::args::REF_COUNT && nursery_object && self.common.needs_log_bit {
+                if !self.rc_enabled && nursery_object && self.common.needs_log_bit {
                     if self.common.needs_field_log_bit {
                         for i in (0..object.get_size::<VM>()).step_by(8) {
                             let a = object.to_address() + i;
@@ -339,7 +363,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                             .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                     }
                 }
-                trace.process_node(object);
+                queue.enqueue(object);
             }
         }
         object
@@ -392,7 +416,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[inline(always)]
     fn test_and_mark(&self, object: ObjectReference, value: usize) -> bool {
         loop {
-            let mask = if crate::args::REF_COUNT {
+            let mask = if self.rc_enabled {
                 MARK_BIT
             } else if self.in_nursery_gc {
                 LOS_BIT_MASK
@@ -474,82 +498,22 @@ fn get_super_page(cell: Address) -> Address {
     cell.align_down(BYTES_IN_PAGE)
 }
 
-pub struct RCSweepMatureLOS<VM: VMBinding> {
-    counter: LazySweepingJobsCounter,
-    immix: *const Immix<VM>,
-    worker: *mut GCWorker<VM>,
-    recursive_dec_objects: Vec<ObjectReference>,
+pub struct RCSweepMatureLOS {
+    _counter: LazySweepingJobsCounter,
 }
 
-impl<VM: VMBinding> RCSweepMatureLOS<VM> {
+impl RCSweepMatureLOS {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
-        Self {
-            counter,
-            recursive_dec_objects: vec![],
-            immix: std::ptr::null_mut(),
-            worker: std::ptr::null_mut(),
-        }
-    }
-
-    #[inline(always)]
-    fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
-    }
-
-    #[inline(always)]
-    const fn immix(&self) -> &Immix<VM> {
-        unsafe { &*self.immix }
-    }
-
-    #[cold]
-    fn flush_recursive_dec_objects(&mut self, end: bool) {
-        if self.recursive_dec_objects.is_empty() {
-            return;
-        }
-        let mut recursive_dec_objects = vec![];
-        std::mem::swap(&mut recursive_dec_objects, &mut self.recursive_dec_objects);
-        let immix = self.immix();
-        let w = ProcessDecs::new(recursive_dec_objects, self.counter.clone_with_decs());
-        if end {
-            self.worker().do_work(w)
-        } else if immix.current_pause().is_none() {
-            self.worker()
-                .add_work_prioritized(WorkBucketStage::Unconstrained, w);
-        } else {
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
-        }
-    }
-
-    #[inline(never)]
-    fn scan_and_recursively_dec_objects(&mut self, dead: ObjectReference) {
-        EdgeIterator::<VM>::iterate(dead, |edge| {
-            let mut x = unsafe { edge.load::<ObjectReference>() };
-            if !x.is_null() && !rc::is_dead(x) && self.immix().is_marked(x) {
-                debug_assert!(x.is_mapped());
-                x = x.fix_start_address::<VM>();
-                debug_assert!(x.class_is_valid());
-                if unlikely(self.recursive_dec_objects.is_empty()) {
-                    self.recursive_dec_objects
-                        .reserve(ProcessDecs::<VM>::CAPACITY);
-                }
-                self.recursive_dec_objects.push(x);
-                if self.recursive_dec_objects.len() >= ProcessDecs::<VM>::CAPACITY {
-                    self.flush_recursive_dec_objects(false);
-                }
-            }
-        });
+        Self { _counter: counter }
     }
 }
-unsafe impl<VM: VMBinding> Send for RCSweepMatureLOS<VM> {}
 
-impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS<VM> {
+impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
     fn do_work(
         &mut self,
-        worker: &mut crate::scheduler::GCWorker<VM>,
+        _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        self.worker = worker;
-        self.immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {
@@ -572,15 +536,9 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS<VM> {
                         s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
                     }
                 });
-                if crate::args::SATB_SWEEP_APPLY_DECS {
-                    self.scan_and_recursively_dec_objects(*o);
-                }
                 rc::set(*o, 0);
                 los.rc_free(*o);
             }
-        }
-        if crate::args::SATB_SWEEP_APPLY_DECS {
-            self.flush_recursive_dec_objects(true);
         }
     }
 }

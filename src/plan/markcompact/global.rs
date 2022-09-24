@@ -3,11 +3,9 @@ use super::gc_work::{
     CalculateForwardingAddress, Compact, ForwardingProcessEdges, MarkingProcessEdges,
     UpdateReferences,
 };
-use crate::mmtk::MMTK;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
-use crate::plan::global::NoCopy;
 use crate::plan::markcompact::mutator::ALLOCATOR_MAPPING;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
@@ -19,6 +17,7 @@ use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(not(feature = "global_alloc_bit"))]
 use crate::util::alloc_bit::ALLOC_SIDE_METADATA_SPEC;
+use crate::util::copy::CopySemantics;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -28,11 +27,17 @@ use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSani
 use crate::util::opaque_pointer::*;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::vm::VMBinding;
+
 use enum_map::EnumMap;
 use std::sync::Arc;
 
+use mmtk_macros::PlanTraceObject;
+
+#[derive(PlanTraceObject)]
 pub struct MarkCompact<VM: VMBinding> {
+    #[trace(CopySemantics::DefaultCopy)]
     pub mc_space: MarkCompactSpace<VM>,
+    #[fallback_trace]
     pub common: CommonPlan<VM>,
 }
 
@@ -52,25 +57,8 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         &MARKCOMPACT_CONSTRAINTS
     }
 
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        // mark compact does not use a threadlocal copy allocator
-        // therefore, NoCopy is used instead of CopyContext
-        let mut c = NoCopy::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
-    }
-
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
-        self.common.gc_init(heap_size, vm_map, scheduler);
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
+        self.common.gc_init(heap_size, vm_map);
         self.mc_space.init(vm_map);
     }
 
@@ -116,31 +104,51 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<MarkCompactGCWorkContext<VM>>::new(self));
 
-        // VM-specific weak ref processing
-        scheduler.work_buckets[WorkBucketStage::RefClosure]
-            .add(ProcessWeakRefs::<MarkingProcessEdges<VM>>::new());
-
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
             .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
         // do another trace to update references
-        scheduler.work_buckets[WorkBucketStage::RefForwarding].add(UpdateReferences::<VM>::new());
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new());
         scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.mc_space));
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<MarkCompactGCWorkContext<VM>>::new(self));
 
+        // Reference processing
+        if !*self.base().options.no_reference_types {
+            use crate::util::reference_processor::{
+                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            };
+            scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
+                .add(SoftRefProcessing::<MarkingProcessEdges<VM>>::new());
+            scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add(WeakRefProcessing::<MarkingProcessEdges<VM>>::new());
+            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
+                .add(PhantomRefProcessing::<MarkingProcessEdges<VM>>::new());
+
+            // VM-specific weak ref processing
+            scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add(VMProcessWeakRefs::<MarkingProcessEdges<VM>>::new());
+
+            use crate::util::reference_processor::RefForwarding;
+            scheduler.work_buckets[WorkBucketStage::RefForwarding]
+                .add(RefForwarding::<ForwardingProcessEdges<VM>>::new());
+
+            use crate::util::reference_processor::RefEnqueue;
+            scheduler.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+        }
+
         // Finalization
-        if !self.base().options.no_finalizer {
+        if !*self.base().options.no_finalizer {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
             // treat finalizable objects as roots and perform a closure (marking)
             // must be done before calculating forwarding pointers
-            scheduler.work_buckets[WorkBucketStage::RefClosure]
+            scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
                 .add(Finalization::<MarkingProcessEdges<VM>>::new());
             // update finalizable object references
             // must be done before compacting
-            scheduler.work_buckets[WorkBucketStage::RefForwarding]
+            scheduler.work_buckets[WorkBucketStage::FinalizableForwarding]
                 .add(ForwardFinalization::<ForwardingProcessEdges<VM>>::new());
         }
 
@@ -151,21 +159,19 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
             scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         }
         #[cfg(feature = "sanity")]
-        scheduler.work_buckets[WorkBucketStage::Final].add(
-            crate::util::sanity::sanity_checker::ScheduleSanityGC::<Self, NoCopy<VM>>::new(self),
-        );
-        scheduler.set_finalizer(Some(EndOfGC));
+        scheduler.work_buckets[WorkBucketStage::Final]
+            .add(crate::util::sanity::sanity_checker::ScheduleSanityGC::<Self>::new(self));
     }
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+        self.base().collection_required(self, space_full)
     }
 
-    fn get_pages_used(&self) -> usize {
-        self.mc_space.reserved_pages() + self.common.get_pages_used()
+    fn get_used_pages(&self) -> usize {
+        self.mc_space.reserved_pages() + self.common.get_used_pages()
     }
 
-    fn get_collection_reserve(&self) -> usize {
+    fn get_collection_reserved_pages(&self) -> usize {
         0
     }
 }

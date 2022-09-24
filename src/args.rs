@@ -3,6 +3,7 @@ use std::env;
 
 use crate::{
     policy::immix::{block::Block, line::Line},
+    util::linear_scan::Region,
     BarrierSelector,
 };
 
@@ -22,8 +23,7 @@ pub const BUFFER_SIZE: usize = {
     }
 };
 
-pub const HEAP_HEALTH_GUIDED_GC: bool = cfg!(feature = "lxr_heap_health_guided_gc");
-pub const ENABLE_NON_TEMPORAL_MEMSET: bool = cfg!(feature = "nontemporal");
+pub const HEAP_HEALTH_GUIDED_GC: bool = true;
 pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
     env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
 });
@@ -34,8 +34,6 @@ pub static INC_BUFFER_LIMIT: Lazy<Option<usize>> =
     Lazy::new(|| env::var("INCS_LIMIT").map(|x| x.parse().unwrap()).ok());
 
 // ---------- Immix flags ---------- //
-pub const CONCURRENT_MARKING: bool = cfg!(feature = "ix_concurrent_marking");
-pub const REF_COUNT: bool = cfg!(feature = "ix_ref_count");
 pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = cfg!(feature = "ix_block_only");
@@ -46,11 +44,10 @@ pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
 // ---------- CM/RC Immix flags ---------- //
 pub const EAGER_INCREMENTS: bool = false;
-pub const LAZY_DECREMENTS: bool = cfg!(feature = "lxr_lazy_decrements");
-pub const LOCK_FREE_BLOCK_ALLOCATION: bool = cfg!(feature = "ix_lock_free_block_allocation");
+pub const LAZY_DECREMENTS: bool = !cfg!(feature = "lxr_no_evac");
 pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
-pub const RC_NURSERY_EVACUATION: bool = cfg!(feature = "lxr_nursery_evacuation");
-pub const RC_MATURE_EVACUATION: bool = cfg!(feature = "lxr_mature_evacuation");
+pub const RC_NURSERY_EVACUATION: bool = !cfg!(feature = "lxr_no_nursery_evac");
+pub const RC_MATURE_EVACUATION: bool = !cfg!(feature = "lxr_no_mature_evac");
 pub const ENABLE_INITIAL_ALLOC_LIMIT: bool = cfg!(feature = "lxr_enable_initial_alloc_limit");
 
 /// One more atomic-store per barrier slow-path if this value is smaller than 6.
@@ -120,8 +117,6 @@ pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(20f32)
 });
-pub const COUNT_BYTES_FOR_MATURE_EVAC: bool = cfg!(feature = "lxr_count_bytes_for_mature_evac");
-
 pub static MAX_MATURE_DEFRAG_PERCENT: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_MATURE_DEFRAG_PERCENT")
         .map(|x| x.parse().unwrap())
@@ -160,7 +155,6 @@ pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 pub const INC_MAX_COPY_DEPTH: bool = false;
-pub const SATB_SWEEP_APPLY_DECS: bool = cfg!(feature = "lxr_dec_on_satb_sweep");
 
 pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> = Lazy::new(|| {
     env::var("MAX_SURVIVAL_MB")
@@ -206,12 +200,7 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("instrumentation");
     dump_feature!("ix_block_only");
     dump_feature!("ix_defrag");
-    dump_feature!("ix_lock_free_block_allocation");
-    dump_feature!("ix_concurrent_marking");
     dump_feature!("ix_ref_count");
-    dump_feature!("lxr_lazy_decrements");
-    dump_feature!("lxr_nursery_evacuation");
-    dump_feature!("lxr_mature_evacuation");
     dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("lxr_enable_initial_alloc_limit");
@@ -235,7 +224,6 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
-    dump_feature!("enable_non_temporal_memset", ENABLE_NON_TEMPORAL_MEMSET);
     dump_feature!("max_mature_defrag_percent", *MAX_MATURE_DEFRAG_PERCENT);
     dump_feature!(
         "no_gc_until_lazy_sweeping_finished",
@@ -243,7 +231,6 @@ fn dump_features(active_barrier: BarrierSelector) {
     );
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
-    dump_feature!("count_bytes_for_mature_evac", COUNT_BYTES_FOR_MATURE_EVAC);
     dump_feature!("max_pause_millis", *MAX_PAUSE_MILLIS);
     dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
     dump_feature!("lxr_rc_only");
@@ -263,7 +250,6 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("cm_large_array_optimization", CM_LARGE_ARRAY_OPTIMIZATION);
     dump_feature!("lazy_mu_reuse_block_sweeping", LAZY_MU_REUSE_BLOCK_SWEEPING);
     dump_feature!("inc_max_copy_depth", INC_MAX_COPY_DEPTH);
-    dump_feature!("satb_sweep_apply_decs", SATB_SWEEP_APPLY_DECS);
 
     println!("----------------------------------------------------");
 }
@@ -271,16 +257,10 @@ fn dump_features(active_barrier: BarrierSelector) {
 pub fn validate_features(active_barrier: BarrierSelector) {
     dump_features(active_barrier);
     validate!(DEFRAG => !BLOCK_ONLY);
-    validate!(DEFRAG => !CONCURRENT_MARKING);
-    validate!(DEFRAG => !REF_COUNT);
-    validate!(CONCURRENT_MARKING => !DEFRAG);
-    validate!(REF_COUNT => !DEFRAG);
     validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
     validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);
     if BARRIER_MEASUREMENT {
         assert!(!EAGER_INCREMENTS);
         assert!(!LAZY_DECREMENTS);
-        assert!(!REF_COUNT);
-        assert!(!CONCURRENT_MARKING);
     }
 }

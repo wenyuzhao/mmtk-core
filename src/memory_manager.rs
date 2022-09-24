@@ -14,7 +14,7 @@
 use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
-use crate::scheduler::{GCWork, GCWorker};
+use crate::scheduler::{GCController, GCWork, GCWorker};
 use crate::scheduler::{WorkBucketStage, LAST_ACTIVATE_TIME};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
@@ -22,7 +22,7 @@ use crate::util::heap::layout::vm_layout_constants::HEAP_END;
 use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
-use crate::vm::Collection;
+use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
@@ -46,15 +46,6 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
         unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
     }
     crate::GC_START_TIME.store(t, Ordering::SeqCst);
-}
-
-/// Run the main loop for the GC controller thread. This method does not return.
-///
-/// Arguments:
-/// * `mmtk`: A reference to an MMTk instance.
-/// * `tls`: The thread that will be used as the GC controller.
-pub fn start_control_collector<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMWorkerThread) {
-    mmtk.plan.base().control_collector_context.run(tls);
 }
 
 /// Initialize an MMTk instance. A VM should call this method after creating an [MMTK](../mmtk/struct.MMTK.html)
@@ -91,9 +82,8 @@ pub fn gc_init<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, heap_size: usize) {
         }
     }
     assert!(heap_size > 0, "Invalid heap size");
-    mmtk.plan
-        .gc_init(heap_size, &crate::VM_MAP, &mmtk.scheduler);
-    info!("Initialized MMTk with {:?}", mmtk.options.plan);
+    mmtk.plan.gc_init(heap_size, &crate::VM_MAP);
+    info!("Initialized MMTk with {:?}", *mmtk.options.plan);
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
     spin::Lazy::force(&crate::BOOT_TIME);
@@ -194,38 +184,129 @@ pub fn get_allocator_mapping<VM: VMBinding>(
     mmtk.plan.get_allocator_mapping()[semantics]
 }
 
+/// The standard malloc. MMTk either uses its own allocator, or forward the call to a
+/// library malloc.
+pub fn malloc(size: usize) -> Address {
+    crate::util::malloc::malloc(size)
+}
+
+/// The standard malloc except that with the feature `malloc_counted_size`, MMTk will count the allocated memory into its heap size.
+/// Thus the method requires a reference to an MMTk instance. MMTk either uses its own allocator, or forward the call to a
+/// library malloc.
+#[cfg(feature = "malloc_counted_size")]
+pub fn counted_malloc<VM: VMBinding>(mmtk: &MMTK<VM>, size: usize) -> Address {
+    crate::util::malloc::counted_malloc(mmtk, size)
+}
+
+/// The standard calloc.
+pub fn calloc(num: usize, size: usize) -> Address {
+    crate::util::malloc::calloc(num, size)
+}
+
+/// The standard calloc except that with the feature `malloc_counted_size`, MMTk will count the allocated memory into its heap size.
+/// Thus the method requires a reference to an MMTk instance.
+#[cfg(feature = "malloc_counted_size")]
+pub fn counted_calloc<VM: VMBinding>(mmtk: &MMTK<VM>, num: usize, size: usize) -> Address {
+    crate::util::malloc::counted_calloc(mmtk, num, size)
+}
+
+/// The standard realloc.
+pub fn realloc(addr: Address, size: usize) -> Address {
+    crate::util::malloc::realloc(addr, size)
+}
+
+/// The standard realloc except that with the feature `malloc_counted_size`, MMTk will count the allocated memory into its heap size.
+/// Thus the method requires a reference to an MMTk instance, and the size of the existing memory that will be reallocated.
+/// The `addr` in the arguments must be an address that is earlier returned from MMTk's `malloc()`, `calloc()` or `realloc()`.
+#[cfg(feature = "malloc_counted_size")]
+pub fn realloc_with_old_size<VM: VMBinding>(
+    mmtk: &MMTK<VM>,
+    addr: Address,
+    size: usize,
+    old_size: usize,
+) -> Address {
+    crate::util::malloc::realloc_with_old_size(mmtk, addr, size, old_size)
+}
+
+/// The standard free.
+/// The `addr` in the arguments must be an address that is earlier returned from MMTk's `malloc()`, `calloc()` or `realloc()`.
+pub fn free(addr: Address) {
+    crate::util::malloc::free(addr)
+}
+
+/// The standard free except that with the feature `malloc_counted_size`, MMTk will count the allocated memory into its heap size.
+/// Thus the method requires a reference to an MMTk instance, and the size of the memory to free.
+/// The `addr` in the arguments must be an address that is earlier returned from MMTk's `malloc()`, `calloc()` or `realloc()`.
+#[cfg(feature = "malloc_counted_size")]
+pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: usize) {
+    crate::util::malloc::free_with_size(mmtk, addr, old_size)
+}
+
+/// Poll for GC. MMTk will decide if a GC is needed. If so, this call will block
+/// the current thread, and trigger a GC. Otherwise, it will simply return.
+/// Usually a binding does not need to call this function. MMTk will poll for GC during its allocation.
+/// However, if a binding uses counted malloc (which won't poll for GC), they may want to poll for GC manually.
+/// This function should only be used by mutator threads.
+pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    use crate::vm::{ActivePlan, Collection};
+    debug_assert!(
+        VM::VMActivePlan::is_mutator(tls.0),
+        "gc_poll() can only be called by a mutator thread."
+    );
+
+    let plan = mmtk.get_plan();
+    if plan.should_trigger_gc_when_heap_is_full() && plan.poll(false, None) {
+        debug!("Collection required");
+        assert!(plan.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
+        VM::VMCollection::block_for_gc(tls);
+    }
+}
+
+/// Run the main loop for the GC controller thread. This method does not return.
+///
+/// Arguments:
+/// * `tls`: The thread that will be used as the GC controller.
+/// * `gc_controller`: The execution context of the GC controller threa.
+///   It is the `GCController` passed to `Collection::spawn_gc_thread`.
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn start_control_collector<VM: VMBinding>(
+    _mmtk: &'static MMTK<VM>,
+    tls: VMWorkerThread,
+    gc_controller: &mut GCController<VM>,
+) {
+    gc_controller.run(tls);
+}
+
 /// Run the main loop of a GC worker. This method does not return.
 ///
 /// Arguments:
 /// * `tls`: The thread that will be used as the GC worker.
-/// * `worker`: A reference to the GC worker.
+/// * `worker`: The execution context of the GC worker thread.
+///   It is the `GCWorker` passed to `Collection::spawn_gc_thread`.
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn start_worker<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
     worker: &mut GCWorker<VM>,
-    mmtk: &'static MMTK<VM>,
 ) {
-    worker.init(tls);
-    worker.set_local(mmtk.plan.create_worker_local(tls, mmtk));
-    worker.run(mmtk);
+    worker.run(tls, mmtk);
 }
 
 /// Initialize the scheduler and GC workers that are required for doing garbage collections.
 /// This is a mandatory call for a VM during its boot process once its thread system
-/// is ready. This should only be called once. This call will invoke Collection::spawn_worker_thread()
+/// is ready. This should only be called once. This call will invoke Collection::spawn_gc_thread()
 /// to create GC threads.
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that wants to enable the collection. This value will be passed back to the VM in
-///   Collection::spawn_worker_thread() so that the VM knows the context.
+///   Collection::spawn_gc_thread() so that the VM knows the context.
 pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThread) {
     assert!(
         !mmtk.plan.is_initialized(),
         "MMTk collection has been initialized (was initialize_collection() already called before?)"
     );
-    mmtk.scheduler.initialize(mmtk.options.threads, mmtk, tls);
-    VM::VMCollection::spawn_worker_thread(tls, None); // spawn controller thread
+    mmtk.scheduler.spawn_gc_threads(mmtk, tls);
     mmtk.plan.base().initialized.store(true, Ordering::SeqCst);
 }
 
@@ -267,20 +348,25 @@ pub fn disable_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
         .store(false, Ordering::SeqCst);
 }
 
-/// Process MMTk run-time options.
+/// Process MMTk run-time options. Returns true if the option is processed successfully.
+/// We expect that only one thread should call `process()` or `process_bulk()` before `gc_init()` is called.
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `name`: The name of the option.
 /// * `value`: The value of the option (as a string).
 pub fn process<VM: VMBinding>(mmtk: &'static MMTK<VM>, name: &str, value: &str) -> bool {
-    // Note that currently we cannot process options for setting plan,
-    // as we have set plan when creating an MMTK instance, and processing options is after creating on an instance.
-    // The only way to set plan is to use the env var 'MMTK_PLAN'.
-    // FIXME: We should remove this function, and ask for options when creating an MMTk instance.
-    assert!(name != "plan");
-
     unsafe { mmtk.options.process(name, value) }
+}
+
+/// Process multiple MMTk run-time options. Returns true if all the options are processed successfully.
+/// We expect that only one thread should call `process()` or `process_bulk()` before `gc_init()` is called.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `options`: a string that is key value pairs separated by white spaces, e.g. "threads=1 stress_factor=4096"
+pub fn process_bulk<VM: VMBinding>(mmtk: &'static MMTK<VM>, options: &str) -> bool {
+    unsafe { mmtk.options.process_bulk(options) }
 }
 
 /// Return used memory in bytes.
@@ -288,7 +374,7 @@ pub fn process<VM: VMBinding>(mmtk: &'static MMTK<VM>, name: &str, value: &str) 
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn used_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
-    mmtk.plan.get_pages_used() << LOG_BYTES_IN_PAGE
+    mmtk.plan.get_used_pages() << LOG_BYTES_IN_PAGE
 }
 
 /// Return free memory in bytes.
@@ -336,21 +422,90 @@ pub fn is_live_object(object: ObjectReference) -> bool {
     object.is_live()
 }
 
-/// Is the object in the mapped memory? The runtime can use this function to check
-/// if an object is in MMTk heap.
+/// Check if `addr` is the address of an object reference to an MMTk object.
+///
+/// Concretely:
+/// 1.  Return true if `addr.to_object_reference()` is a valid object reference to an object in any
+///     space in MMTk.
+/// 2.  Also return true if there exists an `objref: ObjectReference` such that
+///     -   `objref` is a valid object reference to an object in any space in MMTk, and
+///     -   `lo <= objref.to_address() < hi`, where
+///         -   `lo = addr.align_down(ALLOC_BIT_REGION_SIZE)` and
+///         -   `hi = lo + ALLOC_BIT_REGION_SIZE` and
+///         -   `ALLOC_BIT_REGION_SIZE` is [`crate::util::is_mmtk_object::ALLOC_BIT_REGION_SIZE`].
+///             It is the byte granularity of the alloc bit.
+/// 3.  Return false otherwise.  This function never panics.
+///
+/// Case 2 means **this function is imprecise for misaligned addresses**.
+/// This function uses the "alloc bits" side metadata, i.e. a bitmap.
+/// For space efficiency, each bit of the bitmap governs a small region of memory.
+/// The size of a region is currently defined as the [minimum object size](crate::util::constants::MIN_OBJECT_SIZE),
+/// which is currently defined as the [word size](crate::util::constants::BYTES_IN_WORD),
+/// which is 4 bytes on 32-bit systems or 8 bytes on 64-bit systems.
+/// The alignment of a region is also the region size.
+/// If an alloc bit is `1`, the bitmap cannot tell which address within the 4-byte or 8-byte region
+/// is the valid object reference.
+/// Therefore, if the input `addr` is not properly aligned, but is close to a valid object
+/// reference, this function may still return true.
+///
+/// For the reason above, the VM **must check if `addr` is properly aligned** before calling this
+/// function.  For most VMs, valid object references are always aligned to the word size, so
+/// checking `addr.is_aligned_to(BYTES_IN_WORD)` should usually work.  If you are paranoid, you can
+/// always check against [`crate::util::is_mmtk_object::ALLOC_BIT_REGION_SIZE`].
+///
+/// This function is useful for conservative root scanning.  The VM can iterate through all words in
+/// a stack, filter out zeros, misaligned words, obviously out-of-range words (such as addresses
+/// greater than `0x0000_7fff_ffff_ffff` on Linux on x86_64), and use this function to deside if the
+/// word is really a reference.
+///
+/// Note: This function has special behaviors if the VM space (enabled by the `vm_space` feature)
+/// is present.  See [`crate::plan::global::BasePlan::vm_space`].
+///
+/// Argument:
+/// * `addr`: An arbitrary address.
+#[cfg(feature = "is_mmtk_object")]
+pub fn is_mmtk_object(addr: Address) -> bool {
+    crate::util::is_mmtk_object::is_mmtk_object(addr)
+}
+
+/// Return true if the `object` lies in a region of memory where
+/// -   only MMTk can allocate into, or
+/// -   only MMTk's delegated memory allocator (such as a malloc implementation) can allocate into
+///     for allocation requests from MMTk.
+/// Return false otherwise.  This function never panics.
+///
+/// Particularly, if this function returns true, `object` cannot be an object allocated by the VM
+/// itself.
+///
+/// If this function returns true, the object cannot be allocate by the `malloc` function called by
+/// the VM, either. In other words, if the `MallocSpace` of MMTk called `malloc` to allocate the
+/// object for the VM in response to `memory_manager::alloc`, this function will return true; but
+/// if the VM directly called `malloc` to allocate the object, this function will return false.
+///
+/// If `is_mmtk_object(object.to_address())` returns true, `is_in_mmtk_spaces(object)` must also
+/// return true.
+///
+/// This function is useful if an object reference in the VM can be either a pointer into the MMTk
+/// heap, or a pointer to non-MMTk objects.  If the VM has a pre-built boot image that contains
+/// primordial objects, or if the VM has its own allocator or uses any third-party allocators, or
+/// if the VM allows an object reference to point to native objects such as C++ objects, this
+/// function can distinguish between MMTk-allocated objects and other objects.
+///
+/// Note: This function has special behaviors if the VM space (enabled by the `vm_space` feature)
+/// is present.  See [`crate::plan::global::BasePlan::vm_space`].
 ///
 /// Arguments:
 /// * `object`: The object reference to query.
-pub fn is_mapped_object(object: ObjectReference) -> bool {
-    object.is_mapped()
+pub fn is_in_mmtk_spaces(object: ObjectReference) -> bool {
+    object.is_in_any_space()
 }
 
 /// Is the address in the mapped memory? The runtime can use this function to check
-/// if an address is mapped by MMTk. Note that this is different than is_mapped_object().
+/// if an address is mapped by MMTk. Note that this is different than is_in_mmtk_spaces().
 /// For malloc spaces, MMTk does not map those addresses (malloc does the mmap), so
-/// this function will return false, but is_mapped_object will return true if the address
+/// this function will return false, but is_in_mmtk_spaces will return true if the address
 /// is actually a valid object in malloc spaces. To check if an object is in our heap,
-/// the runtime should always use is_mapped_object(). This function is_mapped_address()
+/// the runtime should always use is_in_mmtk_spaces(). This function is_mapped_address()
 /// may get removed at some point.
 ///
 /// Arguments:
@@ -371,49 +526,34 @@ pub fn modify_check<VM: VMBinding>(mmtk: &MMTK<VM>, object: ObjectReference) {
     mmtk.plan.modify_check(object);
 }
 
-/// Add a reference to the list of weak references.
+/// Add a reference to the list of weak references. A binding may
+/// call this either when a weak reference is created, or when a weak reference is traced during GC.
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The weak reference to add.
-/// * `referent`: The object that the reference points to.
-pub fn add_weak_candidate<VM: VMBinding>(
-    mmtk: &MMTK<VM>,
-    reff: ObjectReference,
-    referent: ObjectReference,
-) {
-    mmtk.reference_processors
-        .add_weak_candidate::<VM>(reff, referent);
+pub fn add_weak_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
+    mmtk.reference_processors.add_weak_candidate::<VM>(reff);
 }
 
-/// Add a reference to the list of soft references.
+/// Add a reference to the list of soft references. A binding may
+/// call this either when a weak reference is created, or when a weak reference is traced during GC.
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The soft reference to add.
-/// * `referent`: The object that the reference points to.
-pub fn add_soft_candidate<VM: VMBinding>(
-    mmtk: &MMTK<VM>,
-    reff: ObjectReference,
-    referent: ObjectReference,
-) {
-    mmtk.reference_processors
-        .add_soft_candidate::<VM>(reff, referent);
+pub fn add_soft_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
+    mmtk.reference_processors.add_soft_candidate::<VM>(reff);
 }
 
-/// Add a reference to the list of phantom references.
+/// Add a reference to the list of phantom references. A binding may
+/// call this either when a weak reference is created, or when a weak reference is traced during GC.
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The phantom reference to add.
-/// * `referent`: The object that the reference points to.
-pub fn add_phantom_candidate<VM: VMBinding>(
-    mmtk: &MMTK<VM>,
-    reff: ObjectReference,
-    referent: ObjectReference,
-) {
-    mmtk.reference_processors
-        .add_phantom_candidate::<VM>(reff, referent);
+pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
+    mmtk.reference_processors.add_phantom_candidate::<VM>(reff);
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We do a full heap
@@ -446,8 +586,11 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance
 /// * `object`: The object that has a finalizer
-pub fn add_finalizer<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
-    if mmtk.options.no_finalizer {
+pub fn add_finalizer<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    object: <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
+) {
+    if *mmtk.options.no_finalizer {
         warn!("add_finalizer() is called when no_finalizer = true");
     }
 
@@ -462,15 +605,57 @@ pub fn add_finalizer<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectRefer
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
-pub fn get_finalized_object<VM: VMBinding>(mmtk: &'static MMTK<VM>) -> Option<ObjectReference> {
-    if mmtk.options.no_finalizer {
-        warn!("get_object_for_finalization() is called when no_finalizer = true");
+pub fn get_finalized_object<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+) -> Option<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType> {
+    if *mmtk.options.no_finalizer {
+        warn!("get_finalized_object() is called when no_finalizer = true");
     }
 
     mmtk.finalizable_processor
         .lock()
         .unwrap()
         .get_ready_object()
+}
+
+/// Pop all the finalizers that were registered for finalization. The returned objects may or may not be ready for
+/// finalization. After this call, MMTk's finalizer processor should have no registered finalizer any more.
+///
+/// This is useful for some VMs which require all finalizable objects to be finalized on exit.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn get_all_finalizers<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+) -> Vec<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType> {
+    if *mmtk.options.no_finalizer {
+        warn!("get_all_finalizers() is called when no_finalizer = true");
+    }
+
+    mmtk.finalizable_processor
+        .lock()
+        .unwrap()
+        .get_all_finalizers()
+}
+
+/// Pop finalizers that were registered and associated with a certain object. The returned objects may or may not be ready for finalization.
+/// This is useful for some VMs that may manually execute finalize method for an object.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `object`: the given object that MMTk will pop its finalizers
+pub fn get_finalizers_for<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    object: ObjectReference,
+) -> Vec<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType> {
+    if *mmtk.options.no_finalizer {
+        warn!("get_finalizers() is called when no_finalizer = true");
+    }
+
+    mmtk.finalizable_processor
+        .lock()
+        .unwrap()
+        .get_finalizers_for(object)
 }
 
 /// Get the number of workers. MMTk spawns worker threads for the 'threads' defined in the options.

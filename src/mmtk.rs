@@ -11,6 +11,7 @@ use crate::util::options::{Options, UnsafeOptionsWrapper};
 use crate::util::reference_processor::ReferenceProcessors;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::SanityChecker;
+use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 use std::default::Default;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,17 +32,20 @@ lazy_static! {
 
     /// A global Mmapper for mmaping and protection of virtual memory.
     pub static ref MMAPPER: Mmapper = Mmapper::new();
-
-    // A global space function table that allows efficient dispatch space specific code for addresses in our heap.
-    pub static ref SFT_MAP: SFTMap<'static> = SFTMap::new();
 }
+
+use crate::util::rust_util::InitializeOnce;
+
+// A global space function table that allows efficient dispatch space specific code for addresses in our heap.
+pub static SFT_MAP: InitializeOnce<SFTMap<'static>> = InitializeOnce::new();
 
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
     pub(crate) plan: Box<dyn Plan<VM = VM>>,
     pub(crate) reference_processors: ReferenceProcessors,
-    pub(crate) finalizable_processor: Mutex<FinalizableProcessor>,
+    pub(crate) finalizable_processor:
+        Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
     pub(crate) options: Arc<UnsafeOptionsWrapper>,
     pub scheduler: Arc<GCWorkScheduler<VM>>,
     #[cfg(feature = "sanity")]
@@ -51,10 +55,21 @@ pub struct MMTK<VM: VMBinding> {
 
 impl<VM: VMBinding> MMTK<VM> {
     pub fn new() -> Self {
-        let scheduler = GCWorkScheduler::new();
+        // Initialize SFT first in case we need to use this in the constructor.
+        // The first call will initialize SFT map. Other calls will be blocked until SFT map is initialized.
+        SFT_MAP.initialize_once(&SFTMap::new);
+
         let options = Arc::new(UnsafeOptionsWrapper::new(Options::default()));
+
+        let num_workers = if cfg!(feature = "single_worker") {
+            1
+        } else {
+            *options.threads
+        };
+
+        let scheduler = GCWorkScheduler::new(num_workers);
         let plan = crate::plan::create_plan(
-            options.plan,
+            *options.plan,
             &VM_MAP,
             &MMAPPER,
             options.clone(),
@@ -63,7 +78,9 @@ impl<VM: VMBinding> MMTK<VM> {
         MMTK {
             plan,
             reference_processors: ReferenceProcessors::new(),
-            finalizable_processor: Mutex::new(FinalizableProcessor::new()),
+            finalizable_processor: Mutex::new(FinalizableProcessor::<
+                <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
+            >::new()),
             options,
             scheduler,
             #[cfg(feature = "sanity")]
@@ -93,6 +110,11 @@ impl<VM: VMBinding> MMTK<VM> {
 
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
         self.plan.as_ref()
+    }
+
+    #[inline(always)]
+    pub fn get_options(&self) -> &Options {
+        &self.options
     }
 }
 

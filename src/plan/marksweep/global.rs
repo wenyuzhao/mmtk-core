@@ -1,8 +1,6 @@
-use crate::mmtk::MMTK;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
-use crate::plan::global::NoCopy;
 use crate::plan::marksweep::gc_work::{MSGCWorkContext, MSSweepChunks};
 use crate::plan::marksweep::mutator::ALLOCATOR_MAPPING;
 use crate::plan::AllocationSemantics;
@@ -27,8 +25,13 @@ use std::sync::Arc;
 
 use enum_map::EnumMap;
 
+use mmtk_macros::PlanTraceObject;
+
+#[derive(PlanTraceObject)]
 pub struct MarkSweep<VM: VMBinding> {
+    #[fallback_trace]
     common: CommonPlan<VM>,
+    #[trace]
     ms: MallocSpace<VM>,
 }
 
@@ -44,13 +47,8 @@ pub const MS_CONSTRAINTS: PlanConstraints = PlanConstraints {
 impl<VM: VMBinding> Plan for MarkSweep<VM> {
     type VM = VM;
 
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
-        self.common.gc_init(heap_size, vm_map, scheduler);
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
+        self.common.gc_init(heap_size, vm_map);
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -74,16 +72,12 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
         self.common.release(tls, true);
     }
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+        self.base().collection_required(self, space_full)
     }
 
-    fn get_collection_reserve(&self) -> usize {
-        0
-    }
-
-    fn get_pages_used(&self) -> usize {
-        self.common.get_pages_used() + self.ms.reserved_pages()
+    fn get_used_pages(&self) -> usize {
+        self.common.get_used_pages() + self.ms.reserved_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -96,16 +90,6 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
 
     fn constraints(&self) -> &'static PlanConstraints {
         &MS_CONSTRAINTS
-    }
-
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = NoCopy::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
     }
 }
 

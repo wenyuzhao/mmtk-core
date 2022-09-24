@@ -11,15 +11,19 @@ pub mod address;
 /// Allocators
 // This module is made public so the binding could implement allocator slowpaths if they would like to.
 pub mod alloc;
-pub mod cm;
 /// Constants used in MMTk
 pub mod constants;
 /// Calculation, conversion and rounding for memory related numbers.
 pub mod conversions;
+/// The copy allocators for a GC worker.
+pub mod copy;
+/// Linear scan through a heap range
+pub mod linear_scan;
 /// Wrapper functions for memory syscalls such as mmap, mprotect, etc.
 pub mod memory;
 /// Opaque pointers used in MMTk, e.g. VMThread.
 pub mod opaque_pointer;
+/// Reference counting support.
 pub mod rc;
 /// Reference processing implementation.
 pub mod reference_processor;
@@ -33,10 +37,14 @@ pub(crate) mod analysis;
 /// Logging edges to check duplicated edges in GC.
 #[cfg(feature = "extreme_assertions")]
 pub(crate) mod edge_logger;
+/// Non-generic refs to generic types of <VM>.
+pub(crate) mod erase_vm;
 /// Finalization implementation.
 pub(crate) mod finalizable_processor;
 /// Heap implementation, including page resource, mmapper, etc.
 pub(crate) mod heap;
+#[cfg(feature = "is_mmtk_object")]
+pub mod is_mmtk_object;
 /// Logger initialization
 pub(crate) mod logger;
 /// Various malloc implementations (conditionally compiled by features)

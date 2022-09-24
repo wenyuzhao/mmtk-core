@@ -1,22 +1,18 @@
 use super::Immix;
-use crate::plan::barriers::FieldLoggingBarrier;
-use crate::plan::barriers::ObjectRememberingBarrier;
-use crate::plan::immix::gc_work::ImmixProcessEdges;
-use crate::plan::immix::gc_work::TraceKind;
-use crate::plan::immix::global::ACTIVE_BARRIER;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
+use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
-use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
-use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use crate::BarrierSelector;
-use crate::MMTK;
+use crate::{
+    plan::barriers::NoBarrier,
+    util::opaque_pointer::{VMMutatorThread, VMWorkerThread},
+};
 use enum_map::EnumMap;
 
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -56,35 +52,25 @@ lazy_static! {
 
 pub fn create_immix_mutator<VM: VMBinding>(
     mutator_tls: VMMutatorThread,
-    mmtk: &'static MMTK<VM>,
+    plan: &'static dyn Plan<VM = VM>,
 ) -> Mutator<VM> {
-    let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
+    let immix = plan.downcast_ref::<Immix<VM>>().unwrap();
     let config = MutatorConfig {
         allocator_mapping: &*ALLOCATOR_MAPPING,
-        space_mapping: box {
-            let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, mmtk.get_plan());
+        space_mapping: Box::new({
+            let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, plan);
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
             vec
-        },
+        }),
         prepare_func: &immix_mutator_prepare,
         release_func: &immix_mutator_release,
     };
 
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
-        barrier: if *ACTIVE_BARRIER == BarrierSelector::ObjectBarrier {
-            box ObjectRememberingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
-                mmtk,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            )
-        } else {
-            box FieldLoggingBarrier::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new(
-                mmtk,
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            )
-        },
+        allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
+        barrier: Box::new(NoBarrier),
         mutator_tls,
         config,
-        plan: &*mmtk.plan,
+        plan,
     }
 }

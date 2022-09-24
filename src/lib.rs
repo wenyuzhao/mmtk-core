@@ -1,32 +1,3 @@
-#![allow(incomplete_features)]
-#![feature(asm)]
-#![feature(integer_atomics)]
-#![feature(is_sorted)]
-#![feature(drain_filter)]
-#![feature(nll)]
-#![feature(box_syntax)]
-#![feature(maybe_uninit_extra)]
-#![feature(get_mut_unchecked)]
-#![feature(arbitrary_self_types)]
-#![feature(associated_type_defaults)]
-#![feature(specialization)]
-#![feature(trait_alias)]
-#![feature(step_trait)]
-#![feature(once_cell)]
-#![feature(const_generics_defaults)]
-#![feature(const_trait_impl)]
-#![feature(const_option)]
-#![feature(const_fn_trait_bound)]
-#![feature(core_intrinsics)]
-#![feature(adt_const_params)]
-#![feature(generic_const_exprs)]
-#![feature(const_raw_ptr_deref)]
-#![feature(const_mut_refs)]
-#![feature(option_result_unwrap_unchecked)]
-#![feature(hash_drain_filter)]
-#![feature(const_for)]
-#![feature(const_ptr_offset)]
-#![feature(thread_local)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 
@@ -54,17 +25,13 @@
 //!   * [Work packets](scheduler/work/trait.GCWork.html): units of GC work scheduled by the MMTk's scheduler.
 //! * [GC plans](plan/global/trait.Plan.html): GC algorithms composed from components.
 //! * [Heap implementations](util/heap/index.html): the underlying implementations of memory resources that support spaces.
-//! * [Scheduler](scheduler/scheduler/struct.Scheduler.html): the MMTk scheduler to allow flexible and parallel execution of GC work.
+//! * [Scheduler](scheduler/scheduler/struct.GCWorkScheduler.html): the MMTk scheduler to allow flexible and parallel execution of GC work.
 //! * Interfaces: bi-directional interfaces between MMTk and language implementations
 //!   i.e. [the memory manager API](memory_manager/index.html) that allows a language's memory manager to use MMTk
 //!   and [the VMBinding trait](vm/trait.VMBinding.html) that allows MMTk to call the language implementation.
 
-#[macro_use]
-extern crate custom_derive;
-#[macro_use]
-extern crate enum_derive;
-
 extern crate libc;
+extern crate strum_macros;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -72,7 +39,7 @@ extern crate log;
 #[cfg(target = "x86_64-unknown-linux-gnu")]
 extern crate atomic;
 extern crate atomic_traits;
-extern crate crossbeam_deque;
+extern crate crossbeam;
 extern crate num_cpus;
 #[macro_use]
 extern crate downcast_rs;
@@ -89,13 +56,14 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
 use plan::immix::Pause;
 use scheduler::WorkBucketStage;
-use spin::Mutex;
+use spin::{Lazy, Mutex};
+type RwLock<T> = spin::rwlock::RwLock<T, spin::Yield>;
 
 #[macro_use]
 mod policy;
@@ -108,11 +76,10 @@ pub mod util;
 pub mod vm;
 
 pub use crate::plan::{
-    AllocationSemantics, BarrierSelector, CopyContext, Mutator, MutatorContext, Plan, TraceLocal,
-    TransitiveClosure,
+    AllocationSemantics, BarrierSelector, Mutator, MutatorContext, ObjectQueue, Plan,
 };
+pub use crate::policy::copy_context::PolicyCopyContext;
 
-static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct LazySweepingJobsCounter {
@@ -122,27 +89,25 @@ pub struct LazySweepingJobsCounter {
 impl LazySweepingJobsCounter {
     #[inline(always)]
     pub fn new() -> Self {
-        unsafe {
-            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
-            counter.fetch_add(1, Ordering::SeqCst);
-            Self {
-                decs_counter: None,
-                counter: counter.clone(),
-            }
+        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
+        let counter = lazy_sweeping_jobs.curr_counter.as_ref().unwrap();
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self {
+            decs_counter: None,
+            counter: counter.clone(),
         }
     }
 
     #[inline(always)]
     pub fn new_desc() -> Self {
-        unsafe {
-            let decs_counter = LAZY_SWEEPING_JOBS.curr_decs_counter.as_ref().unwrap();
-            decs_counter.fetch_add(1, Ordering::SeqCst);
-            let counter = LAZY_SWEEPING_JOBS.curr_counter.as_ref().unwrap();
-            counter.fetch_add(1, Ordering::SeqCst);
-            Self {
-                decs_counter: Some(decs_counter.clone()),
-                counter: counter.clone(),
-            }
+        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
+        let decs_counter = lazy_sweeping_jobs.curr_decs_counter.as_ref().unwrap();
+        decs_counter.fetch_add(1, Ordering::SeqCst);
+        let counter = lazy_sweeping_jobs.curr_counter.as_ref().unwrap();
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self {
+            decs_counter: Some(decs_counter.clone()),
+            counter: counter.clone(),
         }
     }
 
@@ -173,19 +138,16 @@ impl LazySweepingJobsCounter {
 impl Drop for LazySweepingJobsCounter {
     #[inline(always)]
     fn drop(&mut self) {
+        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         if let Some(decs) = self.decs_counter.as_ref() {
             if decs.fetch_sub(1, Ordering::SeqCst) == 1 {
-                unsafe {
-                    let f = LAZY_SWEEPING_JOBS.end_of_decs.as_ref().unwrap();
-                    f(self.clone())
-                }
+                let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
+                f(self.clone())
             }
         }
         if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-            unsafe {
-                if let Some(f) = LAZY_SWEEPING_JOBS.end_of_lazy.as_ref() {
-                    f()
-                }
+            if let Some(f) = lazy_sweeping_jobs.end_of_lazy.as_ref() {
+                f()
             }
         }
     }
@@ -196,12 +158,12 @@ pub struct LazySweepingJobs {
     curr_decs_counter: Option<Arc<AtomicUsize>>,
     prev_counter: Option<Arc<AtomicUsize>>,
     curr_counter: Option<Arc<AtomicUsize>>,
-    pub end_of_decs: Option<Box<dyn Fn(LazySweepingJobsCounter)>>,
-    pub end_of_lazy: Option<Box<dyn Fn()>>,
+    pub end_of_decs: Option<Box<dyn Send + Sync + Fn(LazySweepingJobsCounter)>>,
+    pub end_of_lazy: Option<Box<dyn Send + Sync + Fn()>>,
 }
 
 impl LazySweepingJobs {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             prev_decs_counter: None,
             curr_decs_counter: None,
@@ -214,17 +176,14 @@ impl LazySweepingJobs {
 
     #[inline(always)]
     pub fn all_finished() -> bool {
-        unsafe {
-            LAZY_SWEEPING_JOBS
-                .prev_counter
-                .as_ref()
-                .map(|c| c.load(Ordering::SeqCst))
-                .unwrap_or(0)
-                == 0
-        }
+        LAZY_SWEEPING_JOBS
+            .read()
+            .prev_counter
+            .as_ref()
+            .map(|c| c.load(Ordering::SeqCst))
+            .unwrap_or(0)
+            == 0
     }
-
-    pub fn init(&mut self) {}
 
     pub fn swap(&mut self) {
         self.prev_decs_counter = self.curr_decs_counter.take();
@@ -234,12 +193,8 @@ impl LazySweepingJobs {
     }
 }
 
-static mut LAZY_SWEEPING_JOBS: LazySweepingJobs = LazySweepingJobs::new();
-
-#[inline(always)]
-fn concurrent_marking_in_progress() -> bool {
-    cfg!(feature = "ix_concurrent_marking") && crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
-}
+static LAZY_SWEEPING_JOBS: Lazy<RwLock<LazySweepingJobs>> =
+    Lazy::new(|| RwLock::new(LazySweepingJobs::new()));
 
 #[inline(always)]
 fn concurrent_marking_packets_drained() -> bool {
@@ -575,11 +530,7 @@ static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 pub fn gc_worker_id() -> Option<usize> {
-    if !crate::scheduler::IS_WORKER.load(Ordering::Relaxed) {
-        return None;
-    }
-    let id = crate::scheduler::WORKER_ID.load(Ordering::SeqCst);
-    Some(id)
+    crate::scheduler::current_worker_ordinal()
 }
 
 static CALC_WORKERS: spin::Lazy<usize> = spin::Lazy::new(|| {

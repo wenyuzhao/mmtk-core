@@ -1,3 +1,4 @@
+use crate::plan::VectorObjectQueue;
 use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
 use crate::util::Address;
@@ -13,6 +14,8 @@ use crate::util::conversions;
 use crate::util::opaque_pointer::*;
 
 use crate::mmtk::SFT_MAP;
+use crate::scheduler::GCWorker;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::map::Map;
@@ -23,8 +26,12 @@ use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::HeapMeta;
 use crate::util::memory;
 
+#[cfg(feature = "is_mmtk_object")]
+use crate::util::alloc_bit;
+
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
+use std::sync::Mutex;
 
 use downcast_rs::Downcast;
 
@@ -74,12 +81,48 @@ pub trait SFT {
     /// we mark the entire chunk in the SFT table as a malloc space, but only some of the addresses
     /// in the space contain actual MMTk objects. So they need a further check.
     #[inline(always)]
-    fn is_mmtk_object(&self, _object: ObjectReference) -> bool {
+    fn is_in_space(&self, _object: ObjectReference) -> bool {
         true
+    }
+    /// Is `addr` a valid object reference to an object allocated in this space?
+    /// This default implementation works for all spaces that use MMTk's mapper to allocate memory.
+    /// Some spaces, like `MallocSpace`, use third-party libraries to allocate memory.
+    /// Such spaces needs to override this method.
+    #[cfg(feature = "is_mmtk_object")]
+    #[inline(always)]
+    fn is_mmtk_object(&self, addr: Address) -> bool {
+        // Having found the SFT means the `addr` is in one of our spaces.
+        // Although the SFT map is allocated eagerly when the space is contiguous,
+        // the pages of the space itself are acquired on demand.
+        // Therefore, the page of `addr` may not have been mapped, yet.
+        if !addr.is_mapped() {
+            return false;
+        }
+        // The `addr` is mapped. We use the global alloc bit to get the exact answer.
+        alloc_bit::is_alloced_object(addr)
     }
     /// Initialize object metadata (in the header, or in the side metadata).
     fn initialize_object_metadata(&self, object: ObjectReference, _bytes: usize, alloc: bool);
+    /// Trace objects through SFT. This along with [`SFTProcessEdges`](mmtk/scheduler/gc_work/SFTProcessEdges)
+    /// provides an easy way for most plans to trace objects without the need to implement any plan-specific
+    /// code. However, tracing objects for some policies are more complicated, and they do not provide an
+    /// implementation of this method. For example, mark compact space requires trace twice in each GC.
+    /// Immix has defrag trace and fast trace.
+    fn sft_trace_object(
+        &self,
+        // We use concrete type for `queue` because SFT doesn't support generic parameters,
+        // and SFTProcessEdges uses `VectorObjectQueue`.
+        queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        worker: GCWorkerMutRef,
+    ) -> ObjectReference;
 }
+
+// Create erased VM refs for these types that will be used in `sft_trace_object()`.
+// In this way, we can store the refs with <VM> in SFT (which cannot have parameters with generic type parameters)
+
+use crate::util::erase_vm::define_erased_vm_mut_ref;
+define_erased_vm_mut_ref!(GCWorkerMutRef = GCWorker<VM>);
 
 /// Print debug info for SFT. Should be false when committed.
 const DEBUG_SFT: bool = cfg!(debug_assertions) && false;
@@ -101,6 +144,7 @@ impl SFT for EmptySpaceSFT {
     }
     #[cfg(feature = "sanity")]
     fn is_sane(&self) -> bool {
+        warn!("Object in empty space!");
         false
     }
     fn is_movable(&self) -> bool {
@@ -115,7 +159,12 @@ impl SFT for EmptySpaceSFT {
         false
     }
     #[inline(always)]
-    fn is_mmtk_object(&self, _object: ObjectReference) -> bool {
+    fn is_in_space(&self, _object: ObjectReference) -> bool {
+        false
+    }
+    #[cfg(feature = "is_mmtk_object")]
+    #[inline(always)]
+    fn is_mmtk_object(&self, _addr: Address) -> bool {
         false
     }
 
@@ -125,9 +174,22 @@ impl SFT for EmptySpaceSFT {
             object
         )
     }
+
+    fn sft_trace_object(
+        &self,
+        _queue: &mut VectorObjectQueue,
+        object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        // We do not have the `VM` type parameter here, so we cannot forward the call to the VM.
+        panic!(
+            "Call trace_object() on {} (chunk {}), which maps to an empty space. SFTProcessEdges does not support the fallback to vm_trace_object().",
+            object,
+            conversions::chunk_align_down(object.to_address()),
+        )
+    }
 }
 
-#[derive(Default)]
 pub struct SFTMap<'a> {
     sft: Vec<&'a (dyn SFT + Sync + 'static)>,
 }
@@ -135,7 +197,7 @@ pub struct SFTMap<'a> {
 // TODO: MMTK<VM> holds a reference to SFTMap. We should have a safe implementation rather than use raw pointers for dyn SFT.
 unsafe impl<'a> Sync for SFTMap<'a> {}
 
-static EMPTY_SPACE_SFT: EmptySpaceSFT = EmptySpaceSFT {};
+const EMPTY_SPACE_SFT: EmptySpaceSFT = EmptySpaceSFT {};
 
 impl<'a> SFTMap<'a> {
     pub fn new() -> Self {
@@ -153,7 +215,8 @@ impl<'a> SFTMap<'a> {
     }
 
     pub fn get(&self, address: Address) -> &'a dyn SFT {
-        let res = self.sft[address.chunk_index()];
+        debug_assert!(address.chunk_index() < MAX_CHUNKS);
+        let res = unsafe { *self.sft.get_unchecked(address.chunk_index()) };
         if DEBUG_SFT {
             trace!(
                 "Get SFT for {} #{} = {}",
@@ -166,38 +229,42 @@ impl<'a> SFTMap<'a> {
     }
 
     fn log_update(&self, space: &(dyn SFT + Sync + 'static), start: Address, bytes: usize) {
-        debug!(
-            "Update SFT for [{}, {}) as {}",
-            start,
-            start + bytes,
-            space.name()
-        );
+        debug!("Update SFT for Chunk {} as {}", start, space.name(),);
         let first = start.chunk_index();
-        let last = conversions::chunk_align_up(start + bytes).chunk_index();
         let start_chunk = chunk_index_to_address(first);
-        let end_chunk = chunk_index_to_address(last);
         debug!(
-            "Update SFT for {} bytes of [{} #{}, {} #{})",
-            bytes, start_chunk, first, end_chunk, last
+            "Update SFT for {} bytes of Chunk {} #{}",
+            bytes, start_chunk, first
         );
     }
 
     fn trace_sft_map(&self) {
-        // For large heaps, it takes long to iterate each chunk. So check log level first.
-        if log::log_enabled!(log::Level::Trace) {
-            // print the entire SFT map
-            const SPACE_PER_LINE: usize = 10;
-            for i in (0..self.sft.len()).step_by(SPACE_PER_LINE) {
-                let max = if i + SPACE_PER_LINE > self.sft.len() {
-                    self.sft.len()
-                } else {
-                    i + SPACE_PER_LINE
-                };
-                let chunks: Vec<usize> = (i..max).collect();
-                let space_names: Vec<&str> = chunks.iter().map(|&x| self.sft[x].name()).collect();
-                trace!("Chunk {}: {}", i, space_names.join(","));
-            }
+        trace!("{}", self.print_sft_map());
+    }
+
+    // This can be used during debugging to print SFT map.
+    fn print_sft_map(&self) -> String {
+        // print the entire SFT map
+        let mut res = String::new();
+
+        const SPACE_PER_LINE: usize = 10;
+        for i in (0..self.sft.len()).step_by(SPACE_PER_LINE) {
+            let max = if i + SPACE_PER_LINE > self.sft.len() {
+                self.sft.len()
+            } else {
+                i + SPACE_PER_LINE
+            };
+            let chunks: Vec<usize> = (i..max).collect();
+            let space_names: Vec<&str> = chunks.iter().map(|&x| self.sft[x].name()).collect();
+            res.push_str(&format!(
+                "{}: {}",
+                chunk_index_to_address(i),
+                space_names.join(",")
+            ));
+            res.push('\n');
         }
+
+        res
     }
 
     /// Update SFT map for the given address range.
@@ -220,6 +287,13 @@ impl<'a> SFTMap<'a> {
     // TODO: We should clear a SFT entry when a space releases a chunk.
     #[allow(dead_code)]
     pub fn clear(&self, chunk_start: Address) {
+        if DEBUG_SFT {
+            debug!(
+                "Clear SFT for chunk {} (was {})",
+                chunk_start,
+                self.get(chunk_start).name()
+            );
+        }
         assert!(chunk_start.is_aligned_to(BYTES_IN_CHUNK));
         let chunk_idx = chunk_start.chunk_index();
         self.set(chunk_idx, &EMPTY_SPACE_SFT);
@@ -228,6 +302,14 @@ impl<'a> SFTMap<'a> {
     // Currently only used by 32 bits vm map
     #[allow(dead_code)]
     pub fn clear_by_index(&self, chunk_idx: usize) {
+        if DEBUG_SFT {
+            let chunk_start = chunk_index_to_address(chunk_idx);
+            debug!(
+                "Clear SFT for chunk {} by index (was {})",
+                chunk_start,
+                self.get(chunk_start).name()
+            );
+        }
         self.set(chunk_idx, &EMPTY_SPACE_SFT)
     }
 
@@ -259,15 +341,43 @@ impl<'a> SFTMap<'a> {
         self_mut.sft[chunk] = sft;
     }
 
-    #[inline(always)]
-    pub fn is_in_space(&self, object: ObjectReference) -> bool {
+    pub fn is_in_any_space(&self, object: ObjectReference) -> bool {
         if object.to_address().chunk_index() >= self.sft.len() {
             return false;
         }
         // if crate::args::REF_COUNT {
         //     return self.get(object.to_address()) as *const dyn SFT != &EMPTY_SPACE_SFT;
         // }
-        self.get(object.to_address()).is_mmtk_object(object)
+        self.get(object.to_address()).is_in_space(object)
+    }
+
+    #[cfg(feature = "is_mmtk_object")]
+    pub fn is_mmtk_object(&self, addr: Address) -> bool {
+        if addr.chunk_index() >= self.sft.len() {
+            return false;
+        }
+        self.get(addr).is_mmtk_object(addr)
+    }
+
+    /// Make sure we have valid SFT entries for the object reference.
+    #[cfg(debug_assertions)]
+    pub fn assert_valid_entries_for_object<VM: VMBinding>(&self, object: ObjectReference) {
+        let object_sft = self.get(object.to_address());
+        let object_start_sft = self.get(VM::VMObjectModel::object_start_ref(object));
+
+        debug_assert!(
+            object_sft.name() != EMPTY_SFT_NAME,
+            "Object {} has empty SFT",
+            object
+        );
+        debug_assert_eq!(
+            object_sft.name(),
+            object_start_sft.name(),
+            "Object {} has incorrect SFT entries (object start = {}, object = {}).",
+            object,
+            object_start_sft.name(),
+            object_sft.name()
+        );
     }
 }
 
@@ -294,7 +404,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         trace!("Pages reserved");
         trace!("Polling ..");
 
-        if should_poll && VM::VMActivePlan::global().poll(false, self.as_space()) {
+        if should_poll && VM::VMActivePlan::global().poll(false, Some(self.as_space())) {
             debug!("Collection required");
             assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
             pr.clear_request(pages_reserved);
@@ -303,14 +413,30 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         } else {
             debug!("Collection not required");
 
+            // We need this lock: Othrewise, it is possible that one thread acquires pages in a new chunk, but not yet
+            // set SFT for it (in grow_space()), and another thread acquires pages in the same chunk, which is not
+            // a new chunk so grow_space() won't be called on it. The second thread could return a result in the chunk before
+            // its SFT is properly set.
+            // We need to minimize the scope of this lock for performance when we have many threads (mutator threads, or GC threads with copying allocators).
+            // See: https://github.com/mmtk/mmtk-core/issues/610
+            let lock = self.common().acquire_lock.lock().unwrap();
+
             match pr.get_new_pages(self.common().descriptor, pages_reserved, pages, tls) {
                 Ok(res) => {
-                    // The following code was guarded by a page resource lock in Java MMTk.
-                    // I think they are thread safe and we do not need a lock. So they
-                    // are no longer guarded by a lock. If we see any issue here, considering
-                    // adding a space lock here.
+                    debug!(
+                        "Got new pages {} ({} pages) for {} in chunk {}, new_chunk? {}",
+                        res.start,
+                        res.pages,
+                        self.get_name(),
+                        conversions::chunk_align_down(res.start),
+                        res.new_chunk
+                    );
                     let bytes = conversions::pages_to_bytes(res.pages);
                     self.grow_space(res.start, bytes, res.new_chunk);
+
+                    // Once we finish grow_space, we can drop the lock.
+                    drop(lock);
+
                     // Mmap the pages and the side metadata, and handle error. In case of any error,
                     // we will either call back to the VM for OOM, or simply panic.
                     if let Err(mmap_error) = self
@@ -331,17 +457,45 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     //     memory::zero(res.start, bytes);
                     // }
 
+                    // Some assertions
+                    {
+                        // --- Assert the start of the allocated region ---
+                        // The start address SFT should be correct.
+                        debug_assert_eq!(SFT_MAP.get(res.start).name(), self.get_name());
+                        // The start address is in our space.
+                        debug_assert!(self.address_in_space(res.start));
+                        // The descriptor should be correct.
+                        debug_assert_eq!(
+                            self.common().vm_map().get_descriptor_for_address(res.start),
+                            self.common().descriptor
+                        );
+
+                        // --- Assert the last byte in the allocated region ---
+                        let last_byte = res.start + bytes - 1;
+                        // The SFT for the last byte in the allocated memory should be correct.
+                        debug_assert_eq!(SFT_MAP.get(last_byte).name(), self.get_name());
+                        // The last byte in the allocated memory should be in this space.
+                        debug_assert!(self.address_in_space(last_byte));
+                        // The descriptor for the last byte should be correct.
+                        debug_assert_eq!(
+                            self.common().vm_map().get_descriptor_for_address(last_byte),
+                            self.common().descriptor
+                        );
+                    }
+
                     debug!("Space.acquire(), returned = {}", res.start);
                     res.start
                 }
                 Err(_) => {
+                    drop(lock); // drop the lock immediately
+
                     // We thought we had memory to allocate, but somehow failed the allocation. Will force a GC.
                     assert!(
                         allow_gc,
                         "Physical allocation failed when GC is not allowed!"
                     );
 
-                    let gc_performed = VM::VMActivePlan::global().poll(true, self.as_space());
+                    let gc_performed = VM::VMActivePlan::global().poll(true, Some(self.as_space()));
                     debug_assert!(gc_performed, "GC not performed when forced.");
                     pr.clear_request(pages_reserved);
                     VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
@@ -356,7 +510,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();
         let pr = self.get_page_resource();
         let pages_reserved = pr.reserve_pages(total_pages);
-        let gc_required = should_poll && VM::VMActivePlan::global().poll(false, self.as_space());
+        let gc_required =
+            should_poll && VM::VMActivePlan::global().poll(false, Some(self.as_space()));
         pr.clear_request(pages_reserved);
         if gc_required {
             if !allow_poll {
@@ -375,11 +530,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         pages: usize,
         poll_on_failure: bool,
     ) -> Option<Address> {
-        let pr = self.get_page_resource().bpr().unwrap();
+        let pr = self.get_page_resource();
         let pages_reserved = pr.reserve_pages(pages);
         let should_poll = VM::VMActivePlan::is_mutator(tls);
         let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();
-        match pr.alloc_pages_no_lock(self.common().descriptor, pages_reserved, pages, tls) {
+        match pr.alloc_pages(self.common().descriptor, pages_reserved, pages, tls) {
             Ok(res) => {
                 // The following code was guarded by a page resource lock in Java MMTk.
                 // I think they are thread safe and we do not need a lock. So they
@@ -412,7 +567,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     if !allow_poll {
                         panic!("Physical allocation failed when polling not allowed!");
                     }
-                    let gc_performed = VM::VMActivePlan::global().poll(true, self.as_space());
+                    let gc_performed = VM::VMActivePlan::global().poll(true, Some(self.as_space()));
                     debug_assert!(gc_performed, "GC not performed when forced.");
                 }
                 pr.clear_request(pages_reserved);
@@ -449,11 +604,14 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
             bytes,
             new_chunk
         );
-        // FIXME: This assertion is too strict. See https://github.com/mmtk/mmtk-core/issues/374
-        // debug_assert!(
-        //     (new_chunk && start.is_aligned_to(BYTES_IN_CHUNK)) || !new_chunk,
-        //     "should only grow space for new chunks at chunk-aligned start address"
-        // );
+
+        // If this is not a new chunk, the SFT for [start, start + bytes) should alreayd be initialized.
+        #[cfg(debug_assertions)]
+        if !new_chunk {
+            debug_assert!(SFT_MAP.get(start).name() != EMPTY_SFT_NAME, "In grow_space(start = {}, bytes = {}, new_chunk = {}), we have empty SFT entries (chunk for {} = {})", start, bytes, new_chunk, start, SFT_MAP.get(start).name());
+            debug_assert!(SFT_MAP.get(start + bytes - 1).name() != EMPTY_SFT_NAME, "In grow_space(start = {}, bytes = {}, new_chunk = {}), we have empty SFT entries (chunk for {} = {}", start, bytes, new_chunk, start + bytes - 1, SFT_MAP.get(start + bytes - 1).name());
+        }
+
         if new_chunk {
             SFT_MAP.update(self.as_sft(), start, bytes);
         }
@@ -493,6 +651,12 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     fn common(&self) -> &CommonSpace<VM>;
 
     fn release_multiple_pages(&mut self, start: Address);
+
+    /// What copy semantic we should use for this space if we copy objects from this space.
+    /// This is only needed for plans that use SFTProcessEdges
+    fn set_copy_for_sft_trace(&mut self, _semantics: Option<CopySemantics>) {
+        panic!("A copying space should override this method")
+    }
 
     fn print_vm_map(&self) {
         let common = self.common();
@@ -561,6 +725,10 @@ pub struct CommonSpace<VM: VMBinding> {
     pub descriptor: SpaceDescriptor,
     pub vmrequest: VMRequest,
 
+    /// For a copying space that allows sft_trace_object(), this should be set before each GC so we know
+    // the copy semantics for the space.
+    pub copy: Option<CopySemantics>,
+
     immortal: bool,
     movable: bool,
     pub contiguous: bool,
@@ -579,6 +747,9 @@ pub struct CommonSpace<VM: VMBinding> {
     // TODO: This should be a constant for performance.
     pub needs_log_bit: bool,
     pub needs_field_log_bit: bool,
+
+    /// A lock used during acquire() to make sure only one thread can allocate.
+    pub acquire_lock: Mutex<()>,
 
     p: PhantomData<VM>,
 }
@@ -608,6 +779,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             name: opt.name,
             descriptor: SpaceDescriptor::UNINITIALIZED,
             vmrequest: opt.vmrequest,
+            copy: None,
             immortal: opt.immortal,
             movable: opt.movable,
             contiguous: true,
@@ -621,6 +793,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             needs_field_log_bit: opt.needs_field_log_bit,
             metadata: opt.side_metadata_specs,
             p: PhantomData,
+            acquire_lock: Mutex::new(()),
         };
 
         let vmrequest = opt.vmrequest;
@@ -653,14 +826,13 @@ impl<VM: VMBinding> CommonSpace<VM> {
             extent
         );
 
-        let start: Address;
-        if let VMRequest::Fixed { start: _start, .. } = vmrequest {
-            start = _start;
+        let start = if let VMRequest::Fixed { start: _start, .. } = vmrequest {
+            _start
         } else {
             // FIXME
             //if (HeapLayout.vmMap.isFinalized()) VM.assertions.fail("heap is narrowed after regionMap is finalized: " + name);
-            start = heap.reserve(extent, top);
-        }
+            heap.reserve(extent, top)
+        };
         assert!(
             start == chunk_align_up(start),
             "{} starting on non-aligned boundary: {}",

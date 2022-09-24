@@ -2,9 +2,9 @@ use crate::mmtk::SFT_MAP;
 use crate::policy::space::{CommonSpace, Space, SFT};
 use crate::util::address::Address;
 use crate::util::heap::PageResource;
-
 use crate::util::ObjectReference;
 
+use crate::policy::space::*;
 use crate::util::conversions;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{
@@ -57,6 +57,14 @@ impl<VM: VMBinding> SFT for LockFreeImmortalSpace<VM> {
     fn initialize_object_metadata(&self, _object: ObjectReference, _bytes: usize, _alloc: bool) {
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit(_object);
+    }
+    fn sft_trace_object(
+        &self,
+        _queue: &mut VectorObjectQueue,
+        _object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        unreachable!()
     }
 }
 
@@ -138,6 +146,27 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
     fn verify_side_metadata_sanity(&self, side_metadata_sanity_checker: &mut SideMetadataSanity) {
         side_metadata_sanity_checker
             .verify_metadata_context(std::any::type_name::<Self>(), &self.metadata)
+    }
+}
+
+use crate::plan::{ObjectQueue, VectorObjectQueue};
+use crate::scheduler::GCWorker;
+use crate::util::copy::CopySemantics;
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LockFreeImmortalSpace<VM> {
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        _queue: &mut Q,
+        _object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        unreachable!()
+    }
+    #[inline(always)]
+    fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        unreachable!()
     }
 }
 

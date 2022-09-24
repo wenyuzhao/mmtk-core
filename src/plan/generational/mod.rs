@@ -11,12 +11,9 @@ use crate::policy::space::Space;
 use crate::util::alloc::AllocatorSelector;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
-use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::Plan;
-
-use std::sync::atomic::Ordering;
 
 use super::mutator_context::create_space_mapping;
 use super::mutator_context::ReservedAllocators;
@@ -54,11 +51,6 @@ pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
 
 /// Full heap collection as nursery GC.
 pub const FULL_NURSERY_GC: bool = crate::args::BARRIER_MEASUREMENT;
-/// Force object barrier never enters the slow-path.
-/// If enabled,
-///  - `FULL_NURSERY_GC` must be `true`.
-///  - `ACTIVE_BARRIER` must be `ObjectBarrier`.
-pub const NO_SLOW: bool = false;
 
 /// Constraints for generational plans. Each generational plan should overwrite based on this constant.
 pub static GEN_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -66,8 +58,8 @@ pub static GEN_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     gc_header_bits: 2,
     gc_header_words: 0,
     num_specialized_scans: 1,
-    needs_log_bit: true,
-    needs_field_log_bit: *ACTIVE_BARRIER == BarrierSelector::FieldLoggingBarrier,
+    needs_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier),
+    needs_field_log_bit: false,
     barrier: *ACTIVE_BARRIER,
     max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
         crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
@@ -82,26 +74,6 @@ pub fn new_generational_global_metadata_specs<VM: VMBinding>() -> Vec<SideMetada
     let specs =
         crate::util::metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC]);
     SideMetadataContext::new_global_specs(&specs)
-}
-
-/// Post copying operation for generational plans.
-pub fn generational_post_copy<VM: VMBinding>(
-    obj: ObjectReference,
-    _tib: Address,
-    bytes: usize,
-    _semantics: AllocationSemantics,
-) {
-    crate::util::object_forwarding::clear_forwarding_bits::<VM>(obj);
-    if !FULL_NURSERY_GC {
-        debug_assert_eq!(*ACTIVE_BARRIER, BarrierSelector::ObjectBarrier);
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(obj, Ordering::SeqCst);
-    } else if !NO_SLOW {
-        for i in (0..bytes).step_by(8) {
-            let a = obj.to_address() + i;
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
-        }
-    }
 }
 
 const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {

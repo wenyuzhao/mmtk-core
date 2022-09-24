@@ -2,12 +2,13 @@ use super::chunk::Chunk;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
+use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockQueue;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{self, *};
-use crate::util::{constants::*, rc};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use std::{iter::Step, ops::Range, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 /// The block allocation state.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -83,6 +84,25 @@ impl BlockState {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Block(Address);
+
+impl From<Address> for Block {
+    #[inline(always)]
+    fn from(address: Address) -> Block {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+}
+
+impl From<Block> for Address {
+    #[inline(always)]
+    fn from(block: Block) -> Address {
+        block.0
+    }
+}
+
+impl Region for Block {
+    const LOG_BYTES: usize = 15;
+}
 
 impl Block {
     /// Log bytes in block
@@ -177,30 +197,6 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn calc_dead_bytes<VM: VMBinding>(&self) -> usize {
-        let mut live = 0usize;
-        for o in (self.start()..self.end())
-            .step_by(rc::MIN_OBJECT_SIZE)
-            .map(|a| unsafe { a.to_object_reference() })
-        {
-            let c = rc::count(o);
-            if c != 0 {
-                if Line::is_aligned(o.to_address()) {
-                    if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
-                        continue;
-                    }
-                }
-                let o = o.fix_start_address::<VM>();
-                live += o.get_size::<VM>();
-            }
-        }
-        if live > Self::BYTES {
-            return 0;
-        }
-        Self::BYTES - live
-    }
-
-    #[inline(always)]
     pub fn dead_bytes(&self) -> usize {
         let v = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
         v << LOG_BYTES_IN_WORD
@@ -213,7 +209,8 @@ impl Block {
 
     pub const ZERO: Self = Self(Address::ZERO);
 
-    pub const fn is_zero(&self) -> bool {
+    #[inline(always)]
+    pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
 
@@ -393,7 +390,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     #[inline]
-    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, _space: &ImmixSpace<VM>) {
+    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         #[cfg(feature = "sanity")]
         if !copy && !reuse {
@@ -408,7 +405,7 @@ impl Block {
             if reuse {
                 debug_assert!(!self.is_defrag_source());
             }
-            self.set_state(if crate::args::REF_COUNT {
+            self.set_state(if space.rc_enabled {
                 BlockState::Unmarked
             } else {
                 BlockState::Marked
@@ -422,40 +419,50 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     #[inline]
-    pub fn deinit(&self) {
-        if !crate::args::HOLE_COUNTING && crate::args::REF_COUNT {
+    pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
         }
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
         self.set_as_defrag_source(false);
-        if crate::args::REF_COUNT {
+        if space.rc_enabled {
             Line::update_validity(self.lines());
         }
+    }
+
+    #[inline(always)]
+    pub fn start_line(&self) -> Line {
+        Line::from(self.start())
+    }
+
+    #[inline(always)]
+    pub fn end_line(&self) -> Line {
+        Line::from(self.end())
     }
 
     /// Get the range of lines within the block.
     #[allow(clippy::assertions_on_constants)]
     #[inline(always)]
-    pub fn lines(&self) -> Range<Line> {
+    pub fn lines(&self) -> RegionIterator<Line> {
         debug_assert!(!super::BLOCK_ONLY);
-        Line::from(self.start())..Line::from(self.end())
+        RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
     #[inline(always)]
     pub fn clear_line_validity_states(&self) {
-        side_metadata::bzero_x(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
+        side_metadata::bzero_metadata(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_x(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
+        side_metadata::bzero_metadata(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_striddle_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             &crate::util::rc::RC_STRADDLE_LINES,
             self.start(),
             Block::BYTES,
@@ -497,7 +504,7 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_x(
+        side_metadata::bzero_metadata(
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             self.start(),
             Block::BYTES,
@@ -522,16 +529,7 @@ impl Block {
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {
             let bytes = limit.offset_from(start) as usize;
-            if crate::args::ENABLE_NON_TEMPORAL_MEMSET && false {
-                debug_assert_eq!(bytes & ((1 << 4) - 1), 0);
-                crate::util::memory::write_nt(
-                    start as *mut u128,
-                    bytes >> 4,
-                    0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff_u128,
-                );
-            } else {
-                std::ptr::write_bytes(start, 0xffu8, bytes);
-            }
+            std::ptr::write_bytes(start, 0xffu8, bytes);
         }
     }
 
@@ -567,7 +565,6 @@ impl Block {
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
-        debug_assert!(!crate::args::REF_COUNT);
         if super::BLOCK_ONLY {
             match self.get_state() {
                 BlockState::Unallocated => false,
@@ -632,7 +629,6 @@ impl Block {
         space: &ImmixSpace<VM>,
         mutator_reused_blocks: bool,
     ) {
-        debug_assert!(crate::args::REF_COUNT);
         if mutator_reused_blocks {
             if self.rc_dead() {
                 space.release_block(*self, true, true);
@@ -672,10 +668,7 @@ impl Block {
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
                 // println!("reuse N {:?}", self);
-                space.reusable_blocks.push_x(
-                    *self,
-                    (Block::LINES - self.calc_dead_lines()) << Line::LOG_BYTES,
-                );
+                space.reusable_blocks.push(*self);
             } else if mutator_reused_blocks {
                 // debug_assert_eq!(self.get_state(), BlockState::Reusing);
                 self.set_state(BlockState::Marked);
@@ -697,7 +690,6 @@ impl Block {
 
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        debug_assert!(crate::args::REF_COUNT);
         if self.get_state() == BlockState::Unallocated {
             return false;
         }
@@ -742,17 +734,14 @@ impl Block {
             };
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
-                space.reusable_blocks.push_x(
-                    *self,
-                    (Block::LINES - self.calc_dead_lines()) << Line::LOG_BYTES,
-                );
+                space.reusable_blocks.push(*self);
             }
         }
         false
     }
 
     #[inline(always)]
-    pub const fn rc_table_start(&self) -> Address {
+    pub fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 
@@ -829,75 +818,37 @@ impl Block {
     }
 }
 
-impl Step for Block {
-    /// Get the number of blocks between the given two blocks.
-    #[inline(always)]
-    #[allow(clippy::assertions_on_constants)]
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        if start > end {
-            return None;
-        }
-        Some((end.start() - start.start()) >> Self::LOG_BYTES)
-    }
-    /// result = block_address + count * block_size
-    #[inline(always)]
-    fn forward(start: Self, count: usize) -> Self {
-        Self::from(start.start() + (count << Self::LOG_BYTES))
-    }
-    /// result = block_address + count * block_size
-    #[inline(always)]
-    fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() > usize::MAX - (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::forward(start, count))
-    }
-    /// result = block_address + count * block_size
-    #[inline(always)]
-    fn backward(start: Self, count: usize) -> Self {
-        Self::from(start.start() - (count << Self::LOG_BYTES))
-    }
-    /// result = block_address - count * block_size
-    #[inline(always)]
-    fn backward_checked(start: Self, count: usize) -> Option<Self> {
-        if start.start().as_usize() < (count << Self::LOG_BYTES) {
-            return None;
-        }
-        Some(Self::backward(start, count))
-    }
-}
-
 /// A non-block single-linked list to store blocks.
 pub struct BlockList {
-    prioritized_queue: BlockQueue<Block>,
     queue: BlockQueue<Block>,
+    num_workers: usize,
+}
+
+impl Default for BlockList {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BlockList {
+    /// Create empty block list
     pub fn new() -> Self {
         Self {
-            prioritized_queue: BlockQueue::new(),
             queue: BlockQueue::new(),
+            num_workers: 0,
         }
     }
+
+    /// Initialize block queue
+    pub fn init(&mut self, num_workers: usize) {
+        self.queue.init(num_workers);
+        self.num_workers = num_workers;
+    }
+
     /// Get number of blocks in this list.
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.queue.len() + self.prioritized_queue.len()
-    }
-
-    #[inline(always)]
-    pub fn push_x(&self, block: Block, live: usize) {
-        if live > (Block::BYTES >> 1) {
-            self.push_prioritized(block)
-        } else {
-            self.push(block)
-        }
-    }
-
-    #[inline(always)]
-    pub fn push_prioritized(&self, block: Block) {
-        self.prioritized_queue.push(block)
+        self.queue.len()
     }
 
     /// Add a block to the list.
@@ -909,27 +860,23 @@ impl BlockList {
     /// Pop a block out of the list.
     #[inline(always)]
     pub fn pop(&self) -> Option<Block> {
-        if let Some(b) = self.prioritized_queue.pop() {
-            return Some(b);
-        }
         self.queue.pop()
     }
 
     /// Clear the list.
-    #[inline(always)]
     pub fn reset(&mut self) {
-        self.prioritized_queue = BlockQueue::new();
         self.queue = BlockQueue::new();
+        self.init(self.num_workers);
     }
 
+    /// Iterate all the blocks in the queue. Call the visitor for each reported block.
     #[inline]
     pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
-        self.prioritized_queue.iterate_blocks(&mut f);
         self.queue.iterate_blocks(&mut f);
     }
 
+    /// Flush the block queue
     pub fn flush_all(&self) {
-        self.prioritized_queue.flush_all();
         self.queue.flush_all();
     }
 }

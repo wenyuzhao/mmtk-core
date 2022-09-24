@@ -1,5 +1,4 @@
 // ANCHOR: imports_no_gc_work
-use crate::mmtk::MMTK;
 use crate::plan::global::BasePlan; //Modify
 use crate::plan::global::CommonPlan; // Add
 use crate::plan::global::GcStatus; // Add
@@ -11,8 +10,8 @@ use crate::plan::PlanConstraints;
 use crate::policy::copyspace::CopySpace; // Add
 use crate::policy::space::Space;
 use crate::scheduler::*; // Modify
-use crate::scheduler::gc_work::*; // Add
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::{HEAP_END, HEAP_START};
@@ -27,24 +26,21 @@ use std::sync::atomic::{AtomicBool, Ordering}; // Add
 use std::sync::Arc;
 // ANCHOR_END: imports_no_gc_work
 
-// ANCHOR: imports_gc_work
-use super::gc_work::{MyGCCopyContext, MyGCProcessEdges}; // Add
-//ANCHOR_END: imports_gc_work
-
 // Remove #[allow(unused_imports)].
 // Remove handle_user_collection_request().
 
-
-pub type SelectedPlan<VM> = MyGC<VM>;
-
-pub const ALLOC_MyGC: AllocationSemantics = AllocationSemantics::Default; // Add
+use mmtk_macros::PlanTraceObject;
 
 // Modify
 // ANCHOR: plan_def
+#[derive(PlanTraceObject)]
 pub struct MyGC<VM: VMBinding> {
     pub hi: AtomicBool,
+    #[trace(CopySemantics::DefaultCopy)]
     pub copyspace0: CopySpace<VM>,
+    #[trace(CopySemantics::DefaultCopy)]
     pub copyspace1: CopySpace<VM>,
+    #[fallback_trace]
     pub common: CommonPlan<VM>,
 }
 // ANCHOR_END: plan_def
@@ -66,17 +62,22 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
         &MYGC_CONSTRAINTS
     }
 
-    // ANCHOR: create_worker_local
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = MyGCCopyContext::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
+    // ANCHOR: create_copy_config
+    fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
+        use enum_map::enum_map;
+        CopyConfig {
+            copy_mapping: enum_map! {
+                CopySemantics::DefaultCopy => CopySelector::CopySpace(0),
+                _ => CopySelector::Unused,
+            },
+            space_mapping: vec![
+                // The tospace argument doesn't matter, we will rebind before a GC anyway.
+                (CopySelector::CopySpace(0), &self.copyspace0)
+            ],
+            constraints: &MYGC_CONSTRAINTS,
+        }
     }
-    // ANCHOR_END: create_worker_local
+    // ANCHOR_END: create_copy_config
 
     // Modify
     // ANCHOR: gc_init
@@ -84,9 +85,8 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
         &mut self,
         heap_size: usize,
         vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
     ) {
-        self.common.gc_init(heap_size, vm_map, scheduler);
+        self.common.gc_init(heap_size, vm_map);
         self.copyspace0.init(&vm_map);
         self.copyspace1.init(&vm_map);
     }
@@ -102,8 +102,8 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
     // ANCHOR_END: schedule_collection
 
     // ANCHOR: collection_required()
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+        self.base().collection_required(self, space_full)
     }
     // ANCHOR_END: collection_required()
 
@@ -122,8 +122,19 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
         let hi = self.hi.load(Ordering::SeqCst);
         self.copyspace0.prepare(hi);
         self.copyspace1.prepare(!hi);
+
+        self.fromspace_mut()
+            .set_copy_for_sft_trace(Some(CopySemantics::DefaultCopy));
+        self.tospace_mut().set_copy_for_sft_trace(None);
     }
     // ANCHOR_END: prepare
+
+    // Add
+    // ANCHOR: prepare_worker
+    fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
+        unsafe { worker.get_copy_context_mut().copy[0].assume_init_mut() }.rebind(self.tospace());
+    }
+    // ANCHOR_END: prepare_worker
 
     // Modify
     // ANCHOR: release
@@ -135,17 +146,17 @@ impl<VM: VMBinding> Plan for MyGC<VM> {
 
     // Modify
     // ANCHOR: plan_get_collection_reserve
-    fn get_collection_reserve(&self) -> usize {
+    fn get_collection_reserved_pages(&self) -> usize {
         self.tospace().reserved_pages()
     }
     // ANCHOR_END: plan_get_collection_reserve
 
     // Modify
-    // ANCHOR: plan_get_pages_used
-    fn get_pages_used(&self) -> usize {
-        self.tospace().reserved_pages() + self.common.get_pages_used()
+    // ANCHOR: plan_get_used_pages
+    fn get_used_pages(&self) -> usize {
+        self.tospace().reserved_pages() + self.common.get_used_pages()
     }
-    // ANCHOR_END: plan_get_pages_used
+    // ANCHOR_END: plan_get_used_pages
 
     // Modify
     // ANCHOR: plan_base
@@ -169,7 +180,6 @@ impl<VM: VMBinding> MyGC<VM> {
         vm_map: &'static VMMap,
         mmapper: &'static Mmapper,
         options: Arc<UnsafeOptionsWrapper>,
-        _scheduler: &'static GCWorkScheduler<VM>,
     ) -> Self {
         // Modify
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
@@ -227,6 +237,22 @@ impl<VM: VMBinding> MyGC<VM> {
             &self.copyspace0
         } else {
             &self.copyspace1
+        }
+    }
+
+    pub fn tospace_mut(&mut self) -> &mut CopySpace<VM> {
+        if self.hi.load(Ordering::SeqCst) {
+            &mut self.copyspace1
+        } else {
+            &mut self.copyspace0
+        }
+    }
+
+    pub fn fromspace_mut(&mut self) -> &mut CopySpace<VM> {
+        if self.hi.load(Ordering::SeqCst) {
+            &mut self.copyspace0
+        } else {
+            &mut self.copyspace1
         }
     }
     // ANCHOR_END: plan_space_access

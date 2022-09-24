@@ -1,6 +1,5 @@
 use atomic_traits::Atomic;
 use std::fmt;
-use std::iter::Step;
 use std::mem;
 use std::ops::*;
 use std::sync::atomic::Ordering;
@@ -34,7 +33,7 @@ pub type ByteOffset = isize;
 pub struct Address(usize);
 
 /// Address + ByteSize (positive)
-impl const Add<ByteSize> for Address {
+impl Add<ByteSize> for Address {
     type Output = Address;
     fn add(self, offset: ByteSize) -> Address {
         Address(self.0 + offset)
@@ -236,7 +235,7 @@ impl Address {
     /// # Safety
     /// This could throw a segment fault if the address is invalid
     #[inline(always)]
-    pub const unsafe fn load<T: Copy>(self) -> T {
+    pub unsafe fn load<T: Copy>(self) -> T {
         *(self.0 as *mut T)
     }
 
@@ -280,7 +279,7 @@ impl Address {
 
     /// is this address zero?
     #[inline(always)]
-    pub const fn is_zero(self) -> bool {
+    pub fn is_zero(self) -> bool {
         self.0 == 0
     }
 
@@ -316,7 +315,7 @@ impl Address {
 
     /// converts the Address to a pointer
     #[inline(always)]
-    pub const fn to_ptr<T>(self) -> *const T {
+    pub fn to_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
@@ -333,6 +332,7 @@ impl Address {
     }
 
     /// returns the chunk index for this address
+    #[inline(always)]
     pub fn chunk_index(self) -> usize {
         use crate::util::conversions;
         conversions::address_to_chunk_index(self)
@@ -491,25 +491,6 @@ impl fmt::Debug for Address {
     }
 }
 
-impl Step for Address {
-    #[inline(always)]
-    #[allow(clippy::assertions_on_constants)]
-    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-        if start > end {
-            return None;
-        }
-        Some(*end - *start)
-    }
-    #[inline(always)]
-    fn forward_checked(start: Self, count: usize) -> Option<Self> {
-        Some(start + count)
-    }
-    #[inline(always)]
-    fn backward_checked(start: Self, count: usize) -> Option<Self> {
-        Some(start - count)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::util::Address;
@@ -649,8 +630,8 @@ impl ObjectReference {
         SFT_MAP.get(Address(self.0)).get_forwarded_object(self)
     }
 
-    pub fn is_mapped(self) -> bool {
-        SFT_MAP.is_in_space(self)
+    pub fn is_in_any_space(self) -> bool {
+        SFT_MAP.is_in_any_space(self)
     }
 
     #[cfg(feature = "sanity")]
@@ -671,18 +652,6 @@ impl ObjectReference {
         }
         let a = VM::VMObjectModel::object_start_ref(self);
         a..a + self.get_size::<VM>()
-    }
-
-    #[inline(always)]
-    pub fn dump<VM: VMBinding>(self) {
-        debug_assert!(!self.is_null());
-        VM::VMObjectModel::dump_object(self)
-    }
-
-    #[inline(always)]
-    pub fn dump_s<VM: VMBinding>(self) -> String {
-        debug_assert!(!self.is_null());
-        VM::VMObjectModel::dump_object_s(self)
     }
 
     #[inline(always)]
@@ -760,7 +729,7 @@ impl ObjectReference {
             if self.is_null() {
                 return;
             }
-            assert!(self.is_mapped());
+            assert!(self.is_in_any_space());
             assert_ne!(
                 unsafe { self.to_address().load::<usize>() },
                 0xdead,

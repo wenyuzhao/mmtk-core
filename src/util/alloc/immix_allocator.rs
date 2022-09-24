@@ -1,4 +1,5 @@
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
+use super::object_ref_guard::adjust_thread_local_buffer_limit;
 use crate::plan::Plan;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::block::BlockState;
@@ -8,6 +9,7 @@ use crate::policy::space::Space;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::alloc::Allocator;
+use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::VMThread;
 use crate::util::Address;
 use crate::vm::*;
@@ -21,7 +23,9 @@ pub struct ImmixAllocator<VM: VMBinding> {
     cursor: Address,
     /// Limit for bump pointer
     limit: Address,
+    /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
     space: &'static ImmixSpace<VM>,
+    /// [`Plan`] instance that this allocator instance is associated with.
     plan: &'static dyn Plan<VM = VM>,
     /// *unused*
     hot: bool,
@@ -36,13 +40,6 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     mutator_recycled_blocks: Box<Vec<Block>>,
-    /// Are we doing alloc slow when stress test is turned on. This is only set to true,
-    /// during the allow_slow_once_stress_test() call. In the call, we will restore the correct
-    /// limit for bump allocation, and call alloc() to try resolve the allocation request with
-    /// the thread local buffer. If we cannot do the allocation from the thread local buffer,
-    /// we will eventually call allow_slow_once_stress_test(). With this flag set to true, we know
-    /// we are resolving an allocation request and have failed the thread local allocation. In
-    /// this case, we will acquire new block from the space.
     retry: bool,
 }
 
@@ -160,14 +157,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
-            mutator_recycled_blocks: box vec![],
+            mutator_recycled_blocks: Box::new(vec![]),
             retry: false,
         }
     }
 
     pub fn flush(&mut self) {
         if !self.mutator_recycled_blocks.is_empty() {
-            let mut v = box vec![];
+            let mut v = Box::new(vec![]);
             std::mem::swap(&mut v, &mut self.mutator_recycled_blocks);
             self.immix_space().mutator_recycled_blocks.push(*v);
             // self.immix_space().scheduler().work_buckets[WorkBucketStage::Initial]
@@ -180,7 +177,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.space
     }
 
-    /// Large-object (larger than a line) bump alloaction.
+    /// Large-object (larger than a line) bump allocation.
     fn overflow_alloc(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: overflow_alloc", self.tls);
         let start = align_allocation_no_fill::<VM>(self.large_cursor, align, offset);
@@ -218,15 +215,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: isize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
-            if let Some(lines) = self.immix_space().get_next_available_lines(self.copy, line) {
+            if let Some((start_line, end_line)) =
+                self.immix_space().get_next_available_lines(self.copy, line)
+            {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
-                self.cursor = lines.start.start();
-                self.limit = lines.end.start();
+                self.cursor = start_line.start();
+                self.limit = adjust_thread_local_buffer_limit::<VM>(end_line.start());
                 trace!(
-                    "{:?}: acquire_recyclable_lines -> {:?} {:?} {:?}",
+                    "{:?}: acquire_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
                     self.tls,
                     self.line,
-                    lines,
+                    start_line,
+                    end_line,
                     self.tls
                 );
                 #[cfg(feature = "global_alloc_bit")]
@@ -236,12 +236,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     align_allocation_no_fill::<VM>(self.cursor, align, offset) + size <= self.limit
                 );
                 let block = line.block();
-                self.line = if lines.end == block.lines().end {
+                self.line = if end_line == block.end_line() {
                     // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
                     None
                 } else {
                     // Update the hole-searching cursor to None.
-                    Some(lines.end)
+                    Some(end_line)
                 };
                 return true;
             } else {
@@ -264,7 +264,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // }
                 }
                 // Set the hole-searching cursor to the start of this block.
-                self.line = Some(block.lines().start);
+                self.line = Some(block.start_line());
                 true
             }
             _ => false,
@@ -276,67 +276,105 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         match self.immix_space().get_clean_block(self.tls, self.copy) {
             None => Address::ZERO,
             Some(block) => {
-                trace!("{:?}: Acquired a new block {:?}", self.tls, block);
+                trace!(
+                    "{:?}: Acquired a new block {:?} -> {:?}",
+                    self.tls,
+                    block.start(),
+                    block.end()
+                );
                 if self.request_for_large {
                     self.large_cursor = block.start();
-                    self.large_limit = block.end();
+                    self.large_limit = adjust_thread_local_buffer_limit::<VM>(block.end());
                 } else {
                     self.cursor = block.start();
-                    self.limit = block.end();
+                    self.limit = adjust_thread_local_buffer_limit::<VM>(block.end());
                 }
                 self.alloc(size, align, offset)
             }
         }
     }
 
-    /// Set fake limits for the bump allocation for stress tests. The fake limit is the remaining thread local buffer size,
-    /// which should be always smaller than the bump cursor.
-    /// This method may be reentrant. We need to check before setting the values.
+    /// Return whether the TLAB has been exhausted and we need to acquire a new block. Assumes that
+    /// the buffer limits have been restored using [`ImmixAllocator::restore_limit_for_stress`].
+    /// Note that this function may implicitly change the limits of the allocator.
+    fn require_new_block(&mut self, size: usize, align: usize, offset: isize) -> bool {
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+        let insufficient_space = new_cursor > self.limit;
+
+        // We want this function to behave as if `alloc()` has been called. Hence, we perform a
+        // size check and then return the conditions where `alloc_slow_inline()` would be called
+        // in an `alloc()` call, namely when both `overflow_alloc()` and `alloc_slow_hot()` fail
+        // to service the allocation request
+        if insufficient_space && size > Line::BYTES {
+            let start = align_allocation_no_fill::<VM>(self.large_cursor, align, offset);
+            let end = start + size;
+            end > self.large_limit
+        } else {
+            // We try to acquire recyclable lines here just like `alloc_slow_hot()`
+            insufficient_space && !self.acquire_recyclable_lines(size, align, offset)
+        }
+    }
+
+    /// Set fake limits for the bump allocation for stress tests. The fake limit is the remaining
+    /// thread local buffer size, which should be always smaller than the bump cursor. This method
+    /// may be reentrant. We need to check before setting the values.
     fn set_limit_for_stress(&mut self) {
         if self.cursor < self.limit {
+            let old_limit = self.limit;
             let new_limit = unsafe { Address::from_usize(self.limit - self.cursor) };
             self.limit = new_limit;
             trace!(
-                "{:?}: set_limit_for_stress. normal {} -> {}",
+                "{:?}: set_limit_for_stress. normal c {} l {} -> {}",
                 self.tls,
-                self.limit,
-                new_limit
+                self.cursor,
+                old_limit,
+                new_limit,
             );
         }
+
         if self.large_cursor < self.large_limit {
+            let old_lg_limit = self.large_limit;
             let new_lg_limit = unsafe { Address::from_usize(self.large_limit - self.large_cursor) };
             self.large_limit = new_lg_limit;
             trace!(
-                "{:?}: set_limit_for_stress. large {} -> {}",
+                "{:?}: set_limit_for_stress. large c {} l {} -> {}",
                 self.tls,
-                self.large_limit,
-                new_lg_limit
+                self.large_cursor,
+                old_lg_limit,
+                new_lg_limit,
             );
         }
     }
 
-    /// Restore the real limits for the bump allocation so we can do a properly thread local allocation.
-    /// The fake limit is the remaining thread local buffer size, and we restore the actual limit from the size and the cursor.
-    /// This method may be reentrant. We need to check before setting the values.
+    /// Restore the real limits for the bump allocation so we can properly do a thread local
+    /// allocation. The fake limit is the remaining thread local buffer size, and we restore the
+    /// actual limit from the size and the cursor. This method may be reentrant. We need to check
+    /// before setting the values.
     fn restore_limit_for_stress(&mut self) {
         if self.limit < self.cursor {
+            let old_limit = self.limit;
             let new_limit = self.cursor + self.limit.as_usize();
             self.limit = new_limit;
             trace!(
-                "{:?}: restore_limit_for_stress. normal {} -> {}",
+                "{:?}: restore_limit_for_stress. normal c {} l {} -> {}",
                 self.tls,
-                self.limit,
-                new_limit
+                self.cursor,
+                old_limit,
+                new_limit,
             );
         }
+
         if self.large_limit < self.large_cursor {
+            let old_lg_limit = self.large_limit;
             let new_lg_limit = self.large_cursor + self.large_limit.as_usize();
             self.large_limit = new_lg_limit;
             trace!(
-                "{:?}: restore_limit_for_stress. large {} -> {}",
+                "{:?}: restore_limit_for_stress. large c {} l {} -> {}",
                 self.tls,
-                self.large_limit,
-                new_lg_limit
+                self.large_cursor,
+                old_lg_limit,
+                new_lg_limit,
             );
         }
     }

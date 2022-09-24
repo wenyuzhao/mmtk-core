@@ -1,6 +1,5 @@
 use super::gc_work::PPGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
-use crate::mmtk::MMTK;
 use crate::plan::global::GcStatus;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
@@ -17,14 +16,17 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::{plan::global::BasePlan, vm::VMBinding};
 use crate::{
-    plan::global::{CommonPlan, NoCopy},
-    policy::largeobjectspace::LargeObjectSpace,
+    plan::global::CommonPlan, policy::largeobjectspace::LargeObjectSpace,
     util::opaque_pointer::VMWorkerThread,
 };
 use enum_map::EnumMap;
 use std::sync::Arc;
 
+use mmtk_macros::PlanTraceObject;
+
+#[derive(PlanTraceObject)]
 pub struct PageProtect<VM: VMBinding> {
+    #[trace]
     pub space: LargeObjectSpace<VM>,
     pub common: CommonPlan<VM>,
 }
@@ -41,22 +43,7 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
         &CONSTRAINTS
     }
 
-    fn create_worker_local(
-        &self,
-        tls: VMWorkerThread,
-        mmtk: &'static MMTK<Self::VM>,
-    ) -> GCWorkerLocalPtr {
-        let mut c = NoCopy::new(mmtk);
-        c.init(tls);
-        GCWorkerLocalPtr::new(c)
-    }
-
-    fn gc_init(
-        &mut self,
-        heap_size: usize,
-        vm_map: &'static VMMap,
-        scheduler: &Arc<GCWorkScheduler<VM>>,
-    ) {
+    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
         // Warn users that the plan may fail due to maximum mapping allowed.
         warn!(
             "PageProtect uses a high volume of memory mappings. \
@@ -68,7 +55,7 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
                 ""
             }
         );
-        self.common.gc_init(heap_size, vm_map, scheduler);
+        self.common.gc_init(heap_size, vm_map);
         self.space.init(vm_map);
     }
 
@@ -92,16 +79,12 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
         self.space.release(true);
     }
 
-    fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
-        self.base().collection_required(self, space_full, space)
+    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+        self.base().collection_required(self, space_full)
     }
 
-    fn get_collection_reserve(&self) -> usize {
-        0
-    }
-
-    fn get_pages_used(&self) -> usize {
-        self.space.reserved_pages() + self.common.get_pages_used()
+    fn get_used_pages(&self) -> usize {
+        self.space.reserved_pages() + self.common.get_used_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {

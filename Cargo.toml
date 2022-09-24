@@ -1,8 +1,8 @@
 [package]
 name = "mmtk"
-version = "0.8.0"
+version = "0.13.0"
 authors = ["The MMTk Developers <>"]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "MMTk is a framework for the design and implementation of high-performance and portable memory managers."
 homepage = "https://www.mmtk.io"
@@ -10,6 +10,7 @@ repository = "https://github.com/mmtk/mmtk-core"
 readme = "README.md"
 categories = ["memory-management"]
 keywords = ["gc", "garbage", "collection", "garbage-collection", "allocation"]
+rust-version = "1.57.0"
 
 [lib]
 name = "mmtk"
@@ -17,28 +18,30 @@ crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
-custom_derive = "0.1"
-enum_derive = "0.1"
+# MMTk macros
+mmtk-macros = { version = "0.13.0", path = "macros/" }
+
 libc = "0.2"
-jemalloc-sys = {version = "0.3.2", features = ["disable_initial_exec_tls"], optional = true }
-mimalloc-sys = {version = "0.1.6", optional = true }
-hoard-sys = {version = "0.1.1", optional = true }
+jemalloc-sys = { version = "0.3.2", features = ["disable_initial_exec_tls"], optional = true }
+mimalloc-sys = { version = "0.1.6", optional = true }
+hoard-sys = { version = "0.1.2", optional = true }
 lazy_static = "1.1"
-log = {version = "0.4", features = ["max_level_trace", "release_max_level_off"] }
-crossbeam-deque = "0.7"
-crossbeam-queue = "0.3.2"
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_off"] }
+crossbeam = "0.8.1"
 num_cpus = "1.8"
-enum-map = "0.6.2"
+enum-map = "=2.1"
 downcast-rs = "1.1.1"
 atomic-traits = "0.2.0"
-atomic = "0.5"
-spin = {version = "0.9.2", features = ["std"]}
+atomic = "0.5.1"
+spin = {version = "0.9.3", features = ["std"]}
 env_logger = "0.8.2"
-pfm = {version = "0.1.0-beta.1", optional = true}
+pfm = { version = "0.1.0-beta.1", optional = true }
 thread-priority = "0.2.4"
+atomic_refcell = "0.1.7"
+strum = "0.24"
+strum_macros = "0.24"
 
 [dev-dependencies]
-crossbeam = "0.7.3"
 rand = "0.7.3"
 
 [features]
@@ -56,11 +59,13 @@ survival_ratio = []
 log_gc = []
 log_stages = ["log_gc"]
 log_work_packets = ["log_stages"]
+no_meta_counting = []
+
 # IX Features
-ix_concurrent_marking = []
-ix_lock_free_block_allocation = []
 ix_block_only = []
 ix_defrag = []
+
+# LXR Paraleters
 lxr_los_16k = []
 lxr_los_32k = []
 lxr_block_16k = []
@@ -84,41 +89,18 @@ lxr_buf_2048 = []
 lxr_rc_bits_2 = []
 lxr_rc_bits_4 = []
 lxr_rc_bits_8 = []
+
+# LXR Features
 lxr_hole_counting = []
 lxr_no_rc_in_cm = []
-slow_edge_check = []
-# LXR Features
-ix_ref_count = ["ix_lock_free_block_allocation"]
-lxr_heap_health_guided_gc = ["ix_ref_count"]
-lxr_lazy_decrements = ["ix_ref_count"]
-lxr_nursery_evacuation = ["ix_ref_count"]
-lxr_mature_evacuation = ["ix_ref_count", "lxr_nursery_evacuation"]
-lxr_concurrent_marking = ["ix_ref_count", "ix_concurrent_marking"]
-lxr_block_only = ["ix_ref_count", "ix_block_only"]
-lxr_dec_on_satb_sweep = []
-# LXR Features (unused)
+lxr_no_cm = []
+lxr_no_lazy = []
+lxr_no_nursery_evac = []
+lxr_no_mature_evac = []
+lxr_no_evac = ["lxr_no_nursery_evac", "lxr_no_mature_evac"]
 lxr_evacuate_nursery_in_recycled_lines = []
 lxr_delayed_nursery_evacuation = []
-lxr_count_bytes_for_mature_evac = []
 lxr_enable_initial_alloc_limit = []
-no_meta_counting = []
-
-# Non-moving, Non-concurrent LXR
-lxr_basic = ["ix_ref_count", "lxr_heap_health_guided_gc"]
-# LXR (Concurrent marking)
-lxr_cm = ["lxr_basic", "lxr_concurrent_marking"]
-# LXR (Lazy RC processing)
-lxr_lazy = ["lxr_basic", "lxr_lazy_decrements"]
-# LXR (Concurrent)
-lxr_conc = ["lxr_basic", "lxr_concurrent_marking", "lxr_lazy_decrements"]
-# LXR (Evacuation)
-lxr_nevac = ["lxr_basic", "lxr_nursery_evacuation"]
-lxr_evac = ["lxr_basic", "lxr_nursery_evacuation", "lxr_mature_evacuation", "lxr_count_bytes_for_mature_evac"]
-# LXR (Block only)
-lxr_block = ["lxr_basic", "lxr_block_only"]
-lxr_rc_only = ["lxr"]
-# LXR (Default config with full features)
-lxr = ["lxr_basic", "lxr_cm", "lxr_lazy", "lxr_evac"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -140,6 +122,9 @@ code_space  = []
 # metadata
 global_alloc_bit = []
 
+# conservative garbage collection support
+is_mmtk_object = ["global_alloc_bit"]
+
 # Run sanity GC
 sanity = []
 # Run analysis
@@ -157,6 +142,12 @@ extreme_assertions = []
 
 # Enable multiple spaces for NoGC, each allocator maps to an individual ImmortalSpace.
 nogc_multi_space = []
+
+# To collect statistics for each GC work packet. Enabling this may introduce a small overhead (several percentage slowdown on benchmark time).
+work_packet_stats = []
+
+# Count the malloc'd memory into the heap size
+malloc_counted_size = []
 
 # Do not modify the following line - ci-common.sh matches it
 # -- Mutally exclusive features --

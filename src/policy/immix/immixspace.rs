@@ -1,47 +1,65 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
-use super::{block::*, chunk::ChunkMap, defrag::Defrag};
-use crate::plan::immix::{Immix, Pause};
-use crate::plan::EdgeIterator;
+use super::{
+    block::*,
+    chunk::{Chunk, ChunkMap},
+    defrag::Defrag,
+};
+use crate::plan::immix::Pause;
+use crate::plan::lxr::{RemSet, LXR};
+use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
+use crate::policy::gc_work::TraceKind;
 use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
-use crate::policy::immix::chunk::Chunk;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
+use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
+use crate::scheduler::ProcessEdgesWork;
+use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
-use crate::util::metadata::{self, compare_exchange_metadata, load_metadata, MetadataSpec};
-use crate::util::rc::SweepBlocksAfterDecs;
-use crate::util::{object_forwarding as ForwardingWord, rc};
+use crate::util::metadata::{
+    self, compare_exchange_metadata, load_metadata, store_metadata, MetadataSpec,
+};
+use crate::util::object_forwarding as ForwardingWord;
+use crate::util::rc;
 use crate::util::{Address, ObjectReference};
 use crate::{
-    plan::TransitiveClosure,
-    scheduler::{gc_work::ProcessEdgesWork, GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
-    util::{heap::blockpageresource::BlockPageResource, opaque_pointer::VMThread},
-    AllocationSemantics, CopyContext, MMTK,
+    plan::ObjectQueue,
+    scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
+    util::opaque_pointer::{VMThread, VMWorkerThread},
+    MMTK,
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
-use crossbeam_queue::SegQueue;
+use crossbeam::queue::SegQueue;
 use spin::Mutex;
 use std::sync::atomic::AtomicUsize;
-use std::{
-    iter::Step,
-    ops::Range,
-    sync::{atomic::AtomicU8, Arc},
-};
+use std::sync::{atomic::AtomicU8, Arc};
 use std::{mem, ptr};
 
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
+// For 32-bit platforms, we still use FreeListPageResource
+#[cfg(target_pointer_width = "32")]
+use crate::util::heap::FreeListPageResource as ImmixPageResource;
+
+// BlockPageResource is for 64-bit platforms only
+#[cfg(target_pointer_width = "64")]
+use crate::util::heap::BlockPageResource as ImmixPageResource;
+
+pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
+pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
+
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pub pr: BlockPageResource<VM>,
+    pub pr: ImmixPageResource<VM>,
     /// Allocation status for all chunks in immix space
     pub chunk_map: ChunkMap,
     /// Current line mark state
@@ -61,7 +79,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub mutator_recycled_blocks: SegQueue<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    last_defrag_blocks: Vec<Block>,
+    pub last_defrag_blocks: Vec<Block>,
     defrag_blocks: Vec<Block>,
     num_defrag_blocks: AtomicUsize,
     #[allow(dead_code)]
@@ -70,6 +88,9 @@ pub struct ImmixSpace<VM: VMBinding> {
     fragmented_blocks_size: AtomicUsize,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
+    pub remset: RemSet,
+    pub cm_enabled: bool,
+    pub rc_enabled: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -79,14 +100,14 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         self.get_name()
     }
     fn is_live(&self, object: ObjectReference) -> bool {
-        if super::REF_COUNT {
+        if self.rc_enabled {
             return crate::util::rc::count(object) > 0
                 || ForwardingWord::is_forwarded::<VM>(object);
         }
         if self.initial_mark_pause {
             return true;
         }
-        if crate::args::CONCURRENT_MARKING {
+        if self.cm_enabled {
             let block_state = Block::containing::<VM>(object).get_state();
             if block_state == BlockState::Nursery {
                 return true;
@@ -114,6 +135,14 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             None
         }
     }
+    fn sft_trace_object(
+        &self,
+        _queue: &mut VectorObjectQueue,
+        _object: ObjectReference,
+        _worker: GCWorkerMutRef,
+    ) -> ObjectReference {
+        panic!("We do not use SFT to trace objects for Immix. sft_trace_object() cannot be used.")
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
@@ -133,12 +162,57 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
     fn init(&mut self, _vm_map: &'static VMMap) {
         super::validate_features();
+        // Initialize the block queues in `reusable_blocks` and `pr`.
+        self.reusable_blocks.init(self.scheduler.num_workers());
+        #[cfg(target_pointer_width = "64")]
+        self.pr.init(self.scheduler.num_workers());
         self.common().init(self.as_space());
         self.block_allocation
             .init(unsafe { &*(self as *const Self) })
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
+    }
+    fn set_copy_for_sft_trace(&mut self, _semantics: Option<CopySemantics>) {
+        panic!("We do not use SFT to trace objects for Immix. set_copy_context() cannot be used.")
+    }
+}
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace<VM> {
+    #[inline(always)]
+    fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        if KIND == TRACE_KIND_DEFRAG {
+            self.trace_object(queue, object, copy.unwrap(), worker)
+        } else if KIND == TRACE_KIND_FAST {
+            self.fast_trace_object(queue, object)
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[inline(always)]
+    fn post_scan_object(&self, object: ObjectReference) {
+        if super::MARK_LINE_AT_SCAN_TIME && !super::BLOCK_ONLY {
+            debug_assert!(self.in_space(object));
+            self.mark_lines(object);
+        }
+    }
+
+    #[inline(always)]
+    fn may_move_objects<const KIND: TraceKind>() -> bool {
+        if KIND == TRACE_KIND_DEFRAG {
+            true
+        } else if KIND == TRACE_KIND_FAST {
+            false
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -147,8 +221,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     const MARKED_STATE: u8 = 1;
 
     /// Get side metadata specs
-    fn side_metadata_specs() -> Vec<SideMetadataSpec> {
-        if crate::plan::immix::REF_COUNT {
+    fn side_metadata_specs(rc_enabled: bool) -> Vec<SideMetadataSpec> {
+        if rc_enabled {
             return metadata::extract_side_metadata(&vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
@@ -186,6 +260,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
         global_side_metadata_specs: Vec<SideMetadataSpec>,
         constraints: &'static PlanConstraints,
+        rc_enabled: bool,
     ) -> Self {
         let common = CommonSpace::new(
             SpaceOptions {
@@ -196,7 +271,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 vmrequest: VMRequest::discontiguous(),
                 side_metadata_specs: SideMetadataContext {
                     global: global_side_metadata_specs,
-                    local: Self::side_metadata_specs(),
+                    local: Self::side_metadata_specs(rc_enabled),
                 },
                 needs_log_bit: constraints.needs_log_bit,
                 needs_field_log_bit: constraints.needs_field_log_bit,
@@ -206,17 +281,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             heap,
         );
         ImmixSpace {
+            #[cfg(target_pointer_width = "32")]
             pr: if common.vmrequest.is_discontiguous() {
-                unreachable!()
-                // BlockPageResource::new_discontiguous(Block::LOG_PAGES, vm_map)
+                ImmixPageResource::new_discontiguous(0, vm_map)
             } else {
-                BlockPageResource::new_contiguous(
-                    Block::LOG_PAGES,
-                    common.start,
-                    common.extent,
-                    vm_map,
-                )
+                ImmixPageResource::new_contiguous(common.start, common.extent, 0, vm_map)
             },
+            #[cfg(target_pointer_width = "64")]
+            pr: ImmixPageResource::new_contiguous(
+                Block::LOG_PAGES,
+                common.start,
+                common.extent,
+                vm_map,
+            ),
             common,
             chunk_map: ChunkMap::new(),
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
@@ -238,7 +315,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             fragmented_blocks_size: Default::default(),
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
+            remset: RemSet::new(),
+            cm_enabled: false,
+            rc_enabled,
         }
+    }
+
+    /// Flush the thread-local queues in BlockPageResource
+    pub fn flush_page_resource(&self) {
+        self.reusable_blocks.flush_all();
+        #[cfg(target_pointer_width = "64")]
+        self.pr.flush_all()
     }
 
     /// Get the number of defrag headroom pages.
@@ -272,6 +359,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             user_triggered_collection,
             self.reusable_blocks.len() == 0,
             full_heap_system_gc,
+            self.cm_enabled,
+            self.rc_enabled,
         );
         self.defrag.in_defrag()
     }
@@ -316,12 +405,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             me.defrag_blocks.push(block);
             live_bytes += (Block::BYTES - dead_bytes) >> 1;
             num_blocks += 1;
-            if crate::args::COUNT_BYTES_FOR_MATURE_EVAC {
-                if live_bytes >= defrag_bytes {
-                    break;
-                }
-            } else {
-                unreachable!();
+            if live_bytes >= defrag_bytes {
+                break;
             }
         }
         if crate::args::LOG_PER_GC_STATE {
@@ -334,12 +419,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        let tasks = self
-            .chunk_map
-            .generate_tasks(|chunk| box SelectDefragBlocksInChunk {
+        let tasks = self.chunk_map.generate_tasks(|chunk| {
+            Box::new(SelectDefragBlocksInChunk {
                 chunk,
                 defrag_threshold: 1,
-            });
+            })
+        });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
         self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
@@ -349,7 +434,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
-        let num_workers = self.scheduler().worker_group().worker_count();
+        let num_workers = self.scheduler().worker_group.worker_count();
         // let (stw_packets, delayed_packets, nursery_blocks) =
         //     if crate::args::LOCK_FREE_BLOCK_ALLOCATION {
         //         self.block_allocation
@@ -449,11 +534,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             while let Some(blocks) = self.mutator_recycled_blocks.pop() {
                 if !blocks.is_empty() {
                     for chunk in blocks.chunks(256) {
-                        packets.push(box RCSweepNurseryBlocks {
+                        packets.push(Box::new(RCSweepNurseryBlocks {
                             space,
                             blocks: chunk.to_vec(),
                             mutator_reused_blocks: true,
-                        });
+                        }));
                     }
                 }
             }
@@ -513,7 +598,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
         self.initial_mark_pause = initial_mark_pause;
-        debug_assert!(!crate::args::REF_COUNT);
+        debug_assert!(!self.rc_enabled);
         self.block_allocation.reset();
         if major_gc {
             // Update mark_state
@@ -555,7 +640,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Release for the immix space. This is called when a GC finished.
     /// Return whether this GC was a defrag GC, as a plan may want to know this.
     pub fn release(&mut self, major_gc: bool) -> bool {
-        debug_assert!(!crate::args::REF_COUNT);
+        debug_assert!(!self.rc_enabled);
         self.block_allocation.reset();
         let did_defrag = self.defrag.in_defrag();
         if major_gc {
@@ -602,7 +687,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
-        block.deinit();
+        block.deinit(self);
         crate::stat(|s| {
             if nursery {
                 s.reclaimed_blocks_nursery += 1;
@@ -616,7 +701,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Allocate a clean block.
     #[inline(always)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        self.block_allocation.get_clean_block(tls, copy)
+        self.block_allocation
+            .get_clean_block(tls, copy, self.rc_enabled)
     }
 
     /// Pop a reusable block from the reusable block list.
@@ -642,7 +728,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn fast_trace_object(
         &self,
-        trace: &mut impl TransitiveClosure,
+        trace: &mut impl ObjectQueue,
         object: ObjectReference,
     ) -> ObjectReference {
         self.trace_object_without_moving(trace, object)
@@ -652,10 +738,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn trace_object(
         &self,
-        trace: &mut impl TransitiveClosure,
+        trace: &mut impl ObjectQueue,
         object: ObjectReference,
-        semantics: AllocationSemantics,
-        copy_context: &mut impl CopyContext,
+        semantics: CopySemantics,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
         debug_assert!(
@@ -664,7 +750,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object
         );
         if Block::containing::<VM>(object).is_defrag_source() {
-            self.trace_object_with_opportunistic_copy(trace, object, semantics, copy_context)
+            debug_assert!(self.in_defrag());
+            self.trace_object_with_opportunistic_copy(trace, object, semantics, worker)
         } else {
             self.trace_object_without_moving(trace, object)
         }
@@ -674,18 +761,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn trace_object_without_moving(
         &self,
-        trace: &mut impl TransitiveClosure,
+        queue: &mut impl ObjectQueue,
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
-            if crate::args::REF_COUNT {
+            if self.rc_enabled {
                 let straddle = rc::is_straddle_line(Line::from(Line::align(object.to_address())));
                 if straddle {
                     return object;
                 }
             }
             // println!("Mark {:?}", object.range::<VM>());
-            if !crate::args::REF_COUNT {
+            if !self.rc_enabled {
                 // Mark block and lines
                 if !super::BLOCK_ONLY {
                     if !super::MARK_LINE_AT_SCAN_TIME {
@@ -700,7 +787,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
             // Visit node
-            trace.process_node(object);
+            queue.enqueue(object);
         }
         object
     }
@@ -710,19 +797,53 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn trace_object_with_opportunistic_copy(
         &self,
-        trace: &mut impl TransitiveClosure,
+        queue: &mut impl ObjectQueue,
         object: ObjectReference,
-        semantics: AllocationSemantics,
-        copy_context: &mut impl CopyContext,
+        semantics: CopySemantics,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
+        let copy_context = worker.get_copy_context_mut();
         debug_assert!(!super::BLOCK_ONLY);
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
-            ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status)
+            // We lost the forwarding race as some other thread has set the forwarding word; wait
+            // until the object has been forwarded by the winner. Note that the object may not
+            // necessarily get forwarded since Immix opportunistically moves objects.
+            #[allow(clippy::let_and_return)]
+            let new_object =
+                ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
+            #[cfg(debug_assertions)]
+            {
+                if new_object == object {
+                    debug_assert!(
+                        self.is_marked(object) || self.defrag.space_exhausted() || Self::is_pinned(object),
+                        "Forwarded object is the same as original object {} even though it should have been copied",
+                        object,
+                    );
+                } else {
+                    // new_object != object
+                    debug_assert!(
+                        !Block::containing::<VM>(new_object).is_defrag_source(),
+                        "Block {:?} containing forwarded object {} should not be a defragmentation source",
+                        Block::containing::<VM>(new_object),
+                        new_object,
+                    );
+                }
+            }
+            new_object
         } else if self.is_marked(object) {
+            // We won the forwarding race but the object is already marked so we clear the
+            // forwarding status and return the unmoved object
+            debug_assert!(
+                self.defrag.space_exhausted() || Self::is_pinned(object),
+                "Forwarded object is the same as original object {} even though it should have been copied",
+                object,
+            );
             ForwardingWord::clear_forwarding_bits::<VM>(object);
             object
         } else {
+            // We won the forwarding race; actually forward and copy the object if it is not pinned
+            // and we have sufficient space in our copy allocator
             let new_object = if Self::is_pinned(object) || self.defrag.space_exhausted() {
                 self.attempt_mark(object);
                 ForwardingWord::clear_forwarding_bits::<VM>(object);
@@ -731,16 +852,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_alloc_bit(object);
-                ForwardingWord::forward_object::<VM, _>(object, semantics, copy_context)
+                ForwardingWord::forward_object::<VM>(object, semantics, copy_context)
             };
-            if !super::MARK_LINE_AT_SCAN_TIME {
-                self.mark_lines(new_object);
-            }
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
                 state == BlockState::Marked || state == BlockState::Nursery
             });
-            trace.process_node(new_object);
+            queue.enqueue(new_object);
+            debug_assert!(new_object.is_live());
             new_object
         }
     }
@@ -748,26 +867,27 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn rc_trace_object(
         &self,
-        trace: &mut impl TransitiveClosure,
+        queue: &mut impl ObjectQueue,
         object: ObjectReference,
-        copy_context: &mut impl CopyContext,
+        semantics: CopySemantics,
         pause: Pause,
         mark: bool,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        debug_assert!(crate::args::REF_COUNT);
+        debug_assert!(self.rc_enabled);
         if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
-            self.trace_forward_rc_mature_object(trace, object, copy_context, pause)
+            self.trace_forward_rc_mature_object(queue, object, semantics, pause, worker)
         } else if crate::args::RC_MATURE_EVACUATION {
-            self.trace_mark_rc_mature_object(trace, object, pause, mark)
+            self.trace_mark_rc_mature_object(queue, object, pause, mark)
         } else {
-            self.trace_object_without_moving(trace, object)
+            self.trace_object_without_moving(queue, object)
         }
     }
 
     #[inline(always)]
     pub fn trace_mark_rc_mature_object(
         &self,
-        trace: &mut impl TransitiveClosure,
+        queue: &mut impl ObjectQueue,
         mut object: ObjectReference,
         _pause: Pause,
         mark: bool,
@@ -776,7 +896,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             object = ForwardingWord::read_forwarding_pointer::<VM>(object);
         }
         if mark && self.attempt_mark(object) {
-            trace.process_node(object);
+            queue.enqueue(object);
         }
         object
     }
@@ -785,11 +905,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn trace_forward_rc_mature_object(
         &self,
-        trace: &mut impl TransitiveClosure,
+        queue: &mut impl ObjectQueue,
         object: ObjectReference,
-        copy_context: &mut impl CopyContext,
+        _semantics: CopySemantics,
         _pause: Pause,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
+        let copy_context = worker.get_copy_context_mut();
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             let new =
@@ -797,9 +919,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             new
         } else {
             // Evacuate the mature object
-            let new = ForwardingWord::forward_object::<VM, _>(
+            let new = ForwardingWord::forward_object::<VM>(
                 object,
-                AllocationSemantics::Default,
+                CopySemantics::DefaultCopy,
                 copy_context,
             );
             crate::stat(|s| {
@@ -817,7 +939,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             rc::set(new, rc::count(object));
             self.attempt_mark(new);
             self.unmark(object);
-            trace.process_node(new);
+            queue.enqueue(new);
             new
         }
     }
@@ -827,7 +949,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
-        if crate::args::REF_COUNT {
+        if self.rc_enabled {
             return;
         }
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
@@ -924,13 +1046,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Hole searching.
     ///
     /// Linearly scan lines in a block to search for the next
-    /// hole, starting from the given line.
+    /// hole, starting from the given line. If we find available lines,
+    /// return a tuple of the start line and the end line (non-inclusive).
     ///
     /// Returns None if the search could not find any more holes.
     #[allow(clippy::assertions_on_constants)]
-    pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<Range<Line>> {
+    pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        if super::REF_COUNT {
+        if self.rc_enabled {
             self.rc_get_next_available_lines(copy, search_start)
         } else {
             self.normal_get_next_available_lines(search_start)
@@ -944,9 +1067,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         copy: bool,
         search_start: Line,
-    ) -> Option<Range<Line>> {
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(super::REF_COUNT);
+        debug_assert!(self.rc_enabled);
         let block = search_start.block();
         let rc_array = RCArray::of(block);
         let limit = Block::LINES;
@@ -995,21 +1118,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
-            Line::update_validity(start..end);
+            Line::update_validity(RegionIterator::<Line>::new(start, end));
         }
         block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);
         // }
-        Some(start..end)
+        Some((start, end))
     }
 
     #[allow(clippy::assertions_on_constants)]
     #[inline]
-    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<Range<Line>> {
+    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        debug_assert!(!super::REF_COUNT);
+        debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();
@@ -1027,23 +1150,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if cursor == Block::LINES {
             return None;
         }
-        let start = Line::forward(search_start, cursor - start_cursor);
+        let start = search_start.next_nth(cursor - start_cursor);
         // Find limit
         while cursor < Block::LINES {
             let mark = mark_data.get(cursor);
             if mark == unavail_state || mark == current_state {
                 break;
             }
-            if crate::plan::immix::CONCURRENT_MARKING {
+            if self.cm_enabled {
                 mark_data.set(cursor, current_state);
             }
             cursor += 1;
         }
-        let end = Line::forward(search_start, cursor - start_cursor);
+        let end = search_start.next_nth(cursor - start_cursor);
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
         }
-        Some(start..end)
+        Some((start, end))
     }
 
     pub fn is_last_gc_exhaustive(did_defrag_for_last_gc: bool) -> bool {
@@ -1086,12 +1209,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let packets = bins
             .into_iter()
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
-                box SweepBlocksAfterDecs::new(blocks, counter.clone())
+                Box::new(SweepBlocksAfterDecs::new(blocks, counter.clone()))
             })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            .add_prioritized(box RCReleaseMatureLOS::new(counter.clone()));
+            .add_prioritized(Box::new(RCReleaseMatureLOS::new(counter.clone())));
     }
 }
 
@@ -1111,7 +1234,6 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
     pub fn new(
         buffer: Vec<ObjectReference>,
         concurrent: bool,
-        _immix: Option<&'static Immix<E::VM>>,
         immix_space: &'static ImmixSpace<E::VM>,
     ) -> Self {
         debug_assert!(!concurrent);
@@ -1128,21 +1250,8 @@ impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
         }
     }
 
-    const fn worker(&self) -> &mut GCWorker<E::VM> {
+    fn worker(&self) -> &mut GCWorker<E::VM> {
         unsafe { &mut *self.worker }
-    }
-
-    #[inline(always)]
-    fn process_node(&mut self, o: ObjectReference) {
-        EdgeIterator::<E::VM>::iterate(o, |e| {
-            let t = unsafe { e.load::<ObjectReference>() };
-            if !t.is_null() {
-                self.edges.push(e);
-            }
-        });
-        if self.edges.len() >= E::CAPACITY {
-            self.flush();
-        }
     }
 
     fn flush(&mut self) {
@@ -1164,8 +1273,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
         self.worker = worker;
         let mut buffer = vec![];
         mem::swap(&mut buffer, &mut self.buffer);
+        let tls = worker.tls;
+        let mut closure = ObjectsClosure::<E>::new(worker);
         for object in buffer {
-            self.process_node(object);
+            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
             if super::MARK_LINE_AT_SCAN_TIME
                 && !super::BLOCK_ONLY
                 && self.immix_space.in_space(object)
@@ -1189,11 +1300,11 @@ pub struct MatureSweeping;
 
 impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        let immix_mut = unsafe { &mut *(immix as *const _ as *mut Immix<VM>) };
-        immix_mut
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr_mut = unsafe { &mut *(lxr as *const _ as *mut LXR<VM>) };
+        lxr_mut
             .immix_space
-            .schedule_mature_sweeping(immix.current_pause().unwrap())
+            .schedule_mature_sweeping(lxr.current_pause().unwrap())
     }
 }
 
@@ -1234,15 +1345,14 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 blocks.push((block, score));
             }
         }
-        let immix = mmtk.plan.downcast_ref::<Immix<VM>>().unwrap();
-        immix
-            .immix_space
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        lxr.immix_space
             .fragmented_blocks_size
             .fetch_add(blocks.len(), Ordering::SeqCst);
-        immix.immix_space.fragmented_blocks.push(blocks);
+        lxr.immix_space.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            immix.immix_space.select_mature_evacuation_candidates(
-                immix.current_pause().unwrap(),
+            lxr.immix_space.select_mature_evacuation_candidates(
+                lxr.current_pause().unwrap(),
                 mmtk.plan.get_total_pages(),
             )
         }
@@ -1255,5 +1365,129 @@ impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         VM::VMCollection::update_weak_processor();
+    }
+}
+
+use crate::plan::{Plan, VectorObjectQueue};
+use crate::policy::copy_context::PolicyCopyContext;
+use crate::util::alloc::Allocator;
+use crate::util::alloc::ImmixAllocator;
+
+/// Immix copy allocator
+pub struct ImmixCopyContext<VM: VMBinding> {
+    copy_allocator: ImmixAllocator<VM>,
+    defrag_allocator: ImmixAllocator<VM>,
+}
+
+impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
+    type VM = VM;
+
+    fn prepare(&mut self) {
+        self.copy_allocator.reset();
+        self.defrag_allocator.reset();
+    }
+    fn release(&mut self) {
+        self.copy_allocator.reset();
+        self.defrag_allocator.reset();
+    }
+    #[inline(always)]
+    fn alloc_copy(
+        &mut self,
+        _original: ObjectReference,
+        bytes: usize,
+        align: usize,
+        offset: isize,
+    ) -> Address {
+        if self.get_space().in_defrag() {
+            self.defrag_allocator.alloc(bytes, align, offset)
+        } else {
+            self.copy_allocator.alloc(bytes, align, offset)
+        }
+    }
+    #[inline(always)]
+    fn post_copy(&mut self, obj: ObjectReference, _bytes: usize) {
+        let space = self.get_space();
+        if space.rc_enabled {
+            return;
+        }
+        // Mark the object
+        store_metadata::<VM>(
+            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+            obj,
+            space.mark_state as usize,
+            None,
+            Some(Ordering::SeqCst),
+        );
+        // Mark the line
+        if !super::MARK_LINE_AT_SCAN_TIME {
+            space.mark_lines(obj);
+        }
+    }
+}
+
+impl<VM: VMBinding> ImmixCopyContext<VM> {
+    pub fn new(
+        tls: VMWorkerThread,
+        plan: &'static dyn Plan<VM = VM>,
+        space: &'static ImmixSpace<VM>,
+    ) -> Self {
+        ImmixCopyContext {
+            copy_allocator: ImmixAllocator::new(tls.0, Some(space), plan, true),
+            defrag_allocator: ImmixAllocator::new(tls.0, Some(space), plan, true),
+        }
+    }
+
+    #[inline(always)]
+    fn get_space(&self) -> &ImmixSpace<VM> {
+        // Both copy allocators should point to the same space.
+        debug_assert_eq!(
+            self.defrag_allocator.immix_space().common().descriptor,
+            self.copy_allocator.immix_space().common().descriptor
+        );
+        // Just get the space from either allocator
+        self.defrag_allocator.immix_space()
+    }
+}
+
+pub struct SweepBlocksAfterDecs {
+    blocks: Vec<(Block, bool)>,
+    _counter: LazySweepingJobsCounter,
+}
+
+impl SweepBlocksAfterDecs {
+    pub fn new(blocks: Vec<(Block, bool)>, counter: LazySweepingJobsCounter) -> Self {
+        Self {
+            blocks,
+            _counter: counter,
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        if self.blocks.is_empty() {
+            return;
+        }
+        let mut count = 0;
+        for (block, defrag) in &self.blocks {
+            block.unlog();
+            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
+                count += 1;
+            } else {
+                assert!(
+                    !*defrag,
+                    "defrag block is freed? {:?} {:?} {}",
+                    block,
+                    block.get_state(),
+                    block.is_defrag_source()
+                );
+            }
+        }
+        if count != 0 && lxr.current_pause().is_none() {
+            lxr.immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(count, Ordering::Relaxed);
+        }
     }
 }
