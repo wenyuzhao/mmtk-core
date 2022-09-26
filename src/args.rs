@@ -8,7 +8,7 @@ use crate::{
 };
 
 pub const CM_LARGE_ARRAY_OPTIMIZATION: bool = true;
-pub const LAZY_MU_REUSE_BLOCK_SWEEPING: bool = cfg!(feature = "lxr_lazy");
+pub const LAZY_MU_REUSE_BLOCK_SWEEPING: bool = true;
 pub const BUFFER_SIZE: usize = {
     if cfg!(feature = "lxr_buf_2048") {
         2048
