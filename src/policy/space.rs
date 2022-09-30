@@ -448,6 +448,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     {
                         memory::handle_mmap_error::<VM>(mmap_error, tls);
                     }
+                    memory::munprotect(res.start, bytes).unwrap();
 
                     // TODO: Concurrent zeroing
                     if self.common().zeroed {

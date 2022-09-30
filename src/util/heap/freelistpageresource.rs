@@ -193,7 +193,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
             _p: PhantomData,
-            protect_memory_on_release: false,
+            protect_memory_on_release: true,
         };
         if !flpr.common.growable {
             // For non-growable space, we just need to reserve metadata according to the requested size.
@@ -229,7 +229,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
             _p: PhantomData,
-            protect_memory_on_release: false,
+            protect_memory_on_release: true,
         }
     }
 

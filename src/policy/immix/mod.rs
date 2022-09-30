@@ -13,10 +13,10 @@ use crate::util::linear_scan::Region;
 pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES >> 1;
 
 /// Mark/sweep memory for block-level only
-pub const BLOCK_ONLY: bool = false;
+pub const BLOCK_ONLY: bool = true;
 
 /// Opportunistic copying
-pub const DEFRAG: bool = !cfg!(feature = "immix_no_defrag");
+pub const DEFRAG: bool = false;
 
 /// Mark lines when scanning objects.
 /// Otherwise, do it at mark time.
