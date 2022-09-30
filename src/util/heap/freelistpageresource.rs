@@ -20,6 +20,8 @@ use crate::vm::*;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
+static SYNC: spin::Mutex<()> = spin::Mutex::new(());
+
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 
 pub struct CommonFreeListPageResource {
@@ -102,6 +104,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             self.meta_data_pages_per_region == 0
                 || required_pages <= PAGES_IN_CHUNK - self.meta_data_pages_per_region
         );
+        let _g = SYNC.lock();
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const _ as *mut _) };
@@ -193,7 +196,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
             _p: PhantomData,
-            protect_memory_on_release: true,
+            protect_memory_on_release: false,
         };
         if !flpr.common.growable {
             // For non-growable space, we just need to reserve metadata according to the requested size.
@@ -229,7 +232,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 highwater_mark: UNINITIALIZED_WATER_MARK,
             }),
             _p: PhantomData,
-            protect_memory_on_release: true,
+            protect_memory_on_release: false,
         }
     }
 
@@ -356,6 +359,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     }
 
     pub fn release_pages(&self, first: Address) {
+        let _g = SYNC.lock();
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages(first - self.start);
         let pages = self.free_list.size(page_offset as _);
