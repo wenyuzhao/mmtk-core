@@ -104,7 +104,6 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             self.meta_data_pages_per_region == 0
                 || required_pages <= PAGES_IN_CHUNK - self.meta_data_pages_per_region
         );
-        let _g = SYNC.lock();
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const _ as *mut _) };
