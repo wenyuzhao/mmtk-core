@@ -20,8 +20,6 @@ use crate::vm::*;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
-static SYNC: spin::Mutex<()> = spin::Mutex::new(());
-
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 
 pub struct CommonFreeListPageResource {
@@ -308,7 +306,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         rtn
     }
 
-    fn free_contiguous_chunk(&mut self, chunk: Address) {
+    fn free_contiguous_chunk(&mut self, chunk: Address, sync: &mut FreeListPageResourceSync) {
         let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
         debug_assert!(num_chunks == 1 || self.meta_data_pages_per_region == 0);
         /* nail down all pages associated with the chunk, so it is no longer on our free list */
@@ -326,7 +324,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             debug_assert!(tmp == chunk_start);
             chunk_start += PAGES_IN_CHUNK;
             {
-                let mut sync = self.sync.lock().unwrap();
                 sync.pages_currently_on_freelist -=
                     PAGES_IN_CHUNK - self.meta_data_pages_per_region;
             }
@@ -358,7 +355,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     }
 
     pub fn release_pages(&self, first: Address) {
-        let _g = SYNC.lock();
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages(first - self.start);
         let pages = self.free_list.size(page_offset as _);
@@ -371,10 +367,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         }
 
         // FIXME
+        let mut sync = self.sync.lock().unwrap();
         #[allow(clippy::cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const _ as *mut Self) };
         let freed = {
-            let mut sync = self.sync.lock().unwrap();
             self.common.accounting.release(pages as _);
             let freed = me.free_list.free(page_offset as _, true);
             sync.pages_currently_on_freelist += pages as usize;
@@ -382,17 +378,22 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         };
         if !self.common.contiguous {
             // only discontiguous spaces use chunks
-            me.release_free_chunks(first, freed as _);
+            me.release_free_chunks(first, freed as _, &mut sync);
         }
     }
 
-    fn release_free_chunks(&mut self, freed_page: Address, pages_freed: usize) {
+    fn release_free_chunks(
+        &mut self,
+        freed_page: Address,
+        pages_freed: usize,
+        sync: &mut FreeListPageResourceSync,
+    ) {
         let page_offset = conversions::bytes_to_pages(freed_page - self.start);
 
         if self.meta_data_pages_per_region > 0 {
             // can only be a single chunk
             if pages_freed == (PAGES_IN_CHUNK - self.meta_data_pages_per_region) {
-                self.free_contiguous_chunk(conversions::chunk_align_down(freed_page));
+                self.free_contiguous_chunk(conversions::chunk_align_down(freed_page), sync);
             }
         } else {
             // may be multiple chunks
@@ -414,7 +415,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
                 debug_assert!(next_region_start < generic_freelist::MAX_UNITS as usize);
                 if pages_freed == next_region_start - region_start {
                     let start = self.start;
-                    self.free_contiguous_chunk(start + conversions::pages_to_bytes(region_start));
+                    self.free_contiguous_chunk(
+                        start + conversions::pages_to_bytes(region_start),
+                        sync,
+                    );
                 }
             }
         }
