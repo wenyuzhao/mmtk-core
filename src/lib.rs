@@ -60,7 +60,6 @@ use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
-pub(crate) use mmtk::VM_MAP;
 use plan::immix::Pause;
 use scheduler::WorkBucketStage;
 use spin::{Lazy, Mutex};

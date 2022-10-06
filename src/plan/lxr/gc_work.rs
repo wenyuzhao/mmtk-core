@@ -143,8 +143,8 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     }
     fn create_scan_work(
         &self,
-        nodes: Vec<ObjectReference>,
-        roots: bool,
+        _nodes: Vec<ObjectReference>,
+        _roots: bool,
     ) -> Self::ScanObjectsWorkType {
         unimplemented!()
     }
