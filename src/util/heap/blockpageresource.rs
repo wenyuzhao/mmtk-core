@@ -69,6 +69,7 @@ impl<VM: VMBinding> BlockPageResource<VM> {
         start: Address,
         bytes: usize,
         vm_map: &'static VMMap,
+        num_workers: usize,
     ) -> Self {
         let growable = cfg!(target_pointer_width = "64");
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
@@ -78,15 +79,10 @@ impl<VM: VMBinding> BlockPageResource<VM> {
             // Highwater starts from the start address of the contiguous space
             highwater: Atomic::new(start),
             limit: (start + bytes).align_up(BYTES_IN_CHUNK),
-            block_queue: BlockQueue::new(),
+            block_queue: BlockQueue::new(num_workers),
             sync: Mutex::new(()),
             _p: PhantomData,
         }
-    }
-
-    /// Initialize BlockPageResource. Called during `gc_init`.
-    pub fn init(&mut self, num_workers: usize) {
-        self.block_queue.init(num_workers);
     }
 
     /// Grow contiguous space
@@ -312,20 +308,13 @@ pub struct BlockQueue<Block> {
 
 impl<Block: Debug + Copy> BlockQueue<Block> {
     /// Create a BlockQueue
-    pub fn new() -> Self {
+    pub fn new(num_workers: usize) -> Self {
         Self {
             head_global_freed_blocks: Default::default(),
             global_freed_blocks: Default::default(),
-            worker_local_freed_blocks: vec![],
+            worker_local_freed_blocks: (0..num_workers).map(|_| BlockArray::new()).collect(),
             count: AtomicUsize::new(0),
         }
-    }
-
-    /// Initialize the thread-local queues
-    pub fn init(&mut self, num_workers: usize) {
-        let mut worker_local_freed_blocks = vec![];
-        worker_local_freed_blocks.resize_with(num_workers, || BlockArray::new());
-        self.worker_local_freed_blocks = worker_local_freed_blocks;
     }
 
     /// Add a BlockArray to the global pool

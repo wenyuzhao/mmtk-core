@@ -27,7 +27,7 @@ use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
-use crate::util::options::UnsafeOptionsWrapper;
+use crate::util::options::Options;
 use crate::util::rc::{self, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
@@ -94,6 +94,12 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
 
 impl<VM: VMBinding> Plan for LXR<VM> {
     type VM = VM;
+
+    fn get_spaces(&self) -> Vec<&dyn Space<Self::VM>> {
+        let mut ret = self.common.get_spaces();
+        ret.push(&self.immix_space);
+        ret
+    }
 
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
         // Don't do a GC until we finished the lazy reclaimation.
@@ -230,69 +236,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             space_mapping: vec![(CopySelector::Immix(0), &self.immix_space)],
             constraints: &LXR_CONSTRAINTS,
         }
-    }
-
-    fn gc_init(&mut self, heap_size: usize, vm_map: &'static VMMap) {
-        crate::args::validate_features(ACTIVE_BARRIER);
-        self.common.gc_init(heap_size, vm_map);
-        self.immix_space.init(vm_map);
-        self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
-        self.common.los.rc_enabled = true;
-        unsafe {
-            let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
-            lazy_sweeping_jobs.swap();
-            let me = &*(self as *const Self);
-            lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
-                me.immix_space.schedule_rc_block_sweeping_tasks(c);
-            }));
-            lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
-                // me.immix_space.reusable_blocks.flush_all();
-                me.immix_space.flush_page_resource();
-                if crate::args::LOG_PER_GC_STATE {
-                    println!(
-                        " - lazy jobs done, heap {:?}M {:?}",
-                        me.get_reserved_pages() / 256,
-                        me.previous_pause()
-                    );
-                }
-                // Update counters
-                if !crate::args::LAZY_DECREMENTS {
-                    HEAP_AFTER_GC.store(me.get_used_pages(), Ordering::SeqCst);
-                }
-                {
-                    let o = Ordering::Relaxed;
-                    let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
-                    let lazy_released_pages = me
-                        .immix_space
-                        .num_clean_blocks_released_lazy
-                        .load(Ordering::SeqCst)
-                        << Block::LOG_PAGES;
-                    let x = if used_pages_after_gc >= lazy_released_pages {
-                        used_pages_after_gc - lazy_released_pages
-                    } else {
-                        0
-                    };
-                    crate::COUNTERS.total_used_pages.store(
-                        crate::COUNTERS.total_used_pages.load(o) + x,
-                        Ordering::Relaxed,
-                    );
-                    let min = crate::COUNTERS.min_used_pages.load(o);
-                    crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
-                    let max = crate::COUNTERS.max_used_pages.load(o);
-                    crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
-                }
-                me.decide_next_gc_may_perform_cycle_collection();
-            }));
-        }
-        if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
-            let total_blocks = heap_size >> Block::LOG_BYTES;
-            let nursery_blocks = total_blocks / (nursery_ratio + 1);
-            self.nursery_blocks = Some(nursery_blocks);
-        }
-        if let Some(inc_buffer_limit) = *crate::args::INC_BUFFER_LIMIT {
-            self.inc_buffer_limit = Some(inc_buffer_limit);
-        }
-        self.cm_threshold = *crate::args::CONCURRENT_MARKING_THRESHOLD;
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -494,10 +437,10 @@ impl<VM: VMBinding> LXR<VM> {
     pub fn new(
         vm_map: &'static VMMap,
         mmapper: &'static Mmapper,
-        options: Arc<UnsafeOptionsWrapper>,
+        options: Arc<Options>,
         scheduler: Arc<GCWorkScheduler<VM>>,
-    ) -> Self {
-        let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
+    ) -> Box<Self> {
+        let mut heap = HeapMeta::new(&options);
         let immix_specs = if crate::args::BARRIER_MEASUREMENT
             || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)
         {
@@ -521,12 +464,12 @@ impl<VM: VMBinding> LXR<VM> {
             true,
         );
         immix_space.cm_enabled = true;
-        let immix = LXR {
+        let mut lxr = Box::new(LXR {
             immix_space,
             common: CommonPlan::new(
                 vm_map,
                 mmapper,
-                options,
+                options.clone(),
                 heap,
                 &LXR_CONSTRAINTS,
                 global_metadata_specs,
@@ -544,19 +487,19 @@ impl<VM: VMBinding> LXR<VM> {
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
-        };
+        });
+
+        lxr.gc_init(&options);
 
         {
             let mut side_metadata_sanity_checker = SideMetadataSanity::new();
-            immix
-                .common
+            lxr.common
                 .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
-            immix
-                .immix_space
+            lxr.immix_space
                 .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
         }
 
-        immix
+        lxr
     }
 
     #[inline(always)]
@@ -926,5 +869,66 @@ impl<VM: VMBinding> LXR<VM> {
     #[inline(always)]
     pub fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
+    }
+
+    fn gc_init(&mut self, options: &Options) {
+        crate::args::validate_features(ACTIVE_BARRIER);
+        self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
+        self.common.los.rc_enabled = true;
+        unsafe {
+            let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
+            lazy_sweeping_jobs.swap();
+            let me = &*(self as *const Self);
+            lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
+                me.immix_space.schedule_rc_block_sweeping_tasks(c);
+            }));
+            lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
+                // me.immix_space.reusable_blocks.flush_all();
+                me.immix_space.flush_page_resource();
+                if crate::args::LOG_PER_GC_STATE {
+                    println!(
+                        " - lazy jobs done, heap {:?}M {:?}",
+                        me.get_reserved_pages() / 256,
+                        me.previous_pause()
+                    );
+                }
+                // Update counters
+                if !crate::args::LAZY_DECREMENTS {
+                    HEAP_AFTER_GC.store(me.get_used_pages(), Ordering::SeqCst);
+                }
+                {
+                    let o = Ordering::Relaxed;
+                    let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
+                    let lazy_released_pages = me
+                        .immix_space
+                        .num_clean_blocks_released_lazy
+                        .load(Ordering::SeqCst)
+                        << Block::LOG_PAGES;
+                    let x = if used_pages_after_gc >= lazy_released_pages {
+                        used_pages_after_gc - lazy_released_pages
+                    } else {
+                        0
+                    };
+                    crate::COUNTERS.total_used_pages.store(
+                        crate::COUNTERS.total_used_pages.load(o) + x,
+                        Ordering::Relaxed,
+                    );
+                    let min = crate::COUNTERS.min_used_pages.load(o);
+                    crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
+                    let max = crate::COUNTERS.max_used_pages.load(o);
+                    crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
+                }
+                me.decide_next_gc_may_perform_cycle_collection();
+            }));
+        }
+        if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
+            let total_blocks = *options.heap_size >> Block::LOG_BYTES;
+            let nursery_blocks = total_blocks / (nursery_ratio + 1);
+            self.nursery_blocks = Some(nursery_blocks);
+        }
+        if let Some(inc_buffer_limit) = *crate::args::INC_BUFFER_LIMIT {
+            self.inc_buffer_limit = Some(inc_buffer_limit);
+        }
+        self.cm_threshold = *crate::args::CONCURRENT_MARKING_THRESHOLD;
     }
 }

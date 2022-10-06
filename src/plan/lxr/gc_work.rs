@@ -66,6 +66,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ImmixProcessEdges<VM, KIND> {
 
 impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdges<VM, KIND> {
     type VM = VM;
+    type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG
         && if KIND == TRACE_KIND_DEFRAG {
             true
@@ -88,7 +89,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 false,
                 &self.lxr().immix_space,
             );
-            self.start_or_dispatch_scan_work(Box::new(scan_objects_work));
+            self.start_or_dispatch_scan_work(scan_objects_work);
         }
     }
 
@@ -139,6 +140,13 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
                 .add(ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots));
         }
         self.flush();
+    }
+    fn create_scan_work(
+        &self,
+        nodes: Vec<ObjectReference>,
+        roots: bool,
+    ) -> Self::ScanObjectsWorkType {
+        unimplemented!()
     }
 }
 

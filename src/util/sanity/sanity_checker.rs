@@ -273,13 +273,22 @@ impl<VM: VMBinding> SanityGCProcessEdges<VM> {
             sanity_checker.refs.insert(object); // "Mark" it
             self.nodes.enqueue(object);
         }
-        object
+    }
+
+    fn create_scan_work(
+        &self,
+        nodes: Vec<ObjectReference>,
+        roots: bool,
+    ) -> Self::ScanObjectsWorkType {
+        ScanObjects::<Self>::new(nodes, false, roots)
     }
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     type VM = VM;
     const OVERWRITE_REFERENCE: bool = false;
+    type ScanObjectsWorkType = ScanObjects<Self>;
+
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         Self {
             base: ProcessEdgesBase::new(edges, roots, mmtk),
@@ -294,5 +303,13 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
         self.trace_object(slot, object);
+    }
+
+    fn create_scan_work(
+        &self,
+        nodes: Vec<ObjectReference>,
+        roots: bool,
+    ) -> Self::ScanObjectsWorkType {
+        ScanObjects::<Self>::new(nodes, false, roots)
     }
 }

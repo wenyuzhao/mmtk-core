@@ -45,6 +45,7 @@ extern crate num_cpus;
 extern crate downcast_rs;
 
 mod mmtk;
+pub use mmtk::MMTKBuilder;
 use std::{
     fs::File,
     io::Write,

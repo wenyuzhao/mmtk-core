@@ -160,15 +160,11 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
-    fn init(&mut self, _vm_map: &'static VMMap) {
-        super::validate_features();
+    fn initialize_sft(&self) {
+        self.common().initialize_sft(self.as_sft());
         // Initialize the block queues in `reusable_blocks` and `pr`.
-        self.reusable_blocks.init(self.scheduler.num_workers());
-        #[cfg(target_pointer_width = "64")]
-        self.pr.init(self.scheduler.num_workers());
-        self.common().init(self.as_space());
-        self.block_allocation
-            .init(unsafe { &*(self as *const Self) })
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        me.block_allocation.init(unsafe { &*(self as *const Self) })
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -262,6 +258,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         constraints: &'static PlanConstraints,
         rc_enabled: bool,
     ) -> Self {
+        super::validate_features();
         let common = CommonSpace::new(
             SpaceOptions {
                 name,
@@ -280,6 +277,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mmapper,
             heap,
         );
+        println!("Workers: {}", scheduler.num_workers());
         ImmixSpace {
             #[cfg(target_pointer_width = "32")]
             pr: if common.vmrequest.is_discontiguous() {
@@ -293,12 +291,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 common.start,
                 common.extent,
                 vm_map,
+                scheduler.num_workers(),
             ),
             common,
             chunk_map: ChunkMap::new(),
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
-            reusable_blocks: BlockList::new(),
+            reusable_blocks: BlockList::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,

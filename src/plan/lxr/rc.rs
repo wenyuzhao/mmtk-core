@@ -2,6 +2,7 @@ use super::cm::LXRConcurrentTraceObjects;
 use super::cm::LXRStopTheWorldProcessEdges;
 use super::LXR;
 use crate::policy::immix::block::BlockState;
+use crate::scheduler::gc_work::ScanObjects;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::rc::*;
@@ -783,6 +784,7 @@ pub struct RCImmixCollectRootEdges<VM: VMBinding> {
 
 impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     type VM = VM;
+    type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
@@ -810,6 +812,14 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             self.worker().add_work(bucket, w);
             // }
         }
+    }
+
+    fn create_scan_work(
+        &self,
+        nodes: Vec<ObjectReference>,
+        roots: bool,
+    ) -> Self::ScanObjectsWorkType {
+        unimplemented!()
     }
 }
 

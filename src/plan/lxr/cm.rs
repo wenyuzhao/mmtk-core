@@ -207,6 +207,8 @@ pub struct CMImmixCollectRootEdges<VM: VMBinding> {
 
 impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
     type VM = VM;
+    type ScanObjectsWorkType = ScanObjects<Self>;
+
     const OVERWRITE_REFERENCE: bool = false;
     const RC_ROOTS: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
@@ -231,6 +233,11 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
             let w = LXRConcurrentTraceObjects::<VM>::new(roots, self.mmtk());
             self.mmtk().scheduler.postpone(w);
         }
+    }
+
+    #[inline(always)]
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
+        ScanObjects::<Self>::new(nodes, false, roots)
     }
 }
 
@@ -289,6 +296,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     type VM = VM;
+    type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
@@ -305,8 +313,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     #[cold]
     fn flush(&mut self) {
         if !self.nodes.is_empty() {
-            let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false);
-            self.start_or_dispatch_scan_work(Box::new(scan_objects_work))
+            let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
+            self.start_or_dispatch_scan_work(scan_objects_work)
         }
     }
 
@@ -362,6 +370,11 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 crate::plan::lxr::CURR_ROOTS.push(roots);
             }
         }
+    }
+
+    #[inline(always)]
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
+        ScanObjects::<Self>::new(nodes, false, roots)
     }
 }
 

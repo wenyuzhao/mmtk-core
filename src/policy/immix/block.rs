@@ -824,25 +824,13 @@ pub struct BlockList {
     num_workers: usize,
 }
 
-impl Default for BlockList {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl BlockList {
     /// Create empty block list
-    pub fn new() -> Self {
+    pub fn new(num_workers: usize) -> Self {
         Self {
-            queue: BlockQueue::new(),
+            queue: BlockQueue::new(num_workers),
             num_workers: 0,
         }
-    }
-
-    /// Initialize block queue
-    pub fn init(&mut self, num_workers: usize) {
-        self.queue.init(num_workers);
-        self.num_workers = num_workers;
     }
 
     /// Get number of blocks in this list.
@@ -865,8 +853,7 @@ impl BlockList {
 
     /// Clear the list.
     pub fn reset(&mut self) {
-        self.queue = BlockQueue::new();
-        self.init(self.num_workers);
+        self.queue = BlockQueue::new(self.num_workers);
     }
 
     /// Iterate all the blocks in the queue. Call the visitor for each reported block.
