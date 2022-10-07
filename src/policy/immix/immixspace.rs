@@ -259,6 +259,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         constraints: &'static PlanConstraints,
         rc_enabled: bool,
     ) -> Self {
+        #[cfg(feature = "immix_no_defrag")]
+        info!(
+            "Creating non-moving ImmixSpace: {}. Block size: 2^{}",
+            name,
+            Block::LOG_BYTES
+        );
+
         super::validate_features();
         let common = CommonSpace::new(
             SpaceOptions {
