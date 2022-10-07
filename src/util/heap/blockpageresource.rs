@@ -2,6 +2,7 @@ use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
 use crate::util::address::Address;
 use crate::util::constants::*;
+use crate::util::conversions::bytes_to_pages;
 use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
@@ -60,6 +61,12 @@ impl<VM: VMBinding> PageResource<VM> for BlockPageResource<VM> {
     #[inline(always)]
     fn adjust_for_metadata(&self, pages: usize) -> usize {
         pages // No legacy metadata support
+    }
+
+    fn get_available_physical_pages(&self) -> usize {
+        debug_assert!(self.common.contiguous);
+        let _sync = self.sync.lock().unwrap();
+        bytes_to_pages(self.limit - self.highwater.load(Ordering::SeqCst))
     }
 }
 

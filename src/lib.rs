@@ -69,6 +69,7 @@ type RwLock<T> = spin::rwlock::RwLock<T, spin::Yield>;
 mod policy;
 
 pub mod args;
+pub mod build_info;
 pub mod memory_manager;
 pub mod plan;
 pub mod scheduler;
