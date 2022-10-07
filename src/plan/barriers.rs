@@ -31,7 +31,7 @@ impl BarrierSelector {
 }
 
 /// For field writes in HotSpot, we cannot always get the source object pointer and the field address
-pub enum WriteTarget {
+pub enum BarrierWriteTarget {
     Field {
         src: ObjectReference,
         slot: Address,
@@ -52,7 +52,7 @@ pub enum WriteTarget {
 
 pub trait Barrier: 'static + Send {
     fn flush(&mut self);
-    fn write_barrier(&mut self, target: WriteTarget);
+    fn write_barrier(&mut self, target: BarrierWriteTarget);
     fn assert_is_flushed(&self) {}
 }
 
@@ -60,7 +60,7 @@ pub struct NoBarrier;
 
 impl Barrier for NoBarrier {
     fn flush(&mut self) {}
-    fn write_barrier(&mut self, _target: WriteTarget) {
+    fn write_barrier(&mut self, _target: BarrierWriteTarget) {
         unreachable!("write_barrier called on NoBarrier")
     }
 }
@@ -88,21 +88,27 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
     #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
         loop {
-            let old_value =
-                load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
-            if old_value == LOGGED_VALUE {
-                return false;
-            }
+            // Try set the bit from 1 to 0 (log object). This may fail, if
+            // 1. the bit is cleared by others, or
+            // 2. other bits in the same byte may get modified if we use side metadata
             if compare_exchange_metadata::<E::VM>(
                 &self.meta,
                 object,
-                UNLOGGED_VALUE,
-                LOGGED_VALUE,
+                1,
+                0,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             ) {
+                // We just logged the object
                 return true;
+            } else {
+                let old_value =
+                    load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
+                // If the bit is cleared before, someone else has logged the object. Return false.
+                if old_value == 0 {
+                    return false;
+                }
             }
         }
     }
@@ -122,6 +128,19 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
                 self.flush();
             }
         }
+    }
+
+    #[inline(always)]
+    fn barrier(&mut self, obj: ObjectReference) {
+        if load_metadata::<E::VM>(&self.meta, obj, None, None) == 0 {
+            return;
+        }
+        self.barrier_slow(obj);
+    }
+
+    #[inline(never)]
+    fn barrier_slow(&mut self, obj: ObjectReference) {
+        self.enqueue_node(obj);
     }
 }
 
@@ -145,15 +164,15 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
     }
 
     #[inline(always)]
-    fn write_barrier(&mut self, target: WriteTarget) {
+    fn write_barrier(&mut self, target: BarrierWriteTarget) {
         match target {
-            WriteTarget::Field { src, .. } => {
+            BarrierWriteTarget::Field { src, .. } => {
                 self.enqueue_node(src);
             }
-            WriteTarget::ArrayCopy { dst, .. } => {
+            BarrierWriteTarget::ArrayCopy { dst, .. } => {
                 self.enqueue_node(dst);
             }
-            WriteTarget::Clone { dst, .. } => {
+            BarrierWriteTarget::Clone { dst, .. } => {
                 self.enqueue_node(dst);
             }
         }
@@ -165,129 +184,3 @@ pub const LOGGED_VALUE: usize = 0b0;
 
 pub const UNLOCKED_VALUE: usize = 0b0;
 pub const LOCKED_VALUE: usize = 0b1;
-
-pub struct GenFieldLoggingBarrier<E: ProcessEdgesWork> {
-    mmtk: &'static MMTK<E::VM>,
-    edges: Vec<Address>,
-    nodes: Vec<ObjectReference>,
-    meta: MetadataSpec,
-}
-
-impl<E: ProcessEdgesWork> GenFieldLoggingBarrier<E> {
-    #[allow(unused)]
-    pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
-        Self {
-            mmtk,
-            edges: vec![],
-            nodes: vec![],
-            meta,
-        }
-    }
-
-    #[inline(always)]
-    fn log_object(&self, object: ObjectReference) -> bool {
-        loop {
-            let old_value =
-                load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
-            if old_value == 0 {
-                return false;
-            }
-            if compare_exchange_metadata::<E::VM>(
-                &self.meta,
-                object,
-                1,
-                0,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                return true;
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn log_edge(&self, edge: Address) -> bool {
-        loop {
-            let old_value = load_metadata::<E::VM>(
-                &self.meta,
-                unsafe { edge.to_object_reference() },
-                None,
-                Some(Ordering::SeqCst),
-            );
-            if old_value == 0 {
-                return false;
-            }
-            if compare_exchange_metadata::<E::VM>(
-                &self.meta,
-                unsafe { edge.to_object_reference() },
-                1,
-                0,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                return true;
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn enqueue_edge(&mut self, edge: Address) {
-        if self.log_edge(edge) {
-            self.edges.push(edge);
-            if self.edges.len() >= E::CAPACITY {
-                self.flush();
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn enqueue_node(&mut self, obj: ObjectReference) {
-        if self.log_object(obj) {
-            self.nodes.push(obj);
-            if self.nodes.len() >= E::CAPACITY {
-                self.flush();
-            }
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> Barrier for GenFieldLoggingBarrier<E> {
-    #[cold]
-    fn flush(&mut self) {
-        if !self.nodes.is_empty() {
-            let mut nodes = vec![];
-            std::mem::swap(&mut nodes, &mut self.nodes);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(ProcessModBuf::<E>::new(nodes, self.meta));
-        }
-        if !self.edges.is_empty() {
-            let mut edges = vec![];
-            std::mem::swap(&mut edges, &mut self.edges);
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(EdgesProcessModBuf::<E>::new(edges, self.meta));
-        }
-    }
-
-    #[inline(always)]
-    fn write_barrier(&mut self, target: WriteTarget) {
-        match target {
-            WriteTarget::Field { slot, .. } => {
-                self.enqueue_edge(slot);
-            }
-            WriteTarget::ArrayCopy {
-                dst,
-                dst_offset,
-                len,
-                ..
-            } => {
-                let dst_base = dst.to_address() + dst_offset;
-                for i in 0..len {
-                    self.enqueue_edge(dst_base + (i << 3));
-                }
-            }
-            WriteTarget::Clone { dst, .. } => self.enqueue_node(dst),
-        }
-    }
-}

@@ -1,6 +1,6 @@
 //! Mutator context for each application thread.
 
-use crate::plan::barriers::{Barrier, WriteTarget};
+use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
@@ -12,6 +12,7 @@ use crate::vm::VMBinding;
 use enum_map::EnumMap;
 
 use super::immix::Immix;
+use super::BarrierWriteTarget;
 
 type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
 
@@ -150,7 +151,7 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
         val: ObjectReference,
     ) {
         self.barrier()
-            .write_barrier(WriteTarget::Field { src, slot, val });
+            .write_barrier(BarrierWriteTarget::Field { src, slot, val });
     }
     #[inline(always)]
     fn object_reference_arraycopy(
@@ -161,7 +162,7 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
         dst_offset: usize,
         len: usize,
     ) {
-        self.barrier().write_barrier(WriteTarget::ArrayCopy {
+        self.barrier().write_barrier(BarrierWriteTarget::ArrayCopy {
             src,
             src_offset,
             dst,
@@ -172,7 +173,7 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     #[inline(always)]
     fn object_reference_clone(&mut self, src: ObjectReference, dst: ObjectReference) {
         self.barrier()
-            .write_barrier(WriteTarget::Clone { src, dst });
+            .write_barrier(BarrierWriteTarget::Clone { src, dst });
     }
 }
 

@@ -14,6 +14,7 @@
 use crate::mmtk::MMTKBuilder;
 use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
+use crate::plan::BarrierWriteTarget;
 use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::{GCController, GCWork, GCWorker};
 use crate::scheduler::{WorkBucketStage, LAST_ACTIVATE_TIME};
@@ -144,6 +145,7 @@ pub fn flush_mutator<VM: VMBinding>(mutator: &mut Mutator<VM>) {
 /// * `align`: Required alignment for the object.
 /// * `offset`: Offset associated with the alignment.
 /// * `semantics`: The allocation semantic required for the allocation.
+#[inline(always)]
 pub fn alloc<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     size: usize,
@@ -179,6 +181,7 @@ pub fn alloc<VM: VMBinding>(
 /// * `refer`: The newly allocated object.
 /// * `bytes`: The size of the space allocated for the object (in bytes).
 /// * `semantics`: The allocation semantics used for the allocation.
+#[inline(always)]
 pub fn post_alloc<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     refer: ObjectReference,

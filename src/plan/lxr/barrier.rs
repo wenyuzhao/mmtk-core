@@ -6,7 +6,7 @@ use atomic::Ordering;
 
 use super::LXR;
 use crate::plan::barriers::Barrier;
-use crate::plan::barriers::WriteTarget;
+use crate::plan::barriers::BarrierWriteTarget;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::immix::Pause;
 use crate::plan::lxr::cm::ProcessModBufSATB;
@@ -262,12 +262,12 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn write_barrier(&mut self, target: WriteTarget) {
+    fn write_barrier(&mut self, target: BarrierWriteTarget) {
         match target {
-            WriteTarget::Field { src, slot, val, .. } => {
+            BarrierWriteTarget::Field { src, slot, val, .. } => {
                 self.enqueue_node(src, slot, Some(val));
             }
-            WriteTarget::ArrayCopy {
+            BarrierWriteTarget::ArrayCopy {
                 dst,
                 dst_offset,
                 len,
@@ -281,7 +281,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                     self.enqueue_node(dst, dst_base + (i << 3), None);
                 }
             }
-            WriteTarget::Clone { dst, .. } => {
+            BarrierWriteTarget::Clone { dst, .. } => {
                 EdgeIterator::<E::VM>::iterate(dst, |x| self.enqueue_node(dst, x, None))
             }
         }
