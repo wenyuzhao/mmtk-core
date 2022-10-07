@@ -2,11 +2,13 @@ use super::cm::LXRConcurrentTraceObjects;
 use super::cm::LXRStopTheWorldProcessEdges;
 use super::LXR;
 use crate::policy::immix::block::BlockState;
+use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::rc::*;
 use crate::util::Address;
+use crate::vm::edge_shape::Edge;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{immix::Pause, EdgeIterator},
@@ -502,7 +504,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             {
                 worker.add_work(
                     WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
+                    LXRStopTheWorldProcessEdges::<VM>::new(
+                        unsafe { std::mem::transmute(root_edges) },
+                        true,
+                        mmtk,
+                    ),
                 )
             } else {
                 unsafe {
@@ -790,7 +796,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
     #[inline(always)]
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }
@@ -804,7 +810,8 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
             let roots = std::mem::take(&mut self.edges);
-            let w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
+            let w =
+                ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(unsafe { std::mem::transmute(roots) });
             // if crate::args::LAZY_DECREMENTS {
             //     GCWork::do_work(&mut w, self.worker(), self.mmtk())
             // } else {

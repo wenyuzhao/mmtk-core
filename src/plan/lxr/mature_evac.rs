@@ -111,7 +111,8 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             .map(|e| Line::decode_validity_state(e).0)
             .collect::<Vec<_>>();
         // transitive closure
-        let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);
+        let w =
+            LXRStopTheWorldProcessEdges::new(unsafe { std::mem::transmute(edges) }, false, mmtk);
         worker.add_work(WorkBucketStage::Closure, w);
     }
 }

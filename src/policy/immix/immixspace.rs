@@ -15,6 +15,7 @@ use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::*;
 use crate::policy::space::{CommonSpace, Space, SFT};
+use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::ProcessEdgesWork;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
@@ -1222,7 +1223,7 @@ pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
     buffer: Vec<ObjectReference>,
     concurrent: bool,
     immix_space: &'static ImmixSpace<Edges::VM>,
-    edges: Vec<Address>,
+    edges: Vec<EdgeOf<Edges>>,
     worker: *mut GCWorker<Edges::VM>,
     mmtk: *const MMTK<Edges::VM>,
 }

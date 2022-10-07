@@ -4,9 +4,10 @@
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::scheduler::gc_work::ProcessEdgesWork;
+use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
+use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
 use crate::vm::{Scanning, VMBinding};
 
@@ -65,7 +66,7 @@ impl ObjectQueue for VectorObjectQueue {
 
 /// A transitive closure visitor to collect all the edges of an object.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: Vec<Address>,
+    buffer: Vec<EdgeOf<E>>,
     worker: &'a mut GCWorker<E::VM>,
 }
 
@@ -87,9 +88,9 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> EdgeVisitor for ObjectsClosure<'a, E> {
+impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     #[inline(always)]
-    fn visit_edge(&mut self, slot: Address) {
+    fn visit_edge(&mut self, slot: EdgeOf<E>) {
         if self.buffer.is_empty() {
             self.buffer.reserve(E::CAPACITY);
         }
@@ -120,10 +121,10 @@ struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(Address)> {
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding, F: FnMut(Address)> EdgeVisitor for EdgeIteratorImpl<VM, F> {
+impl<VM: VMBinding, F: FnMut(Address)> EdgeVisitor<VM::VMEdge> for EdgeIteratorImpl<VM, F> {
     #[inline(always)]
-    fn visit_edge(&mut self, slot: Address) {
-        (self.f)(slot);
+    fn visit_edge(&mut self, slot: VM::VMEdge) {
+        (self.f)(slot.to_address());
     }
 }
 

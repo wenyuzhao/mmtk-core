@@ -1,8 +1,9 @@
 use crate::plan::immix::Pause;
 use crate::policy::space::Space;
-use crate::scheduler::gc_work::ScanObjects;
+use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
+use crate::vm::edge_shape::Edge;
 use crate::{
     plan::{EdgeIterator, ObjectQueue},
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
@@ -213,7 +214,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
     const RC_ROOTS: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }
@@ -299,7 +300,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -356,7 +357,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         }
         if self.pause == Pause::FullTraceFast {
             for i in 0..self.edges.len() {
-                self.process_mark_edge(self.edges[i])
+                self.process_mark_edge(self.edges[i].to_address())
             }
         } else {
             for i in 0..self.edges.len() {

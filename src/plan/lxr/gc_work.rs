@@ -5,6 +5,7 @@ use crate::policy::space::Space;
 use crate::scheduler::{gc_work::*, WorkBucketStage};
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
+use crate::vm::edge_shape::Edge;
 use crate::vm::*;
 use crate::MMTK;
 use std::ops::{Deref, DerefMut};
@@ -74,7 +75,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
             false
         };
 
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(edges: Vec<VM::VMEdge>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self { plan, base }
@@ -126,18 +127,19 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
         if KIND == TRACE_KIND_FAST {
             for i in 0..self.edges.len() {
                 // Use fast_process_edge since we don't need to forward any objects.
-                self.fast_process_edge(self.edges[i])
+                self.fast_process_edge(self.edges[i].to_address())
             }
         } else {
             for i in 0..self.edges.len() {
                 ProcessEdgesWork::process_edge(self, self.edges[i])
             }
         }
-        if !crate::plan::barriers::BARRIER_MEASUREMENT && self.roots {
+        if !crate::args::BARRIER_MEASUREMENT && self.roots {
             let roots = std::mem::take(&mut self.edges);
             let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk().scheduler.work_buckets[bucket]
-                .add(ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots));
+            self.mmtk().scheduler.work_buckets[bucket].add(
+                ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(unsafe { std::mem::transmute(roots) }),
+            );
         }
         self.flush();
     }
