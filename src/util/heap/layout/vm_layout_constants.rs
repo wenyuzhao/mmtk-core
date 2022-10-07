@@ -95,12 +95,22 @@ impl VMLayoutConstants {
             space_size_64: 1 << 41,
         }
     }
-    pub fn new_64bit_with_pointer_compression() -> Self {
+    pub fn new_64bit_with_pointer_compression(heap_size: usize) -> Self {
         println!("VMLayoutConstants: 64bit (with pointer compression)");
+        assert!(
+            heap_size <= (32usize << 30),
+            "Heap size is larger than 32 GB"
+        );
+        let start = 0x4000_0000;
+        let end = match start + heap_size {
+            end if end <= (4usize << 30) => 4usize << 30,
+            end if end <= (32usize << 30) => 32usize << 30,
+            _ => 0x4000_0000 + (32usize << 30),
+        };
         Self {
             log_address_space: 32,
-            heap_start: chunk_align_down(unsafe { Address::from_usize(0x10_6000_0000) }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0x11_6000_0000) }),
+            heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
             log_max_chunks: Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
@@ -125,7 +135,16 @@ impl VMLayoutConstants {
 pub enum AddressSpaceKind {
     _32Bits,
     _64Bits,
-    _64BitsWithPointerCompression,
+    _64BitsWithPointerCompression { heap_size: usize },
+}
+
+impl AddressSpaceKind {
+    pub const fn pointer_compression(&self) -> bool {
+        match self {
+            Self::_64BitsWithPointerCompression { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 static ADDRESS_SPACE_KIND: Mutex<Option<AddressSpaceKind>> = Mutex::new(None);
@@ -138,8 +157,8 @@ lazy_static! {
         match las {
             AddressSpaceKind::_32Bits => unimplemented!(),
             AddressSpaceKind::_64Bits => VMLayoutConstants::new_64bit(),
-            AddressSpaceKind::_64BitsWithPointerCompression => {
-                VMLayoutConstants::new_64bit_with_pointer_compression()
+            AddressSpaceKind::_64BitsWithPointerCompression { heap_size } => {
+                VMLayoutConstants::new_64bit_with_pointer_compression(heap_size)
             }
         }
     };

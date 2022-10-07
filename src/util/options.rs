@@ -5,7 +5,6 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use strum_macros::EnumString;
 
-use super::heap::layout::vm_layout_constants::AddressSpaceKind;
 use super::heap::layout::vm_layout_constants::VMLayoutConstants;
 
 #[derive(Copy, Clone, EnumString, Debug)]
@@ -75,7 +74,7 @@ impl FromStr for PerfEventOptions {
 /// Get max nursery space size.
 fn max_nursery_size() -> usize {
     if cfg!(target_pointer_width = "32")
-        || VMLayoutConstants::get_address_space() == AddressSpaceKind::_64BitsWithPointerCompression
+        || VMLayoutConstants::get_address_space().pointer_compression()
     {
         32 << LOG_BYTES_IN_MBYTE
     } else {
