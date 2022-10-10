@@ -156,7 +156,7 @@ impl Line {
     #[inline(always)]
     pub fn decode_validity_state(x: Address) -> (Address, u8) {
         let v = (x.as_usize() >> 56) as u8;
-        let p = unsafe { Address::from_usize(x.as_usize() & 0x00ff_ffff_ffff_ffff_usize) };
+        let p = unsafe { Address::from_usize(x.as_usize() & 0x0000_ffff_ffff_ffff_usize) };
         (p, v)
     }
 
@@ -175,11 +175,13 @@ impl Line {
         if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             return;
         }
+        let mut has_invalid_state = false;
         for line in lines {
             let old = line.currrent_validity_state();
-            debug_assert_ne!(old, 255);
+            has_invalid_state = has_invalid_state || (old >= u8::MAX);
             unsafe { Self::VALIDITY_STATE.store(line.start(), old + 1) };
         }
+        assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
     #[inline(always)]

@@ -241,14 +241,16 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             LOS_PAGE_VALIDITY.bzero_metadata(start, pages << LOG_BYTES_IN_PAGE);
             return;
         }
+        let mut has_invalid_state = false;
         for i in 0..pages {
             let page = start + (i << LOG_BYTES_IN_PAGE);
             unsafe {
                 let old = LOS_PAGE_VALIDITY.load::<u8>(page);
-                debug_assert_ne!(old, 255);
+                has_invalid_state = has_invalid_state || (old >= u8::MAX);
                 LOS_PAGE_VALIDITY.store(page, old + 1);
             }
         }
+        assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
     #[inline(always)]
