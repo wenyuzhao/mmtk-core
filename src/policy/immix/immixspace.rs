@@ -288,9 +288,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         ImmixSpace {
             #[cfg(target_pointer_width = "32")]
             pr: if common.vmrequest.is_discontiguous() {
-                ImmixPageResource::new_discontiguous(0, vm_map)
+                ImmixPageResource::new_discontiguous(vm_map)
             } else {
-                ImmixPageResource::new_contiguous(common.start, common.extent, 0, vm_map)
+                ImmixPageResource::new_contiguous(common.start, common.extent, vm_map)
             },
             #[cfg(target_pointer_width = "64")]
             pr: ImmixPageResource::new_contiguous(
