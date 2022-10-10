@@ -17,6 +17,7 @@ use thread_priority::ThreadPriority;
 thread_local! {
     /// Current worker's ordinal
     static WORKER_ORDINAL: Atomic<Option<usize>> = Atomic::new(None);
+    static _WORKER: Atomic<Option<*mut ()>> = Atomic::new(None);
 }
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
@@ -119,6 +120,13 @@ impl<VM: VMBinding> GCWorker<VM> {
         }
     }
 
+    /// Get current worker.
+    #[inline(always)]
+    pub fn current() -> &'static mut Self {
+        let ptr = _WORKER.with(|x| x.load(Ordering::Relaxed)).unwrap() as *mut Self;
+        unsafe { &mut *ptr }
+    }
+
     const LOCALLY_CACHED_WORK_PACKETS: usize = 16;
 
     /// Add a work packet to the work queue and mark it with a higher priority.
@@ -198,10 +206,10 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// Each worker will keep polling and executing work packets in a loop.
     pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
         WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
+        _WORKER.with(|x| x.store(Some(self as *mut Self as *mut ()), Ordering::SeqCst));
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
-        WORKER_ID.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
         let lower_priority_for_concurrent_work = *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY;
         let mut low_priority = false;
         loop {
@@ -242,10 +250,6 @@ impl<VM: VMBinding> GCWorker<VM> {
                     as usize,
             )
     }
-}
-
-thread_local! {
-    pub static WORKER_ID: Atomic<Option<usize>> = Atomic::new(None);
 }
 
 /// A worker group to manage all the GC workers (except the coordinator worker).

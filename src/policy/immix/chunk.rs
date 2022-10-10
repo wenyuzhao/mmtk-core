@@ -337,7 +337,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 /// Chunk sweeping work packet.
 struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
-    worker: *mut GCWorker<VM>,
     _counter: LazySweepingJobsCounter,
     lxr: *const LXR<VM>,
 }
@@ -349,11 +348,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     const CAPACITY: usize = 1024;
 
     #[inline(always)]
-    fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
-    }
-
-    #[inline(always)]
     fn lxr(&self) -> &LXR<VM> {
         unsafe { &*self.lxr }
     }
@@ -361,7 +355,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
         Self {
             chunk,
-            worker: std::ptr::null_mut(),
             lxr: std::ptr::null_mut(),
             _counter: counter,
         }
@@ -428,8 +421,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     #[inline]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.worker = worker;
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.lxr = lxr;
         let immix_space = &lxr.immix_space;

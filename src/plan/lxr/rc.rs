@@ -25,8 +25,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     incs: Vec<Address>,
     /// Recursively generated new increments
     new_incs: Vec<Address>,
-    /// Execution worker
-    worker: *mut GCWorker<VM>,
     lxr: *const LXR<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
@@ -43,7 +41,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[inline(always)]
     fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
+        GCWorker::<VM>::current()
     }
 
     #[inline(always)]
@@ -56,7 +54,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Self {
             incs: vec![],
             new_incs: vec![],
-            worker: std::ptr::null_mut(),
             lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
@@ -72,7 +69,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Self {
             incs,
             new_incs: vec![],
-            worker: std::ptr::null_mut(),
             lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
@@ -446,7 +442,6 @@ impl DerefMut for AddressBuffer<'_> {
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.worker = worker;
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.current_pause = self.lxr().current_pause().unwrap();
@@ -537,8 +532,6 @@ pub struct ProcessDecs<VM: VMBinding> {
     decs: Vec<ObjectReference>,
     /// Recursively generated new decrements
     new_decs: Vec<ObjectReference>,
-    /// Execution worker
-    worker: *mut GCWorker<VM>,
     mmtk: *const MMTK<VM>,
     counter: LazySweepingJobsCounter,
     mark_objects: Vec<ObjectReference>,
@@ -554,7 +547,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     #[inline(always)]
     fn worker(&self) -> &mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
+        GCWorker::<VM>::current()
     }
 
     #[inline]
@@ -562,7 +555,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         Self {
             decs,
             new_decs: vec![],
-            worker: std::ptr::null_mut(),
             mmtk: std::ptr::null_mut(),
             counter,
             mark_objects: vec![],
@@ -581,7 +573,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         Self {
             decs: vec![],
             new_decs: vec![],
-            worker: std::ptr::null_mut(),
             mmtk: std::ptr::null_mut(),
             counter,
             mark_objects: vec![],
@@ -759,8 +750,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.worker = worker;
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.mmtk = mmtk;
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
