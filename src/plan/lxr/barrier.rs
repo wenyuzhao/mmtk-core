@@ -27,8 +27,8 @@ pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
 pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub const UNLOCKED_VALUE: usize = 0b0;
-pub const LOCKED_VALUE: usize = 0b1;
+pub const UNLOCKED_VALUE: u8 = 0b0;
+pub const LOCKED_VALUE: u8 = 0b1;
 
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
