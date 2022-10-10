@@ -5,10 +5,7 @@ use crate::util::metadata::MetadataSpec;
 use crate::util::{metadata::side_metadata::address_to_meta_address, Address};
 use crate::{
     policy::immix::{block::Block, line::Line},
-    util::{
-        metadata::side_metadata::{self, SideMetadataSpec},
-        ObjectReference,
-    },
+    util::{metadata::side_metadata::SideMetadataSpec, ObjectReference},
     vm::*,
 };
 use atomic::Ordering;
@@ -24,9 +21,9 @@ pub const LOG_REF_COUNT_BITS: usize = {
         1
     }
 };
-pub const REF_COUNT_BITS: usize = 1 << LOG_REF_COUNT_BITS;
-pub const REF_COUNT_MASK: usize = (1 << REF_COUNT_BITS) - 1;
-pub const MAX_REF_COUNT: usize = (1 << REF_COUNT_BITS) - 1;
+pub const REF_COUNT_BITS: u8 = 1 << LOG_REF_COUNT_BITS;
+pub const REF_COUNT_MASK: u8 = (1 << REF_COUNT_BITS) - 1;
+pub const MAX_REF_COUNT: u8 = (1 << REF_COUNT_BITS) - 1;
 
 pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
@@ -41,17 +38,8 @@ pub const RC_LOCK_BITS: SideMetadataSpec =
 pub const RC_LOCK_BIT_SPEC: MetadataSpec = MetadataSpec::OnSide(RC_LOCK_BITS);
 
 #[inline(always)]
-pub fn fetch_update(
-    o: ObjectReference,
-    f: impl FnMut(usize) -> Option<usize>,
-) -> Result<usize, usize> {
-    side_metadata::fetch_update(
-        &RC_TABLE,
-        o.to_address(),
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-        f,
-    )
+pub fn fetch_update(o: ObjectReference, f: impl FnMut(u8) -> Option<u8>) -> Result<u8, u8> {
+    RC_TABLE.fetch_update_atomic(o.to_address(), Ordering::Relaxed, Ordering::Relaxed, f)
 }
 
 #[inline(always)]
@@ -60,7 +48,7 @@ pub fn rc_stick(o: ObjectReference) -> bool {
 }
 
 #[inline(always)]
-pub fn inc(o: ObjectReference) -> Result<usize, usize> {
+pub fn inc(o: ObjectReference) -> Result<u8, u8> {
     fetch_update(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == MAX_REF_COUNT {
@@ -72,7 +60,7 @@ pub fn inc(o: ObjectReference) -> Result<usize, usize> {
 }
 
 #[inline(always)]
-pub fn dec(o: ObjectReference) -> Result<usize, usize> {
+pub fn dec(o: ObjectReference) -> Result<u8, u8> {
     fetch_update(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == 0 || x == MAX_REF_COUNT
@@ -86,13 +74,13 @@ pub fn dec(o: ObjectReference) -> Result<usize, usize> {
 }
 
 #[inline(always)]
-pub fn set(o: ObjectReference, count: usize) {
-    side_metadata::store_atomic(&RC_TABLE, o.to_address(), count, Ordering::Relaxed)
+pub fn set(o: ObjectReference, count: u8) {
+    RC_TABLE.store_atomic(o.to_address(), count, Ordering::Relaxed)
 }
 
 #[inline(always)]
-pub fn count(o: ObjectReference) -> usize {
-    side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::Relaxed)
+pub fn count(o: ObjectReference) -> u8 {
+    RC_TABLE.load_atomic(o.to_address(), Ordering::Relaxed)
 }
 
 pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
@@ -110,19 +98,19 @@ pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
 #[allow(unused)]
 #[inline(always)]
 pub fn is_dead(o: ObjectReference) -> bool {
-    let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::Relaxed);
+    let v: u8 = RC_TABLE.load_atomic(o.to_address(), Ordering::Relaxed);
     v == 0
 }
 
 #[inline(always)]
 pub fn is_dead_or_stick(o: ObjectReference) -> bool {
-    let v = side_metadata::load_atomic(&RC_TABLE, o.to_address(), Ordering::Relaxed);
+    let v: u8 = RC_TABLE.load_atomic(o.to_address(), Ordering::Relaxed);
     v == 0 || v == MAX_REF_COUNT
 }
 
 #[inline(always)]
 pub fn is_straddle_line(line: Line) -> bool {
-    let v = side_metadata::load_atomic(&RC_STRADDLE_LINES, line.start(), Ordering::Relaxed);
+    let v: u8 = RC_STRADDLE_LINES.load_atomic(line.start(), Ordering::Relaxed);
     v != 0
 }
 
@@ -140,7 +128,7 @@ fn mark_straddle_object_with_size<VM: VMBinding>(o: ObjectReference, size: usize
     let end_line = Line::from(Line::align(o.to_address() + size));
     let mut line = start_line;
     while line != end_line {
-        side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 1, Ordering::Relaxed);
+        RC_STRADDLE_LINES.store_atomic(line.start(), 1u8, Ordering::Relaxed);
         self::set(unsafe { line.start().to_object_reference() }, 1);
         line = line.next();
     }
@@ -164,7 +152,7 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
         while line != end_line {
             self::set(unsafe { line.start().to_object_reference() }, 0);
             // std::sync::atomic::fence(Ordering::Relaxed);
-            side_metadata::store_atomic(&RC_STRADDLE_LINES, line.start(), 0, Ordering::Relaxed);
+            RC_STRADDLE_LINES.store_atomic(line.start(), 0u8, Ordering::Relaxed);
             // std::sync::atomic::fence(Ordering::Relaxed);
             line = line.next();
         }

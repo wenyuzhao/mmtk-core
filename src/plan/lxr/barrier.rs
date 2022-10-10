@@ -16,11 +16,9 @@ use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::EdgeIterator;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
-use crate::util::metadata::load_metadata;
-use crate::util::metadata::side_metadata::compare_exchange_atomic2;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
-use crate::util::metadata::store_metadata;
 use crate::util::metadata::MetadataSpec;
+use crate::util::rc::RC_LOCK_BITS;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
 use crate::vm::*;
@@ -45,8 +43,9 @@ pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
 
 impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
-    const UNLOG_BITS: MetadataSpec =
-        *<E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec();
+    const UNLOG_BITS: SideMetadataSpec = *<E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
     const LOCK_BITS: SideMetadataSpec = *RC_LOCK_BIT_SPEC.extract_side_spec();
 
     #[allow(unused)]
@@ -62,13 +61,8 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 
     #[inline(always)]
-    fn get_edge_logging_state(&self, edge: Address) -> usize {
-        load_metadata::<E::VM>(
-            &Self::UNLOG_BITS,
-            unsafe { edge.to_object_reference() },
-            None,
-            None,
-        )
+    fn get_edge_logging_state(&self, edge: Address) -> u8 {
+        unsafe { Self::UNLOG_BITS.load(edge) }
     }
 
     #[inline(always)]
@@ -79,14 +73,16 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
                 return false;
             }
             // Attempt to lock the edges
-            if compare_exchange_atomic2(
-                &Self::LOCK_BITS,
-                edge,
-                UNLOCKED_VALUE,
-                LOCKED_VALUE,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
+            if Self::LOCK_BITS
+                .compare_exchange_atomic(
+                    edge,
+                    UNLOCKED_VALUE,
+                    LOCKED_VALUE,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
                 if self.get_edge_logging_state(edge) == LOGGED_VALUE {
                     self.unlock_edge(edge);
                     return false;
@@ -99,35 +95,17 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
 
     #[inline(always)]
     fn unlock_edge(&self, edge: Address) {
-        store_metadata::<E::VM>(
-            &RC_LOCK_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            UNLOCKED_VALUE,
-            None,
-            Some(Ordering::Relaxed),
-        );
+        RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
     #[inline(always)]
     fn log_and_unlock_edge(&self, edge: Address) {
-        store_metadata::<E::VM>(
-            &Self::UNLOG_BITS,
-            unsafe { edge.to_object_reference() },
-            LOGGED_VALUE,
-            None,
-            if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
-                None
-            } else {
-                Some(Ordering::Relaxed)
-            },
-        );
-        store_metadata::<E::VM>(
-            &RC_LOCK_BIT_SPEC,
-            unsafe { edge.to_object_reference() },
-            UNLOCKED_VALUE,
-            None,
-            Some(Ordering::Relaxed),
-        );
+        if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
+            unsafe { Self::UNLOG_BITS.store(edge, LOGGED_VALUE) };
+        } else {
+            Self::UNLOG_BITS.store_atomic(edge, LOGGED_VALUE, Ordering::Relaxed);
+        }
+        RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
     #[inline(always)]

@@ -5,8 +5,7 @@ use atomic::Ordering;
 use super::block::Block;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::{self, *};
-use crate::util::metadata::store_metadata;
+use crate::util::metadata::side_metadata::*;
 use crate::util::rc;
 use crate::{
     util::{Address, ObjectReference},
@@ -116,7 +115,7 @@ impl Line {
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe {
-            side_metadata::store(&Self::MARK_TABLE, self.start(), state as _);
+            Self::MARK_TABLE.store::<u8>(self.start(), state);
         }
     }
 
@@ -124,7 +123,7 @@ impl Line {
     #[inline(always)]
     pub fn is_marked(&self, state: u8) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
-        unsafe { side_metadata::load(&Self::MARK_TABLE, self.start()) as u8 == state }
+        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
     }
 
     /// Mark all lines the object is spanned to.
@@ -163,7 +162,7 @@ impl Line {
 
     #[inline(always)]
     pub fn currrent_validity_state(&self) -> u8 {
-        unsafe { side_metadata::load(&Self::VALIDITY_STATE, self.start()) as _ }
+        unsafe { Self::VALIDITY_STATE.load(self.start()) }
     }
 
     #[inline(always)]
@@ -177,11 +176,9 @@ impl Line {
             return;
         }
         for line in lines {
-            unsafe {
-                let old = side_metadata::load(&Self::VALIDITY_STATE, line.start());
-                debug_assert_ne!(old, 255);
-                side_metadata::store(&Self::VALIDITY_STATE, line.start(), old + 1);
-            }
+            let old = line.currrent_validity_state();
+            debug_assert_ne!(old, 255);
+            unsafe { Self::VALIDITY_STATE.store(line.start(), old + 1) };
         }
     }
 
@@ -224,15 +221,9 @@ impl Line {
         // FIXME: Performance
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
+        let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
         for i in (0..size).step_by(16) {
-            let a = start + i;
-            store_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                unsafe { a.to_object_reference() },
-                0,
-                None,
-                Some(Ordering::SeqCst),
-            );
+            mark_bit.store_atomic(start + i, 0u8, Ordering::SeqCst);
         }
     }
 }

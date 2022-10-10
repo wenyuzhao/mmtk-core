@@ -5,7 +5,7 @@ use super::ImmixSpace;
 use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockQueue;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::{self, *};
+use crate::util::metadata::side_metadata::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use std::sync::atomic::Ordering;
@@ -152,29 +152,29 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
 
     #[inline(always)]
-    fn inc_dead_bytes_sloppy(&self, bytes: usize) {
-        let max_words = Self::BYTES >> LOG_BYTES_IN_WORD;
+    fn inc_dead_bytes_sloppy(&self, bytes: u32) {
+        let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
         let words = bytes >> LOG_BYTES_IN_WORD;
-        let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
+        let old: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
         let mut new = old + words;
         if new >= max_words {
             new = max_words - 1;
         }
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
+        unsafe { Self::DEAD_WORDS.store(self.start(), new) };
     }
 
     #[inline(always)]
-    pub fn dec_dead_bytes_sloppy(&self, bytes: usize) {
+    pub fn dec_dead_bytes_sloppy(&self, bytes: u32) {
         let words = bytes >> LOG_BYTES_IN_WORD;
-        let old = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
+        let old: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
         let new = if old <= words { 0 } else { old - words };
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), new) };
+        unsafe { Self::DEAD_WORDS.store(self.start(), new) };
     }
 
     #[inline(always)]
     pub fn inc_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
         let block = Block::containing::<VM>(o);
-        block.inc_dead_bytes_sloppy(o.get_size::<VM>());
+        block.inc_dead_bytes_sloppy(o.get_size::<VM>() as u32);
     }
 
     #[inline(always)]
@@ -200,14 +200,14 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn dead_bytes(&self) -> usize {
-        let v = unsafe { side_metadata::load(&Self::DEAD_WORDS, self.start()) };
+    pub fn dead_bytes(&self) -> u32 {
+        let v: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
         v << LOG_BYTES_IN_WORD
     }
 
     #[inline(always)]
     fn reset_dead_bytes(&self) {
-        unsafe { side_metadata::store(&Self::DEAD_WORDS, self.start(), 0) };
+        unsafe { Self::DEAD_WORDS.store(self.start(), 0u32) };
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -269,16 +269,15 @@ impl Block {
     /// Get block mark state.
     #[inline(always)]
     pub fn get_state(&self) -> BlockState {
-        let byte =
-            side_metadata::load_atomic(&Self::MARK_TABLE, self.start(), Ordering::SeqCst) as u8;
+        let byte = Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         byte.into()
     }
 
     /// Set block mark state.
     #[inline(always)]
     pub fn set_state(&self, state: BlockState) {
-        let state = u8::from(state) as usize;
-        side_metadata::store_atomic(&Self::MARK_TABLE, self.start(), state, Ordering::SeqCst);
+        let state = u8::from(state);
+        Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
     /// Set block mark state.
@@ -287,15 +286,12 @@ impl Block {
         &self,
         mut f: impl FnMut(BlockState) -> Option<BlockState>,
     ) -> Result<BlockState, BlockState> {
-        side_metadata::fetch_update(
-            &Self::MARK_TABLE,
-            self.start(),
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-            |s| f((s as u8).into()).map(|x| u8::from(x) as usize),
-        )
-        .map(|x| (x as u8).into())
-        .map_err(|x| (x as u8).into())
+        Self::MARK_TABLE
+            .fetch_update_atomic::<u8, _>(self.start(), Ordering::SeqCst, Ordering::SeqCst, |s| {
+                f(s.into()).map(|x| u8::from(x))
+            })
+            .map(|x| (x as u8).into())
+            .map_err(|x| (x as u8).into())
     }
 
     pub fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
@@ -316,9 +312,8 @@ impl Block {
     /// Test if the block is marked for defragmentation.
     #[inline(always)]
     pub fn is_defrag_source(&self) -> bool {
-        let byte =
-            side_metadata::load_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), Ordering::SeqCst)
-                as u8;
+        let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
+        debug_assert!(byte == 0 || byte == Self::DEFRAG_SOURCE_STATE);
         byte == Self::DEFRAG_SOURCE_STATE
     }
 
@@ -336,34 +331,28 @@ impl Block {
     #[inline(always)]
     pub fn set_as_defrag_source(&self, defrag: bool) {
         let byte = if defrag { Self::DEFRAG_SOURCE_STATE } else { 0 };
-        side_metadata::store_atomic(
-            &Self::DEFRAG_STATE_TABLE,
-            self.start(),
-            byte as usize,
-            Ordering::SeqCst,
-        );
+        Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), byte, Ordering::SeqCst);
     }
 
     #[inline(always)]
     pub fn attempt_to_set_as_defrag_source(&self) -> bool {
         loop {
-            let old_value = side_metadata::load_atomic(
-                &Self::DEFRAG_STATE_TABLE,
-                self.start(),
-                Ordering::SeqCst,
-            ) as u8;
+            let old_value: u8 =
+                Self::DEFRAG_STATE_TABLE.load_atomic(self.start(), Ordering::SeqCst);
             if old_value == Self::DEFRAG_SOURCE_STATE {
                 return false;
             }
 
-            if side_metadata::compare_exchange_atomic(
-                &Self::DEFRAG_STATE_TABLE,
-                self.start(),
-                old_value as usize,
-                Self::DEFRAG_SOURCE_STATE as _,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            if Self::DEFRAG_STATE_TABLE
+                .compare_exchange_atomic(
+                    self.start(),
+                    old_value,
+                    Self::DEFRAG_SOURCE_STATE,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 break;
             }
         }
@@ -373,20 +362,13 @@ impl Block {
     /// Record the number of holes in the block.
     #[inline(always)]
     pub fn set_holes(&self, holes: usize) {
-        side_metadata::store_atomic(
-            &Self::DEFRAG_STATE_TABLE,
-            self.start(),
-            holes,
-            Ordering::SeqCst,
-        );
+        Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), holes as u8, Ordering::SeqCst);
     }
 
     /// Get the number of holes.
     #[inline(always)]
     pub fn get_holes(&self) -> usize {
-        let byte =
-            side_metadata::load_atomic(&Self::DEFRAG_STATE_TABLE, self.start(), Ordering::SeqCst)
-                as u8;
+        let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         debug_assert_ne!(byte, Self::DEFRAG_SOURCE_STATE);
         byte as usize
     }
@@ -455,39 +437,30 @@ impl Block {
 
     #[inline(always)]
     pub fn clear_line_validity_states(&self) {
-        side_metadata::bzero_metadata(&Line::VALIDITY_STATE, self.start(), Block::BYTES);
+        Line::VALIDITY_STATE.bzero_metadata(self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_metadata(&crate::util::rc::RC_TABLE, self.start(), Block::BYTES);
+        crate::util::rc::RC_TABLE.bzero_metadata(self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn clear_striddle_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_metadata(
-            &crate::util::rc::RC_STRADDLE_LINES,
-            self.start(),
-            Block::BYTES,
-        );
+        crate::util::rc::RC_STRADDLE_LINES.bzero_metadata(self.start(), Block::BYTES);
     }
 
     #[inline(always)]
     pub fn log(&self) -> bool {
         loop {
-            let old_value =
-                side_metadata::load_atomic(&Self::LOG_TABLE, self.start(), Ordering::Relaxed);
+            let old_value: u8 = Self::LOG_TABLE.load_atomic(self.start(), Ordering::Relaxed);
             if old_value == 1 {
                 return false;
             }
-            if side_metadata::compare_exchange_atomic(
-                &Self::LOG_TABLE,
-                self.start(),
-                0,
-                1,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            if Self::LOG_TABLE
+                .compare_exchange_atomic(self.start(), 0u8, 1u8, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -495,23 +468,19 @@ impl Block {
 
     #[inline(always)]
     pub fn unlog(&self) {
-        side_metadata::store_atomic(&Self::LOG_TABLE, self.start(), 0, Ordering::Relaxed);
+        Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
     #[inline(always)]
     pub fn unlog_non_atomic(&self) {
-        unsafe {
-            side_metadata::store(&Self::LOG_TABLE, self.start(), 0);
-        }
+        unsafe { Self::LOG_TABLE.store(self.start(), 0u8) };
     }
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        side_metadata::bzero_metadata(
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-            self.start(),
-            Block::BYTES,
-        );
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(self.start(), Block::BYTES);
     }
 
     #[inline(always)]

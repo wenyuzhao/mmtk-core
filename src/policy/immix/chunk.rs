@@ -4,7 +4,7 @@ use super::immixspace::ImmixSpace;
 use super::line::Line;
 use crate::plan::lxr::LXR;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::{self, SideMetadataSpec};
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc;
 use crate::util::ObjectReference;
 use crate::LazySweepingJobsCounter;
@@ -88,7 +88,7 @@ impl Chunk {
 
     #[inline(always)]
     pub fn is_committed(&self) -> bool {
-        let byte = unsafe { side_metadata::load(&ChunkMap::ALLOC_TABLE, self.start()) as u8 };
+        let byte: u8 = unsafe { ChunkMap::ALLOC_TABLE.load(self.start()) };
         let state = match byte {
             0 => ChunkState::Free,
             1 => ChunkState::Allocated,
@@ -131,7 +131,7 @@ impl ChunkMap {
             return;
         }
         // Update alloc byte
-        unsafe { side_metadata::store(&Self::ALLOC_TABLE, chunk.start(), state as u8 as _) };
+        unsafe { Self::ALLOC_TABLE.store::<u8>(chunk.start(), state as u8) };
         // If this is a newly allcoated chunk, then expand the chunk range.
         if state == ChunkState::Allocated {
             debug_assert!(!chunk.start().is_zero());
@@ -149,7 +149,7 @@ impl ChunkMap {
 
     /// Get chunk state
     pub fn get(&self, chunk: Chunk) -> ChunkState {
-        let byte = unsafe { side_metadata::load(&Self::ALLOC_TABLE, chunk.start()) as u8 };
+        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
         match byte {
             0 => ChunkState::Free,
             1 => ChunkState::Allocated,
@@ -165,7 +165,7 @@ impl ChunkMap {
 
     pub fn committed_chunks(&self) -> impl Iterator<Item = Chunk> {
         self.all_chunks().filter(|c| {
-            let byte = unsafe { side_metadata::load(&Self::ALLOC_TABLE, c.start()) as u8 };
+            let byte: u8 = unsafe { ChunkMap::ALLOC_TABLE.load(c.start()) };
             let state = match byte {
                 0 => ChunkState::Free,
                 1 => ChunkState::Allocated,
@@ -258,11 +258,9 @@ impl PrepareChunk {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        side_metadata::bzero_metadata(
-            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
-            chunk.start(),
-            Chunk::BYTES,
-        );
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(chunk.start(), Chunk::BYTES);
     }
 }
 
@@ -454,11 +452,9 @@ impl ConcurrentChunkMetadataZeroing {
     #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
-        side_metadata::bzero_metadata(
-            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec(),
-            chunk.start(),
-            Chunk::BYTES,
-        );
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(chunk.start(), Chunk::BYTES);
     }
 }
 

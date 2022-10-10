@@ -11,12 +11,11 @@ use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
+use crate::util::rc::RC_LOCK_BITS;
 use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::vm::*;
 
 use super::constants::BYTES_IN_WORD;
-use super::metadata::side_metadata::compare_exchange_atomic2;
-use super::metadata::{load_metadata, store_metadata};
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -250,6 +249,7 @@ impl Address {
     /// atomic operation: load
     /// # Safety
     /// This could throw a segment fault if the address is invalid
+    #[inline(always)]
     pub unsafe fn atomic_load<T: Atomic>(self, order: Ordering) -> T::Type {
         let loc = &*(self.0 as *const T);
         loc.load(order)
@@ -258,6 +258,7 @@ impl Address {
     /// atomic operation: store
     /// # Safety
     /// This could throw a segment fault if the address is invalid
+    #[inline(always)]
     pub unsafe fn atomic_store<T: Atomic>(self, val: T::Type, order: Ordering) {
         let loc = &*(self.0 as *const T);
         loc.store(val, order)
@@ -266,6 +267,7 @@ impl Address {
     /// atomic operation: compare and exchange usize
     /// # Safety
     /// This could throw a segment fault if the address is invalid
+    #[inline(always)]
     pub unsafe fn compare_exchange<T: Atomic>(
         self,
         old: T::Type,
@@ -325,6 +327,15 @@ impl Address {
         self.0 as *mut T
     }
 
+    /// converts the Address to a Rust reference
+    ///
+    /// # Safety
+    /// The caller must guarantee the address actually points to a Rust object.
+    #[inline(always)]
+    pub unsafe fn as_ref<'a, T>(self) -> &'a T {
+        &*self.to_mut_ptr()
+    }
+
     /// converts the Address to a pointer-sized integer
     #[inline(always)]
     pub const fn as_usize(self) -> usize {
@@ -351,27 +362,23 @@ impl Address {
     #[inline(always)]
     pub fn unlock<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        store_metadata::<VM>(
-            &RC_LOCK_BIT_SPEC,
-            unsafe { self.to_object_reference() },
-            UNLOCKED_VALUE,
-            None,
-            Some(Ordering::Relaxed),
-        )
+        RC_LOCK_BITS.store_atomic(self, UNLOCKED_VALUE, Ordering::Relaxed)
     }
 
     #[inline(always)]
     pub fn lock(&self) {
         loop {
             // Attempt to lock the edges
-            if compare_exchange_atomic2(
-                RC_LOCK_BIT_SPEC.extract_side_spec(),
-                *self,
-                UNLOCKED_VALUE,
-                LOCKED_VALUE,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
+            if RC_LOCK_BITS
+                .compare_exchange_atomic(
+                    *self,
+                    UNLOCKED_VALUE,
+                    LOCKED_VALUE,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
                 return;
             }
             // Failed to lock the edge. Spin.
@@ -381,46 +388,39 @@ impl Address {
     #[inline(always)]
     pub fn is_locked<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        load_metadata::<VM>(
-            &RC_LOCK_BIT_SPEC,
-            unsafe { self.to_object_reference() },
-            None,
-            None,
-        ) == LOCKED_VALUE
+        unsafe { RC_LOCK_BITS.load::<u8>(self) == LOCKED_VALUE }
     }
 
     #[inline(always)]
     pub fn is_logged<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        load_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { self.to_object_reference() },
-            None,
-            None,
-        ) == LOGGED_VALUE
+        unsafe {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .extract_side_spec()
+                .load::<u8>(self)
+                == LOGGED_VALUE
+        }
     }
 
     #[inline(always)]
     pub fn attempt_log<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
+        let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
         loop {
-            let old_value = load_metadata::<VM>(
-                &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-                unsafe { self.to_object_reference() },
-                None,
-                Some(Ordering::SeqCst),
-            );
+            let old_value: u8 = log_bit.load_atomic(self, Ordering::SeqCst);
             if old_value == LOGGED_VALUE {
                 return false;
             }
-            if compare_exchange_atomic2(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                self,
-                UNLOGGED_VALUE,
-                LOGGED_VALUE,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            if log_bit
+                .compare_exchange_atomic(
+                    self,
+                    UNLOGGED_VALUE,
+                    LOGGED_VALUE,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -429,37 +429,27 @@ impl Address {
     #[inline(always)]
     pub fn log<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { self.to_object_reference() },
-            LOGGED_VALUE,
-            None,
-            Some(Ordering::Relaxed),
-        )
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .extract_side_spec()
+            .store_atomic(self, LOGGED_VALUE, Ordering::Relaxed)
     }
 
     #[inline(always)]
     pub fn unlog<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { self.to_object_reference() },
-            UNLOGGED_VALUE,
-            None,
-            Some(Ordering::Relaxed),
-        )
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .extract_side_spec()
+            .store_atomic(self, UNLOGGED_VALUE, Ordering::Relaxed)
     }
 
     #[inline(always)]
     pub fn unlog_non_atomic<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { self.to_object_reference() },
-            UNLOGGED_VALUE,
-            None,
-            None,
-        )
+        unsafe {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .extract_side_spec()
+                .store(self, UNLOGGED_VALUE)
+        }
     }
 }
 
@@ -657,39 +647,15 @@ impl ObjectReference {
     #[inline(always)]
     pub fn log_start_address<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            self,
-            UNLOGGED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { (self.to_address() + BYTES_IN_ADDRESS).to_object_reference() },
-            LOGGED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
+        self.to_address().unlog::<VM>();
+        (self.to_address() + BYTES_IN_ADDRESS).log::<VM>();
     }
 
     #[inline(always)]
     pub fn clear_start_address_log<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            self,
-            LOGGED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
-        store_metadata::<VM>(
-            &VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            unsafe { (self.to_address() + BYTES_IN_ADDRESS).to_object_reference() },
-            LOGGED_VALUE,
-            None,
-            Some(Ordering::SeqCst),
-        );
+        self.to_address().log::<VM>();
+        (self.to_address() + BYTES_IN_ADDRESS).log::<VM>();
     }
 
     #[inline(always)]

@@ -16,7 +16,6 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::memory;
-use crate::util::metadata::side_metadata::bzero_metadata;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use std::marker::PhantomData;
@@ -363,11 +362,9 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages(first - self.start);
         let pages = self.free_list.size(page_offset as _);
-        bzero_metadata(
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-            first,
-            (pages as usize) << LOG_BYTES_IN_PAGE,
-        );
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(first, (pages as usize) << LOG_BYTES_IN_PAGE);
 
         // if (VM.config.ZERO_PAGES_ON_RELEASE)
         //     VM.memory.zero(false, first, Conversions.pagesToBytes(pages));

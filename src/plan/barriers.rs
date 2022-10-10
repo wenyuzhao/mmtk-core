@@ -4,8 +4,7 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
-use crate::util::metadata::load_metadata;
-use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
+use crate::util::metadata::MetadataSpec;
 use crate::util::*;
 use crate::MMTK;
 use atomic::Ordering;
@@ -91,20 +90,24 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
             // Try set the bit from 1 to 0 (log object). This may fail, if
             // 1. the bit is cleared by others, or
             // 2. other bits in the same byte may get modified if we use side metadata
-            if compare_exchange_metadata::<E::VM>(
-                &self.meta,
-                object,
-                1,
-                0,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            if self
+                .meta
+                .compare_exchange_metadata::<E::VM, u8>(
+                    object,
+                    1,
+                    0,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 // We just logged the object
                 return true;
             } else {
-                let old_value =
-                    load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
+                let old_value = self
+                    .meta
+                    .load_atomic::<E::VM, u8>(object, None, Ordering::SeqCst);
                 // If the bit is cleared before, someone else has logged the object. Return false.
                 if old_value == 0 {
                     return false;
@@ -132,7 +135,14 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
 
     #[inline(always)]
     fn barrier(&mut self, obj: ObjectReference) {
-        if load_metadata::<E::VM>(&self.meta, obj, None, None) == 0 {
+        // Perform a relaxed load for performance.
+        // It is okay if this check fails occasionally and
+        // the execution goes to the slowpath, we can take care of that in the slowpath.
+        if self
+            .meta
+            .load_atomic::<E::VM, u8>(obj, None, Ordering::Relaxed)
+            == 0
+        {
             return;
         }
         self.barrier_slow(obj);
@@ -179,8 +189,8 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
     }
 }
 
-pub const UNLOGGED_VALUE: usize = 0b1;
-pub const LOGGED_VALUE: usize = 0b0;
+pub const UNLOGGED_VALUE: u8 = 0b1;
+pub const LOGGED_VALUE: u8 = 0b0;
 
-pub const UNLOCKED_VALUE: usize = 0b0;
-pub const LOCKED_VALUE: usize = 0b1;
+pub const UNLOCKED_VALUE: u8 = 0b0;
+pub const LOCKED_VALUE: u8 = 0b1;

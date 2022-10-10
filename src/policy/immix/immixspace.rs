@@ -24,9 +24,7 @@ use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
-use crate::util::metadata::{
-    self, compare_exchange_metadata, load_metadata, store_metadata, MetadataSpec,
-};
+use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::rc;
 use crate::util::{Address, ObjectReference};
@@ -966,25 +964,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[inline(always)]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         loop {
-            let old_value = load_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+            let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
                 object,
                 None,
-                Some(Ordering::SeqCst),
-            ) as u8;
+                Ordering::SeqCst,
+            );
             if old_value == self.mark_state {
                 return false;
             }
 
-            if compare_exchange_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                old_value as usize,
-                self.mark_state as usize,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+                .compare_exchange_metadata::<VM, u8>(
+                    object,
+                    old_value,
+                    self.mark_state,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 break;
             }
         }
@@ -994,26 +993,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Atomically mark an object.
     #[inline(always)]
     pub fn unmark(&self, object: ObjectReference) -> bool {
+        let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
+        let obj_addr = VM::VMObjectModel::ref_to_address(object);
         loop {
-            let old_value = load_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                None,
-                Some(Ordering::SeqCst),
-            ) as u8;
+            let old_value: u8 = mark_bit.load_atomic(obj_addr, Ordering::SeqCst);
             if old_value == Self::UNMARKED_STATE {
                 return false;
             }
 
-            if compare_exchange_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                Self::MARKED_STATE as _,
-                Self::UNMARKED_STATE as _,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            if mark_bit
+                .compare_exchange_atomic(
+                    obj_addr,
+                    Self::MARKED_STATE,
+                    Self::UNMARKED_STATE,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 break;
             }
         }
@@ -1023,23 +1020,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Check if an object is marked.
     #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
-        let old_value = load_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+        let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
             None,
-            Some(Ordering::SeqCst),
-        ) as u8;
-        old_value == self.mark_state
-    }
-
-    #[inline(always)]
-    pub fn mark_bit(&self, object: ObjectReference) -> bool {
-        let old_value = load_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-            object,
-            None,
-            Some(Ordering::SeqCst),
-        ) as u8;
+            Ordering::SeqCst,
+        );
         old_value == self.mark_state
     }
 
@@ -1127,7 +1112,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             Line::update_validity(RegionIterator::<Line>::new(start, end));
         }
-        block.dec_dead_bytes_sloppy(Line::steps_between(&start, &end).unwrap() << Line::LOG_BYTES);
+        block.dec_dead_bytes_sloppy(
+            (Line::steps_between(&start, &end).unwrap() as u32) << Line::LOG_BYTES,
+        );
         // Line::clear_mark_table::<VM>(start..end);
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);
@@ -1418,12 +1405,11 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
             return;
         }
         // Mark the object
-        store_metadata::<VM>(
-            &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
             obj,
-            space.mark_state as usize,
+            space.mark_state,
             None,
-            Some(Ordering::SeqCst),
+            Ordering::SeqCst,
         );
         // Mark the line
         if !super::MARK_LINE_AT_SCAN_TIME {
