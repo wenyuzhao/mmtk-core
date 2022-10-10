@@ -9,6 +9,7 @@ use crate::plan::barriers::LOCKED_VALUE;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
+use crate::policy::sft_map::SFTMap;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
 use crate::util::rc::RC_LOCK_BITS;
@@ -222,6 +223,10 @@ impl Address {
     #[inline(always)]
     pub const fn sub(self, size: usize) -> Address {
         Address(self.0 - size)
+    }
+
+    pub const fn and(self, mask: usize) -> usize {
+        self.0 & mask
     }
 
     // Perform a saturating subtract on the Address
@@ -596,7 +601,7 @@ impl ObjectReference {
         if self.is_null() {
             false
         } else {
-            SFT_MAP.get(Address(self.0)).is_reachable(self)
+            unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_reachable(self)
         }
     }
 
@@ -605,27 +610,27 @@ impl ObjectReference {
         if self.0 == 0 {
             false
         } else {
-            SFT_MAP.get(Address(self.0)).is_live(self)
+            unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_live(self)
         }
     }
 
     pub fn is_movable(self) -> bool {
-        SFT_MAP.get(Address(self.0)).is_movable()
+        unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_movable()
     }
 
     /// Get forwarding pointer if the object is forwarded.
     #[inline(always)]
     pub fn get_forwarded_object(self) -> Option<Self> {
-        SFT_MAP.get(Address(self.0)).get_forwarded_object(self)
+        unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
     pub fn is_in_any_space(self) -> bool {
-        SFT_MAP.is_in_any_space(self)
+        unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_in_space(self)
     }
 
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
-        SFT_MAP.get(Address(self.0)).is_sane()
+        unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_sane()
     }
 
     #[inline(always)]
