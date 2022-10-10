@@ -8,7 +8,6 @@ use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::rc::*;
 use crate::util::Address;
-use crate::vm::edge_shape::Edge;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{immix::Pause, EdgeIterator},

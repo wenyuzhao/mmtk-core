@@ -229,7 +229,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
         if !self.edges.is_empty() {
             let mut roots = vec![];
             for e in &self.edges {
-                roots.push(unsafe { e.load() })
+                roots.push(e.load())
             }
             let w = LXRConcurrentTraceObjects::<VM>::new(roots, self.mmtk());
             self.mmtk().scheduler.postpone(w);

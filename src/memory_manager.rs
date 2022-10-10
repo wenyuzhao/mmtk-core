@@ -14,7 +14,6 @@
 use crate::mmtk::MMTKBuilder;
 use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
-use crate::plan::BarrierWriteTarget;
 use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::{GCController, GCWork, GCWorker};
 use crate::scheduler::{WorkBucketStage, LAST_ACTIVATE_TIME};

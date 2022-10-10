@@ -244,7 +244,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         for i in 0..pages {
             let page = start + (i << LOG_BYTES_IN_PAGE);
             unsafe {
-                let old = unsafe { LOS_PAGE_VALIDITY.load::<u8>(page) };
+                let old = LOS_PAGE_VALIDITY.load::<u8>(page);
                 debug_assert_ne!(old, 255);
                 LOS_PAGE_VALIDITY.store(page, old + 1);
             }
