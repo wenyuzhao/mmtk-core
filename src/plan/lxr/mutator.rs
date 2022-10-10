@@ -1,8 +1,6 @@
-use super::barrier::FieldLoggingBarrier;
-use super::gc_work::TRACE_KIND_FAST;
+use super::barrier::LXRFieldBarrierSemantics;
 use super::LXR;
-use crate::plan::barriers::ObjectRememberingBarrier;
-use crate::plan::lxr::gc_work::ImmixProcessEdges;
+use crate::plan::barriers::FieldBarrier;
 use crate::plan::lxr::global::ACTIVE_BARRIER;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
@@ -13,7 +11,6 @@ use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
-use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
 use crate::MMTK;
@@ -73,17 +70,9 @@ pub fn create_lxr_mutator<VM: VMBinding>(
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
         barrier: if ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier) {
-            Box::new(ObjectRememberingBarrier::<
-                ImmixProcessEdges<VM, { TRACE_KIND_FAST }>,
-            >::new(
-                mmtk, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            ))
+            unimplemented!()
         } else {
-            Box::new(FieldLoggingBarrier::<
-                ImmixProcessEdges<VM, { TRACE_KIND_FAST }>,
-            >::new(
-                mmtk, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            ))
+            Box::new(FieldBarrier::new(LXRFieldBarrierSemantics::new(mmtk)))
         },
         mutator_tls,
         config,

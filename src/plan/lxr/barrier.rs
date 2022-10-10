@@ -5,22 +5,20 @@ use std::sync::atomic::AtomicUsize;
 use atomic::Ordering;
 
 use super::LXR;
-use crate::plan::barriers::Barrier;
-use crate::plan::barriers::BarrierWriteTarget;
+use crate::plan::barriers::BarrierSemantics;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::immix::Pause;
 use crate::plan::lxr::cm::ProcessModBufSATB;
 use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
-use crate::plan::EdgeIterator;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
-use crate::util::metadata::MetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
-use crate::util::rc::RC_LOCK_BIT_SPEC;
 use crate::util::*;
+use crate::vm::edge_shape::Edge;
+use crate::vm::edge_shape::MemorySlice;
 use crate::vm::*;
 use crate::LazySweepingJobsCounter;
 use crate::MMTK;
@@ -32,31 +30,31 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub const UNLOCKED_VALUE: usize = 0b0;
 pub const LOCKED_VALUE: usize = 0b1;
 
-pub struct FieldLoggingBarrier<E: ProcessEdgesWork> {
-    mmtk: &'static MMTK<E::VM>,
+pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
+    mmtk: &'static MMTK<VM>,
     edges: Vec<Address>,
     nodes: Vec<ObjectReference>,
     incs: Vec<Address>,
     decs: Vec<ObjectReference>,
-    lxr: &'static LXR<E::VM>,
+    lxr: &'static LXR<VM>,
 }
 
-impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
+impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
-    const UNLOG_BITS: SideMetadataSpec = *<E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    const UNLOG_BITS: SideMetadataSpec = *<VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
-    const LOCK_BITS: SideMetadataSpec = *RC_LOCK_BIT_SPEC.extract_side_spec();
+    const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]
-    pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
+    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         Self {
             mmtk,
             edges: vec![],
             nodes: vec![],
             incs: Vec::with_capacity(Self::CAPACITY),
             decs: Vec::with_capacity(Self::CAPACITY),
-            lxr: mmtk.plan.downcast_ref::<LXR<E::VM>>().unwrap(),
+            lxr: mmtk.plan.downcast_ref::<LXR<VM>>().unwrap(),
         }
     }
 
@@ -122,9 +120,9 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     #[inline(always)]
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
-        if !edge.is_logged::<E::VM>() {
+        if !edge.is_logged::<VM>() {
             let old: ObjectReference = unsafe { edge.load() };
-            edge.log::<E::VM>();
+            edge.log::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -177,13 +175,8 @@ impl<E: ProcessEdgesWork> FieldLoggingBarrier<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
-    fn assert_is_flushed(&self) {
-        debug_assert!(self.edges.is_empty());
-        debug_assert!(self.nodes.is_empty());
-        debug_assert!(self.incs.is_empty());
-        debug_assert!(self.decs.is_empty());
-    }
+impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
+    type VM = VM;
 
     #[cold]
     fn flush(&mut self) {
@@ -216,7 +209,7 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
                 let nodes = self.decs.clone();
                 // }
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                    .add(ProcessModBufSATB::<E>::new(edges, nodes));
+                    .add(ProcessModBufSATB::<VM>::new(edges, nodes));
             }
         }
         // Flush inc and dec buffer
@@ -239,29 +232,18 @@ impl<E: ProcessEdgesWork> Barrier for FieldLoggingBarrier<E> {
         }
     }
 
-    #[inline(always)]
-    fn write_barrier(&mut self, target: BarrierWriteTarget) {
-        match target {
-            BarrierWriteTarget::Field { src, slot, val, .. } => {
-                self.enqueue_node(src, slot, Some(val));
-            }
-            BarrierWriteTarget::ArrayCopy {
-                dst,
-                dst_offset,
-                len,
-                ..
-            } => {
-                if dst.is_null() {
-                    return;
-                }
-                let dst_base = dst.to_address() + dst_offset;
-                for i in 0..len {
-                    self.enqueue_node(dst, dst_base + (i << 3), None);
-                }
-            }
-            BarrierWriteTarget::Clone { dst, .. } => {
-                EdgeIterator::<E::VM>::iterate(dst, |x| self.enqueue_node(dst, x, None))
-            }
+    fn object_reference_write_slow(
+        &mut self,
+        _src: ObjectReference,
+        slot: VM::VMEdge,
+        _target: ObjectReference,
+    ) {
+        self.enqueue_node(ObjectReference::NULL, slot.to_address(), None);
+    }
+
+    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
+        for e in dst.iter_edges() {
+            self.enqueue_node(ObjectReference::NULL, e.to_address(), None);
         }
     }
 }

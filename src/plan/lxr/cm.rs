@@ -257,13 +257,13 @@ impl<VM: VMBinding> DerefMut for CMImmixCollectRootEdges<VM> {
     }
 }
 
-pub struct ProcessModBufSATB<E: ProcessEdgesWork> {
+pub struct ProcessModBufSATB<VM: VMBinding> {
     edges: Vec<Address>,
     nodes: Vec<ObjectReference>,
-    phantom: PhantomData<E>,
+    phantom: PhantomData<VM>,
 }
 
-impl<E: ProcessEdgesWork> ProcessModBufSATB<E> {
+impl<VM: VMBinding> ProcessModBufSATB<VM> {
     pub fn new(edges: Vec<Address>, nodes: Vec<ObjectReference>) -> Self {
         Self {
             edges,
@@ -273,15 +273,15 @@ impl<E: ProcessEdgesWork> ProcessModBufSATB<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBufSATB<E> {
+impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB<VM> {
     #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         if self.edges.is_empty() && self.nodes.is_empty() {
             return;
         }
         GCWork::do_work(
-            &mut LXRConcurrentTraceObjects::<E::VM>::new(self.nodes.clone(), mmtk),
+            &mut LXRConcurrentTraceObjects::<VM>::new(self.nodes.clone(), mmtk),
             worker,
             mmtk,
         );

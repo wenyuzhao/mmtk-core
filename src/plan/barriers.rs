@@ -2,12 +2,14 @@
 
 use std::sync::atomic::AtomicUsize;
 
-use crate::scheduler::gc_work::*;
-use crate::scheduler::WorkBucketStage;
-use crate::util::metadata::MetadataSpec;
-use crate::util::*;
-use crate::MMTK;
+use crate::vm::edge_shape::{Edge, MemorySlice};
+use crate::vm::ObjectModel;
+use crate::{
+    util::{metadata::MetadataSpec, *},
+    vm::VMBinding,
+};
 use atomic::Ordering;
+use downcast_rs::Downcast;
 
 pub const BARRIER_MEASUREMENT: bool = crate::args::BARRIER_MEASUREMENT;
 pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
@@ -15,7 +17,12 @@ pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// BarrierSelector describes which barrier to use.
-#[derive(Copy, Clone, Debug)]
+///
+/// This is used as an *indicator* for each plan to enable the correct barrier.
+/// For example, immix can use this selector to enable different barriers for analysis.
+///
+/// VM bindings may also use this to enable the correct fast-path, if the fast-path is implemented in the binding.
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
@@ -29,57 +36,131 @@ impl BarrierSelector {
     }
 }
 
-/// For field writes in HotSpot, we cannot always get the source object pointer and the field address
-pub enum BarrierWriteTarget {
-    Field {
+/// A barrier is a combination of fast-path behaviour + slow-path semantics.
+/// This trait exposes generic barrier interfaces. The implementations will define their
+/// own fast-path code and slow-path semantics.
+///
+/// Normally, a binding will call these generic barrier interfaces (`object_reference_write` and `memory_region_copy`) for subsuming barrier calls.
+///
+/// If a subsuming barrier cannot be easily deployed due to platform limitations, the binding may chosse to call both `object_reference_write_pre` and `object_reference_write_post`
+/// barrier before and after the store operation.
+///
+/// As a performance optimization, the binding may also choose to port the fast-path to the VM side,
+/// and call the slow-path (`object_reference_write_slow`) only if necessary.
+pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
+    fn flush(&mut self) {}
+
+    /// Subsuming barrier for object reference write
+    fn object_reference_write(
+        &mut self,
         src: ObjectReference,
-        slot: Address,
-        val: ObjectReference,
-    },
-    ArrayCopy {
-        src: ObjectReference,
-        src_offset: usize,
-        dst: ObjectReference,
-        dst_offset: usize,
-        len: usize,
-    },
-    Clone {
-        src: ObjectReference,
-        dst: ObjectReference,
-    },
+        slot: VM::VMEdge,
+        target: ObjectReference,
+    ) {
+        self.object_reference_write_pre(src, slot, target);
+        slot.store(target);
+        self.object_reference_write_post(src, slot, target);
+    }
+
+    /// Full pre-barrier for object reference write
+    fn object_reference_write_pre(
+        &mut self,
+        _src: ObjectReference,
+        _slot: VM::VMEdge,
+        _target: ObjectReference,
+    ) {
+    }
+
+    /// Full post-barrier for object reference write
+    fn object_reference_write_post(
+        &mut self,
+        _src: ObjectReference,
+        _slot: VM::VMEdge,
+        _target: ObjectReference,
+    ) {
+    }
+
+    /// Object reference write slow-path call.
+    /// This can be called either before or after the store, depend on the concrete barrier implementation.
+    fn object_reference_write_slow(
+        &mut self,
+        _src: ObjectReference,
+        _slot: VM::VMEdge,
+        _target: ObjectReference,
+    ) {
+    }
+
+    /// Subsuming barrier for array copy
+    fn memory_region_copy(&mut self, src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
+        self.memory_region_copy_pre(src.clone(), dst.clone());
+        VM::VMMemorySlice::copy(&src, &dst);
+        self.memory_region_copy_post(src, dst);
+    }
+
+    /// Full pre-barrier for array copy
+    fn memory_region_copy_pre(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+
+    /// Full post-barrier for array copy
+    fn memory_region_copy_post(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
 }
 
-pub trait Barrier: 'static + Send {
-    fn flush(&mut self);
-    fn write_barrier(&mut self, target: BarrierWriteTarget);
-    fn assert_is_flushed(&self) {}
-}
+impl_downcast!(Barrier<VM> where VM: VMBinding);
 
+/// Empty barrier implementation.
+/// For GCs that do not need any barriers
+///
+/// Note that since NoBarrier noes nothing but the object field write itself, it has no slow-path semantics (i.e. an no-op slow-path).
 pub struct NoBarrier;
 
-impl Barrier for NoBarrier {
-    fn flush(&mut self) {}
-    fn write_barrier(&mut self, _target: BarrierWriteTarget) {
-        unreachable!("write_barrier called on NoBarrier")
+impl<VM: VMBinding> Barrier<VM> for NoBarrier {}
+
+/// A barrier semantics defines the barrier slow-path behaviour. For example, how an object barrier processes it's modbufs.
+/// Specifically, it defines the slow-path call interfaces and a call to flush buffers.
+///
+/// A barrier is a combination of fast-path behaviour + slow-path semantics.
+/// The fast-path code will decide whether to call the slow-path calls.
+pub trait BarrierSemantics: 'static + Send {
+    type VM: VMBinding;
+
+    const UNLOG_BIT_SPEC: MetadataSpec =
+        *<Self::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec();
+
+    /// Flush thread-local buffers or remembered sets.
+    /// Normally this is called by the slow-path implementation whenever the thread-local buffers are full.
+    /// This will also be called externally by the VM, when the thread is being destroyed.
+    fn flush(&mut self);
+
+    /// Slow-path call for object field write operations.
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <Self::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    );
+
+    /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
+    fn memory_region_copy_slow(
+        &mut self,
+        src: <Self::VM as VMBinding>::VMMemorySlice,
+        dst: <Self::VM as VMBinding>::VMMemorySlice,
+    );
+}
+
+/// Generic object barrier with a type argument defining it's slow-path behaviour.
+pub struct ObjectBarrier<S: BarrierSemantics> {
+    semantics: S,
+}
+
+impl<S: BarrierSemantics> ObjectBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
     }
-}
 
-pub struct ObjectRememberingBarrier<E: ProcessEdgesWork> {
-    mmtk: &'static MMTK<E::VM>,
-    modbuf: Vec<ObjectReference>,
-    /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
-    /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
-    meta: MetadataSpec,
-}
-
-impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
-    #[allow(unused)]
-    pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
-        Self {
-            mmtk,
-            modbuf: vec![],
-            meta,
-        }
+    /// Attepmt to atomically log an object.
+    /// Returns true if the object is not logged previously.
+    #[inline(always)]
+    fn object_is_unlogged(&self, object: ObjectReference) -> bool {
+        unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
     }
 
     /// Attepmt to atomically log an object.
@@ -87,12 +168,13 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
     #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
         loop {
-            // Try set the bit from 1 to 0 (log object). This may fail, if
-            // 1. the bit is cleared by others, or
-            // 2. other bits in the same byte may get modified if we use side metadata
-            if self
-                .meta
-                .compare_exchange_metadata::<E::VM, u8>(
+            let old_value =
+                S::UNLOG_BIT_SPEC.load_atomic::<S::VM, u8>(object, None, Ordering::SeqCst);
+            if old_value == 0 {
+                return false;
+            }
+            if S::UNLOG_BIT_SPEC
+                .compare_exchange_metadata::<S::VM, u8>(
                     object,
                     1,
                     0,
@@ -102,70 +184,113 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
                 )
                 .is_ok()
             {
-                // We just logged the object
                 return true;
-            } else {
-                let old_value = self
-                    .meta
-                    .load_atomic::<E::VM, u8>(object, None, Ordering::SeqCst);
-                // If the bit is cleared before, someone else has logged the object. Return false.
-                if old_value == 0 {
-                    return false;
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn enqueue_node(&mut self, obj: ObjectReference) {
-        // If the objecct is unlogged, log it and push it to mod buffer
-        if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
-            FAST_COUNT.fetch_add(1, Ordering::SeqCst);
-        }
-        if self.log_object(obj) {
-            if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
-                SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
-            }
-            self.modbuf.push(obj);
-            if self.modbuf.len() >= E::CAPACITY {
-                self.flush();
             }
         }
     }
 }
 
-impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
-    #[cold]
+impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn flush(&mut self) {
-        if self.modbuf.is_empty() {
-            return;
-        }
-        let mut modbuf = vec![];
-        std::mem::swap(&mut modbuf, &mut self.modbuf);
-        debug_assert!(
-            !self.mmtk.scheduler.work_buckets[WorkBucketStage::Final].is_activated(),
-            "{:?}",
-            self as *const _
-        );
-        if !modbuf.is_empty() {
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(ProcessModBuf::<E>::new(modbuf, self.meta));
+        self.semantics.flush();
+    }
+
+    #[inline(always)]
+    fn object_reference_write_post(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    ) {
+        if self.object_is_unlogged(src) {
+            self.object_reference_write_slow(src, slot, target);
         }
     }
 
     #[inline(always)]
-    fn write_barrier(&mut self, target: BarrierWriteTarget) {
-        match target {
-            BarrierWriteTarget::Field { src, .. } => {
-                self.enqueue_node(src);
-            }
-            BarrierWriteTarget::ArrayCopy { dst, .. } => {
-                self.enqueue_node(dst);
-            }
-            BarrierWriteTarget::Clone { dst, .. } => {
-                self.enqueue_node(dst);
-            }
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    ) {
+        if self.log_object(src) {
+            self.semantics
+                .object_reference_write_slow(src, slot, target);
         }
+    }
+
+    #[inline(always)]
+    fn memory_region_copy_post(
+        &mut self,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.semantics.memory_region_copy_slow(src, dst);
+    }
+}
+
+/// Generic object barrier with a type argument defining it's slow-path behaviour.
+pub struct FieldBarrier<S: BarrierSemantics> {
+    semantics: S,
+}
+
+impl<S: BarrierSemantics> FieldBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
+    }
+}
+
+impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
+    fn flush(&mut self) {
+        self.semantics.flush();
+    }
+
+    fn object_reference_write_pre(
+        &mut self,
+        _src: ObjectReference,
+        _slot: <S::VM as VMBinding>::VMEdge,
+        _target: ObjectReference,
+    ) {
+        unimplemented!()
+    }
+
+    fn object_reference_write_post(
+        &mut self,
+        _src: ObjectReference,
+        _slot: <S::VM as VMBinding>::VMEdge,
+        _target: ObjectReference,
+    ) {
+        unimplemented!()
+    }
+
+    #[inline(always)]
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    ) {
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
+    }
+
+    #[inline(always)]
+    fn memory_region_copy_pre(
+        &mut self,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.semantics.memory_region_copy_slow(src, dst);
+    }
+
+    #[inline(always)]
+    fn memory_region_copy_post(
+        &mut self,
+        _src: <S::VM as VMBinding>::VMMemorySlice,
+        _dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        unimplemented!()
     }
 }
 
