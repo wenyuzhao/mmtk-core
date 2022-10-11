@@ -1,4 +1,5 @@
 use crate::plan::immix::Pause;
+use crate::plan::VectorQueue;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::copy::CopySemantics;
@@ -13,7 +14,6 @@ use crate::{
 use atomic::Ordering;
 use std::{
     marker::PhantomData,
-    mem,
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -24,7 +24,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
     mmtk: &'static MMTK<VM>,
     objects: Vec<ObjectReference>,
-    next_objects: Vec<ObjectReference>,
+    next_objects: VectorQueue<ObjectReference>,
     worker: *mut GCWorker<VM>,
     slice: Option<&'static [ObjectReference]>,
 }
@@ -41,7 +41,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             plan,
             mmtk,
             objects,
-            next_objects: vec![],
+            next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
             slice: None,
         }
@@ -54,7 +54,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             plan,
             mmtk,
             objects: vec![],
-            next_objects: vec![],
+            next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
             slice: Some(slice),
         }
@@ -68,8 +68,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     #[cold]
     fn flush(&mut self) {
         if !self.next_objects.is_empty() {
-            let mut new_nodes = vec![];
-            mem::swap(&mut new_nodes, &mut self.next_objects);
+            let new_nodes = self.next_objects.take();
             // This packet is executed in concurrent.
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
@@ -151,11 +150,8 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                         .remset
                         .record(e, &self.plan.immix_space);
                 }
-                if self.next_objects.is_empty() {
-                    self.next_objects.reserve(Self::CAPACITY);
-                }
                 self.next_objects.push(t);
-                if self.next_objects.len() >= Self::CAPACITY {
+                if self.next_objects.is_full() {
                     self.flush();
                 }
             });
@@ -191,7 +187,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         let mut objects = vec![];
         while !self.next_objects.is_empty() {
             objects.clear();
-            std::mem::swap(&mut objects, &mut self.next_objects);
+            self.next_objects.swap(&mut objects);
             for i in 0..objects.len() {
                 self.trace_object(objects[i]);
             }
@@ -258,15 +254,13 @@ impl<VM: VMBinding> DerefMut for CMImmixCollectRootEdges<VM> {
 }
 
 pub struct ProcessModBufSATB<VM: VMBinding> {
-    edges: Vec<Address>,
     nodes: Vec<ObjectReference>,
     phantom: PhantomData<VM>,
 }
 
 impl<VM: VMBinding> ProcessModBufSATB<VM> {
-    pub fn new(edges: Vec<Address>, nodes: Vec<ObjectReference>) -> Self {
+    pub fn new(nodes: Vec<ObjectReference>) -> Self {
         Self {
-            edges,
             nodes,
             phantom: PhantomData,
         }
@@ -277,7 +271,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB<VM> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        if self.edges.is_empty() && self.nodes.is_empty() {
+        if self.nodes.is_empty() {
             return;
         }
         GCWork::do_work(

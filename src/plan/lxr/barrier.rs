@@ -12,6 +12,7 @@ use crate::plan::lxr::cm::ProcessModBufSATB;
 use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
+use crate::plan::VectorQueue;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -32,15 +33,14 @@ pub const LOCKED_VALUE: u8 = 0b1;
 
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    edges: Vec<Address>,
-    nodes: Vec<ObjectReference>,
-    incs: Vec<Address>,
-    decs: Vec<ObjectReference>,
+    edges: VectorQueue<Address>,
+    nodes: VectorQueue<ObjectReference>,
+    incs: VectorQueue<Address>,
+    decs: VectorQueue<ObjectReference>,
     lxr: &'static LXR<VM>,
 }
 
 impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const UNLOG_BITS: SideMetadataSpec = *<VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -50,10 +50,10 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         Self {
             mmtk,
-            edges: vec![],
-            nodes: vec![],
-            incs: Vec::with_capacity(Self::CAPACITY),
-            decs: Vec::with_capacity(Self::CAPACITY),
+            edges: VectorQueue::default(),
+            nodes: VectorQueue::default(),
+            incs: VectorQueue::default(),
+            decs: VectorQueue::default(),
             lxr: mmtk.plan.downcast_ref::<LXR<VM>>().unwrap(),
         }
     }
@@ -153,10 +153,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         crate::util::rc::inc_inc_buffer_size();
         // }
         // Flush
-        if self.edges.len() >= Self::CAPACITY
-            || self.incs.len() >= Self::CAPACITY
-            || self.decs.len() >= Self::CAPACITY
-        {
+        if self.edges.is_full() || self.incs.is_full() || self.decs.is_full() {
             self.flush();
         }
     }
@@ -184,10 +181,8 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         if crate::args::BARRIER_MEASUREMENT {
             // Unlog inc edges
             if !self.incs.is_empty() {
-                let mut decs = Vec::with_capacity(Self::CAPACITY);
-                std::mem::swap(&mut decs, &mut self.decs);
-                let mut incs = vec![];
-                std::mem::swap(&mut incs, &mut self.incs);
+                let _decs = self.decs.take();
+                let incs = self.incs.take();
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
                     .add(UnlogEdges::new(incs));
             }
@@ -200,29 +195,20 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
                 || self.lxr.current_pause() == Some(Pause::FinalMark))
         {
             if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
-                let edges = vec![];
-                // let mut nodes = vec![];
-                // if !crate::args::REF_COUNT {
-                //     std::mem::swap(&mut edges, &mut self.edges);
-                //     std::mem::swap(&mut nodes, &mut self.nodes);
-                // } else {
-                let nodes = self.decs.clone();
-                // }
+                let nodes = self.decs.clone_buffer();
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                    .add(ProcessModBufSATB::<VM>::new(edges, nodes));
+                    .add(ProcessModBufSATB::<VM>::new(nodes));
             }
         }
         // Flush inc and dec buffer
         if !self.incs.is_empty() {
             // Inc buffer
-            let mut incs = Vec::with_capacity(Self::CAPACITY);
-            std::mem::swap(&mut incs, &mut self.incs);
+            let incs = self.incs.take();
             let bucket = WorkBucketStage::rc_process_incs_stage();
             self.mmtk.scheduler.work_buckets[bucket]
                 .add(ProcessIncs::<_, { EDGE_KIND_MATURE }>::new(incs));
             // Dec buffer
-            let mut decs = Vec::with_capacity(Self::CAPACITY);
-            std::mem::swap(&mut decs, &mut self.decs);
+            let decs = self.decs.take();
             let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone_prioritized(w);

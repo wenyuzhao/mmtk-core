@@ -26,9 +26,15 @@ pub struct VectorQueue<T> {
     buffer: Vec<T>,
 }
 
+impl<T: Clone> VectorQueue<T> {
+    pub fn clone_buffer(&self) -> Vec<T> {
+        self.buffer.clone()
+    }
+}
+
 impl<T> VectorQueue<T> {
     /// Reserve a capacity of this on first enqueue to avoid frequent resizing.
-    const CAPACITY: usize = 4096;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     /// Create an empty `VectorObjectQueue`.
     pub fn new() -> Self {
@@ -62,6 +68,11 @@ impl<T> VectorQueue<T> {
             self.buffer.reserve(Self::CAPACITY);
         }
         self.buffer.push(v);
+    }
+
+    #[inline(always)]
+    pub fn swap(&mut self, new_buffer: &mut Vec<T>) {
+        std::mem::swap(&mut self.buffer, new_buffer)
     }
 }
 

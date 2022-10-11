@@ -1,6 +1,7 @@
 use super::cm::LXRConcurrentTraceObjects;
 use super::cm::LXRStopTheWorldProcessEdges;
 use super::LXR;
+use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
 use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::ScanObjects;
@@ -24,7 +25,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<Address>,
     /// Recursively generated new increments
-    new_incs: Vec<Address>,
+    new_incs: VectorQueue<Address>,
     lxr: *const LXR<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
@@ -53,7 +54,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     pub fn new_array_slice(slice: &'static [ObjectReference]) -> Self {
         Self {
             incs: vec![],
-            new_incs: vec![],
+            new_incs: VectorQueue::default(),
             lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
@@ -68,7 +69,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     pub fn new(incs: Vec<Address>) -> Self {
         Self {
             incs,
-            new_incs: vec![],
+            new_incs: VectorQueue::default(),
             lxr: std::ptr::null(),
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
@@ -187,11 +188,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 let target = unsafe { edge.load::<ObjectReference>() };
                 if !target.is_null() {
                     if !self::rc_stick(target) {
-                        if self.new_incs.is_empty() {
-                            self.new_incs.reserve(Self::CAPACITY)
-                        }
                         self.new_incs.push(edge);
-                        if self.new_incs.len() >= Self::CAPACITY {
+                        if self.new_incs.is_full() {
                             self.flush()
                         }
                     } else {
@@ -205,7 +203,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.new_incs.is_empty() {
-            let new_incs = std::mem::take(&mut self.new_incs);
+            let new_incs = self.new_incs.take();
             let mut w = ProcessIncs::<VM, { EDGE_KIND_NURSERY }>::new(new_incs);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
@@ -406,13 +404,6 @@ pub const EDGE_KIND_ROOT: u8 = 0;
 pub const EDGE_KIND_NURSERY: u8 = 1;
 pub const EDGE_KIND_MATURE: u8 = 2;
 
-// #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-// pub enum EdgeKind {
-//     Root,
-//     Nursery,
-//     Mature,
-// }
-
 enum AddressBuffer<'a> {
     Owned(Vec<Address>),
     Ref(&'a mut Vec<Address>),
@@ -516,7 +507,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         while !self.new_incs.is_empty() {
             depth += 1;
             incs.clear();
-            std::mem::swap(&mut incs, &mut self.new_incs);
+            self.new_incs.swap(&mut incs);
             self.process_incs::<{ EDGE_KIND_NURSERY }>(
                 AddressBuffer::Ref(&mut incs),
                 copy_context,
@@ -531,10 +522,10 @@ pub struct ProcessDecs<VM: VMBinding> {
     /// Decrements to process
     decs: Vec<ObjectReference>,
     /// Recursively generated new decrements
-    new_decs: Vec<ObjectReference>,
+    new_decs: VectorQueue<ObjectReference>,
     mmtk: *const MMTK<VM>,
     counter: LazySweepingJobsCounter,
-    mark_objects: Vec<ObjectReference>,
+    mark_objects: VectorQueue<ObjectReference>,
     concurrent_marking_in_progress: bool,
     slice: Option<(bool, &'static [ObjectReference])>,
     mature_sweeping_in_progress: bool,
@@ -554,10 +545,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             decs,
-            new_decs: vec![],
+            new_decs: VectorQueue::default(),
             mmtk: std::ptr::null_mut(),
             counter,
-            mark_objects: vec![],
+            mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
             slice: None,
             mature_sweeping_in_progress: false,
@@ -572,10 +563,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     ) -> Self {
         Self {
             decs: vec![],
-            new_decs: vec![],
+            new_decs: VectorQueue::default(),
             mmtk: std::ptr::null_mut(),
             counter,
-            mark_objects: vec![],
+            mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
             slice: Some((not_marked, slice)),
             mature_sweeping_in_progress: false,
@@ -584,11 +575,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     #[inline(always)]
     pub fn recursive_dec(&mut self, o: ObjectReference) {
-        if self.new_decs.is_empty() {
-            self.new_decs.reserve(Self::CAPACITY);
-        }
         self.new_decs.push(o);
-        if self.new_decs.len() > Self::CAPACITY {
+        if self.new_decs.is_full() {
             self.flush()
         }
     }
@@ -606,7 +594,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     #[inline]
     pub fn flush(&mut self) {
         if !self.new_decs.is_empty() {
-            let new_decs = std::mem::take(&mut self.new_decs);
+            let new_decs = self.new_decs.take();
             let mmtk = unsafe { &*self.mmtk };
             let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
@@ -615,7 +603,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             );
         }
         if !self.mark_objects.is_empty() {
-            let objects = std::mem::take(&mut self.mark_objects);
+            let objects = self.mark_objects.take();
             let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
@@ -766,7 +754,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         let mut decs = vec![];
         while !self.new_decs.is_empty() {
             decs.clear();
-            std::mem::swap(&mut decs, &mut self.new_decs);
+            self.new_decs.swap(&mut decs);
             self.process_decs(&decs, lxr, false, false);
         }
         self.flush();
