@@ -25,7 +25,7 @@ use crate::util::options::PlanSelector;
 use crate::util::statistics::stats::Stats;
 use crate::util::ObjectReference;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::ActivePlan;
+use crate::vm::*;
 use downcast_rs::Downcast;
 use enum_map::EnumMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -584,14 +584,14 @@ impl<VM: VMBinding> BasePlan<VM> {
     }
 
     /// The application code has requested a collection.
-    pub fn handle_user_collection_request(&self, _tls: VMMutatorThread, _force: bool) {
-        // if force || !*self.options.ignore_system_g_c {
-        //     info!("User triggering collection");
-        //     self.user_triggered_collection
-        //         .store(true, Ordering::Relaxed);
-        //     self.gc_requester.request();
-        //     VM::VMCollection::block_for_gc(tls);
-        // }
+    pub fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
+        if force || !*self.options.ignore_system_gc {
+            info!("User triggering collection");
+            self.user_triggered_collection
+                .store(true, Ordering::Relaxed);
+            self.gc_requester.request(false);
+            VM::VMCollection::block_for_gc(tls);
+        }
     }
 
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).
