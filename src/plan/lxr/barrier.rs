@@ -13,7 +13,7 @@ use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::VectorQueue;
-use crate::scheduler::gc_work::*;
+use crate::scheduler::gc_work::UnlogEdges;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
@@ -35,7 +35,7 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     edges: VectorQueue<Address>,
     nodes: VectorQueue<ObjectReference>,
-    incs: VectorQueue<Address>,
+    incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
     lxr: &'static LXR<VM>,
 }
@@ -130,7 +130,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     #[inline(always)]
-    fn slow(&mut self, _src: ObjectReference, edge: Address, old: ObjectReference) {
+    fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
         #[cfg(any(feature = "sanity", debug_assertions))]
         assert!(
             old.is_null() || crate::util::rc::count(old) != 0,
@@ -159,11 +159,16 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     #[inline(always)]
-    fn enqueue_node(&mut self, src: ObjectReference, edge: Address, _new: Option<ObjectReference>) {
+    fn enqueue_node(
+        &mut self,
+        src: ObjectReference,
+        edge: VM::VMEdge,
+        _new: Option<ObjectReference>,
+    ) {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if let Ok(old) = self.log_edge_and_get_old_target(edge) {
+        if let Ok(old) = self.log_edge_and_get_old_target(edge.to_address()) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
@@ -224,12 +229,12 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         slot: VM::VMEdge,
         _target: ObjectReference,
     ) {
-        self.enqueue_node(ObjectReference::NULL, slot.to_address(), None);
+        self.enqueue_node(ObjectReference::NULL, slot, None);
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         for e in dst.iter_edges() {
-            self.enqueue_node(ObjectReference::NULL, e.to_address(), None);
+            self.enqueue_node(ObjectReference::NULL, e, None);
         }
     }
 }

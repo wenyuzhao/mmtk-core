@@ -9,6 +9,7 @@ use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::rc::*;
 use crate::util::Address;
+use crate::vm::edge_shape::Edge;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::{immix::Pause, EdgeIterator},
@@ -23,9 +24,9 @@ use std::ops::{Deref, DerefMut};
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
-    incs: Vec<Address>,
+    incs: Vec<VM::VMEdge>,
     /// Recursively generated new increments
-    new_incs: VectorQueue<Address>,
+    new_incs: VectorQueue<VM::VMEdge>,
     lxr: *const LXR<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
@@ -66,7 +67,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline]
-    pub fn new(incs: Vec<Address>) -> Self {
+    pub fn new(incs: Vec<VM::VMEdge>) -> Self {
         Self {
             incs,
             new_incs: VectorQueue::default(),
@@ -110,13 +111,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline(always)]
-    fn record_mature_evac_remset(&mut self, e: Address, o: ObjectReference, force: bool) {
+    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference, force: bool) {
         if !(crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
         {
             return;
         }
-        if force || (!self.lxr().address_in_defrag(e) && self.lxr().in_defrag(o)) {
+        if force || (!self.lxr().address_in_defrag(e.to_address()) && self.lxr().in_defrag(o)) {
             self.lxr()
                 .immix_space
                 .remset
@@ -185,7 +186,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 .bulk_add(packets);
         } else {
             EdgeIterator::<VM>::iterate(o, |edge| {
-                let target = unsafe { edge.load::<ObjectReference>() };
+                let target = edge.load();
                 if !target.is_null() {
                     if !self::rc_stick(target) {
                         self.new_incs.push(edge);
@@ -305,13 +306,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[inline(always)]
     fn unlog_and_load_rc_object<const K: EdgeKind>(
         &mut self,
-        e: Address,
+        e: VM::VMEdge,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
-        let o = unsafe { e.load::<ObjectReference>() };
+        let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE {
-            e.unlog::<VM>();
+            e.to_address().unlog::<VM>();
         }
         if o.is_null() {
             return None;
@@ -322,7 +323,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[inline(always)]
     fn process_edge<const K: EdgeKind>(
         &mut self,
-        e: Address,
+        e: VM::VMEdge,
         cc: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<ObjectReference> {
@@ -342,7 +343,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         if new != o {
             // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));
-            unsafe { e.store(new) }
+            e.store(new)
         } else {
             // println!(" -- inc {:?}: {:?} rc={}", e, o, count(o));
         }
@@ -352,7 +353,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[inline(always)]
     fn process_incs<const K: EdgeKind>(
         &mut self,
-        mut incs: AddressBuffer<'_>,
+        mut incs: AddressBuffer<'_, VM::VMEdge>,
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
@@ -393,7 +394,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     ) -> Option<Vec<ObjectReference>> {
         for e in slice {
             let e = Address::from_ref(e);
-            self.process_edge::<K>(e, copy_context, depth);
+            self.process_edge::<K>(VM::VMEdge::from_address(e), copy_context, depth);
         }
         None
     }
@@ -404,13 +405,13 @@ pub const EDGE_KIND_ROOT: u8 = 0;
 pub const EDGE_KIND_NURSERY: u8 = 1;
 pub const EDGE_KIND_MATURE: u8 = 2;
 
-enum AddressBuffer<'a> {
-    Owned(Vec<Address>),
-    Ref(&'a mut Vec<Address>),
+enum AddressBuffer<'a, E: Edge> {
+    Owned(Vec<E>),
+    Ref(&'a mut Vec<E>),
 }
 
-impl Deref for AddressBuffer<'_> {
-    type Target = Vec<Address>;
+impl<E: Edge> Deref for AddressBuffer<'_, E> {
+    type Target = Vec<E>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         match self {
@@ -420,7 +421,7 @@ impl Deref for AddressBuffer<'_> {
     }
 }
 
-impl DerefMut for AddressBuffer<'_> {
+impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
@@ -489,11 +490,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             {
                 worker.add_work(
                     WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM>::new(
-                        unsafe { std::mem::transmute(root_edges) },
-                        true,
-                        mmtk,
-                    ),
+                    LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
                 )
             } else {
                 unsafe {
@@ -657,7 +654,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         } else {
             EdgeIterator::<VM>::iterate(o, |edge| {
-                let x = unsafe { edge.load::<ObjectReference>() };
+                let x = edge.load();
                 if !x.is_null() {
                     // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);
                     let rc = self::count(x);
@@ -787,8 +784,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
             let roots = std::mem::take(&mut self.edges);
-            let w =
-                ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(unsafe { std::mem::transmute(roots) });
+            let w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
             // if crate::args::LAZY_DECREMENTS {
             //     GCWork::do_work(&mut w, self.worker(), self.mmtk())
             // } else {

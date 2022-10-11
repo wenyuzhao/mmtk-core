@@ -98,6 +98,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
+    // FIXME: Compressed pointers
     fn process_objects(&mut self, objects: &[ObjectReference], slice: bool) {
         if slice {
             for o in objects {
@@ -105,10 +106,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     && self.plan.in_defrag(*o)
                     && crate::util::rc::count(*o) != 0
                 {
-                    self.plan
-                        .immix_space
-                        .remset
-                        .record(Address::from_ref(o), &self.plan.immix_space);
+                    self.plan.immix_space.remset.record(
+                        VM::VMEdge::from_address(Address::from_ref(o)),
+                        &self.plan.immix_space,
+                    );
                 }
                 self.trace_object(*o);
             }
@@ -137,7 +138,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 .bulk_add(packets);
         } else {
             EdgeIterator::<VM>::iterate(object, |e| {
-                let t: ObjectReference = unsafe { e.load() };
+                let t: ObjectReference = e.load();
                 if t.is_null() || crate::util::rc::count(t) == 0 {
                     return;
                 }

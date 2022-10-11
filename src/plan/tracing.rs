@@ -5,8 +5,7 @@ use std::marker::PhantomData;
 
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
-use crate::util::{Address, ObjectReference, VMThread, VMWorkerThread};
-use crate::vm::edge_shape::Edge;
+use crate::util::{ObjectReference, VMThread, VMWorkerThread};
 use crate::vm::EdgeVisitor;
 use crate::vm::{Scanning, VMBinding};
 
@@ -134,15 +133,15 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
-struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(Address)> {
+struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge)> {
     f: F,
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding, F: FnMut(Address)> EdgeVisitor<VM::VMEdge> for EdgeIteratorImpl<VM, F> {
+impl<VM: VMBinding, F: FnMut(VM::VMEdge)> EdgeVisitor<VM::VMEdge> for EdgeIteratorImpl<VM, F> {
     #[inline(always)]
     fn visit_edge(&mut self, slot: VM::VMEdge) {
-        (self.f)(slot.to_address());
+        (self.f)(slot);
     }
 }
 
@@ -152,7 +151,7 @@ pub struct EdgeIterator<VM: VMBinding> {
 
 impl<VM: VMBinding> EdgeIterator<VM> {
     #[inline(always)]
-    pub fn iterate(o: ObjectReference, f: impl FnMut(Address)) {
+    pub fn iterate(o: ObjectReference, f: impl FnMut(VM::VMEdge)) {
         let mut x = EdgeIteratorImpl::<VM, _> { f, _p: PhantomData };
         <VM::VMScanning as Scanning<VM>>::scan_object(
             VMWorkerThread(VMThread::UNINITIALIZED),

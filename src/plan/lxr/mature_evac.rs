@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::util::rc;
+use crate::vm::edge_shape::Edge;
 use crate::{
     plan::{immix::Pause, lxr::cm::LXRStopTheWorldProcessEdges},
     policy::{
@@ -19,7 +20,7 @@ use crate::{
 use super::LXR;
 
 pub struct EvacuateMatureObjects<VM: VMBinding> {
-    remset: Vec<Address>,
+    remset: Vec<VM::VMEdge>,
     _p: PhantomData<VM>,
 }
 
@@ -29,7 +30,7 @@ unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     pub const CAPACITY: usize = 512;
 
-    pub fn new(remset: Vec<Address>) -> Self {
+    pub fn new(remset: Vec<VM::VMEdge>) -> Self {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         Self {
             remset,
@@ -105,14 +106,13 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         let edges = remset
             .into_iter()
             .filter(|e| {
-                let (e, epoch) = Line::decode_validity_state(*e);
+                let (e, epoch) = Line::decode_validity_state(e.to_address());
                 self.process_edge(e, epoch, lxr)
             })
-            .map(|e| Line::decode_validity_state(e).0)
+            .map(|e| VM::VMEdge::from_address(Line::decode_validity_state(e.to_address()).0))
             .collect::<Vec<_>>();
         // transitive closure
-        let w =
-            LXRStopTheWorldProcessEdges::new(unsafe { std::mem::transmute(edges) }, false, mmtk);
+        let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);
         worker.add_work(WorkBucketStage::Closure, w);
     }
 }

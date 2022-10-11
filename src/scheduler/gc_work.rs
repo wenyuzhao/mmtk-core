@@ -834,24 +834,24 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     }
 }
 
-pub struct UnlogEdges {
-    edges: Vec<Address>,
+pub struct UnlogEdges<VM: VMBinding> {
+    edges: Vec<VM::VMEdge>,
 }
 
-impl UnlogEdges {
-    pub fn new(edges: Vec<Address>) -> Self {
+impl<VM: VMBinding> UnlogEdges<VM> {
+    pub fn new(edges: Vec<VM::VMEdge>) -> Self {
         Self { edges }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for UnlogEdges {
+impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
     #[inline(always)]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         if !self.edges.is_empty() {
             for edge in &self.edges {
                 let ptr = address_to_meta_address(
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                    *edge,
+                    edge.to_address(),
                 );
                 unsafe {
                     ptr.store(0b11111111u8);

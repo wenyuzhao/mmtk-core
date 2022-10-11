@@ -88,7 +88,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     fragmented_blocks_size: AtomicUsize,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
-    pub remset: RemSet,
+    pub remset: RemSet<VM>,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
 }

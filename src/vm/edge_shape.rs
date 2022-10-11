@@ -39,7 +39,7 @@ use crate::util::{Address, ObjectReference};
 /// Note: this trait only concerns the representation (i.e. the shape) of the edge, not its
 /// semantics, such as whether it holds strong or weak references.  If a VM holds a weak reference
 /// in a word as a pointer, it can also use `SimpleEdge` for weak reference fields.
-pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash {
+pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash + Sized {
     /// Load object reference from the edge.
     fn load(&self) -> ObjectReference;
 
@@ -59,6 +59,10 @@ pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash {
     }
 
     fn to_address(&self) -> Address {
+        unimplemented!()
+    }
+
+    fn from_address(_: Address) -> Self {
         unimplemented!()
     }
 }
@@ -130,6 +134,11 @@ impl Edge for Address {
     #[inline(always)]
     fn to_address(&self) -> Address {
         *self
+    }
+
+    #[inline(always)]
+    fn from_address(a: Address) -> Self {
+        a
     }
 }
 
