@@ -795,7 +795,7 @@ impl SideMetadataContext {
         // Chunk aligned
         debug_assert!(start.is_aligned_to(BYTES_IN_CHUNK));
         debug_assert!(size % BYTES_IN_CHUNK == 0);
-        self.map_metadata_internal(start, size, false)
+        self.map_metadata_internal(start, size, true)
     }
 
     /// The internal function to mmap metadata
@@ -935,7 +935,16 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
     #[inline(always)]
     #[allow(clippy::let_and_return)]
     pub fn get(&self, index: usize) -> u8 {
-        unsafe { *self.data.get_unchecked(index) }
+        #[cfg(feature = "extreme_assertions")]
+        let _lock = sanity::SANITY_LOCK.lock().unwrap();
+        debug_assert!(index <= self.data.len(), "out of boundary");
+        let value = unsafe { *self.data.get_unchecked(index) };
+        #[cfg(feature = "extreme_assertions")]
+        {
+            let data_addr = self.heap_range_start + (index << self.spec.log_bytes_in_region);
+            sanity::verify_load::<u8>(&self.spec, data_addr, value);
+        }
+        value
     }
 
     /// Get a byte from the metadata byte array at the given index.

@@ -74,15 +74,9 @@ pub(crate) fn try_mmap_contiguous_metadata_space(
     let metadata_start = address_to_meta_address(spec, start);
     let mmap_start = metadata_start.align_down(BYTES_IN_PAGE);
     // nearest page-aligned ending address
-    let mmap_size = {
-        let a = address_to_meta_address(spec, start + size);
-        if a == mmap_start {
-            BYTES_IN_PAGE
-        } else {
-            a.align_up(BYTES_IN_PAGE) - mmap_start
-        }
-    };
-    if size != 0 && mmap_size > 0 {
+    let metadata_size = (size + ((1 << addr_rshift(spec)) - 1)) >> addr_rshift(spec);
+    let mmap_size = (metadata_start + metadata_size).align_up(BYTES_IN_PAGE) - mmap_start;
+    if mmap_size > 0 {
         if !no_reserve {
             MMAPPER.ensure_mapped(mmap_start, mmap_size >> LOG_BYTES_IN_PAGE)
         } else {
