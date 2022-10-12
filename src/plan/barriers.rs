@@ -26,7 +26,7 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
-    FieldLoggingBarrier,
+    FieldBarrier,
 }
 
 impl BarrierSelector {

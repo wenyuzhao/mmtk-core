@@ -42,7 +42,7 @@ pub static ACTIVE_BARRIER: Lazy<BarrierSelector> = Lazy::new(|| {
         match std::env::var("BARRIER") {
             Ok(s) if s == "ObjectBarrier" => BarrierSelector::ObjectBarrier,
             Ok(s) if s == "NoBarrier" => BarrierSelector::NoBarrier,
-            Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldLoggingBarrier,
+            Ok(s) if s == "FieldBarrier" => BarrierSelector::FieldBarrier,
             _ => unreachable!("Please explicitly specify barrier"),
         }
     } else {

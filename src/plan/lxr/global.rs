@@ -74,7 +74,7 @@ pub struct LXR<VM: VMBinding> {
     in_concurrent_marking: AtomicBool,
 }
 
-pub static ACTIVE_BARRIER: BarrierSelector = BarrierSelector::FieldLoggingBarrier;
+pub static ACTIVE_BARRIER: BarrierSelector = BarrierSelector::FieldBarrier;
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
     moves_objects: true,
@@ -86,7 +86,7 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     barrier: ACTIVE_BARRIER,
     needs_log_bit: crate::args::BARRIER_MEASUREMENT
         || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier),
-    needs_field_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::FieldLoggingBarrier)
+    needs_field_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::FieldBarrier)
         || (crate::args::BARRIER_MEASUREMENT && ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)),
     ..PlanConstraints::default()
 });
