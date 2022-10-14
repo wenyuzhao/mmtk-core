@@ -92,7 +92,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         let buf = self.buffer.take();
         if !buf.is_empty() {
             self.worker.add_work(
-                WorkBucketStage::Closure,
+                WorkBucketStage::ProcessEdges,
                 E::new(buf, false, self.worker.mmtk),
             );
         }

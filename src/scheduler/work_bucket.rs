@@ -209,6 +209,7 @@ pub enum WorkBucketStage {
     Unconstrained,
     Prepare,
     Closure,
+    ProcessEdges,
     SoftRefClosure,
     WeakRefClosure,
     FinalRefClosure,

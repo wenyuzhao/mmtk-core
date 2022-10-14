@@ -478,7 +478,10 @@ pub trait ProcessEdgesWork:
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     #[inline]
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        assert!(mmtk.scheduler.work_buckets[WorkBucketStage::Closure].is_drained());
+        assert!(mmtk.scheduler.work_buckets[WorkBucketStage::ProcessEdges].is_activated());
+        assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::SoftRefClosure].is_activated());
         trace!("ProcessEdgesWork");
         self.set_worker(worker);
         self.process_edges();
@@ -554,7 +557,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
         crate::memory_manager::add_work_packet(
             self.mmtk,
-            WorkBucketStage::Closure,
+            WorkBucketStage::ProcessEdges,
             E::new(edges, true, self.mmtk),
         );
     }
@@ -696,6 +699,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
                 let next_nodes = process_edges_work.nodes.take();
                 let make_packet = |nodes| {
                     let work_packet = self.make_another(nodes);
+                    unreachable!();
                     memory_manager::add_work_packet(mmtk, WorkBucketStage::Closure, work_packet);
                 };
 

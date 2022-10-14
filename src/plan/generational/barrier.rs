@@ -40,6 +40,7 @@ impl<VM: VMBinding> GenObjectBarrierSemantics<VM> {
     fn flush_modbuf(&mut self) {
         let buf = self.modbuf.take();
         if !buf.is_empty() {
+            unreachable!();
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
                 .add(ProcessModBuf::<GenNurseryProcessEdges<VM>>::new(buf));
         }
@@ -50,6 +51,7 @@ impl<VM: VMBinding> GenObjectBarrierSemantics<VM> {
         let buf = self.region_modbuf.take();
         if !buf.is_empty() {
             debug_assert!(!buf.is_empty());
+            unreachable!();
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
                 .add(ProcessRegionModBuf::<GenNurseryProcessEdges<VM>>::new(buf));
         }
