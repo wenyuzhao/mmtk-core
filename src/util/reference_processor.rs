@@ -36,8 +36,11 @@ impl ReferenceProcessors {
         }
     }
 
+    pub fn allow_new_candidate(&self) -> bool {
+        self.soft.allow_new_candidate.load(Ordering::SeqCst)
+    }
+
     pub fn add_soft_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
-        trace!("Add soft candidate: {}", reff);
         self.soft.add_candidate::<VM>(reff);
     }
 
@@ -90,6 +93,7 @@ impl ReferenceProcessors {
                 .retain::<E>(trace, mmtk.plan.is_current_gc_nursery());
         }
         // This will update the references (and the referents).
+        // println!("scan_soft_refs");
         self.soft
             .scan::<E>(trace, mmtk.plan.is_current_gc_nursery());
     }
@@ -339,6 +343,7 @@ impl ReferenceProcessor {
     // to point to the reference that we last scanned. However, when we use HashSet for reference table,
     // we can no longer do that.
     fn scan<E: ProcessEdgesWork>(&self, trace: &mut E, _nursery: bool) {
+        self.disallow_new_candidate();
         let mut sync = self.sync.lock().unwrap();
 
         debug!("Starting ReferenceProcessor.scan({:?})", self.semantics);
@@ -367,8 +372,8 @@ impl ReferenceProcessor {
             new_set.len(),
             enqueued_references.len()
         );
-        sync.references = new_set;
-        sync.enqueued_references = enqueued_references;
+        sync.references.clear();
+        sync.enqueued_references.clear();
 
         debug!("Ending ReferenceProcessor.scan({:?})", self.semantics);
     }
@@ -434,7 +439,7 @@ impl ReferenceProcessor {
             <E::VM as VMBinding>::VMReferenceGlue::clear_referent(reference);
             trace!(" UNREACHABLE reference: {}", reference);
             trace!(" (unreachable)");
-            return None;
+            unreachable!("{:?} is dead", reference);
         }
 
         // The reference object is live
