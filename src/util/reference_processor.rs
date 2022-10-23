@@ -372,8 +372,10 @@ impl ReferenceProcessor {
             new_set.len(),
             enqueued_references.len()
         );
-        sync.references.clear();
-        sync.enqueued_references.clear();
+        sync.references = new_set;
+        sync.enqueued_references = enqueued_references;
+        // sync.references.clear();
+        // sync.enqueued_references.clear();
 
         debug!("Ending ReferenceProcessor.scan({:?})", self.semantics);
     }
@@ -439,7 +441,7 @@ impl ReferenceProcessor {
             <E::VM as VMBinding>::VMReferenceGlue::clear_referent(reference);
             trace!(" UNREACHABLE reference: {}", reference);
             trace!(" (unreachable)");
-            unreachable!("{:?} is dead", reference);
+            return None;
         }
 
         // The reference object is live
