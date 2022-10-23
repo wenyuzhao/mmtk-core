@@ -197,11 +197,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             use crate::util::reference_processor::{
                 PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
             };
-            self.work_buckets[WorkBucketStage::SoftRefClosure]
+            self.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
             self.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::PhantomRefClosure]
+            self.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
 
             // VM-specific weak ref processing
