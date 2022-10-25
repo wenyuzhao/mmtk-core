@@ -102,5 +102,5 @@ pub trait Collection<VM: VMBinding> {
     fn vm_release() {}
 
     /// Delegate to the VM binding for reference processing.
-    fn process_weak_refs(_worker: &mut GCWorker<VM>) {} // FIXME: Add an appropriate factory/callback parameter.
+    fn process_weak_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {} // FIXME: Add an appropriate factory/callback parameter.
 }
