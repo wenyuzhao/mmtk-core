@@ -194,28 +194,28 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // Reference processing
         if !*plan.base().options.no_reference_types {
-            use crate::util::reference_processor::{
-                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            };
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
+            // use crate::util::reference_processor::{
+            //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            // };
+            // self.work_buckets[WorkBucketStage::WeakRefClosure]
+            //     .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
+            // self.work_buckets[WorkBucketStage::WeakRefClosure]
+            //     .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
+            // self.work_buckets[WorkBucketStage::WeakRefClosure]
+            //     .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
 
             // VM-specific weak ref processing
             self.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(VMProcessWeakRefs::<C::ProcessEdgesWorkType>::new());
 
-            use crate::util::reference_processor::RefForwarding;
-            if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::RefForwarding]
-                    .add(RefForwarding::<C::ProcessEdgesWorkType>::new());
-            }
+            // use crate::util::reference_processor::RefForwarding;
+            // if plan.constraints().needs_forward_after_liveness {
+            //     self.work_buckets[WorkBucketStage::RefForwarding]
+            //         .add(RefForwarding::<C::ProcessEdgesWorkType>::new());
+            // }
 
-            use crate::util::reference_processor::RefEnqueue;
-            self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+            // use crate::util::reference_processor::RefEnqueue;
+            // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
         }
 
         // Finalization

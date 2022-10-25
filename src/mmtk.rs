@@ -83,7 +83,7 @@ impl Default for MMTKBuilder {
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
-    pub plan: Box<dyn Plan<VM = VM>>,
+    pub(crate) plan: Box<dyn Plan<VM = VM>>,
     pub reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
