@@ -84,10 +84,10 @@ impl Default for MMTKBuilder {
 pub struct MMTK<VM: VMBinding> {
     pub(crate) options: Arc<Options>,
     pub(crate) plan: Box<dyn Plan<VM = VM>>,
-    pub(crate) reference_processors: ReferenceProcessors,
+    pub reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
-    pub(crate) scheduler: Arc<GCWorkScheduler<VM>>,
+    pub scheduler: Arc<GCWorkScheduler<VM>>,
     #[cfg(feature = "sanity")]
     pub(crate) sanity_checker: Mutex<SanityChecker<VM::VMEdge>>,
     #[cfg(feature = "extreme_assertions")]

@@ -19,7 +19,7 @@ pub(crate) use work::GCWorkContext;
 mod work_bucket;
 pub use work_bucket::WorkBucketStage;
 
-mod worker;
+pub mod worker;
 pub use worker::{current_worker_ordinal, GCWorker};
 
 mod controller;

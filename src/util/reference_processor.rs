@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::vec::Vec;
 
 use crate::scheduler::ProcessEdgesWork;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
+use crate::vm::Collection;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 
@@ -17,14 +19,17 @@ pub struct ReferenceProcessors {
     soft: ReferenceProcessor,
     weak: ReferenceProcessor,
     phantom: ReferenceProcessor,
+    allow_new_candidate: Arc<AtomicBool>,
 }
 
 impl ReferenceProcessors {
     pub fn new() -> Self {
+        let allow_new_candidate = Arc::new(AtomicBool::new(true));
         ReferenceProcessors {
-            soft: ReferenceProcessor::new(Semantics::SOFT),
-            weak: ReferenceProcessor::new(Semantics::WEAK),
-            phantom: ReferenceProcessor::new(Semantics::PHANTOM),
+            soft: ReferenceProcessor::new(Semantics::SOFT, allow_new_candidate.clone()),
+            weak: ReferenceProcessor::new(Semantics::WEAK, allow_new_candidate.clone()),
+            phantom: ReferenceProcessor::new(Semantics::PHANTOM, allow_new_candidate.clone()),
+            allow_new_candidate,
         }
     }
 
@@ -36,8 +41,11 @@ impl ReferenceProcessors {
         }
     }
 
+    pub fn allow_new_candidate(&self) -> bool {
+        self.allow_new_candidate.load(Ordering::SeqCst)
+    }
+
     pub fn add_soft_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
-        trace!("Add soft candidate: {}", reff);
         self.soft.add_candidate::<VM>(reff);
     }
 
@@ -152,7 +160,7 @@ pub struct ReferenceProcessor {
     // 5. When we trace objects in the node buffer, we will attempt to add WR as a candidate. As we have updated WR to WR' in our reference
     //    table, we would accept WR as a candidate. But we will not trace WR again, and WR will be invalid after this GC.
     // This flag is set to false after Step 4, so in Step 5, we will ignore adding WR.
-    allow_new_candidate: AtomicBool,
+    allow_new_candidate: Arc<AtomicBool>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -179,7 +187,7 @@ struct ReferenceProcessorSync {
 }
 
 impl ReferenceProcessor {
-    pub fn new(semantics: Semantics) -> Self {
+    pub fn new(semantics: Semantics, allow_new_candidate: Arc<AtomicBool>) -> Self {
         ReferenceProcessor {
             sync: Mutex::new(ReferenceProcessorSync {
                 references: HashSet::with_capacity(INITIAL_SIZE),
@@ -187,7 +195,7 @@ impl ReferenceProcessor {
                 nursery_index: 0,
             }),
             semantics,
-            allow_new_candidate: AtomicBool::new(true),
+            allow_new_candidate,
         }
     }
 
@@ -339,6 +347,7 @@ impl ReferenceProcessor {
     // to point to the reference that we last scanned. However, when we use HashSet for reference table,
     // we can no longer do that.
     fn scan<E: ProcessEdgesWork>(&self, trace: &mut E, _nursery: bool) {
+        self.disallow_new_candidate();
         let mut sync = self.sync.lock().unwrap();
 
         debug!("Starting ReferenceProcessor.scan({:?})", self.semantics);
@@ -488,11 +497,8 @@ use std::marker::PhantomData;
 #[derive(Default)]
 pub struct SoftRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_soft_refs(&mut w, mmtk);
-        w.flush();
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        <E::VM as VMBinding>::VMCollection::process_soft_refs::<E>(worker);
     }
 }
 impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
@@ -504,11 +510,8 @@ impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
 #[derive(Default)]
 pub struct WeakRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for WeakRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_weak_refs(&mut w, mmtk);
-        w.flush();
+    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        unreachable!()
     }
 }
 impl<E: ProcessEdgesWork> WeakRefProcessing<E> {
@@ -520,11 +523,8 @@ impl<E: ProcessEdgesWork> WeakRefProcessing<E> {
 #[derive(Default)]
 pub struct PhantomRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_phantom_refs(&mut w, mmtk);
-        w.flush();
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        <E::VM as VMBinding>::VMCollection::process_phantom_refs::<E>(worker);
     }
 }
 impl<E: ProcessEdgesWork> PhantomRefProcessing<E> {

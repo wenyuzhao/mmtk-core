@@ -266,9 +266,6 @@ impl WorkBucketStage {
     }
 
     pub const RCProcessIncs: Self = Self::Initial;
-    #[cfg(feature = "ix_delayed_nursery_evacuation")]
-    pub const RCEvacuateNursery: Self = Self::RefClosure;
-    #[cfg(not(feature = "ix_delayed_nursery_evacuation"))]
     pub const RCEvacuateMature: Self = Self::Closure;
     pub const RCReleaseNursery: Self = Self::Release;
     #[cfg(not(feature = "instrumentation"))]

@@ -274,6 +274,10 @@ pub trait Plan: 'static + Sync + Downcast {
     fn concurrent_collection_required(&self) -> bool {
         false
     }
+
+    fn should_process_refs_at_current_gc(&self) -> bool {
+        true
+    }
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
     // if necessary.

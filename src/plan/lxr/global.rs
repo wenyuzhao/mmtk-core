@@ -430,6 +430,18 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn no_mutator_prepare_release(&self) -> bool {
         true
     }
+
+    fn should_process_refs_at_current_gc(&self) -> bool {
+        // match self.current_pause() {
+        //     Some(pause) => {
+        //         pause == Pause::FullTraceFast
+        //             || pause == Pause::FullTraceDefrag
+        //             || pause == Pause::FinalMark
+        //     }
+        //     _ => false,
+        // }
+        false
+    }
 }
 
 impl<VM: VMBinding> LXR<VM> {
@@ -787,6 +799,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
+        // scheduler.schedule_ref_proc_work::<ImmixGCWorkContext<VM, TRACE_KIND_FAST>>(self);
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
