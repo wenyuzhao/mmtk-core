@@ -8,6 +8,7 @@ use std::vec::Vec;
 use crate::scheduler::ProcessEdgesWork;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
+use crate::vm::Collection;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 
@@ -496,11 +497,8 @@ use std::marker::PhantomData;
 #[derive(Default)]
 pub struct SoftRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_soft_refs(&mut w, mmtk);
-        w.flush();
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        <E::VM as VMBinding>::VMCollection::process_soft_refs::<E>(worker);
     }
 }
 impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
@@ -512,11 +510,8 @@ impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
 #[derive(Default)]
 pub struct WeakRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for WeakRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_weak_refs(&mut w, mmtk);
-        w.flush();
+    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        unreachable!()
     }
 }
 impl<E: ProcessEdgesWork> WeakRefProcessing<E> {
@@ -528,11 +523,8 @@ impl<E: ProcessEdgesWork> WeakRefProcessing<E> {
 #[derive(Default)]
 pub struct PhantomRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_phantom_refs(&mut w, mmtk);
-        w.flush();
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        <E::VM as VMBinding>::VMCollection::process_phantom_refs::<E>(worker);
     }
 }
 impl<E: ProcessEdgesWork> PhantomRefProcessing<E> {

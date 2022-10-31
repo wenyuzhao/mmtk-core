@@ -130,22 +130,8 @@ impl<F: Finalizable> FinalizableProcessor<F> {
 pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
-        debug!(
-            "Finalization, {} objects in candidates, {} objects ready to finalize",
-            finalizable_processor.candidates.len(),
-            finalizable_processor.ready_for_finalize.len()
-        );
-
-        let mut w = E::new(vec![], false, mmtk);
-        w.set_worker(worker);
-        finalizable_processor.scan(worker.tls, &mut w, mmtk.plan.is_current_gc_nursery());
-        debug!(
-            "Finished finalization, {} objects in candidates, {} objects ready to finalize",
-            finalizable_processor.candidates.len(),
-            finalizable_processor.ready_for_finalize.len()
-        );
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        <E::VM as VMBinding>::VMCollection::process_final_refs::<E>(worker);
     }
 }
 impl<E: ProcessEdgesWork> Finalization<E> {
