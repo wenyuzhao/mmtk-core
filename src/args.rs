@@ -3,7 +3,7 @@ use std::env;
 
 use crate::{
     policy::immix::{block::Block, line::Line},
-    util::linear_scan::Region,
+    util::{linear_scan::Region, options::Options},
     BarrierSelector,
 };
 
@@ -191,7 +191,7 @@ macro_rules! dump_feature {
     };
 }
 
-fn dump_features(active_barrier: BarrierSelector) {
+fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     println!("-------------------- Immix Args --------------------");
 
     dump_feature!("barrier", format!("{:?}", active_barrier));
@@ -251,11 +251,14 @@ fn dump_features(active_barrier: BarrierSelector) {
     dump_feature!("lazy_mu_reuse_block_sweeping", LAZY_MU_REUSE_BLOCK_SWEEPING);
     dump_feature!("inc_max_copy_depth", INC_MAX_COPY_DEPTH);
 
+    dump_feature!("no_finalizer", *options.no_finalizer);
+    dump_feature!("no_reference_types", *options.no_reference_types);
+
     println!("----------------------------------------------------");
 }
 
-pub fn validate_features(active_barrier: BarrierSelector) {
-    dump_features(active_barrier);
+pub fn validate_features(active_barrier: BarrierSelector, options: &Options) {
+    dump_features(active_barrier, options);
     validate!(DEFRAG => !BLOCK_ONLY);
     validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
     validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);

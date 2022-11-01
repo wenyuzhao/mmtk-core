@@ -884,7 +884,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn gc_init(&mut self, options: &Options) {
-        crate::args::validate_features(ACTIVE_BARRIER);
+        crate::args::validate_features(ACTIVE_BARRIER, options);
         self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
         self.common.los.rc_enabled = true;
         unsafe {

@@ -460,7 +460,7 @@ options! {
     // Should we shrink/grow the heap to adjust to application working set? (not supported)
     variable_size_heap:    bool                 [env_var: true, command_line: true]  [always_valid] = true,
     // Should finalization be disabled?
-    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = true,
     // Should reference type processing be disabled?
     // If reference type processing is disabled, no weak reference processing work is scheduled,
     // and we expect a binding to treat weak references as strong references.
