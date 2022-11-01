@@ -274,7 +274,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
-        if !crate::args::HEAP_HEALTH_GUIDED_GC {
+        if !self.rc_enabled || !crate::args::HEAP_HEALTH_GUIDED_GC {
             Self::reset_object_mark::<VM>(self.chunk);
         }
         // Iterate over all blocks in this chunk
