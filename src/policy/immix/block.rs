@@ -385,14 +385,16 @@ impl Block {
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         #[cfg(feature = "sanity")]
-        if !copy && !reuse {
+        if !copy && !reuse && space.rc_enabled {
             self.assert_log_table_cleared::<VM>(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             );
         }
         if !copy && reuse {
             self.set_state(BlockState::Reusing);
-            debug_assert!(!self.is_defrag_source());
+            if space.rc_enabled {
+                debug_assert!(!self.is_defrag_source());
+            }
         } else if copy {
             if reuse {
                 debug_assert!(!self.is_defrag_source());

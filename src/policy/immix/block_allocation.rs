@@ -258,10 +258,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 if copy && block.is_defrag_source() {
                     continue;
                 }
-                if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
-                    continue;
-                }
                 if self.space().rc_enabled {
+                    if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
+                        continue;
+                    }
                     // Blocks in the `reusable_blocks` queue can be released after some RC collections.
                     // These blocks can either have `Unallocated` state, or be reallocated again.
                     // Skip these cases and only return the truly reusable blocks.
