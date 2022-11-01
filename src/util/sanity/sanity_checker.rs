@@ -1,12 +1,6 @@
-use crate::plan::immix::Immix;
-use crate::plan::immix::Pause;
 use crate::plan::Plan;
-use crate::policy::immix::block::Block;
-use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
-use crate::scheduler::*;
-use crate::util::object_forwarding;
-use crate::util::{Address, ObjectReference};
+use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
 use crate::MMTK;
@@ -166,130 +160,11 @@ impl<VM: VMBinding> DerefMut for SanityGCProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> SanityGCProcessEdges<VM> {
-    #[inline]
-    fn trace_object(&mut self, slot: Address, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
-        let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
-        if !sanity_checker.refs.contains(&object) {
-            sanity_checker.refs.insert(object); // "Mark" it
-            std::mem::drop(sanity_checker);
-            // FIXME steveb consider VM-specific integrity check on reference.
-            if !object.is_sane() {
-                panic!("Invalid reference {:?} -> {:?}", slot, object);
-            }
-            if let Some(immix) = self.mmtk().plan.downcast_ref::<Immix<VM>>() {
-                assert!(!immix.current_pause().is_none());
-                if immix.immix_space.in_space(object) {
-                    if immix.current_pause() == Some(Pause::FinalMark) {
-                        // println!("ix {:?} rc={:?} defrag={}", object, crate::util::rc::count(object), Block::containing::<VM>(object).is_defrag_source());
-                        assert!(
-                            !Block::containing::<VM>(object).is_defrag_source(),
-                            "ix {:?} -> {:?} rc={:?} defrag={}",
-                            slot,
-                            object,
-                            crate::util::rc::count(object),
-                            Block::containing::<VM>(object).is_defrag_source()
-                        );
-                    }
-                }
-            }
-            if !object.is_live() {
-                if let Some(immix) = self.mmtk().plan.downcast_ref::<Immix<VM>>() {
-                    if immix.immix_space.in_space(object) {
-                        println!(
-                            "[object] ix {:?} {:?} rc={:?} defrag={} mark={} forwarded={}",
-                            object,
-                            Block::containing::<VM>(object).get_state(),
-                            crate::util::rc::count(object),
-                            Block::containing::<VM>(object).is_defrag_source(),
-                            immix.immix_space.mark_bit(object),
-                            object_forwarding::is_forwarded::<VM>(object),
-                        );
-                    }
-                    if immix.immix_space.address_in_space(slot) {
-                        println!(
-                            "[slot] ix {:?} {:?} defrag={}",
-                            slot,
-                            Block::from(Block::align(slot)).get_state(),
-                            Block::from(Block::align(slot)).is_defrag_source()
-                        );
-                    }
-                }
-            }
-            assert!(object.is_live(), "{:?}: {:?} is dead", slot, object,);
-            assert!(
-                object.is_live(),
-                "{:?}: {:?} is dead, e@{:?}({:?}), o@{:?}({:?}) o.end={:} o.rc={} o.mark={} {:?} ",
-                slot,
-                object,
-                Block::from(slot),
-                Block::from(slot).get_state(),
-                Block::containing::<VM>(object),
-                Block::containing::<VM>(object).get_state(),
-                object.to_address() + object.get_size::<VM>(),
-                if crate::args::REF_COUNT {
-                    crate::util::rc::count(object)
-                } else {
-                    0
-                },
-                self.mmtk()
-                    .plan
-                    .downcast_ref::<Immix<VM>>()
-                    .unwrap()
-                    .immix_space
-                    .mark_bit(object),
-                self.mmtk()
-                    .plan
-                    .downcast_ref::<Immix<VM>>()
-                    .unwrap()
-                    .current_pause(),
-                // object.dump_s::<VM>()
-            );
-            assert!(
-                unsafe { object.to_address().load::<usize>() } != 0xdead,
-                "{:?} -> {:?} is dead, {:?}",
-                slot,
-                object,
-                Block::containing::<VM>(object)
-            );
-            assert!(
-                unsafe { (object.to_address() + 8usize).load::<usize>() } != 0xdead,
-                "{:?} -> {:?} is dead, {:?}",
-                slot,
-                object,
-                Block::containing::<VM>(object)
-            );
-            assert!(
-                !object_forwarding::is_forwarded::<VM>(object),
-                "{:?} -> {:?} is forwarded, {:?} {:?}",
-                slot,
-                object,
-                Block::containing::<VM>(object),
-                object_forwarding::read_forwarding_pointer::<VM>(object),
-            );
-            // Object is not "marked"
-            sanity_checker.refs.insert(object); // "Mark" it
-            self.nodes.enqueue(object);
-        }
-    }
-
-    fn create_scan_work(
-        &self,
-        nodes: Vec<ObjectReference>,
-        roots: bool,
-    ) -> Self::ScanObjectsWorkType {
-        ScanObjects::<Self>::new(nodes, false, roots)
-    }
-}
-
 impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     type VM = VM;
-    const OVERWRITE_REFERENCE: bool = false;
     type ScanObjectsWorkType = ScanObjects<Self>;
 
+    const OVERWRITE_REFERENCE: bool = false;
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         Self {
             base: ProcessEdgesBase::new(edges, roots, mmtk),
@@ -297,13 +172,25 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
     }
 
-    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
-        unreachable!()
-    }
-
-    fn process_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
-        self.trace_object(slot, object);
+    #[inline]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if object.is_null() {
+            return object;
+        }
+        let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
+        if !sanity_checker.refs.contains(&object) {
+            // FIXME steveb consider VM-specific integrity check on reference.
+            assert!(object.is_sane(), "Invalid reference {:?}", object);
+            assert!(
+                unsafe { object.to_address().load::<usize>() } != 0xdead,
+                "{:?} is dead",
+                object
+            );
+            // Object is not "marked"
+            sanity_checker.refs.insert(object); // "Mark" it
+            self.nodes.enqueue(object);
+        }
+        object
     }
 
     fn create_scan_work(
