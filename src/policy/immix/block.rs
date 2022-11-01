@@ -801,7 +801,7 @@ impl BlockList {
     pub fn new(num_workers: usize) -> Self {
         Self {
             queue: BlockQueue::new(num_workers),
-            num_workers: 0,
+            num_workers,
         }
     }
 
