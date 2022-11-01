@@ -15,6 +15,7 @@ use crate::{
     MMTK,
 };
 use spin::Mutex;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{ops::Range, sync::atomic::Ordering};
 
@@ -222,15 +223,20 @@ impl ChunkMap {
         if !rc {
             space.defrag.mark_histograms.lock().clear();
         }
-        let epilogue = Arc::new(FlushPageResource { space });
-        self.generate_tasks(|chunk| {
+        let epilogue = Arc::new(FlushPageResource {
+            space,
+            counter: AtomicUsize::new(0),
+        });
+        let tasks = self.generate_tasks(|chunk| {
             Box::new(SweepChunk {
                 space,
                 chunk,
                 nursery_only: rc,
-                _epilogue: epilogue.clone(),
+                epilogue: epilogue.clone(),
             })
-        })
+        });
+        epilogue.counter.store(tasks.len(), Ordering::SeqCst);
+        tasks
     }
 
     /// Generate chunk sweep work packets.
@@ -314,7 +320,7 @@ struct SweepChunk<VM: VMBinding> {
     chunk: Chunk,
     nursery_only: bool,
     /// A destructor invoked when all `SweepChunk` packets are finished.
-    _epilogue: Arc<FlushPageResource<VM>>,
+    epilogue: Arc<FlushPageResource<VM>>,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
@@ -331,6 +337,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 self.space.defrag.add_completed_mark_histogram(histogram);
             }
         }
+        self.epilogue.finish_one_work_packet();
     }
 }
 
@@ -460,13 +467,16 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
 /// Flush page resource of the immix space when destructing.
 struct FlushPageResource<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
+    counter: AtomicUsize,
 }
 
-impl<VM: VMBinding> Drop for FlushPageResource<VM> {
-    fn drop(&mut self) {
-        // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
-        // Now flush the BlockPageResource.
-        // Note: this is a no-op if ImmixSpace uses FreelistPageResource.
-        self.space.flush_page_resource()
+impl<VM: VMBinding> FlushPageResource<VM> {
+    /// Called after a related work packet is finished.
+    fn finish_one_work_packet(&self) {
+        if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
+            // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
+            // Now flush the BlockPageResource.
+            self.space.flush_page_resource()
+        }
     }
 }

@@ -20,6 +20,7 @@ use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::ProcessEdgesWork;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
+use crate::util::heap::BlockPageResource;
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
@@ -46,20 +47,12 @@ use std::{mem, ptr};
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
-// For 32-bit platforms, we still use FreeListPageResource
-#[cfg(target_pointer_width = "32")]
-use crate::util::heap::FreeListPageResource as ImmixPageResource;
-
-// BlockPageResource is for 64-bit platforms only
-#[cfg(target_pointer_width = "64")]
-use crate::util::heap::BlockPageResource as ImmixPageResource;
-
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pub pr: ImmixPageResource<VM>,
+    pub pr: BlockPageResource<VM, Block>,
     /// Allocation status for all chunks in immix space
     pub chunk_map: ChunkMap,
     /// Current line mark state
@@ -67,7 +60,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Line mark state in previous GC
     line_unavail_state: AtomicU8,
     /// A list of all reusable blocks
-    pub reusable_blocks: BlockList,
+    pub reusable_blocks: ReusableBlockPool,
     /// Defrag utilities
     pub(super) defrag: Defrag,
     /// Object mark state
@@ -286,25 +279,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
         println!("Workers: {}", scheduler.num_workers());
         ImmixSpace {
-            #[cfg(target_pointer_width = "32")]
             pr: if common.vmrequest.is_discontiguous() {
-                ImmixPageResource::new_discontiguous(vm_map)
+                BlockPageResource::new_discontiguous(
+                    Block::LOG_PAGES,
+                    vm_map,
+                    scheduler.num_workers(),
+                )
             } else {
-                ImmixPageResource::new_contiguous(common.start, common.extent, vm_map)
+                BlockPageResource::new_contiguous(
+                    Block::LOG_PAGES,
+                    common.start,
+                    common.extent,
+                    vm_map,
+                    scheduler.num_workers(),
+                )
             },
-            #[cfg(target_pointer_width = "64")]
-            pr: ImmixPageResource::new_contiguous(
-                Block::LOG_PAGES,
-                common.start,
-                common.extent,
-                vm_map,
-                scheduler.num_workers(),
-            ),
             common,
             chunk_map: ChunkMap::new(),
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
-            reusable_blocks: BlockList::new(scheduler.num_workers()),
+            reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
@@ -701,7 +695,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 s.reclaimed_blocks_mature += 1;
             }
         });
-        self.pr.release_pages(block.start());
+        self.pr.release_block(block);
     }
 
     /// Allocate a clean block.

@@ -60,7 +60,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         for i in cursor..high_water {
             self.space()
                 .pr
-                .release_pages(self.buffer[i].load(Ordering::SeqCst).start())
+                .release_block(self.buffer[i].load(Ordering::SeqCst))
         }
         self.high_water.store(0, Ordering::SeqCst);
         self.cursor.store(0, Ordering::SeqCst);
@@ -317,7 +317,7 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseUnallocatedNurseryBlocks<VM> {
             return;
         }
         for block in &self.blocks {
-            self.space.pr.release_pages(block.start());
+            self.space.pr.release_block(*block);
         }
     }
 }

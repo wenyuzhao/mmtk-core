@@ -14,20 +14,20 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use thread_priority::ThreadPriority;
 
+/// Represents the ID of a GC worker thread.
+pub type ThreadId = usize;
+
 thread_local! {
     /// Current worker's ordinal
-    static WORKER_ORDINAL: Atomic<Option<usize>> = Atomic::new(None);
+    static WORKER_ORDINAL: Atomic<Option<ThreadId>> = Atomic::new(None);
     static _WORKER: Atomic<Option<*mut ()>> = Atomic::new(None);
 }
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
 #[inline(always)]
-pub fn current_worker_ordinal() -> Option<usize> {
+pub fn current_worker_ordinal() -> Option<ThreadId> {
     WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed))
 }
-
-/// Represents the ID of a GC worker thread.
-pub type ThreadId = usize;
 
 /// The part shared between a GCWorker and the scheduler.
 /// This structure is used for communication, e.g. adding new work packets.
