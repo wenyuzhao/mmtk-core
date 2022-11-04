@@ -272,7 +272,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 trace!("fail with oom={}", fail_with_oom);
                 if fail_with_oom {
                     // Note that we throw a `HeapOutOfMemory` error here and return a null ptr back to the VM
-                    trace!("Throw HeapOutOfMemory!");
+                    println!("Throw HeapOutOfMemory!");
                     VM::VMCollection::out_of_memory(tls, AllocationError::HeapOutOfMemory);
                     plan.allocation_success.swap(false, Ordering::SeqCst);
                     return result;

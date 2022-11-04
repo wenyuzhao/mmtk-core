@@ -155,7 +155,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     /// Disable the bucket
     pub fn deactivate(&self) {
-        debug_assert!(self.queue.is_empty(), "Bucket not drained before close");
+        debug_assert!(self.is_empty(), "Bucket not drained before close");
         self.active.store(false, Ordering::Relaxed);
     }
 
