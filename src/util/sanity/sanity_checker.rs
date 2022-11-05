@@ -181,11 +181,30 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         if !sanity_checker.refs.contains(&object) {
             // FIXME steveb consider VM-specific integrity check on reference.
             assert!(object.is_sane(), "Invalid reference {:?}", object);
-            assert!(
-                unsafe { object.to_address().load::<usize>() } != 0xdead,
-                "{:?} is dead",
-                object
-            );
+            if let Some(lxr) = self
+                .mmtk()
+                .get_plan()
+                .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+            {
+                assert!(
+                    unsafe { object.to_address().load::<usize>() } != 0xdead,
+                    "{:?} is killed by decs",
+                    object
+                );
+                assert!(
+                    crate::util::rc::count(object) > 0,
+                    "{:?} has zero rc count",
+                    object
+                );
+                assert!(
+                    !crate::util::object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
+                    "{:?} is forwarded",
+                    object
+                );
+                if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark {
+                    assert!(lxr.is_marked(object), "{:?} is not marked", object)
+                }
+            }
             // Object is not "marked"
             sanity_checker.refs.insert(object); // "Mark" it
             self.nodes.enqueue(object);
