@@ -196,12 +196,15 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     #[cold]
     fn flush_decs_and_satb(&mut self) {
         if !self.decs.is_empty() {
-            let decs = Arc::new(self.decs.take());
-            if self.should_create_satb_packets() {
+            let w = if self.should_create_satb_packets() {
+                let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
                     .add(ProcessModBufSATB::new_arc(decs.clone()));
-            }
-            let w = ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_desc());
+                ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_desc())
+            } else {
+                let decs = self.decs.take();
+                ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc())
+            };
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone_prioritized(w);
             } else {
