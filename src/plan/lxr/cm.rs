@@ -269,6 +269,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     pause: Pause,
     base: ProcessEdgesBase<VM>,
     forwarded_roots: Vec<ObjectReference>,
+    next_edges: VectorQueue<EdgeOf<Self>>,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
@@ -284,16 +285,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             base,
             pause: Pause::RefCount,
             forwarded_roots: vec![],
+            next_edges: VectorQueue::new(),
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.nodes.is_empty() {
-            let mut scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
-            scan_objects_work.discovery = true;
-            self.start_or_dispatch_scan_work(scan_objects_work)
+        if !self.next_edges.is_empty() {
+            let edges = self.next_edges.take();
+            self.worker().add_boxed_work(
+                WorkBucketStage::Unconstrained,
+                Box::new(Self::new(edges, false, self.mmtk())),
+            );
         }
+        assert!(self.nodes.is_empty());
     }
 
     /// Trace  and evacuate objects.
@@ -310,7 +315,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
-                &mut self.nodes,
+                self,
                 object,
                 CopySemantics::DefaultCopy,
                 pause,
@@ -370,7 +375,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
-                &mut self.nodes,
+                self,
                 object,
                 CopySemantics::DefaultCopy,
                 pause,
@@ -396,6 +401,18 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
+impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
+    #[inline]
+    fn enqueue(&mut self, object: ObjectReference) {
+        object.iterate_fields::<VM, _>(true, |e| {
+            self.next_edges.push(e);
+            if self.next_edges.is_full() {
+                self.flush();
+            }
+        })
+    }
+}
+
 impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
     type Target = ProcessEdgesBase<VM>;
     #[inline(always)]
@@ -415,6 +432,7 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
+    next_edges: VectorQueue<EdgeOf<Self>>,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
@@ -429,16 +447,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             lxr,
             base,
             pause: Pause::RefCount,
+            next_edges: VectorQueue::new(),
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.nodes.is_empty() {
-            let mut scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
-            scan_objects_work.discovery = false;
-            self.start_or_dispatch_scan_work(scan_objects_work)
+        if !self.next_edges.is_empty() {
+            let edges = self.next_edges.take();
+            self.worker().add_boxed_work(
+                WorkBucketStage::Unconstrained,
+                Box::new(Self::new(edges, false, self.mmtk())),
+            );
         }
+        assert!(self.nodes.is_empty());
     }
 
     /// Trace  and evacuate objects.
@@ -451,7 +473,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
-                &mut self.nodes,
+                self,
                 object,
                 CopySemantics::DefaultCopy,
                 pause,
@@ -475,6 +497,18 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     #[inline(always)]
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
+    }
+}
+
+impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
+    #[inline]
+    fn enqueue(&mut self, object: ObjectReference) {
+        object.iterate_fields::<VM, _>(false, |e| {
+            self.next_edges.push(e);
+            if self.next_edges.is_full() {
+                self.flush();
+            }
+        })
     }
 }
 
