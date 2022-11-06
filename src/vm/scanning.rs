@@ -114,6 +114,7 @@ pub trait Scanning<VM: VMBinding> {
         tls: VMWorkerThread,
         object: ObjectReference,
         edge_visitor: &mut EV,
+        disable_discovery: bool,
     );
 
     /// Delegated scanning of a object, visiting each reference field encountered, and trace the

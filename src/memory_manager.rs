@@ -13,6 +13,7 @@
 
 use crate::mmtk::MMTKBuilder;
 use crate::mmtk::MMTK;
+use crate::plan::lxr::LXR;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::{GCController, GCWork, GCWorker};
@@ -885,4 +886,16 @@ pub fn add_work_packets<VM: VMBinding>(
 /// The callback should return true if it add more work packets to the closure bucket.
 pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + Fn() -> bool>) {
     mmtk.scheduler.on_closure_end(f)
+}
+
+pub fn vm_write_field<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    src: ObjectReference,
+    slot: Address,
+    val: ObjectReference,
+) {
+    if let Some(lxr) = mmtk.get_plan().downcast_ref::<LXR<VM>>() {
+        lxr.vm_write_field(src, slot, val);
+    }
+    unsafe { slot.store(val) }
 }

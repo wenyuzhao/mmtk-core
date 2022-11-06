@@ -185,7 +185,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             self.worker().scheduler().work_buckets[WorkBucketStage::RCProcessIncs]
                 .bulk_add(packets);
         } else {
-            EdgeIterator::<VM>::iterate(o, |edge| {
+            let discovery =
+                self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark;
+            EdgeIterator::<VM>::iterate(o, discovery, |edge| {
                 let target = edge.load();
                 if !target.is_null() {
                     if !self::rc_stick(target) {
@@ -484,7 +486,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
+                    .postpone(LXRConcurrentTraceObjects::<VM>::new(
+                        roots.clone(),
+                        mmtk,
+                        true,
+                    ));
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
@@ -601,7 +607,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
-            let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
+            let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk }, true);
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {
@@ -653,7 +659,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     .bulk_add(packets);
             }
         } else {
-            EdgeIterator::<VM>::iterate(o, |edge| {
+            EdgeIterator::<VM>::iterate(o, false, |edge| {
                 let x = edge.load();
                 if !x.is_null() {
                     // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);

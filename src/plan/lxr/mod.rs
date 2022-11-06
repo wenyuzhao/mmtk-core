@@ -4,7 +4,7 @@ mod gc_work;
 pub(super) mod global;
 mod mature_evac;
 pub(super) mod mutator;
-mod rc;
+pub mod rc;
 mod remset;
 
 use std::sync::atomic::AtomicUsize;

@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixGCWorkContext, ImmixProcessEdges, TraceKind};
+use super::gc_work::{ImmixGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
@@ -10,8 +10,8 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::immix::{MatureSweeping, UpdateWeakProcessor};
-use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -264,13 +264,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             );
         }
         match pause {
-            Pause::FullTraceFast => {
-                self.schedule_immix_collection::<RCImmixCollectRootEdges<VM>, { TRACE_KIND_FAST }>(scheduler)
-            }
-            Pause::FullTraceDefrag => self
-                .schedule_immix_collection::<ImmixProcessEdges<VM, { TRACE_KIND_DEFRAG }>, { TRACE_KIND_DEFRAG }>(
-                    scheduler,
-                ),
+            Pause::FullTraceFast => self
+                .schedule_emergency_full_heap_collection::<RCImmixCollectRootEdges<VM>>(scheduler),
+            Pause::FullTraceDefrag => unreachable!(),
             Pause::RefCount => self.schedule_rc_collection(scheduler),
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
@@ -730,24 +726,6 @@ impl<VM: VMBinding> LXR<VM> {
         pause
     }
 
-    fn schedule_immix_collection<E: ProcessEdgesWork<VM = VM>, const KIND: TraceKind>(
-        &'static self,
-        scheduler: &GCWorkScheduler<VM>,
-    ) {
-        // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        Self::process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
-        // Stop & scan mutators (mutator scanning can happen before STW)
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
-        // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<ImmixGCWorkContext<VM, KIND>>::new(self));
-        // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<ImmixGCWorkContext<VM, KIND>>::new(self));
-    }
-
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         #[allow(clippy::collapsible_if)]
         if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
@@ -799,7 +777,28 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
         >::new(self));
-        // scheduler.schedule_ref_proc_work::<ImmixGCWorkContext<VM, TRACE_KIND_FAST>>(self);
+        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
+    }
+
+    fn schedule_emergency_full_heap_collection<E: ProcessEdgesWork<VM = VM>>(
+        &'static self,
+        scheduler: &GCWorkScheduler<VM>,
+    ) {
+        // Before start yielding, wrap all the roots from the previous GC with work-packets.
+        Self::process_prev_roots(scheduler);
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
+        >::new(self));
+        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
@@ -942,5 +941,12 @@ impl<VM: VMBinding> LXR<VM> {
             self.inc_buffer_limit = Some(inc_buffer_limit);
         }
         self.cm_threshold = *crate::args::CONCURRENT_MARKING_THRESHOLD;
+    }
+
+    pub fn vm_write_field(&self, _src: ObjectReference, _slot: Address, val: ObjectReference) {
+        if !val.is_null() {
+            assert_ne!(rc::count(val), 0);
+            let _ = rc::inc(val);
+        }
     }
 }

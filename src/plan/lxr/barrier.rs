@@ -34,9 +34,9 @@ pub const LOCKED_VALUE: u8 = 0b1;
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     edges: VectorQueue<Address>,
-    nodes: VectorQueue<ObjectReference>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
+    refs: VectorQueue<ObjectReference>,
     lxr: &'static LXR<VM>,
 }
 
@@ -51,9 +51,9 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         Self {
             mmtk,
             edges: VectorQueue::default(),
-            nodes: VectorQueue::default(),
             incs: VectorQueue::default(),
             decs: VectorQueue::default(),
+            refs: VectorQueue::default(),
             lxr: mmtk.plan.downcast_ref::<LXR<VM>>().unwrap(),
         }
     }
@@ -199,11 +199,18 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
             && (self.lxr.concurrent_marking_in_progress()
                 || self.lxr.current_pause() == Some(Pause::FinalMark))
         {
-            if !self.edges.is_empty() || !self.nodes.is_empty() || !self.decs.is_empty() {
+            if !self.decs.is_empty() {
                 let nodes = self.decs.clone_buffer();
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
                     .add(ProcessModBufSATB::<VM>::new(nodes));
             }
+            if !self.refs.is_empty() {
+                let nodes = self.refs.take();
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
+                    .add(ProcessModBufSATB::<VM>::new(nodes));
+            }
+        } else {
+            self.refs.clear()
         }
         // Flush inc and dec buffer
         if !self.incs.is_empty() {
@@ -235,6 +242,13 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         for e in dst.iter_edges() {
             self.enqueue_node(ObjectReference::NULL, e, None);
+        }
+    }
+
+    fn load_reference(&mut self, o: ObjectReference) {
+        self.refs.push(o);
+        if self.refs.is_full() {
+            self.flush();
         }
     }
 }

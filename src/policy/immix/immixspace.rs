@@ -108,6 +108,13 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         }
         self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object)
     }
+    fn is_reachable(&self, object: ObjectReference) -> bool {
+        if self.rc_enabled {
+            return self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
+        } else {
+            self.is_live(object)
+        }
+    }
     fn is_movable(&self) -> bool {
         super::DEFRAG
     }
@@ -670,12 +677,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
-        // println!(
-        //     "Release {:?} nursery={} defrag={}",
-        //     block,
-        //     nursery,
-        //     block.is_defrag_source()
-        // );
+        //     println!(
+        //         "Release {:?} nursery={} defrag={}",
+        //         block,
+        //         nursery,
+        //         block.is_defrag_source()
+        //     );
         if crate::args::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
@@ -1265,7 +1272,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
         let tls = worker.tls;
         let mut closure = ObjectsClosure::<E>::new(worker);
         for object in buffer {
-            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
+            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure, false);
             if super::MARK_LINE_AT_SCAN_TIME
                 && !super::BLOCK_ONLY
                 && self.immix_space.in_space(object)

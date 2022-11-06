@@ -73,6 +73,10 @@ impl<T> VectorQueue<T> {
     pub fn swap(&mut self, new_buffer: &mut Vec<T>) {
         std::mem::swap(&mut self.buffer, new_buffer)
     }
+
+    pub fn clear(&mut self) {
+        self.buffer.clear()
+    }
 }
 
 impl<T> Default for VectorQueue<T> {
@@ -116,6 +120,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     #[inline(always)]
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
+        // println!(" - E {:?}", slot);
         self.buffer.push(slot);
         if self.buffer.is_full() {
             self.flush();
@@ -151,12 +156,13 @@ pub struct EdgeIterator<VM: VMBinding> {
 
 impl<VM: VMBinding> EdgeIterator<VM> {
     #[inline(always)]
-    pub fn iterate(o: ObjectReference, f: impl FnMut(VM::VMEdge)) {
+    pub fn iterate(o: ObjectReference, discovery: bool, f: impl FnMut(VM::VMEdge)) {
         let mut x = EdgeIteratorImpl::<VM, _> { f, _p: PhantomData };
         <VM::VMScanning as Scanning<VM>>::scan_object(
             VMWorkerThread(VMThread::UNINITIALIZED),
             o,
             &mut x,
+            !discovery,
         );
     }
 }

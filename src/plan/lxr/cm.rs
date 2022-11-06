@@ -27,6 +27,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     next_objects: VectorQueue<ObjectReference>,
     worker: *mut GCWorker<VM>,
     slice: Option<&'static [ObjectReference]>,
+    discovery: bool,
 }
 
 unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
@@ -34,7 +35,7 @@ unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
-    pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>, discovery: bool) -> Self {
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -44,10 +45,15 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
             slice: None,
+            discovery,
         }
     }
 
-    pub fn new_slice(slice: &'static [ObjectReference], mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new_slice(
+        slice: &'static [ObjectReference],
+        mmtk: &'static MMTK<VM>,
+        discovery: bool,
+    ) -> Self {
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -57,6 +63,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
             slice: Some(slice),
+            discovery,
         }
     }
 
@@ -71,7 +78,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let new_nodes = self.next_objects.take();
             // This packet is executed in concurrent.
             debug_assert!(self.plan.concurrent_marking_enabled());
-            let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
+            let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk, self.discovery);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
     }
@@ -132,13 +139,18 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             let data = VM::VMScanning::obj_array_data(object);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                packets.push((Box::new(Self::new_slice(chunk, self.mmtk))) as Box<dyn GCWork<VM>>);
+                packets.push(
+                    (Box::new(Self::new_slice(chunk, self.mmtk, self.discovery)))
+                        as Box<dyn GCWork<VM>>,
+                );
             }
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            EdgeIterator::<VM>::iterate(object, |e| {
+            EdgeIterator::<VM>::iterate(object, self.discovery, |e: VM::VMEdge| {
                 let t: ObjectReference = e.load();
+
+                // println!("Trace {:?}.{:?} -> {:?}", object, e, t);
                 if t.is_null() || crate::util::rc::count(t) == 0 {
                     return;
                 }
@@ -212,7 +224,6 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }
     }
@@ -228,14 +239,14 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
             for e in &self.edges {
                 roots.push(e.load())
             }
-            let w = LXRConcurrentTraceObjects::<VM>::new(roots, self.mmtk());
+            let w = LXRConcurrentTraceObjects::<VM>::new(roots, self.mmtk(), true);
             self.mmtk().scheduler.postpone(w);
         }
     }
 
     #[inline(always)]
     fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
-        ScanObjects::<Self>::new(nodes, false, roots)
+        unreachable!()
     }
 }
 
@@ -276,7 +287,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB<VM> {
             return;
         }
         GCWork::do_work(
-            &mut LXRConcurrentTraceObjects::<VM>::new(self.nodes.clone(), mmtk),
+            &mut LXRConcurrentTraceObjects::<VM>::new(self.nodes.clone(), mmtk, true),
             worker,
             mmtk,
         );
@@ -296,6 +307,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        // println!("LXRStopTheWorldProcessEdges::new {:?}", object);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -309,7 +321,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     #[cold]
     fn flush(&mut self) {
         if !self.nodes.is_empty() {
-            let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
+            let mut scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
+            scan_objects_work.discovery = true;
             self.start_or_dispatch_scan_work(scan_objects_work)
         }
     }
@@ -322,11 +335,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             || !object.to_address().is_aligned_to(8)
             || !object.class_is_valid()
         {
+            // println!("Trace STW {:?} SKIP", object);
             return object;
         }
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
+            // println!("Trace STW {:?} NOI MARK", object);
             self.lxr.immix_space.rc_trace_object(
                 &mut self.nodes,
                 object,
@@ -336,6 +351,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 worker,
             )
         } else {
+            // println!("Trace STW {:?} SKIP LOS", object);
             object
         };
         if self.roots {
@@ -352,10 +368,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         }
         if self.pause == Pause::FullTraceFast {
             for i in 0..self.edges.len() {
+                // println!(
+                //     "Trace STW M {:?} -> {:?}",
+                //     self.edges[i].to_address(),
+                //     self.edges[i].load()
+                // );
                 self.process_mark_edge(self.edges[i].to_address())
             }
         } else {
             for i in 0..self.edges.len() {
+                // println!(
+                //     "Trace STW {:?} -> {:?}",
+                //     self.edges[i].to_address(),
+                //     self.edges[i].load()
+                // );
                 ProcessEdgesWork::process_edge(self, self.edges[i])
             }
         }
@@ -423,6 +449,97 @@ impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
 }
 
 impl<VM: VMBinding> DerefMut for LXRStopTheWorldProcessEdges<VM> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
+    lxr: &'static LXR<VM>,
+    pause: Pause,
+    base: ProcessEdgesBase<VM>,
+}
+
+impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
+    type VM = VM;
+    type ScanObjectsWorkType = ScanObjects<Self>;
+    const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
+
+    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
+        Self {
+            lxr,
+            base,
+            pause: Pause::RefCount,
+        }
+    }
+
+    #[cold]
+    fn flush(&mut self) {
+        if !self.nodes.is_empty() {
+            let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
+            self.start_or_dispatch_scan_work(scan_objects_work)
+        }
+    }
+
+    /// Trace  and evacuate objects.
+    #[inline(always)]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if object.is_null()
+            || !object.is_in_any_space()
+            || !object.to_address().is_aligned_to(8)
+            || !object.class_is_valid()
+        {
+            return object;
+        }
+        let x = if self.lxr.immix_space.in_space(object) {
+            let pause = self.pause;
+            let worker = self.worker();
+            self.lxr.immix_space.rc_trace_object(
+                &mut self.nodes,
+                object,
+                CopySemantics::DefaultCopy,
+                pause,
+                true,
+                worker,
+            )
+        } else {
+            self.lxr.los().trace_object(&mut self.nodes, object)
+        };
+        x
+    }
+
+    // #[inline]
+    // fn process_edges(&mut self) {
+    //     unreachable!()
+    // }
+
+    #[inline]
+    fn process_edges(&mut self) {
+        self.pause = self.lxr.current_pause().unwrap();
+        for i in 0..self.edges.len() {
+            ProcessEdgesWork::process_edge(self, self.edges[i])
+        }
+        self.flush();
+    }
+
+    #[inline(always)]
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
+        unreachable!()
+    }
+}
+
+impl<VM: VMBinding> Deref for LXRWeakRefProcessEdges<VM> {
+    type Target = ProcessEdgesBase<VM>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<VM: VMBinding> DerefMut for LXRWeakRefProcessEdges<VM> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base

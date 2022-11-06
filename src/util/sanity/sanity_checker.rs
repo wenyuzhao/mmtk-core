@@ -1,5 +1,6 @@
 use crate::plan::Plan;
 use crate::scheduler::gc_work::*;
+use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -114,6 +115,7 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());
         }
+        // println!("Sanity Start")
     }
 }
 
@@ -139,12 +141,14 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
             debug_assert!(result.is_ok());
         }
+        // println!("Sanity End")
     }
 }
 
 // #[derive(Default)]
 pub struct SanityGCProcessEdges<VM: VMBinding> {
     base: ProcessEdgesBase<VM>,
+    edge: Address,
 }
 
 impl<VM: VMBinding> Deref for SanityGCProcessEdges<VM> {
@@ -169,6 +173,18 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         Self {
             base: ProcessEdgesBase::new(edges, roots, mmtk),
             // ..Default::default()
+            edge: Address::ZERO,
+        }
+    }
+
+    #[inline]
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
+        self.edge = slot.to_address();
+        // println!("S {:?} -> {:?}", slot.to_address(), object);
+        let new_object = self.trace_object(object);
+        if Self::OVERWRITE_REFERENCE {
+            slot.store(new_object);
         }
     }
 
@@ -202,7 +218,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                     object
                 );
                 if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark {
-                    assert!(lxr.is_marked(object), "{:?} is not marked", object)
+                    assert!(
+                        lxr.is_marked(object),
+                        "{:?} -> {:?} is not marked",
+                        self.edge,
+                        object
+                    )
                 }
             }
             // Object is not "marked"

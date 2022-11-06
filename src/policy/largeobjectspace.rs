@@ -66,6 +66,13 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         }
         self.test_mark_bit(object, self.mark_state)
     }
+    fn is_reachable(&self, object: ObjectReference) -> bool {
+        if self.rc_enabled {
+            self.test_mark_bit(object, self.mark_state)
+        } else {
+            self.is_live(object)
+        }
+    }
     fn is_movable(&self) -> bool {
         false
     }

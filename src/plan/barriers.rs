@@ -50,6 +50,8 @@ impl BarrierSelector {
 pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn flush(&mut self) {}
 
+    fn load_reference(&mut self, o: ObjectReference) {}
+
     /// Subsuming barrier for object reference write
     fn object_reference_write(
         &mut self,
@@ -144,6 +146,8 @@ pub trait BarrierSemantics: 'static + Send {
         src: <Self::VM as VMBinding>::VMMemorySlice,
         dst: <Self::VM as VMBinding>::VMMemorySlice,
     );
+
+    fn load_reference(&mut self, o: ObjectReference) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -244,6 +248,10 @@ impl<S: BarrierSemantics> FieldBarrier<S> {
 impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
     fn flush(&mut self) {
         self.semantics.flush();
+    }
+
+    fn load_reference(&mut self, o: ObjectReference) {
+        self.semantics.load_reference(o)
     }
 
     fn object_reference_write_pre(

@@ -1,3 +1,4 @@
+use super::cm::LXRWeakRefProcessEdges;
 use super::rc::{ProcessIncs, EDGE_KIND_ROOT};
 use super::LXR;
 use crate::plan::immix::Pause;
@@ -83,6 +84,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     #[cold]
     fn flush(&mut self) {
+        unreachable!();
         if !self.nodes.is_empty() {
             debug_assert_ne!(self.lxr().current_pause(), Some(Pause::InitialMark));
             let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
@@ -175,4 +177,12 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type VM = VM;
     type PlanType = LXR<VM>;
     type ProcessEdgesWorkType = PlanProcessEdges<VM, LXR<VM>, KIND>;
+}
+
+pub(super) struct LXRWeakRefWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
+
+impl<VM: VMBinding> crate::scheduler::GCWorkContext for LXRWeakRefWorkContext<VM> {
+    type VM = VM;
+    type PlanType = LXR<VM>;
+    type ProcessEdgesWorkType = LXRWeakRefProcessEdges<VM>;
 }
