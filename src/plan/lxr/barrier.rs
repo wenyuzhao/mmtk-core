@@ -1,6 +1,7 @@
 //! Read/Write barrier implementations.
 
 use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use atomic::Ordering;
 
@@ -33,7 +34,6 @@ pub const LOCKED_VALUE: u8 = 0b1;
 
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    edges: VectorQueue<Address>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
@@ -50,7 +50,6 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         Self {
             mmtk,
-            edges: VectorQueue::default(),
             incs: VectorQueue::default(),
             decs: VectorQueue::default(),
             refs: VectorQueue::default(),
@@ -148,13 +147,14 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         // if crate::args::BARRIER_MEASUREMENT || crate::args::REF_COUNT {
         if !old.is_null() {
             self.decs.push(old);
+            if self.decs.is_full() {
+                self.flush_decs_and_satb();
+            }
         }
-        self.incs.push(edge);
         crate::util::rc::inc_inc_buffer_size();
-        // }
-        // Flush
-        if self.edges.is_full() || self.incs.is_full() || self.decs.is_full() {
-            self.flush();
+        self.incs.push(edge);
+        if self.incs.is_full() {
+            self.flush_incs();
         }
     }
 
@@ -175,6 +175,50 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             self.slow(src, edge, old)
         }
     }
+
+    #[inline(always)]
+    fn should_create_satb_packets(&self) -> bool {
+        self.lxr.concurrent_marking_enabled()
+            && (self.lxr.concurrent_marking_in_progress()
+                || self.lxr.current_pause() == Some(Pause::FinalMark))
+    }
+
+    #[cold]
+    fn flush_incs(&mut self) {
+        if !self.incs.is_empty() {
+            let incs = self.incs.take();
+            let bucket = WorkBucketStage::rc_process_incs_stage();
+            self.mmtk.scheduler.work_buckets[bucket]
+                .add(ProcessIncs::<_, { EDGE_KIND_MATURE }>::new(incs));
+        }
+    }
+
+    #[cold]
+    fn flush_decs_and_satb(&mut self) {
+        if !self.decs.is_empty() {
+            let decs = Arc::new(self.decs.take());
+            if self.should_create_satb_packets() {
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
+                    .add(ProcessModBufSATB::new_arc(decs.clone()));
+            }
+            let w = ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_desc());
+            if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
+                self.mmtk.scheduler.postpone_prioritized(w);
+            } else {
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
+            }
+        }
+    }
+
+    #[cold]
+    fn flush_weak_refs(&mut self) {
+        if !self.refs.is_empty() {
+            debug_assert!(self.should_create_satb_packets());
+            let nodes = self.refs.take();
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
+                .add(ProcessModBufSATB::new(nodes));
+        }
+    }
 }
 
 impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
@@ -193,41 +237,9 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
             }
             return;
         }
-        // Concurrent Marking: Flush satb buffer
-        #[allow(clippy::collapsible_if)]
-        if self.lxr.concurrent_marking_enabled()
-            && (self.lxr.concurrent_marking_in_progress()
-                || self.lxr.current_pause() == Some(Pause::FinalMark))
-        {
-            if !self.decs.is_empty() {
-                let nodes = self.decs.clone_buffer();
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                    .add(ProcessModBufSATB::<VM>::new(nodes));
-            }
-            if !self.refs.is_empty() {
-                let nodes = self.refs.take();
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                    .add(ProcessModBufSATB::<VM>::new(nodes));
-            }
-        } else {
-            self.refs.clear()
-        }
-        // Flush inc and dec buffer
-        if !self.incs.is_empty() {
-            // Inc buffer
-            let incs = self.incs.take();
-            let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk.scheduler.work_buckets[bucket]
-                .add(ProcessIncs::<_, { EDGE_KIND_MATURE }>::new(incs));
-            // Dec buffer
-            let decs = self.decs.take();
-            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
-            if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
-                self.mmtk.scheduler.postpone_prioritized(w);
-            } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
-            }
-        }
+        self.flush_weak_refs();
+        self.flush_incs();
+        self.flush_decs_and_satb();
     }
 
     fn object_reference_write_slow(
@@ -248,7 +260,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     fn load_reference(&mut self, o: ObjectReference) {
         self.refs.push(o);
         if self.refs.is_full() {
-            self.flush();
+            self.flush_weak_refs();
         }
     }
 }

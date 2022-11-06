@@ -12,8 +12,8 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use std::sync::Arc;
 use std::{
-    marker::PhantomData,
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -23,10 +23,11 @@ use super::LXR;
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
     mmtk: &'static MMTK<VM>,
-    objects: Vec<ObjectReference>,
+    objects: Option<Vec<ObjectReference>>,
+    objects_arc: Option<Arc<Vec<ObjectReference>>>,
+    slice: Option<&'static [ObjectReference]>,
     next_objects: VectorQueue<ObjectReference>,
     worker: *mut GCWorker<VM>,
-    slice: Option<&'static [ObjectReference]>,
 }
 
 unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
@@ -40,10 +41,25 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         Self {
             plan,
             mmtk,
-            objects,
+            objects: Some(objects),
+            objects_arc: None,
+            slice: None,
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
+        }
+    }
+
+    pub fn new_arc(objects: Arc<Vec<ObjectReference>>, mmtk: &'static MMTK<VM>) -> Self {
+        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        Self {
+            plan,
+            mmtk,
+            objects: None,
+            objects_arc: Some(objects),
             slice: None,
+            next_objects: VectorQueue::default(),
+            worker: ptr::null_mut(),
         }
     }
 
@@ -53,10 +69,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         Self {
             plan,
             mmtk,
-            objects: vec![],
+            objects: None,
+            objects_arc: None,
+            slice: Some(slice),
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
-            slice: Some(slice),
         }
     }
 
@@ -179,11 +196,12 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        if let Some(slice) = self.slice {
-            self.process_objects(slice, true)
-        } else {
-            let objects = std::mem::take(&mut self.objects);
+        if let Some(objects) = self.objects.take() {
             self.process_objects(&objects, false)
+        } else if let Some(objects) = self.objects_arc.take() {
+            self.process_objects(&objects, false)
+        } else if let Some(slice) = self.slice {
+            self.process_objects(slice, true)
         }
         let mut objects = vec![];
         while !self.next_objects.is_empty() {
@@ -253,32 +271,50 @@ impl<VM: VMBinding> DerefMut for CMImmixCollectRootEdges<VM> {
     }
 }
 
-pub struct ProcessModBufSATB<VM: VMBinding> {
-    nodes: Vec<ObjectReference>,
-    phantom: PhantomData<VM>,
+pub struct ProcessModBufSATB {
+    nodes: Option<Vec<ObjectReference>>,
+    nodes_arc: Option<Arc<Vec<ObjectReference>>>,
 }
 
-impl<VM: VMBinding> ProcessModBufSATB<VM> {
+impl ProcessModBufSATB {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
         Self {
-            nodes,
-            phantom: PhantomData,
+            nodes: Some(nodes),
+            nodes_arc: None,
+        }
+    }
+    pub fn new_arc(nodes: Arc<Vec<ObjectReference>>) -> Self {
+        Self {
+            nodes: None,
+            nodes_arc: Some(nodes),
         }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB<VM> {
+impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        if self.nodes.is_empty() {
-            return;
+        if let Some(nodes) = self.nodes.take() {
+            if nodes.is_empty() {
+                return;
+            }
+            GCWork::do_work(
+                &mut LXRConcurrentTraceObjects::<VM>::new(nodes, mmtk),
+                worker,
+                mmtk,
+            );
         }
-        GCWork::do_work(
-            &mut LXRConcurrentTraceObjects::<VM>::new(self.nodes.clone(), mmtk),
-            worker,
-            mmtk,
-        );
+        if let Some(nodes) = self.nodes_arc.take() {
+            if nodes.is_empty() {
+                return;
+            }
+            GCWork::do_work(
+                &mut LXRConcurrentTraceObjects::<VM>::new_arc(nodes, mmtk),
+                worker,
+                mmtk,
+            );
+        }
     }
 }
 

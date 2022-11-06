@@ -21,6 +21,7 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
@@ -519,14 +520,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
 
 pub struct ProcessDecs<VM: VMBinding> {
     /// Decrements to process
-    decs: Vec<ObjectReference>,
+    decs: Option<Vec<ObjectReference>>,
+    decs_arc: Option<Arc<Vec<ObjectReference>>>,
+    slice: Option<(bool, &'static [ObjectReference])>,
     /// Recursively generated new decrements
     new_decs: VectorQueue<ObjectReference>,
     mmtk: *const MMTK<VM>,
     counter: LazySweepingJobsCounter,
     mark_objects: VectorQueue<ObjectReference>,
     concurrent_marking_in_progress: bool,
-    slice: Option<(bool, &'static [ObjectReference])>,
     mature_sweeping_in_progress: bool,
 }
 
@@ -543,13 +545,29 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     #[inline]
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
         Self {
-            decs,
+            decs: Some(decs),
+            decs_arc: None,
+            slice: None,
             new_decs: VectorQueue::default(),
             mmtk: std::ptr::null_mut(),
             counter,
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
+            mature_sweeping_in_progress: false,
+        }
+    }
+
+    #[inline]
+    pub fn new_arc(decs: Arc<Vec<ObjectReference>>, counter: LazySweepingJobsCounter) -> Self {
+        Self {
+            decs: None,
+            decs_arc: Some(decs),
             slice: None,
+            new_decs: VectorQueue::default(),
+            mmtk: std::ptr::null_mut(),
+            counter,
+            mark_objects: VectorQueue::default(),
+            concurrent_marking_in_progress: false,
             mature_sweeping_in_progress: false,
         }
     }
@@ -561,13 +579,14 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         counter: LazySweepingJobsCounter,
     ) -> Self {
         Self {
-            decs: vec![],
+            decs: None,
+            decs_arc: None,
+            slice: Some((not_marked, slice)),
             new_decs: VectorQueue::default(),
             mmtk: std::ptr::null_mut(),
             counter,
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
-            slice: Some((not_marked, slice)),
             mature_sweeping_in_progress: false,
         }
     }
@@ -744,11 +763,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
             || lxr.previous_pause() == Some(Pause::FullTraceFast);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        if let Some((not_marked, slice)) = self.slice {
-            self.process_decs(slice, lxr, true, not_marked);
-        } else {
-            let decs = std::mem::take(&mut self.decs);
+        if let Some(decs) = std::mem::take(&mut self.decs) {
             self.process_decs(&decs, lxr, false, false);
+        } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
+            self.process_decs(&decs, lxr, false, false);
+        } else if let Some((not_marked, slice)) = self.slice {
+            self.process_decs(slice, lxr, true, not_marked);
         }
         let mut decs = vec![];
         while !self.new_decs.is_empty() {
