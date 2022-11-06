@@ -460,13 +460,13 @@ options! {
     // Should we shrink/grow the heap to adjust to application working set? (not supported)
     variable_size_heap:    bool                 [env_var: true, command_line: true]  [always_valid] = true,
     // Should finalization be disabled?
-    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = true,
+    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = false,
     // Should reference type processing be disabled?
     // If reference type processing is disabled, no weak reference processing work is scheduled,
     // and we expect a binding to treat weak references as strong references.
     // We disable weak reference processing by default, as we are still working on it. This will be changed to `false`
     // once weak reference processing is implemented properly.
-    no_reference_types:    bool                 [env_var: true, command_line: true]  [always_valid] = true,
+    no_reference_types:    bool                 [env_var: true, command_line: true]  [always_valid] = false,
     // The zeroing approach to use for new object allocations. Affects each plan differently. (not supported)
     nursery_zeroing:       NurseryZeroingOptions[env_var: true, command_line: true]  [always_valid] = NurseryZeroingOptions::Temporal,
     // How frequent (every X bytes) should we do a stress GC?
