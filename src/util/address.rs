@@ -9,6 +9,7 @@ use crate::plan::barriers::LOCKED_VALUE;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
+use crate::plan::EdgeIterator;
 use crate::policy::sft_map::SFTMap;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::heap::layout::mmapper::Mmapper;
@@ -716,6 +717,11 @@ impl ObjectReference {
             );
             self.assert_class_is_valid();
         }
+    }
+
+    #[inline(always)]
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(self, ref_discovery: bool, f: F) {
+        EdgeIterator::<VM>::iterate(self, ref_discovery, f)
     }
 }
 

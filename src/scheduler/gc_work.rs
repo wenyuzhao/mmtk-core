@@ -690,6 +690,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         buffer: &[ObjectReference],
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
         mmtk: &'static MMTK<<Self::E as ProcessEdgesWork>::VM>,
+        should_discover_reference: bool,
     ) {
         let tls = worker.tls;
 
@@ -727,11 +728,11 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Then scan those objects for edges.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker);
+            let mut closure = ObjectsClosure::<Self::E>::new(worker, should_discover_reference);
             for object in objects_to_scan.iter().copied() {
                 if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     // If an object supports edge-enqueuing, we enqueue its edges.
-                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure, true);
+                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
                     self.post_scan_object(object);
                 } else {
                     // If an object does not support edge-enqueuing, we have to use
@@ -753,106 +754,6 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
 
             // Scan objects and trace their edges at the same time.
             for object in scan_later.iter().copied() {
-                unreachable!();
-                <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
-                    tls,
-                    object,
-                    &mut closure,
-                );
-                self.post_scan_object(object);
-            }
-
-            // Create work packets to scan adjacent objects.  We skip ProcessEdgesWork and create
-            // object-scanning packets directly, because the edges are already traced.
-            if !process_edges_work.nodes.is_empty() {
-                let next_nodes = process_edges_work.nodes.take();
-                let make_packet = |nodes| {
-                    let work_packet = self.make_another(nodes);
-                    memory_manager::add_work_packet(mmtk, WorkBucketStage::Closure, work_packet);
-                };
-
-                // Divide the resulting nodes into appropriately sized packets.
-                if next_nodes.len() <= Self::E::CAPACITY {
-                    make_packet(next_nodes);
-                } else {
-                    for chunk in next_nodes.chunks(Self::E::CAPACITY) {
-                        make_packet(chunk.into());
-                    }
-                }
-            }
-        }
-    }
-
-    /// The common code for ScanObjects and PlanScanObjects.
-    fn do_work_common_discovery(
-        &self,
-        buffer: &[ObjectReference],
-        worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
-        mmtk: &'static MMTK<<Self::E as ProcessEdgesWork>::VM>,
-    ) {
-        let tls = worker.tls;
-
-        // If this is a root packet, the objects in this packet will have not been traced, yet.
-        //
-        // This step conceptually traces the edges from root slots to the objects they point to.
-        // However, VMs that deliver root objects instead of root edges are incapable of updating
-        // root slots.  Like processing an edge, we call `trace_object` on those objects, and
-        // assert the GC doesn't move those objects because we cannot store back to the slots.
-        //
-        // If this is a root packet, the `scanned_root_objects` variable will hold those root
-        // objects which are traced for the first time.
-        let scanned_root_objects = self.roots().then(|| {
-            // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work = Self::E::new(vec![], false, mmtk);
-
-            for object in buffer.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
-                debug_assert_eq!(
-                    object, new_object,
-                    "Object moved while tracing root unmovable root object: {} -> {}",
-                    object, new_object
-                );
-            }
-
-            // This contains root objects that are visited the first time.
-            // It is sufficient to only scan these objects.
-            process_edges_work.nodes.take()
-        });
-
-        // If it is a root packet, scan the nodes that are first scanned;
-        // otherwise, scan the nodes in the buffer.
-        let objects_to_scan = scanned_root_objects.as_deref().unwrap_or(buffer);
-
-        // Then scan those objects for edges.
-        let mut scan_later = vec![];
-        {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker);
-            for object in objects_to_scan.iter().copied() {
-                if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
-                    // If an object supports edge-enqueuing, we enqueue its edges.
-                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure, false);
-                    self.post_scan_object(object);
-                } else {
-                    // If an object does not support edge-enqueuing, we have to use
-                    // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
-                    // reference field to the VM.
-                    //
-                    // However, at this point, `closure` is borrowing `worker`.
-                    // So we postpone the processing of objects that needs object enqueuing
-                    scan_later.push(object);
-                }
-            }
-        }
-
-        // If any object does not support edge-enqueuing, we process them now.
-        if !scan_later.is_empty() {
-            // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work = Self::E::new(vec![], false, mmtk);
-            let mut closure = |object| process_edges_work.trace_object(object);
-
-            // Scan objects and trace their edges at the same time.
-            for object in scan_later.iter().copied() {
-                unreachable!();
                 <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
                     tls,
                     object,
@@ -931,11 +832,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        if self.discovery {
-            self.do_work_common_discovery(&self.buffer, worker, mmtk);
-        } else {
-            self.do_work_common(&self.buffer, worker, mmtk);
-        }
+        self.do_work_common(&self.buffer, worker, mmtk, self.discovery);
         trace!("ScanObjects End");
     }
 }
@@ -1097,7 +994,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk);
+        self.do_work_common(&self.buffer, worker, mmtk, true);
         trace!("PlanScanObjects End");
     }
 }

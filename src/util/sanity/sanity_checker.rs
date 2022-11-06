@@ -115,7 +115,6 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());
         }
-        // println!("Sanity Start")
     }
 }
 
@@ -141,7 +140,6 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
             debug_assert!(result.is_ok());
         }
-        // println!("Sanity End")
     }
 }
 
@@ -181,7 +179,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
         self.edge = slot.to_address();
-        // println!("S {:?} -> {:?}", slot.to_address(), object);
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
             slot.store(new_object);

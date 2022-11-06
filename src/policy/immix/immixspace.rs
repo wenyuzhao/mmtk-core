@@ -677,12 +677,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
-        //     println!(
-        //         "Release {:?} nursery={} defrag={}",
-        //         block,
-        //         nursery,
-        //         block.is_defrag_source()
-        //     );
+        // println!(
+        //     "Release {:?} nursery={} defrag={}",
+        //     block,
+        //     nursery,
+        //     block.is_defrag_source()
+        // );
         if crate::args::LOG_PER_GC_STATE {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
@@ -1270,9 +1270,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
         let mut buffer = vec![];
         mem::swap(&mut buffer, &mut self.buffer);
         let tls = worker.tls;
-        let mut closure = ObjectsClosure::<E>::new(worker);
+        let mut closure = ObjectsClosure::<E>::new(worker, true);
         for object in buffer {
-            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure, false);
+            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
             if super::MARK_LINE_AT_SCAN_TIME
                 && !super::BLOCK_ONLY
                 && self.immix_space.in_space(object)

@@ -50,7 +50,8 @@ impl BarrierSelector {
 pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn flush(&mut self) {}
 
-    fn load_reference(&mut self, o: ObjectReference) {}
+    /// load referent from java.lang.Reference
+    fn load_reference(&mut self, _referent: ObjectReference) {}
 
     /// Subsuming barrier for object reference write
     fn object_reference_write(
@@ -147,7 +148,8 @@ pub trait BarrierSemantics: 'static + Send {
         dst: <Self::VM as VMBinding>::VMMemorySlice,
     );
 
-    fn load_reference(&mut self, o: ObjectReference) {}
+    /// load referent from java.lang.Reference
+    fn load_reference(&mut self, _referent: ObjectReference) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.

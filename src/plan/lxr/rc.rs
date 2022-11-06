@@ -12,7 +12,7 @@ use crate::util::Address;
 use crate::vm::edge_shape::Edge;
 use crate::LazySweepingJobsCounter;
 use crate::{
-    plan::{immix::Pause, EdgeIterator},
+    plan::immix::Pause,
     policy::{immix::block::Block, space::Space},
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     util::{metadata::side_metadata, object_forwarding, ObjectReference},
@@ -187,7 +187,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             let discovery =
                 self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark;
-            EdgeIterator::<VM>::iterate(o, discovery, |edge| {
+            o.iterate_fields::<VM, _>(discovery, |edge| {
                 let target = edge.load();
                 if !target.is_null() {
                     if !self::rc_stick(target) {
@@ -659,7 +659,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     .bulk_add(packets);
             }
         } else {
-            EdgeIterator::<VM>::iterate(o, false, |edge| {
+            o.iterate_fields::<VM, _>(false, |edge| {
                 let x = edge.load();
                 if !x.is_null() {
                     // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);

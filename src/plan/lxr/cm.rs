@@ -6,7 +6,7 @@ use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::Edge;
 use crate::{
-    plan::{EdgeIterator, ObjectQueue},
+    plan::ObjectQueue,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
     vm::*,
     MMTK,
@@ -147,7 +147,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            EdgeIterator::<VM>::iterate(object, self.discovery, |e: VM::VMEdge| {
+            object.iterate_fields::<VM, _>(self.discovery, |e| {
                 let t: ObjectReference = e.load();
 
                 // println!("Trace {:?}.{:?} -> {:?}", object, e, t);
@@ -245,7 +245,7 @@ impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
     }
 
     #[inline(always)]
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
     }
 }
@@ -526,7 +526,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     }
 
     #[inline(always)]
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
     }
 }

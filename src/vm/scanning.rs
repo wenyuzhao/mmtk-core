@@ -6,6 +6,10 @@ use crate::vm::VMBinding;
 
 /// Callback trait of scanning functions that report edges.
 pub trait EdgeVisitor<ES: Edge> {
+    #[inline(always)]
+    fn should_discover_references(&self) -> bool {
+        true
+    }
     /// Call this function for each edge.
     fn visit_edge(&mut self, edge: ES);
 }
@@ -114,7 +118,6 @@ pub trait Scanning<VM: VMBinding> {
         tls: VMWorkerThread,
         object: ObjectReference,
         edge_visitor: &mut EV,
-        disable_discovery: bool,
     );
 
     /// Delegated scanning of a object, visiting each reference field encountered, and trace the

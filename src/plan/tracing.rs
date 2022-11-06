@@ -96,13 +96,15 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     buffer: VectorQueue<EdgeOf<E>>,
     worker: &'a mut GCWorker<E::VM>,
+    should_discover_references: bool,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
-    pub fn new(worker: &'a mut GCWorker<E::VM>) -> Self {
+    pub fn new(worker: &'a mut GCWorker<E::VM>, should_discover_references: bool) -> Self {
         Self {
             buffer: VectorQueue::new(),
             worker,
+            should_discover_references,
         }
     }
 
@@ -119,8 +121,11 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 
 impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     #[inline(always)]
+    fn should_discover_references(&self) -> bool {
+        self.should_discover_references
+    }
+    #[inline(always)]
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
-        // println!(" - E {:?}", slot);
         self.buffer.push(slot);
         if self.buffer.is_full() {
             self.flush();
@@ -140,10 +145,15 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 
 struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge)> {
     f: F,
+    should_discover_references: bool,
     _p: PhantomData<VM>,
 }
 
 impl<VM: VMBinding, F: FnMut(VM::VMEdge)> EdgeVisitor<VM::VMEdge> for EdgeIteratorImpl<VM, F> {
+    #[inline(always)]
+    fn should_discover_references(&self) -> bool {
+        self.should_discover_references
+    }
     #[inline(always)]
     fn visit_edge(&mut self, slot: VM::VMEdge) {
         (self.f)(slot);
@@ -156,13 +166,20 @@ pub struct EdgeIterator<VM: VMBinding> {
 
 impl<VM: VMBinding> EdgeIterator<VM> {
     #[inline(always)]
-    pub fn iterate(o: ObjectReference, discovery: bool, f: impl FnMut(VM::VMEdge)) {
-        let mut x = EdgeIteratorImpl::<VM, _> { f, _p: PhantomData };
+    pub fn iterate(
+        o: ObjectReference,
+        should_discover_references: bool,
+        f: impl FnMut(VM::VMEdge),
+    ) {
+        let mut x = EdgeIteratorImpl::<VM, _> {
+            f,
+            should_discover_references,
+            _p: PhantomData,
+        };
         <VM::VMScanning as Scanning<VM>>::scan_object(
             VMWorkerThread(VMThread::UNINITIALIZED),
             o,
             &mut x,
-            !discovery,
         );
     }
 }

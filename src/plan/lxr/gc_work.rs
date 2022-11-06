@@ -84,7 +84,6 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     #[cold]
     fn flush(&mut self) {
-        unreachable!();
         if !self.nodes.is_empty() {
             debug_assert_ne!(self.lxr().current_pause(), Some(Pause::InitialMark));
             let scan_objects_work = crate::policy::immix::ScanObjectsAndMarkLines::<Self>::new(
