@@ -112,7 +112,6 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             .map(|e| VM::VMEdge::from_address(Line::decode_validity_state(e.to_address()).0))
             .collect::<Vec<_>>();
         // transitive closure
-        // println!("EvacuateMatureObjects {:?}", edges);
         let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);
         worker.add_work(WorkBucketStage::Closure, w);
     }

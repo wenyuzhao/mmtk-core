@@ -46,6 +46,7 @@ impl ReferenceProcessors {
     }
 
     pub fn add_soft_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
+        trace!("Add soft candidate: {}", reff);
         self.soft.add_candidate::<VM>(reff);
     }
 

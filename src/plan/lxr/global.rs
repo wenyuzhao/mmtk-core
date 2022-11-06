@@ -427,16 +427,22 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         true
     }
 
-    fn should_process_refs_at_current_gc(&self) -> bool {
-        // match self.current_pause() {
-        //     Some(pause) => {
-        //         pause == Pause::FullTraceFast
-        //             || pause == Pause::FullTraceDefrag
-        //             || pause == Pause::FinalMark
-        //     }
-        //     _ => false,
-        // }
-        false
+    fn should_process_reference(
+        &self,
+        reference: ObjectReference,
+        referent: ObjectReference,
+    ) -> bool {
+        if rc::count(reference) == 0 || rc::count(referent) == 0 {
+            return false;
+        }
+        true
+    }
+
+    fn discover_reference(&self, reference: ObjectReference, referent: ObjectReference) {
+        // Keep weak references and referents alive during SATB.
+        // They can only be swept by mature sweeping.
+        let _ = rc::inc(reference);
+        let _ = rc::inc(referent);
     }
 }
 
@@ -941,13 +947,6 @@ impl<VM: VMBinding> LXR<VM> {
             self.inc_buffer_limit = Some(inc_buffer_limit);
         }
         self.cm_threshold = *crate::args::CONCURRENT_MARKING_THRESHOLD;
-    }
-
-    pub fn vm_write_field(&self, _src: ObjectReference, _slot: Address, val: ObjectReference) {
-        if !val.is_null() {
-            assert_ne!(rc::count(val), 0);
-            let _ = rc::inc(val);
-        }
     }
 
     fn set_concurrent_marking_state(&self, active: bool) {

@@ -486,11 +486,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::<VM>::new(
-                        roots.clone(),
-                        mmtk,
-                        true,
-                    ));
+                    .postpone(LXRConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
@@ -607,7 +603,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
-            let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk }, true);
+            let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {

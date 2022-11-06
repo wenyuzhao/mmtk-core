@@ -275,9 +275,15 @@ pub trait Plan: 'static + Sync + Downcast {
         false
     }
 
-    fn should_process_refs_at_current_gc(&self) -> bool {
+    fn should_process_reference(
+        &self,
+        _reference: ObjectReference,
+        _referent: ObjectReference,
+    ) -> bool {
         true
     }
+
+    fn discover_reference(&self, _reference: ObjectReference, _referent: ObjectReference) {}
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
     // if necessary.
