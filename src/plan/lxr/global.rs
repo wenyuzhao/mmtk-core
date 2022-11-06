@@ -31,7 +31,7 @@ use crate::util::rc::{self, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
-use crate::vm::{ObjectModel, VMBinding};
+use crate::vm::{Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -363,7 +363,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
 
         if pause == Pause::FinalMark {
-            self.in_concurrent_marking.store(false, Ordering::SeqCst);
+            self.set_concurrent_marking_state(false);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START
                     .load(Ordering::SeqCst)
@@ -389,7 +389,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
-            self.in_concurrent_marking.store(true, Ordering::SeqCst);
+            self.set_concurrent_marking_state(true);
             crate::REMSET_RECORDING.store(true, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
@@ -948,5 +948,10 @@ impl<VM: VMBinding> LXR<VM> {
             assert_ne!(rc::count(val), 0);
             let _ = rc::inc(val);
         }
+    }
+
+    fn set_concurrent_marking_state(&self, active: bool) {
+        <VM as VMBinding>::VMCollection::set_concurrent_marking_state(active);
+        self.in_concurrent_marking.store(active, Ordering::SeqCst);
     }
 }
