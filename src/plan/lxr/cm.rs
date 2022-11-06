@@ -217,60 +217,6 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
 }
 
-pub struct CMImmixCollectRootEdges<VM: VMBinding> {
-    base: ProcessEdgesBase<VM>,
-}
-
-impl<VM: VMBinding> ProcessEdgesWork for CMImmixCollectRootEdges<VM> {
-    type VM = VM;
-    type ScanObjectsWorkType = ScanObjects<Self>;
-
-    const OVERWRITE_REFERENCE: bool = false;
-    const RC_ROOTS: bool = true;
-    const SCAN_OBJECTS_IMMEDIATELY: bool = true;
-
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
-        Self { base }
-    }
-
-    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
-        unreachable!()
-    }
-
-    #[inline]
-    fn process_edges(&mut self) {
-        if !self.edges.is_empty() {
-            let mut roots = vec![];
-            for e in &self.edges {
-                roots.push(e.load())
-            }
-            let w = LXRConcurrentTraceObjects::<VM>::new(roots, self.mmtk());
-            self.mmtk().scheduler.postpone(w);
-        }
-    }
-
-    #[inline(always)]
-    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
-        unreachable!()
-    }
-}
-
-impl<VM: VMBinding> Deref for CMImmixCollectRootEdges<VM> {
-    type Target = ProcessEdgesBase<VM>;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.base
-    }
-}
-
-impl<VM: VMBinding> DerefMut for CMImmixCollectRootEdges<VM> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base
-    }
-}
-
 pub struct ProcessModBufSATB {
     nodes: Option<Vec<ObjectReference>>,
     nodes_arc: Option<Arc<Vec<ObjectReference>>>,

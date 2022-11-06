@@ -1,4 +1,4 @@
-use super::gc_work::{ImmixGCWorkContext, LXRWeakRefWorkContext};
+use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
@@ -10,7 +10,6 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::immix::{MatureSweeping, UpdateWeakProcessor};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -746,25 +745,21 @@ impl<VM: VMBinding> LXR<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<LXRGCWorkContext<VM>>::new(self));
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         Self::process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
-        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<LXRGCWorkContext<VM>>::new(self));
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -775,14 +770,12 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
 
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
-        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
@@ -796,14 +789,12 @@ impl<VM: VMBinding> LXR<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
-        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ImmixGCWorkContext<VM, { TRACE_KIND_FAST }>,
-        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 

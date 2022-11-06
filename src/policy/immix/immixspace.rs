@@ -7,7 +7,6 @@ use super::{
 };
 use crate::plan::immix::Pause;
 use crate::plan::lxr::{RemSet, LXR};
-use crate::plan::ObjectsClosure;
 use crate::plan::PlanConstraints;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
@@ -16,8 +15,6 @@ use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
-use crate::scheduler::gc_work::EdgeOf;
-use crate::scheduler::ProcessEdgesWork;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 use crate::util::heap::BlockPageResource;
@@ -40,9 +37,9 @@ use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 use spin::Mutex;
+use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{atomic::AtomicU8, Arc};
-use std::{mem, ptr};
 
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
@@ -1211,84 +1208,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
             .add_prioritized(Box::new(RCReleaseMatureLOS::new(counter.clone())));
-    }
-}
-
-/// A work packet to scan the fields of each objects and mark lines.
-pub struct ScanObjectsAndMarkLines<Edges: ProcessEdgesWork> {
-    buffer: Vec<ObjectReference>,
-    concurrent: bool,
-    immix_space: &'static ImmixSpace<Edges::VM>,
-    edges: Vec<EdgeOf<Edges>>,
-    worker: *mut GCWorker<Edges::VM>,
-    mmtk: *const MMTK<Edges::VM>,
-}
-
-unsafe impl<E: ProcessEdgesWork> Send for ScanObjectsAndMarkLines<E> {}
-
-impl<E: ProcessEdgesWork> ScanObjectsAndMarkLines<E> {
-    pub fn new(
-        buffer: Vec<ObjectReference>,
-        concurrent: bool,
-        immix_space: &'static ImmixSpace<E::VM>,
-    ) -> Self {
-        debug_assert!(!concurrent);
-        if concurrent {
-            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
-        }
-        Self {
-            buffer,
-            concurrent,
-            immix_space,
-            edges: vec![],
-            worker: ptr::null_mut(),
-            mmtk: ptr::null_mut(),
-        }
-    }
-
-    fn worker(&self) -> &mut GCWorker<E::VM> {
-        unsafe { &mut *self.worker }
-    }
-
-    fn flush(&mut self) {
-        if !self.edges.is_empty() {
-            let mut new_edges = Vec::new();
-            mem::swap(&mut new_edges, &mut self.edges);
-            self.worker().add_work(
-                WorkBucketStage::Closure,
-                E::new(new_edges, false, unsafe { &*self.mmtk }),
-            );
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjectsAndMarkLines<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        trace!("ScanObjectsAndMarkLines");
-        self.mmtk = mmtk;
-        self.worker = worker;
-        let mut buffer = vec![];
-        mem::swap(&mut buffer, &mut self.buffer);
-        let tls = worker.tls;
-        let mut closure = ObjectsClosure::<E>::new(worker, true);
-        for object in buffer {
-            <E::VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
-            if super::MARK_LINE_AT_SCAN_TIME
-                && !super::BLOCK_ONLY
-                && self.immix_space.in_space(object)
-            {
-                self.immix_space.mark_lines(object);
-            }
-        }
-        self.flush();
-    }
-}
-
-impl<E: ProcessEdgesWork> Drop for ScanObjectsAndMarkLines<E> {
-    fn drop(&mut self) {
-        if self.concurrent {
-            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
-        }
     }
 }
 
