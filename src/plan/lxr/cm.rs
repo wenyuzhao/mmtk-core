@@ -479,7 +479,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     #[cold]
     fn flush(&mut self) {
         if !self.nodes.is_empty() {
-            let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
+            let mut scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false, false);
+            scan_objects_work.discovery = false;
             self.start_or_dispatch_scan_work(scan_objects_work)
         }
     }
@@ -487,14 +488,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     /// Trace  and evacuate objects.
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null()
-            || !object.is_in_any_space()
-            || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid()
-        {
+        if object.is_null() {
             return object;
         }
-        let x = if self.lxr.immix_space.in_space(object) {
+        if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
@@ -507,8 +504,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             )
         } else {
             self.lxr.los().trace_object(&mut self.nodes, object)
-        };
-        x
+        }
     }
 
     // #[inline]
