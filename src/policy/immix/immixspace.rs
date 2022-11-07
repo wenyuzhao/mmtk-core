@@ -9,7 +9,6 @@ use crate::plan::immix::Pause;
 use crate::plan::lxr::{RemSet, LXR};
 use crate::plan::PlanConstraints;
 use crate::policy::gc_work::TraceKind;
-use crate::policy::immix::block_allocation::RCSweepNurseryBlocks;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
@@ -67,7 +66,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub block_allocation: BlockAllocation<VM>,
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
-    pub mutator_recycled_blocks: SegQueue<Vec<Block>>,
+    pub mutator_recycled_blocks: Mutex<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     pub last_defrag_blocks: Vec<Block>,
     defrag_blocks: Vec<Block>,
@@ -223,6 +222,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
+                MetadataSpec::OnSide(Block::NURSERY_PROMOTION_STATE_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
                 MetadataSpec::OnSide(Line::VALIDITY_STATE),
             ]);
@@ -525,39 +525,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
-        let space = unsafe { &mut *(self as *mut Self) };
-        if pause == Pause::FullTraceFast {
-            while let Some(blocks) = self.mutator_recycled_blocks.pop() {
-                for b in blocks {
-                    b.set_state(BlockState::Marked);
-                }
-            }
+        let mut blocks = self.mutator_recycled_blocks.lock();
+        for b in &*blocks {
+            b.set_state(BlockState::Marked);
+        }
+        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+            // Do nothing
         } else {
-            let mut packets: Vec<Box<dyn GCWork<VM>>> = vec![];
-            packets.reserve(self.mutator_recycled_blocks.len());
-            while let Some(blocks) = self.mutator_recycled_blocks.pop() {
-                if !blocks.is_empty() {
-                    for chunk in blocks.chunks(256) {
-                        packets.push(Box::new(RCSweepNurseryBlocks {
-                            space,
-                            blocks: chunk.to_vec(),
-                            mutator_reused_blocks: true,
-                        }));
-                    }
-                }
-            }
-            if crate::args::LAZY_MU_REUSE_BLOCK_SWEEPING {
-                self.scheduler().postpone_all_prioritized(packets);
-            } else {
-                if pause == Pause::FinalMark {
-                    self.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                        .bulk_add(packets);
-                } else {
-                    self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery]
-                        .bulk_add(packets);
-                }
+            for b in &*blocks {
+                self.add_to_possibly_dead_mature_blocks(*b, false);
             }
         }
+        blocks.clear();
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
         }
@@ -1185,7 +1164,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // }
         // This may happen either within a pause, or in concurrent.
         let size = self.possibly_dead_mature_blocks.len();
-        let num_bins = self.scheduler().num_workers() << 1;
+        let num_bins = self.scheduler().num_workers();
         let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
         let mut bins = (0..num_bins)
             .map(|_| Vec::with_capacity(bin_cap))

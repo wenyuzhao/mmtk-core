@@ -11,7 +11,7 @@ use crate::vm::VMBinding;
 
 use enum_map::EnumMap;
 
-use super::immix::Immix;
+use super::lxr::LXR;
 
 type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
 
@@ -126,7 +126,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
     }
     fn flush_remembered_sets(&mut self) {
         self.barrier().flush();
-        if let Some(_immix) = self.plan.downcast_ref::<Immix<VM>>() {
+        if let Some(_immix) = self.plan.downcast_ref::<LXR<VM>>() {
             unsafe { self.allocators.immix[0].assume_init_mut().flush() }
         }
     }

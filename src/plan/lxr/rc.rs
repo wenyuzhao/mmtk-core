@@ -98,6 +98,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         });
         if !los {
+            if !copied {
+                Block::containing::<VM>(o).set_as_in_place_promoted();
+            }
             self::promote::<VM>(o);
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL
                 .with(|x| x.record_promotion(o.get_size::<VM>()));

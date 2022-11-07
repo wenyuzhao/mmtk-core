@@ -8,7 +8,6 @@ use crate::{
 };
 
 pub const CM_LARGE_ARRAY_OPTIMIZATION: bool = false;
-pub const LAZY_MU_REUSE_BLOCK_SWEEPING: bool = true;
 pub const BUFFER_SIZE: usize = {
     if cfg!(feature = "lxr_buf_2048") {
         2048
@@ -180,7 +179,7 @@ pub static TRACE_THRESHOLD2: Lazy<Option<usize>> = Lazy::new(|| {
         .or(Some(5))
 });
 // ---------- Derived flags ---------- //
-pub static IGNORE_REUSING_BLOCKS: Lazy<bool> = Lazy::new(|| true);
+pub static IGNORE_REUSING_BLOCKS: bool = true;
 
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {
@@ -221,7 +220,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
         "concurrent_marking_threshold",
         *CONCURRENT_MARKING_THRESHOLD
     );
-    dump_feature!("ignore_reusing_blocks", *IGNORE_REUSING_BLOCKS);
+    dump_feature!("ignore_reusing_blocks", IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("max_mature_defrag_percent", *MAX_MATURE_DEFRAG_PERCENT);
@@ -248,7 +247,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("buffer_size", BUFFER_SIZE);
     dump_feature!("nontemporal");
     dump_feature!("cm_large_array_optimization", CM_LARGE_ARRAY_OPTIMIZATION);
-    dump_feature!("lazy_mu_reuse_block_sweeping", LAZY_MU_REUSE_BLOCK_SWEEPING);
     dump_feature!("inc_max_copy_depth", INC_MAX_COPY_DEPTH);
 
     dump_feature!("no_finalizer", *options.no_finalizer);

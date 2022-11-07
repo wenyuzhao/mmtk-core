@@ -422,7 +422,18 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         println!("Warning: User attempted a collection request. The request is ignored.");
     }
 
+    #[inline(always)]
     fn no_mutator_prepare_release(&self) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn no_worker_prepare(&self) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn fast_worker_release(&self) -> bool {
         true
     }
 

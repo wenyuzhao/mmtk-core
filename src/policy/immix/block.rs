@@ -157,6 +157,8 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOG;
     pub const DEAD_WORDS: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
+    pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
 
     #[inline(always)]
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
@@ -476,6 +478,21 @@ impl Block {
     }
 
     #[inline(always)]
+    pub fn set_as_in_place_promoted(&self) {
+        Self::NURSERY_PROMOTION_STATE_TABLE.fetch_or_atomic(self.start(), 1u8, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    pub fn is_in_place_promoted(&self) -> bool {
+        Self::NURSERY_PROMOTION_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
+    }
+
+    #[inline(always)]
+    pub fn clear_in_place_promoted(&self) {
+        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed)
+    }
+
+    #[inline(always)]
     pub fn unlog(&self) {
         Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
@@ -605,55 +622,16 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_nursery<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        mutator_reused_blocks: bool,
-    ) {
-        if mutator_reused_blocks {
-            if self.rc_dead() {
-                space.release_block(*self, true, true);
-                return;
-            }
-        }
-        if !mutator_reused_blocks && self.rc_dead() {
-            space.release_block(*self, true, false);
+    pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        let is_in_place_promoted = self.is_in_place_promoted();
+        self.clear_in_place_promoted();
+        if is_in_place_promoted {
+            self.set_state(BlockState::Reusable {
+                unavailable_lines: 1 as _,
+            });
+            space.reusable_blocks.push(*self);
         } else {
-            // See the caller of this function.
-            // At least one object is dead in the block.
-            let add_as_reusable = if !*crate::args::IGNORE_REUSING_BLOCKS {
-                if !self.get_state().is_reusable() && self.has_holes() {
-                    self.set_state(BlockState::Reusable {
-                        unavailable_lines: 1 as _,
-                    });
-                    true
-                } else {
-                    false
-                }
-            } else {
-                let holes = if crate::args::HOLE_COUNTING {
-                    self.calc_holes()
-                } else {
-                    1
-                };
-                let has_holes = self.has_holes();
-                if has_holes {
-                    self.set_state(BlockState::Reusable {
-                        unavailable_lines: holes as _,
-                    });
-                    true
-                } else {
-                    false
-                }
-            };
-            if add_as_reusable {
-                debug_assert!(self.get_state().is_reusable());
-                // println!("reuse N {:?}", self);
-                space.reusable_blocks.push(*self);
-            } else if mutator_reused_blocks {
-                // debug_assert_eq!(self.get_state(), BlockState::Reusing);
-                self.set_state(BlockState::Marked);
-            }
+            space.release_block(*self, true, false);
         }
     }
 
@@ -675,14 +653,14 @@ impl Block {
             return false;
         }
         if defrag || self.rc_dead() {
-            if self.attempt_dealloc(*crate::args::IGNORE_REUSING_BLOCKS) {
+            if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
                 space.release_block(*self, false, true);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.
-            let add_as_reusable = if !*crate::args::IGNORE_REUSING_BLOCKS {
+            let add_as_reusable = if !crate::args::IGNORE_REUSING_BLOCKS {
                 if !self.get_state().is_reusable() && self.has_holes() {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: 1 as _,

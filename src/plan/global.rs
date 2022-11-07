@@ -373,6 +373,14 @@ pub trait Plan: 'static + Sync + Downcast {
     fn no_mutator_prepare_release(&self) -> bool {
         false
     }
+    #[inline(always)]
+    fn no_worker_prepare(&self) -> bool {
+        false
+    }
+    #[inline(always)]
+    fn fast_worker_release(&self) -> bool {
+        false
+    }
 }
 
 impl_downcast!(Plan assoc VM);

@@ -57,6 +57,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
             }
+        }
+        if !plan_mut.no_worker_prepare() {
             for w in &mmtk.scheduler.worker_group.workers_shared {
                 let result = w.designated_work.push(Box::new(PrepareCollector));
                 debug_assert!(result.is_ok());
@@ -130,9 +132,13 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
                     .add(ReleaseMutator::<C::VM>::new(mutator));
             }
         }
-        for w in &mmtk.scheduler.worker_group.workers_shared {
-            let result = w.designated_work.push(Box::new(ReleaseCollector));
-            debug_assert!(result.is_ok());
+        if !plan_mut.fast_worker_release() {
+            for w in &mmtk.scheduler.worker_group.workers_shared {
+                let result = w.designated_work.push(Box::new(ReleaseCollector));
+                debug_assert!(result.is_ok());
+            }
+        } else {
+            crate::scheduler::worker::reset_workers::<C::VM>();
         }
     }
 }

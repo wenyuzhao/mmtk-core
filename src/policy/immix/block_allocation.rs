@@ -69,12 +69,12 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Drain allocated_block_buffer and free everything in clean_block_buffer.
     pub fn reset_and_generate_nursery_sweep_tasks(
         &mut self,
-        num_workers: usize,
+        _num_workers: usize,
     ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
         let _guard = self.refill_lock.lock().unwrap();
         let blocks = self.cursor.load(Ordering::SeqCst);
         let high_water = self.high_water.load(Ordering::SeqCst);
-        let num_bins = num_workers << 2;
+        let num_bins = 1;
         let bin_cap = blocks / num_bins + if blocks % num_bins == 0 { 0 } else { 1 };
         let mut bins = (0..num_bins)
             .map(|_| Vec::with_capacity(bin_cap))
@@ -93,11 +93,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let mut packets: Vec<Box<dyn GCWork<VM>>> = bins
             .into_iter()
             .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
-                Box::new(RCSweepNurseryBlocks {
-                    space,
-                    blocks,
-                    mutator_reused_blocks: false,
-                })
+                Box::new(RCSweepNurseryBlocks { space, blocks })
             })
             .collect();
         let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
@@ -284,23 +280,13 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 pub struct RCSweepNurseryBlocks<VM: VMBinding> {
     pub space: &'static ImmixSpace<VM>,
     pub blocks: Vec<Block>,
-    pub mutator_reused_blocks: bool,
 }
 
 impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        if self.blocks.is_empty() {
-            return;
-        }
-        if crate::args::LAZY_MU_REUSE_BLOCK_SWEEPING && self.mutator_reused_blocks {
-            for block in &self.blocks {
-                block.rc_sweep_mature(self.space, false);
-            }
-        } else {
-            for block in &self.blocks {
-                block.rc_sweep_nursery(self.space, self.mutator_reused_blocks)
-            }
+        for block in &self.blocks {
+            block.rc_sweep_nursery(self.space)
         }
     }
 }

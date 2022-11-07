@@ -166,9 +166,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         if !self.mutator_recycled_blocks.is_empty() {
             let mut v = Box::new(vec![]);
             std::mem::swap(&mut v, &mut self.mutator_recycled_blocks);
-            self.immix_space().mutator_recycled_blocks.push(*v);
-            // self.immix_space().scheduler().work_buckets[WorkBucketStage::Initial]
-            //     .add(ResetMutatorRecycledBlocks(v));
+            self.immix_space()
+                .mutator_recycled_blocks
+                .lock()
+                .append(&mut v);
         }
     }
 

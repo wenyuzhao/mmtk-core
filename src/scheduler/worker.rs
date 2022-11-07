@@ -23,6 +23,17 @@ thread_local! {
     static _WORKER: Atomic<Option<*mut ()>> = Atomic::new(None);
 }
 
+static mut _WORKERS: Vec<*mut ()> = Vec::new();
+
+pub fn reset_workers<VM: VMBinding>() {
+    for w in unsafe { &_WORKERS } {
+        let w = (*w) as *mut GCWorker<VM>;
+        unsafe {
+            (*w).get_copy_context_mut().release();
+        }
+    }
+}
+
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
 #[inline(always)]
 pub fn current_worker_ordinal() -> Option<ThreadId> {
@@ -206,7 +217,11 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// Each worker will keep polling and executing work packets in a loop.
     pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
         WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
+        let worker = self as *mut Self;
         _WORKER.with(|x| x.store(Some(self as *mut Self as *mut ()), Ordering::SeqCst));
+        unsafe {
+            _WORKERS.push(worker as *mut ());
+        }
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
