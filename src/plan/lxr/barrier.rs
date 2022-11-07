@@ -187,9 +187,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.mmtk.scheduler.work_buckets[bucket]
-                .add(ProcessIncs::<_, { EDGE_KIND_MATURE }>::new(incs));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
+                _,
+                { EDGE_KIND_MATURE },
+            >::new(
+                incs
+            ));
         }
     }
 

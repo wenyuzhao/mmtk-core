@@ -277,14 +277,6 @@ impl WorkBucketStage {
     pub const RCFullHeapRelease: Self = Self::Compact;
     #[cfg(feature = "instrumentation")]
     pub const RCProcessDecs: Self = Self::RefForwarding;
-
-    pub const fn rc_process_incs_stage() -> Self {
-        if crate::args::EAGER_INCREMENTS && !crate::args::BARRIER_MEASUREMENT {
-            WorkBucketStage::Unconstrained
-        } else {
-            WorkBucketStage::RCProcessIncs
-        }
-    }
 }
 
 pub const LAST_CLOSURE_BUCKET: WorkBucketStage = WorkBucketStage::PhantomRefClosure;

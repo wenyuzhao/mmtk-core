@@ -107,7 +107,7 @@ pub trait Collection<VM: VMBinding> {
     fn process_final_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {}
     fn process_phantom_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {}
 
-    fn update_weak_processor() {}
+    fn update_weak_processor(_lxr: bool) {}
 
     fn set_concurrent_marking_state(_active: bool) {}
 }

@@ -307,6 +307,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        VM::VMCollection::update_weak_processor(true);
         let pause = self.current_pause().unwrap();
         self.common.release(
             tls,

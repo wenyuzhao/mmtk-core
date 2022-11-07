@@ -138,21 +138,26 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         depth: usize,
     ) {
         if los {
-            let start = side_metadata::address_to_meta_address(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                o.to_address(),
-            )
-            .to_mut_ptr::<u8>();
-            let limit = side_metadata::address_to_meta_address(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                (o.to_address() + o.get_size::<VM>()).align_up(64),
-            )
-            .to_mut_ptr::<u8>();
-            let bytes = unsafe { limit.offset_from(start) as usize };
-            unsafe {
-                std::ptr::write_bytes(start, 0xffu8, bytes);
+            if !VM::VMScanning::is_val_array(o) {
+                let start = side_metadata::address_to_meta_address(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                    o.to_address(),
+                )
+                .to_mut_ptr::<u8>();
+                let limit = side_metadata::address_to_meta_address(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                    (o.to_address() + o.get_size::<VM>()).align_up(64),
+                )
+                .to_mut_ptr::<u8>();
+                let bytes = unsafe { limit.offset_from(start) as usize };
+                unsafe {
+                    std::ptr::write_bytes(start, 0xffu8, bytes);
+                }
+            } else {
+                o.to_address().unlog_non_atomic::<VM>();
+                (o.to_address() + 8usize).unlog_non_atomic::<VM>();
             }
-        } else if in_place_promotion {
+        } else if in_place_promotion && !VM::VMScanning::is_val_array(o) {
             let size = o.get_size::<VM>();
             let end = o.to_address() + size;
             let aligned_end = end.align_down(64);
@@ -176,7 +181,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor += 8usize;
             }
         };
-        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 1024 {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
@@ -186,7 +191,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
-            self.worker().scheduler().work_buckets[WorkBucketStage::RCProcessIncs]
+            self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
             let discovery =
@@ -464,7 +469,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
                 if crate::args::LOG_PER_GC_STATE {
-                    println!(" - no evac");
+                    println!(
+                        " - no evac over_space={} over_time={}",
+                        over_space, over_time
+                    );
                 }
             }
         }
@@ -809,13 +817,8 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
             let roots = std::mem::take(&mut self.edges);
-            let w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
-            // if crate::args::LAZY_DECREMENTS {
-            //     GCWork::do_work(&mut w, self.worker(), self.mmtk())
-            // } else {
-            let bucket = WorkBucketStage::rc_process_incs_stage();
-            self.worker().add_work(bucket, w);
-            // }
+            let mut w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
+            GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }
 

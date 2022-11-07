@@ -131,7 +131,7 @@ pub static MAX_PAUSE_MILLIS: Lazy<Option<usize>> = Lazy::new(|| {
 pub static MAX_COPY_SIZE: Lazy<usize> = Lazy::new(|| {
     env::var("MAX_COPY_SIZE")
         .map(|x| x.parse().unwrap())
-        .unwrap_or(2048)
+        .unwrap_or(512)
 });
 
 pub static CM_STOP_BLOCKS: Lazy<usize> = Lazy::new(|| {

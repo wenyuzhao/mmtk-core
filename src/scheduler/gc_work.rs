@@ -126,6 +126,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.release(worker.tls);
 
+        if mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_none() {
+            <C::VM as VMBinding>::VMCollection::update_weak_processor(false);
+        }
+
         if !plan_mut.no_mutator_prepare_release() {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Release]

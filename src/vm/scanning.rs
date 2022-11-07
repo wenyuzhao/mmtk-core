@@ -153,6 +153,11 @@ pub trait Scanning<VM: VMBinding> {
         unreachable!()
     }
 
+    #[inline(always)]
+    fn is_val_array(_o: ObjectReference) -> bool {
+        unreachable!()
+    }
+
     /// MMTk calls this method at the first time during a collection that thread's stacks
     /// have been scanned. This can be used (for example) to clean up
     /// obsolete compiled methods that are no longer being executed.
