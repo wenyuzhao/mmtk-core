@@ -98,7 +98,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         });
         if !los {
-            if !copied {
+            if !copied && Block::containing::<VM>(o).get_state() == BlockState::Nursery {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self::promote::<VM>(o);
