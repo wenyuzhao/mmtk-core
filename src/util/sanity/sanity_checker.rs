@@ -235,6 +235,8 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         nodes: Vec<ObjectReference>,
         roots: bool,
     ) -> Self::ScanObjectsWorkType {
-        ScanObjects::<Self>::new(nodes, false, roots)
+        let mut x = ScanObjects::<Self>::new(nodes, false, roots);
+        x.discovery = true;
+        x
     }
 }
