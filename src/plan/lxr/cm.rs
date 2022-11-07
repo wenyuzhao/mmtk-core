@@ -356,8 +356,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 
     #[inline(always)]
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
-        ScanObjects::<Self>::new(nodes, false, roots)
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
+        unreachable!()
     }
 }
 
@@ -383,7 +383,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 worker,
             )
         } else {
-            self.lxr.los().trace_object(&mut self.nodes, object)
+            self.lxr.los().trace_object(self, object)
         };
         if self.roots {
             self.forwarded_roots.push(x)
