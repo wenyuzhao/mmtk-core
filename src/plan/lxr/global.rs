@@ -743,7 +743,25 @@ impl<VM: VMBinding> LXR<VM> {
         pause
     }
 
+    fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, rc_pause: bool) {
+        if rc_pause {
+            scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
+        }
+        scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
+        if rc_pause {
+            scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
+        }
+        scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
+    }
+
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        self.disable_unnecessary_buckets(scheduler, true);
         #[allow(clippy::collapsible_if)]
         if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
         {
@@ -765,6 +783,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        self.disable_unnecessary_buckets(scheduler, true);
         Self::process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
@@ -775,6 +794,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        self.disable_unnecessary_buckets(scheduler, false);
         if self.concurrent_marking_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
@@ -795,6 +815,7 @@ impl<VM: VMBinding> LXR<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
+        self.disable_unnecessary_buckets(scheduler, false);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         Self::process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);

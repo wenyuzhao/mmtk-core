@@ -44,6 +44,7 @@ impl<VM: VMBinding> BucketQueue<VM> {
 }
 
 pub struct WorkBucket<VM: VMBinding> {
+    disable: AtomicBool,
     active: AtomicBool,
     queue: BucketQueue<VM>,
     prioritized_queue: Option<BucketQueue<VM>>,
@@ -59,6 +60,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         group: Arc<WorkerGroup<VM>>,
     ) -> Self {
         Self {
+            disable: AtomicBool::new(false),
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
             prioritized_queue: None,
@@ -66,6 +68,21 @@ impl<VM: VMBinding> WorkBucket<VM> {
             can_open: None,
             group,
         }
+    }
+
+    #[inline(always)]
+    pub fn set_as_enabled(&self) {
+        self.disable.store(false, Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    pub fn set_as_disabled(&self) {
+        self.disable.store(true, Ordering::SeqCst)
+    }
+
+    #[inline(always)]
+    pub fn disabled(&self) -> bool {
+        self.disable.load(Ordering::Relaxed)
     }
 
     pub fn enable_prioritized_queue(&mut self) {
@@ -140,6 +157,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Test if the bucket is drained
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
+        if self.disabled() {
+            return true;
+        }
         self.queue.is_empty()
             && self
                 .prioritized_queue
@@ -163,6 +183,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Panic if this bucket cannot receive prioritized packets.
     #[inline(always)]
     pub fn add_prioritized(&self, work: Box<dyn GCWork<VM>>) {
+        debug_assert!(!self.disabled());
         self.prioritized_queue.as_ref().unwrap().push(work);
         self.notify_one_worker();
     }
@@ -170,6 +191,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Add a work packet to this bucket
     #[inline(always)]
     pub fn add<W: GCWork<VM>>(&self, work: W) {
+        debug_assert!(!self.disabled());
         self.queue.push(Box::new(work));
         self.notify_one_worker();
     }
@@ -177,6 +199,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Add a work packet to this bucket
     #[inline(always)]
     pub fn add_boxed(&self, work: Box<dyn GCWork<VM>>) {
+        debug_assert!(!self.disabled());
         self.queue.push(work);
         self.notify_one_worker();
     }
@@ -185,6 +208,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Panic if this bucket cannot receive prioritized packets.
     #[inline(always)]
     pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+        debug_assert!(!self.disabled());
         self.prioritized_queue.as_ref().unwrap().push_all(work_vec);
         if self.is_activated() {
             self.notify_all_workers();
@@ -194,6 +218,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Add multiple packets
     #[inline(always)]
     pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+        debug_assert!(!self.disabled());
         if work_vec.is_empty() {
             return;
         }
@@ -206,6 +231,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Get a work packet from this bucket
     #[inline(always)]
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
+        debug_assert!(!self.disabled());
         if !self.is_activated() || self.is_empty() {
             return Steal::Empty;
         }

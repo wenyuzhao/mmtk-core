@@ -52,6 +52,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(super) pending_coordinator_packets: AtomicUsize,
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
+    bucket_update_progress: AtomicUsize,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -134,6 +135,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             in_gc_pause: AtomicBool::new(false),
             pending_coordinator_packets: AtomicUsize::new(0),
             affinity,
+            bucket_update_progress: AtomicUsize::new(0),
         })
     }
 
@@ -380,7 +382,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
             "GCWorker attempted to open buckets when there are pending coordinator work packets"
         );
-        buckets.iter().all(|&b| self.work_buckets[b].is_drained())
+        buckets
+            .iter()
+            .all(|&b| self.work_buckets[b].is_drained() || self.work_buckets[b].disabled())
     }
 
     pub fn on_closure_end(&self, f: Box<dyn Send + Fn() -> bool>) {
@@ -424,12 +428,18 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     fn update_buckets(&self) -> bool {
         let mut buckets_updated = false;
         let mut new_packets = false;
-        for i in 0..WorkBucketStage::LENGTH {
+        let start_index = self.bucket_update_progress.load(Ordering::SeqCst) + 1;
+        let mut new_progress = WorkBucketStage::LENGTH;
+        for i in start_index..WorkBucketStage::LENGTH {
             let id = WorkBucketStage::from_usize(i);
             if id == WorkBucketStage::Unconstrained {
                 continue;
             }
+
             let bucket = &self.work_buckets[id];
+            if bucket.disabled() || bucket.is_activated() {
+                continue;
+            }
             let bucket_opened = bucket.update(self);
             if (crate::args::LOG_STAGES || cfg!(feature = "pause_time")) && bucket_opened {
                 unsafe {
@@ -466,9 +476,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 new_packets = new_packets || !bucket.is_drained();
                 // Quit the loop. There'are already new packets in the newly opened buckets.
                 if new_packets {
+                    new_progress = i;
                     break;
                 }
             }
+        }
+        if buckets_updated && new_packets {
+            self.bucket_update_progress
+                .store(new_progress, Ordering::SeqCst);
+        } else {
+            self.bucket_update_progress.store(0, Ordering::SeqCst);
         }
         buckets_updated && new_packets
     }
@@ -477,8 +494,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets.iter().for_each(|(id, bkt)| {
             if id != WorkBucketStage::Unconstrained {
                 bkt.deactivate();
+                bkt.set_as_enabled();
             }
         });
+        self.bucket_update_progress.store(0, Ordering::SeqCst);
     }
 
     pub fn reset_state(&self) {
@@ -486,8 +505,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets.iter().for_each(|(id, bkt)| {
             if id != WorkBucketStage::Unconstrained && id != first_stw_stage {
                 bkt.deactivate();
+                bkt.set_as_enabled();
             }
         });
+        self.bucket_update_progress.store(0, Ordering::SeqCst);
     }
 
     pub fn debug_assert_all_buckets_deactivated(&self) {
@@ -538,6 +559,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         // Try get a packet from a work bucket.
         for work_bucket in self.work_buckets.values() {
+            if work_bucket.disabled() {
+                continue;
+            }
             match work_bucket.poll(&worker.local_work_buffer) {
                 Steal::Success(w) => return Steal::Success(w),
                 Steal::Retry => should_retry = true,
