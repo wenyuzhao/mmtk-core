@@ -66,6 +66,7 @@ log_gc = []
 log_stages = ["log_gc"]
 log_work_packets = ["log_stages"]
 no_meta_counting = []
+field_barrier_validation = []
 
 # IX Features
 ix_block_only = []

@@ -80,6 +80,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub remset: RemSet<VM>,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
+    pub is_end_of_satb: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -90,6 +91,9 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
+            if self.is_end_of_satb {
+                return self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
+            }
             return crate::util::rc::count(object) > 0
                 || ForwardingWord::is_forwarded::<VM>(object);
         }
@@ -322,6 +326,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             remset: RemSet::new(),
             cm_enabled: false,
             rc_enabled,
+            is_end_of_satb: false,
         }
     }
 
@@ -539,6 +544,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         blocks.clear();
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
+            self.is_end_of_satb = true;
         }
     }
 
@@ -550,6 +556,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.scheduler().process_lazy_decrement_packets();
         }
         rc::reset_inc_buffer_size();
+        self.is_end_of_satb = false;
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {

@@ -392,6 +392,9 @@ impl Block {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             );
         }
+        if space.rc_enabled && !reuse {
+            self.clear_in_place_promoted();
+        }
         if !copy && reuse {
             self.set_state(BlockState::Reusing);
             if space.rc_enabled {
@@ -626,11 +629,13 @@ impl Block {
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
         if is_in_place_promoted {
+            debug_assert!(!self.rc_dead());
             self.set_state(BlockState::Reusable {
                 unavailable_lines: 1 as _,
             });
             space.reusable_blocks.push(*self);
         } else {
+            debug_assert!(self.rc_dead());
             space.release_block(*self, true, false);
         }
     }

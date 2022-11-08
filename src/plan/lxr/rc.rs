@@ -157,7 +157,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 o.to_address().unlog_non_atomic::<VM>();
                 (o.to_address() + 8usize).unlog_non_atomic::<VM>();
             }
-        } else if in_place_promotion && !VM::VMScanning::is_val_array(o) {
+        } else if in_place_promotion {
             let size = o.get_size::<VM>();
             let end = o.to_address() + size;
             let aligned_end = end.align_down(64);
@@ -198,15 +198,20 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark;
             o.iterate_fields::<VM, _>(discovery, |edge| {
                 let target = edge.load();
+                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                 if !target.is_null() {
                     if !self::rc_stick(target) {
+                        // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
                         self.new_incs.push(edge);
                         if self.new_incs.is_full() {
                             self.flush()
                         }
                     } else {
+                        super::record_edge_for_validation(edge, target);
                         self.record_mature_evac_remset(edge, target, false);
                     }
+                } else {
+                    super::record_edge_for_validation(edge, target);
                 }
             });
         }
@@ -340,7 +345,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
-            _ => return None,
+            _ => {
+                super::record_edge_for_validation(e, ObjectReference::NULL);
+                return None;
+            }
         };
         // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
         o.verify();
@@ -353,11 +361,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             self.record_mature_evac_remset(e, o, false);
         }
         if new != o {
-            // println!(" -- inc {:?}: {:?} => {:?} rc={}", e, o, new, count(new));
+            // println!(
+            //     " -- inc {:?}: {:?} => {:?} rc={} {:?}",
+            //     e,
+            //     o,
+            //     new.range::<VM>(),
+            //     count(new),
+            //     K
+            // );
             e.store(new)
         } else {
-            // println!(" -- inc {:?}: {:?} rc={}", e, o, count(o));
+            // println!(
+            //     " -- inc {:?}: {:?} rc={} {:?}",
+            //     e,
+            //     o.range::<VM>(),
+            //     count(o),
+            //     K
+            // );
         }
+        super::record_edge_for_validation(e, new);
         Some(new)
     }
 
@@ -688,7 +710,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             o.iterate_fields::<VM, _>(false, |edge| {
                 let x = edge.load();
                 if !x.is_null() {
-                    // println!(" -- rec dead {:?}.{:?} -> {:?}", o, edge, x);
+                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
                     let rc = self::count(x);
                     if rc != MAX_REF_COUNT && rc != 0 {
                         self.recursive_dec(x);

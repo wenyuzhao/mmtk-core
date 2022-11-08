@@ -355,6 +355,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         }
     }
 
+    #[inline]
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
+        let new_object = self.trace_object(object);
+        if Self::OVERWRITE_REFERENCE {
+            slot.store(new_object);
+        }
+        super::record_edge_for_validation(slot, new_object);
+    }
+
     #[inline(always)]
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
@@ -395,6 +405,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     fn process_mark_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
         let new_object = self.trace_and_mark_object(object);
+        super::record_edge_for_validation(slot, new_object);
         if Self::OVERWRITE_REFERENCE {
             unsafe { slot.store(new_object) };
         }

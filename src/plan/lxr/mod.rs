@@ -7,7 +7,9 @@ pub(super) mod mutator;
 pub mod rc;
 mod remset;
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 pub use self::global::LXR;
@@ -18,7 +20,9 @@ use atomic::Atomic;
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 
+use crate::util::Address;
 use crate::util::ObjectReference;
+use crate::vm::edge_shape::Edge;
 
 const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
@@ -141,5 +145,19 @@ impl MatureLivePredictor {
         // println!("predict {}", next);
         // crate::add_mature_reclaim(live_pages, prev);
         self.live_pages.store(next, Ordering::Relaxed);
+    }
+}
+
+lazy_static! {
+    static ref LAST_REFERENTS: Mutex<HashMap<Address, ObjectReference>> = Default::default();
+}
+
+#[inline(always)]
+pub fn record_edge_for_validation(slot: impl Edge, obj: ObjectReference) {
+    if cfg!(feature = "field_barrier_validation") {
+        LAST_REFERENTS
+            .lock()
+            .unwrap()
+            .insert(slot.to_address(), obj);
     }
 }

@@ -93,6 +93,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     ) {
     }
 
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {}
+
     /// Subsuming barrier for array copy
     fn memory_region_copy(&mut self, src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         self.memory_region_copy_pre(src.clone(), dst.clone());
@@ -150,6 +152,8 @@ pub trait BarrierSemantics: 'static + Send {
 
     /// load referent from java.lang.Reference
     fn load_reference(&mut self, _referent: ObjectReference) {}
+
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -254,6 +258,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
 
     fn load_reference(&mut self, o: ObjectReference) {
         self.semantics.load_reference(o)
+    }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        self.semantics.object_reference_clone_pre(obj);
     }
 
     fn object_reference_write_pre(

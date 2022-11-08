@@ -130,12 +130,40 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     #[inline(always)]
     fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
-        #[cfg(any(feature = "sanity", debug_assertions))]
+        #[cfg(any(
+            feature = "sanity",
+            feature = "field_barrier_validation",
+            debug_assertions
+        ))]
         assert!(
             old.is_null() || crate::util::rc::count(old) != 0,
-            "zero rc count {:?}",
+            "zero rc count {:?} -> {:?}",
+            edge,
             old
         );
+        if cfg!(feature = "field_barrier_validation") {
+            let o = super::LAST_REFERENTS
+                .lock()
+                .unwrap()
+                .get(&edge.to_address())
+                .cloned()
+                .expect(&format!("Unknown edge {:?} -> {:?}", edge, old));
+            if old != o {
+                println!("barrier {:?} old={:?}", edge, old);
+                {
+                    let _g = super::LAST_REFERENTS.lock();
+                    println!("{:?} {}", old, VM::VMObjectModel::dump_object_s(old));
+                    println!("{:?} {}", _src, VM::VMObjectModel::dump_object_s(_src));
+                }
+                assert!(
+                    old == o,
+                    "Untracked old referent {:?} -> {:?} should be {:?}  ",
+                    edge,
+                    old,
+                    o,
+                )
+            }
+        }
         // Concurrent Marking
         // if !crate::args::REF_COUNT && self.lxr.concurrent_marking_in_progress() {
         //     self.edges.push(edge);
@@ -250,11 +278,11 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
 
     fn object_reference_write_slow(
         &mut self,
-        _src: ObjectReference,
+        src: ObjectReference,
         slot: VM::VMEdge,
-        _target: ObjectReference,
+        target: ObjectReference,
     ) {
-        self.enqueue_node(ObjectReference::NULL, slot, None);
+        self.enqueue_node(src, slot, Some(target));
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
@@ -268,5 +296,11 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         if self.refs.is_full() {
             self.flush_weak_refs();
         }
+    }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        obj.iterate_fields::<VM, _>(false, |e| {
+            self.enqueue_node(obj, e, None);
+        })
     }
 }
