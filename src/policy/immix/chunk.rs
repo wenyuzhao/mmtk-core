@@ -60,7 +60,7 @@ impl Chunk {
     }
 
     #[inline(always)]
-    pub fn committed_blocks(&self) -> impl Iterator<Item = Block> {
+    pub fn allocated_blocks(&self) -> impl Iterator<Item = Block> {
         self.blocks()
             .filter(|block| block.get_state() != BlockState::Unallocated)
     }
@@ -75,7 +75,7 @@ impl Chunk {
         // number of allocated blocks.
         let mut allocated_blocks = 0;
         // Iterate over all allocated blocks in this chunk.
-        for block in self.committed_blocks() {
+        for block in self.allocated_blocks() {
             if !block.sweep(space, mark_histogram, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
@@ -425,7 +425,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.lxr = lxr;
         let immix_space = &lxr.immix_space;
-        for block in self.chunk.committed_blocks() {
+        for block in self.chunk.allocated_blocks() {
             if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
                 continue;
             } else {

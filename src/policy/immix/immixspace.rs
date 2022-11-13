@@ -1222,7 +1222,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let mut blocks = vec![];
         // Iterate over all blocks in this chunk
-        for block in self.chunk.committed_blocks() {
+        for block in self.chunk.allocated_blocks() {
             let state = block.get_state();
             // Skip unallocated blocks.
             if state == BlockState::Unallocated

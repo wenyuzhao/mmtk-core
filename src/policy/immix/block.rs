@@ -109,14 +109,7 @@ impl From<Block> for Address {
 
 impl Region for Block {
     #[cfg(not(feature = "immix_smaller_block"))]
-    const LOG_BYTES: usize = 15;
-    #[cfg(feature = "immix_smaller_block")]
-    const LOG_BYTES: usize = 13;
-}
-
-impl Block {
-    /// Log bytes in block
-    pub const LOG_BYTES: usize = {
+    const LOG_BYTES: usize = {
         if cfg!(feature = "lxr_block_16k") {
             14
         } else if cfg!(feature = "lxr_block_32k") {
@@ -135,6 +128,13 @@ impl Block {
             15
         }
     };
+    #[cfg(feature = "immix_smaller_block")]
+    const LOG_BYTES: usize = 13;
+}
+
+impl Block {
+    /// Log bytes in block
+    pub const LOG_BYTES: usize = <Self as Region>::LOG_BYTES;
     /// Bytes in block
     pub const BYTES: usize = 1 << Self::LOG_BYTES;
     /// Log pages in block
@@ -392,27 +392,30 @@ impl Block {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
             );
         }
-        if space.rc_enabled && !reuse {
-            self.clear_in_place_promoted();
-        }
-        if !copy && reuse {
-            self.set_state(BlockState::Reusing);
-            if space.rc_enabled {
-                debug_assert!(!self.is_defrag_source());
+        if space.rc_enabled {
+            if !reuse {
+                self.clear_in_place_promoted();
             }
-        } else if copy {
-            if reuse {
+            if !copy && reuse {
+                self.set_state(BlockState::Reusing);
                 debug_assert!(!self.is_defrag_source());
-            }
-            self.set_state(if space.rc_enabled {
-                BlockState::Unmarked
+            } else if copy {
+                if reuse {
+                    debug_assert!(!self.is_defrag_source());
+                }
+                self.set_state(BlockState::Unmarked);
+                self.set_as_defrag_source(false);
             } else {
-                BlockState::Marked
-            });
-            self.set_as_defrag_source(false);
+                self.set_state(BlockState::Nursery);
+                self.set_as_defrag_source(false);
+            }
         } else {
-            self.set_state(BlockState::Nursery);
-            self.set_as_defrag_source(false);
+            self.set_state(if copy {
+                BlockState::Marked
+            } else {
+                BlockState::Unmarked
+            });
+            Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
         }
     }
 
@@ -425,8 +428,8 @@ impl Block {
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::bzero_alloc_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
-        self.set_as_defrag_source(false);
         if space.rc_enabled {
+            self.set_as_defrag_source(false);
             Line::update_validity(self.lines());
         }
     }
@@ -574,11 +577,11 @@ impl Block {
                     space.release_block(*self, false, false);
                     true
                 }
-                BlockState::Nursery | BlockState::Marked | BlockState::Reusing => {
+                BlockState::Marked => {
                     // The block is live.
                     false
                 }
-                BlockState::Reusable { .. } => unreachable!(),
+                _ => unreachable!(),
             }
         } else {
             // Calculate number of marked lines and holes.

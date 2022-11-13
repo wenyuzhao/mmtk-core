@@ -113,10 +113,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     /// Acquire a clean block from ImmixSpace for allocation.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_once", self.tls);
-        self.retry = true;
-        let result = self.alloc(size, align, offset);
-        self.retry = false;
-        result
+        self.acquire_clean_block(size, align, offset)
     }
 
     /// This is called when precise stress is used. We try use the thread local buffer for
@@ -185,11 +182,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let end = start + size;
         if end > self.large_limit {
             self.request_for_large = true;
-            let rtn = if self.retry {
-                self.acquire_clean_block(size, align, offset)
-            } else {
-                self.alloc_slow_inline(size, align, offset)
-            };
+            let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
             rtn
         } else {
@@ -205,8 +198,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         trace!("{:?}: alloc_slow_hot", self.tls);
         if self.acquire_recyclable_lines(size, align, offset) {
             self.alloc(size, align, offset)
-        } else if self.retry {
-            self.acquire_clean_block(size, align, offset)
         } else {
             self.alloc_slow_inline(size, align, offset)
         }
@@ -258,11 +249,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-                if !self.copy {
+                if !self.copy && self.immix_space().rc_enabled {
                     self.mutator_recycled_blocks.push(block);
-                    // if self.mutator_recycled_blocks.len() >= ResetMutatorRecycledBlocks::CAPACITY {
-                    // self.flush();
-                    // }
                 }
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());

@@ -233,7 +233,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let block = if lock_free {
             self.alloc_clean_block(tls)?
         } else {
-            let block_address = self.space().acquire(tls, Block::PAGES);
+            let block_address = self.space().acquire_no_lock(tls, Block::PAGES);
             if block_address.is_zero() {
                 return None;
             }
