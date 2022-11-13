@@ -206,6 +206,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         trace!("stop_all_mutators start");
         mmtk.plan.base().prepare_for_stack_scanning();
         <E::VM as VMBinding>::VMCollection::stop_all_mutators(worker.tls, |mutator| {
+            mutator.flush();
             mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
                 .add(ScanStackRoot::<E>(mutator));
         });
