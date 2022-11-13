@@ -37,7 +37,7 @@ pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = cfg!(feature = "ix_block_only");
 /// Opportunistic copying
-pub const DEFRAG: bool = cfg!(feature = "ix_defrag");
+pub const DEFRAG: bool = cfg!(feature = "ix_no_defrag");
 /// Mark lines when scanning objects. Otherwise, do it at mark time.
 pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
@@ -198,7 +198,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("barrier_measurement");
     dump_feature!("instrumentation");
     dump_feature!("ix_block_only");
-    dump_feature!("ix_defrag");
+    dump_feature!("ix_no_defrag");
     dump_feature!("ix_ref_count");
     dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
     dump_feature!("lxr_delayed_nursery_evacuation");

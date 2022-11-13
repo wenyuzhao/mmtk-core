@@ -70,7 +70,7 @@ field_barrier_validation = []
 
 # IX Features
 ix_block_only = []
-ix_defrag = []
+ix_no_defrag = []
 
 # LXR Paraleters
 lxr_los_16k = []

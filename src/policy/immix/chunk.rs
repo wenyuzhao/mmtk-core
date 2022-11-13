@@ -220,9 +220,8 @@ impl ChunkMap {
         space: &'static ImmixSpace<VM>,
         rc: bool,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        if !rc {
-            space.defrag.mark_histograms.lock().clear();
-        }
+        assert!(!rc);
+        space.defrag.mark_histograms.lock().clear();
         let epilogue = Arc::new(FlushPageResource {
             space,
             counter: AtomicUsize::new(0),
@@ -231,7 +230,6 @@ impl ChunkMap {
             Box::new(SweepChunk {
                 space,
                 chunk,
-                nursery_only: rc,
                 epilogue: epilogue.clone(),
             })
         });
@@ -318,7 +316,6 @@ impl Default for ChunkMap {
 struct SweepChunk<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     chunk: Chunk,
-    nursery_only: bool,
     /// A destructor invoked when all `SweepChunk` packets are finished.
     epilogue: Arc<FlushPageResource<VM>>,
 }
@@ -326,16 +323,12 @@ struct SweepChunk<VM: VMBinding> {
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        if self.nursery_only {
-            unreachable!()
-        } else {
-            let mut histogram = self.space.defrag.new_histogram();
-            if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
-                self.chunk.sweep(self.space, &mut histogram);
-            }
-            if super::DEFRAG {
-                self.space.defrag.add_completed_mark_histogram(histogram);
-            }
+        let mut histogram = self.space.defrag.new_histogram();
+        if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
+            self.chunk.sweep(self.space, &mut histogram);
+        }
+        if super::DEFRAG {
+            self.space.defrag.add_completed_mark_histogram(histogram);
         }
         self.epilogue.finish_one_work_packet();
     }
@@ -464,7 +457,7 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
     }
 }
 
-/// Flush page resource of the immix space when destructing.
+/// Count number of remaining work pacets, and flush page resource if all packets are finished.
 struct FlushPageResource<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     counter: AtomicUsize,
