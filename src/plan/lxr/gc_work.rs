@@ -1,7 +1,7 @@
 use super::cm::LXRWeakRefProcessEdges;
 use super::LXR;
-use crate::scheduler::gc_work::*;
-use crate::vm::*;
+use crate::scheduler::{gc_work::*, GCWork, GCWorker};
+use crate::{vm::*, Plan, MMTK};
 
 pub(in crate::plan) type TraceKind = u8;
 pub(in crate::plan) const TRACE_KIND_DEFAULT: TraceKind = 0;
@@ -20,4 +20,14 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for LXRWeakRefWorkContext<VM
     type VM = VM;
     type PlanType = LXR<VM>;
     type ProcessEdgesWorkType = LXRWeakRefProcessEdges<VM>;
+}
+
+pub struct FastRCPrepare;
+
+impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = unsafe { &mut *(lxr as *const LXR<VM> as *mut LXR<VM>) };
+        lxr.prepare(worker.tls)
+    }
 }

@@ -6,6 +6,7 @@ use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
 use crate::plan::immix::Pause;
+use crate::plan::lxr::gc_work::FastRCPrepare;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
@@ -743,8 +744,11 @@ impl<VM: VMBinding> LXR<VM> {
         pause
     }
 
-    fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, rc_pause: bool) {
-        if rc_pause {
+    fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
+        if pause == Pause::RefCount {
+            scheduler.work_buckets[WorkBucketStage::Prepare].set_as_disabled();
+        }
+        if pause == Pause::RefCount || pause == Pause::InitialMark {
             scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
@@ -753,7 +757,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
-        if rc_pause {
+        if pause == Pause::RefCount || pause == Pause::InitialMark {
             scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
         }
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
@@ -761,7 +765,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        self.disable_unnecessary_buckets(scheduler, true);
+        self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
         #[allow(clippy::collapsible_if)]
         if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
         {
@@ -775,15 +779,14 @@ impl<VM: VMBinding> LXR<VM> {
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+        scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        self.disable_unnecessary_buckets(scheduler, true);
+        self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         Self::process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
@@ -794,7 +797,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        self.disable_unnecessary_buckets(scheduler, false);
+        self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
         if self.concurrent_marking_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
@@ -815,7 +818,7 @@ impl<VM: VMBinding> LXR<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
-        self.disable_unnecessary_buckets(scheduler, false);
+        self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         Self::process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
