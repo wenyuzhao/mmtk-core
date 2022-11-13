@@ -37,7 +37,7 @@ pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = cfg!(feature = "ix_block_only");
 /// Opportunistic copying
-pub const DEFRAG: bool = cfg!(feature = "ix_no_defrag");
+pub const DEFRAG: bool = !cfg!(feature = "ix_no_defrag");
 /// Mark lines when scanning objects. Otherwise, do it at mark time.
 pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
