@@ -70,7 +70,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn reset_and_generate_nursery_sweep_tasks(
         &mut self,
         _num_workers: usize,
-    ) -> (Vec<Box<dyn GCWork<VM>>>, usize) {
+    ) -> Vec<Box<dyn GCWork<VM>>> {
         let _guard = self.refill_lock.lock().unwrap();
         let blocks = self.cursor.load(Ordering::SeqCst);
         let high_water = self.high_water.load(Ordering::SeqCst);
@@ -106,7 +106,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }));
         self.high_water.store(0, Ordering::SeqCst);
         self.cursor.store(0, Ordering::SeqCst);
-        (packets, blocks)
+        packets
     }
 
     fn space(&self) -> &'static ImmixSpace<VM> {

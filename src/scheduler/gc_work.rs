@@ -222,7 +222,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
             );
         }
         mmtk.plan.gc_pause_start(&mmtk.scheduler);
-        mmtk.scheduler.notify_mutators_paused(mmtk);
         if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
             // Prepare mutators if necessary
             // FIXME: This test is probably redundant. JikesRVM requires to call `prepare_mutator` once after mutators are paused
@@ -248,6 +247,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         }
         let factory = ProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
         <E::VM as VMBinding>::VMScanning::scan_vm_specific_roots(worker.tls, factory);
+        mmtk.scheduler.notify_mutators_paused(mmtk);
     }
 }
 

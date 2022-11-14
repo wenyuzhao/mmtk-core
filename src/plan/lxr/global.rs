@@ -357,11 +357,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let me = unsafe { &mut *(self as *const _ as *mut Self) };
         me.immix_space.rc_eager_prepare(pause);
 
-        scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
-        if pause == Pause::RefCount {
-            // scheduler.work_buckets[WorkBucketStage::Initial].activate();
+        if !scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].is_empty()
+            || scheduler.worker_group.parked_workers() < scheduler.worker_group.worker_count() - 1
+        {
+            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
+            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
         }
-        scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
 
         if pause == Pause::FinalMark {
             self.set_concurrent_marking_state(false);
