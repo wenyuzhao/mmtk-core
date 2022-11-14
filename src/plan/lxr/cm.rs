@@ -492,7 +492,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                 worker,
             )
         } else {
-            self.lxr.los().trace_object(&mut self.nodes, object)
+            self.lxr.los().trace_object(self, object)
         }
     }
 
