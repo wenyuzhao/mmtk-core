@@ -239,10 +239,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
             Block::from(block_address)
         };
-        if self.space().common().zeroed {
-            crate::util::memory::zero(block.start(), Block::BYTES);
-        }
         self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
+        if self.space().common().zeroed && !copy {
+            crate::util::memory::zero_w(block.start(), Block::BYTES);
+        }
         Some(block)
     }
 

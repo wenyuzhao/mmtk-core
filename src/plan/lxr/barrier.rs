@@ -87,6 +87,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
                 return true;
             }
             // Failed to lock the edge. Spin.
+            std::hint::spin_loop();
         }
     }
 

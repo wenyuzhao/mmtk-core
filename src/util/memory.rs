@@ -16,6 +16,11 @@ pub fn zero(start: Address, len: usize) {
     unsafe { std::ptr::write_bytes::<u8>(start.to_mut_ptr(), 0, len) }
 }
 
+#[inline(always)]
+pub fn zero_w(start: Address, len: usize) {
+    unsafe { std::ptr::write_bytes::<u128>(start.to_mut_ptr(), 0, len >> 4) }
+}
+
 /// Demand-zero mmap:
 /// This function mmaps the memory and guarantees to zero all mapped memory.
 /// This function WILL overwrite existing memory mapping. The user of this function
