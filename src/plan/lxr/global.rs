@@ -751,11 +751,11 @@ impl<VM: VMBinding> LXR<VM> {
         }
         if pause == Pause::RefCount || pause == Pause::InitialMark {
             scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
-            scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
         }
+        scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
         if pause == Pause::RefCount || pause == Pause::InitialMark {

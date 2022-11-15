@@ -2,10 +2,8 @@ use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
     args::LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE,
     policy::space::Space,
-    scheduler::{GCWork, GCWorker},
     util::{VMMutatorThread, VMThread},
     vm::*,
-    MMTK,
 };
 use atomic::{Atomic, Ordering};
 use spin::Lazy;
@@ -22,6 +20,7 @@ pub struct BlockAllocation<VM: VMBinding> {
     buffer: Vec<Atomic<Block>>,
     pub refill_lock: Mutex<()>,
     refill_count: usize,
+    previously_allocated_nursery_blocks: AtomicUsize,
 }
 
 impl<VM: VMBinding> BlockAllocation<VM> {
@@ -35,6 +34,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 .map(|_| Atomic::new(Block::ZERO))
                 .collect(),
             refill_count: *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE, // num_cpus::get(),
+            previously_allocated_nursery_blocks: AtomicUsize::new(0),
         }
     }
 
@@ -52,61 +52,34 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.space = Some(space);
     }
 
-    /// Reset allocated_block_buffer and free everything in clean_block_buffer.
-    pub fn reset(&mut self) {
+    /// Reset allocated_block_buffer and free nursery blocks.
+    pub fn sweep_and_reset(&mut self) {
         let _guard = self.refill_lock.lock().unwrap();
-        let cursor = self.cursor.load(Ordering::SeqCst);
-        let high_water = self.high_water.load(Ordering::SeqCst);
-        for i in cursor..high_water {
-            self.space()
-                .pr
-                .release_block(self.buffer[i].load(Ordering::SeqCst))
+        let space = self.space();
+        // Sweep nursery blocks
+        let limit = self
+            .previously_allocated_nursery_blocks
+            .load(Ordering::SeqCst);
+        for block in &self.buffer[0..limit] {
+            let block = block.load(Ordering::Relaxed);
+            block.rc_sweep_nursery(space)
         }
-        self.high_water.store(0, Ordering::SeqCst);
+        // Sweep unused pre-allocated blocks
+        let cursor = self.cursor.load(Ordering::Relaxed);
+        let high_water = self.high_water.load(Ordering::Relaxed);
+        for block in &self.buffer[cursor..high_water] {
+            space.pr.release_block(block.load(Ordering::Relaxed))
+        }
+        self.high_water.store(0, Ordering::Relaxed);
         self.cursor.store(0, Ordering::SeqCst);
     }
 
-    /// Drain allocated_block_buffer and free everything in clean_block_buffer.
-    pub fn reset_and_generate_nursery_sweep_tasks(
-        &mut self,
-        _num_workers: usize,
-    ) -> Vec<Box<dyn GCWork<VM>>> {
+    /// Notify a GC pahse has started
+    pub fn notify_mutator_phase_end(&mut self) {
         let _guard = self.refill_lock.lock().unwrap();
-        let blocks = self.cursor.load(Ordering::SeqCst);
-        let high_water = self.high_water.load(Ordering::SeqCst);
-        let num_bins = 1;
-        let bin_cap = blocks / num_bins + if blocks % num_bins == 0 { 0 } else { 1 };
-        let mut bins = (0..num_bins)
-            .map(|_| Vec::with_capacity(bin_cap))
-            .collect::<Vec<Vec<Block>>>();
-        'out: for i in 0..num_bins {
-            for j in 0..bin_cap {
-                let index = i * bin_cap + j;
-                if index < blocks {
-                    bins[i].push(self.buffer[index].load(Ordering::SeqCst));
-                } else {
-                    break 'out;
-                }
-            }
-        }
-        let space = self.space();
-        let mut packets: Vec<Box<dyn GCWork<VM>>> = bins
-            .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
-                Box::new(RCSweepNurseryBlocks { space, blocks })
-            })
-            .collect();
-        let mut unallocated_nursery_blocks = Vec::with_capacity(high_water - blocks);
-        for i in blocks..high_water {
-            unallocated_nursery_blocks.push(self.buffer[i].load(Ordering::Relaxed));
-        }
-        packets.push(Box::new(RCReleaseUnallocatedNurseryBlocks {
-            space,
-            blocks: unallocated_nursery_blocks,
-        }));
-        self.high_water.store(0, Ordering::SeqCst);
-        self.cursor.store(0, Ordering::SeqCst);
-        packets
+        let cursor = self.cursor.load(Ordering::SeqCst);
+        self.previously_allocated_nursery_blocks
+            .store(cursor, Ordering::SeqCst);
     }
 
     fn space(&self) -> &'static ImmixSpace<VM> {
@@ -276,37 +249,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             } else {
                 return None;
             }
-        }
-    }
-}
-
-pub struct RCSweepNurseryBlocks<VM: VMBinding> {
-    pub space: &'static ImmixSpace<VM>,
-    pub blocks: Vec<Block>,
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks<VM> {
-    #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        for block in &self.blocks {
-            block.rc_sweep_nursery(self.space)
-        }
-    }
-}
-
-struct RCReleaseUnallocatedNurseryBlocks<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
-    blocks: Vec<Block>,
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCReleaseUnallocatedNurseryBlocks<VM> {
-    #[inline]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        if self.blocks.is_empty() {
-            return;
-        }
-        for block in &self.blocks {
-            self.space.pr.release_block(*block);
         }
     }
 }

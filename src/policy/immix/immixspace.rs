@@ -443,20 +443,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
-        let num_workers = self.scheduler().worker_group.worker_count();
-        let stw_packets = self
-            .block_allocation
-            .reset_and_generate_nursery_sweep_tasks(num_workers);
-        // If there are not too much nursery blocks for release, we
-        // reclain mature blocks as well.
-        if crate::args::NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY {
-            unimplemented!()
-        }
-        if pause == Pause::FinalMark {
-            self.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(stw_packets);
-        } else {
-            self.scheduler().work_buckets[WorkBucketStage::RCReleaseNursery].bulk_add(stw_packets);
-        }
+        self.block_allocation.notify_mutator_phase_end();
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
             // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -526,7 +513,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn release_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        self.block_allocation.reset();
+        self.block_allocation.sweep_and_reset();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
@@ -565,7 +552,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn prepare(&mut self, major_gc: bool, initial_mark_pause: bool) {
         self.initial_mark_pause = initial_mark_pause;
         debug_assert!(!self.rc_enabled);
-        self.block_allocation.reset();
+        // self.block_allocation.reset();
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -607,7 +594,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Return whether this GC was a defrag GC, as a plan may want to know this.
     pub fn release(&mut self, major_gc: bool) -> bool {
         debug_assert!(!self.rc_enabled);
-        self.block_allocation.reset();
+        // self.block_allocation.reset();
         let did_defrag = self.defrag.in_defrag();
         if major_gc {
             // Update line_unavail_state for hole searching afte this GC.
@@ -1065,7 +1052,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
-        if Line::steps_between(&start, &end).unwrap() < crate::args::MIN_REUSE_LINES {
+        if Line::steps_between(&start, &end).unwrap() < crate::args::MIN_REUSE_LINES && !copy {
             if end == block.end_line() {
                 return None;
             } else {
