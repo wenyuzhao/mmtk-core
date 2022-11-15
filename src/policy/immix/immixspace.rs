@@ -1065,6 +1065,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
+        if Line::steps_between(&start, &end).unwrap() < crate::args::MIN_REUSE_LINES {
+            if end == block.end_line() {
+                return None;
+            } else {
+                return self.rc_get_next_available_lines(copy, end);
+            };
+        }
         if self.common.needs_log_bit {
             if !copy {
                 Line::clear_log_table::<VM>(start..end);
@@ -1118,6 +1125,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             cursor += 1;
         }
         let end = search_start.next_nth(cursor - start_cursor);
+        if Line::steps_between(&start, &end).unwrap() < crate::args::MIN_REUSE_LINES {
+            if end == block.end_line() {
+                return None;
+            } else {
+                return self.normal_get_next_available_lines(end);
+            };
+        }
         if self.common.needs_log_bit {
             Line::clear_log_table::<VM>(start..end);
         }

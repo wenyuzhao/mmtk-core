@@ -139,6 +139,7 @@ pub static CM_STOP_BLOCKS: Lazy<usize> = Lazy::new(|| {
         .map(|x| x.parse().unwrap())
         .unwrap_or(128)
 });
+pub const MIN_REUSE_LINES: usize = 16;
 
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");

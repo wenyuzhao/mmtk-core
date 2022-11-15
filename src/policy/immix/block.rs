@@ -62,12 +62,8 @@ impl From<BlockState> for u8 {
             BlockState::Nursery => BlockState::MARK_NURSERY,
             BlockState::Reusing => BlockState::MARK_REUSING,
             BlockState::Reusable { unavailable_lines } => {
-                debug_assert_ne!(unavailable_lines, BlockState::MARK_UNALLOCATED);
-                debug_assert_ne!(unavailable_lines, BlockState::MARK_UNMARKED);
-                debug_assert_ne!(unavailable_lines, BlockState::MARK_MARKED);
-                debug_assert_ne!(unavailable_lines, BlockState::MARK_NURSERY);
-                debug_assert_ne!(unavailable_lines, BlockState::MARK_REUSING);
-                unavailable_lines
+                assert_ne!(unavailable_lines, 0);
+                u8::min(unavailable_lines, u8::MAX - 4)
             }
         }
     }
@@ -125,7 +121,7 @@ impl Region for Block {
         } else if cfg!(feature = "lxr_block_1m") {
             20
         } else {
-            15
+            17
         }
     };
     #[cfg(feature = "immix_smaller_block")]
@@ -611,7 +607,7 @@ impl Block {
                 if marked_lines != Block::LINES {
                     // There are holes. Mark the block as reusable.
                     self.set_state(BlockState::Reusable {
-                        unavailable_lines: marked_lines as _,
+                        unavailable_lines: usize::min(marked_lines, u8::MAX as usize) as _,
                     });
                     space.reusable_blocks.push(*self)
                 } else {
@@ -693,7 +689,7 @@ impl Block {
                         None
                     } else {
                         Some(BlockState::Reusable {
-                            unavailable_lines: holes as _,
+                            unavailable_lines: usize::min(holes, u8::MAX as usize) as _,
                         })
                     }
                 })
@@ -715,18 +711,21 @@ impl Block {
     #[inline(always)]
     pub fn has_holes(&self) -> bool {
         let rc_array = RCArray::of(*self);
-        let mut find_free_line = false;
+        let mut found_free_line = false;
+        let mut free_lines = 0;
         for i in 0..Self::LINES {
             if rc_array.is_dead(i) {
-                if i == 0 {
-                    return true;
-                } else if !find_free_line {
-                    find_free_line = true;
-                } else {
+                if i == 0 || found_free_line {
+                    free_lines += 1
+                } else if !found_free_line {
+                    found_free_line = true;
+                }
+                if free_lines >= crate::args::MIN_REUSE_LINES {
                     return true;
                 }
             } else {
-                find_free_line = false;
+                free_lines = 0;
+                found_free_line = false;
             }
         }
         false
@@ -779,7 +778,9 @@ impl Block {
         let mut cursor = 0;
         while let Some(end) = search_next_hole(cursor) {
             cursor = end;
-            holes += 1;
+            if end - cursor >= crate::args::MIN_REUSE_LINES {
+                holes += 1;
+            }
         }
         holes
     }
