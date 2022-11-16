@@ -121,7 +121,11 @@ impl Region for Block {
         } else if cfg!(feature = "lxr_block_1m") {
             20
         } else {
-            15
+            if cfg!(feature = "large_tlab") {
+                17
+            } else {
+                15
+            }
         }
     };
     #[cfg(feature = "immix_smaller_block")]
