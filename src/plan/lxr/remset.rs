@@ -17,8 +17,7 @@ pub struct RemSet<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> RemSet<VM> {
-    pub fn new() -> Self {
-        let workers = *crate::CALC_WORKERS;
+    pub fn new(workers: usize) -> Self {
         let mut rs = RemSet { gc_buffers: vec![] };
         rs.gc_buffers
             .resize_with(workers, || UnsafeCell::new(vec![]));

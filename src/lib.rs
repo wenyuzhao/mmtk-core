@@ -533,13 +533,3 @@ static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 pub fn gc_worker_id() -> Option<usize> {
     crate::scheduler::current_worker_ordinal()
 }
-
-static CALC_WORKERS: spin::Lazy<usize> = spin::Lazy::new(|| {
-    if cfg!(feature = "single_worker") {
-        return 1;
-    }
-    if let Some(n) = option_env!("MMTK_THREADS") {
-        return n.parse().unwrap();
-    }
-    num_cpus::get()
-});
