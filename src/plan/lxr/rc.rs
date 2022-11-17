@@ -308,9 +308,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 new
             } else {
                 // Object is not moved.
+                let r = self::inc(o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
-                let _ = self::inc(o);
-                self.promote(o, false, los, depth);
+                if let Ok(0) = r {
+                    self.promote(o, false, los, depth);
+                }
                 o
             }
         }
