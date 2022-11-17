@@ -103,9 +103,9 @@ impl<VM: VMBinding> GCController<VM> {
     /// Coordinate workers to perform GC in response to a GC request.
     pub fn do_gc_until_completion(&mut self) {
         self.scheduler.in_gc_pause.store(true, Ordering::SeqCst);
-        if !crate::LazySweepingJobs::all_finished() {
-            self.scheduler.work_buckets[WorkBucketStage::Unconstrained].force_notify_all_workers();
-        }
+        // if !crate::LazySweepingJobs::all_finished() {
+        //     self.scheduler.work_buckets[WorkBucketStage::Unconstrained].force_notify_all_workers();
+        // }
 
         // Schedule collection.
         ScheduleCollection.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);

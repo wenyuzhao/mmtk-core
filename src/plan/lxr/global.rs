@@ -344,7 +344,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         &self.common
     }
 
-    fn gc_pause_start(&self, scheduler: &GCWorkScheduler<VM>) {
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
         self.immix_space.flush_page_resource();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
@@ -356,13 +356,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(SystemTime::now(), Ordering::SeqCst);
         let me = unsafe { &mut *(self as *const _ as *mut Self) };
         me.immix_space.rc_eager_prepare(pause);
-
-        if !scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].is_empty()
-            || scheduler.worker_group.parked_workers() < scheduler.worker_group.worker_count() - 1
-        {
-            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].activate();
-            scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].notify_all_workers();
-        }
 
         if pause == Pause::FinalMark {
             self.set_concurrent_marking_state(false);

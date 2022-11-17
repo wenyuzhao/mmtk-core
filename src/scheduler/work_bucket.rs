@@ -118,7 +118,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
         // Notify one if there're any parked workers.
         if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
+            // let _guard = self.monitor.0.lock().unwrap();
             self.monitor.1.notify_one()
         }
     }
@@ -126,7 +126,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     #[inline(always)]
     pub fn force_notify_all_workers(&self) {
         if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
+            // let _guard = self.monitor.0.lock().unwrap();
             self.monitor.1.notify_all()
         }
     }
@@ -139,7 +139,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
         // Notify all if there're any parked workers.
         if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
+            // let _guard = self.monitor.0.lock().unwrap();
             self.monitor.1.notify_all()
         }
     }

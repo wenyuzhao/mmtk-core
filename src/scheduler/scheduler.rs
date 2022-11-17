@@ -708,9 +708,28 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
         mmtk.plan.base().gc_requester.clear_request();
         let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
-        // debug_assert!(!first_stw_bucket.is_activated());
         first_stw_bucket.activate();
+        if first_stw_bucket.is_empty() {
+            let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
+            second_stw_bucket.activate();
+            unsafe {
+                if crate::args::LOG_STAGES {
+                    let since_prev_stage = LAST_ACTIVATE_TIME
+                        .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
+                        .elapsed()
+                        .unwrap()
+                        .as_nanos();
+                    println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                    crate::gc_trigger_time() as f64 / 1000000f64,
+                    WorkBucketStage::from_usize(2), since_prev_stage,
+                    crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                    crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                );
+                }
+            }
+        }
         let _guard = self.worker_monitor.0.lock().unwrap();
+        // println!("Notify ALL 3");
         self.worker_monitor.1.notify_all();
     }
 }
