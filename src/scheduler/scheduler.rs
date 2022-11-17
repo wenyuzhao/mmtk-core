@@ -559,9 +559,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         // Try get a packet from a work bucket.
         for work_bucket in self.work_buckets.values() {
-            if work_bucket.disabled() {
-                continue;
-            }
             match work_bucket.poll(&worker.local_work_buffer) {
                 Steal::Success(w) => return Steal::Success(w),
                 Steal::Retry => should_retry = true,

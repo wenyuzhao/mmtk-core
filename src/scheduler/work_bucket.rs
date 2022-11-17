@@ -231,8 +231,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// Get a work packet from this bucket
     #[inline(always)]
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
-        debug_assert!(!self.disabled());
-        if !self.is_activated() || self.is_empty() {
+        if self.disabled() || !self.is_activated() || self.is_empty() {
             return Steal::Empty;
         }
         if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {

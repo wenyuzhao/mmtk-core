@@ -6,7 +6,6 @@
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
-use super::work_bucket::*;
 use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
 use crate::scheduler::CoordinatorMessage;
