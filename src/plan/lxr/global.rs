@@ -751,11 +751,12 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
-        if pause == Pause::RefCount || pause == Pause::InitialMark {
-            scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
-        }
+        scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
+        if crate::args::LAZY_DECREMENTS {
+            scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
+        }
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -802,7 +803,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
-        scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
+        scheduler.work_buckets[WorkBucketStage::Release].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
@@ -822,7 +823,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::RCFullHeapRelease].add(MatureSweeping);
+        scheduler.work_buckets[WorkBucketStage::Release].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
@@ -845,7 +846,7 @@ impl<VM: VMBinding> LXR<VM> {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
             scheduler.postpone_all_prioritized(work_packets);
         } else {
-            scheduler.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(work_packets);
+            scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(work_packets);
         }
     }
 

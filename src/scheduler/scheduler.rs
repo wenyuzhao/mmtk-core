@@ -84,6 +84,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             WorkBucketStage::FinalizableForwarding => WorkBucket::new(false, worker_monitor.clone(), worker_group.clone()),
             WorkBucketStage::Compact => WorkBucket::new(false, worker_monitor.clone(), worker_group.clone()),
             WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone(), worker_group.clone()),
+            WorkBucketStage::STWRCDecsAndSweep => WorkBucket::new(false, worker_monitor.clone(), worker_group.clone()),
             WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone(), worker_group.clone()),
         };
 
@@ -175,7 +176,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         for w in cm_packets {
             postponed_concurrent_work.push(w)
         }
-        self.work_buckets[WorkBucketStage::RCProcessDecs].bulk_add(no_postpone);
+        self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
     }
 
     #[inline]

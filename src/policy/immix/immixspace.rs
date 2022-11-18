@@ -542,9 +542,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {
-                self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease]
+                self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep]
                     .bulk_add(dead_cycle_sweep_packets);
-                self.scheduler().work_buckets[WorkBucketStage::RCFullHeapRelease].add(sweep_los);
+                self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(sweep_los);
             }
         }
     }

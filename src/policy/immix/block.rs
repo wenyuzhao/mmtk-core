@@ -124,7 +124,7 @@ impl Region for Block {
             if cfg!(feature = "large_tlab") {
                 17
             } else {
-                15
+                20
             }
         }
     };
@@ -632,7 +632,7 @@ impl Block {
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
         if is_in_place_promoted {
-            debug_assert!(!self.rc_dead());
+            debug_assert!(!crate::args::LAZY_DECREMENTS || !self.rc_dead());
             self.set_state(BlockState::Reusable {
                 unavailable_lines: 1 as _,
             });

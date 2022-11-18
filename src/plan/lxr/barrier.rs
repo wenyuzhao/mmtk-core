@@ -240,7 +240,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             if crate::args::LAZY_DECREMENTS && !crate::args::BARRIER_MEASUREMENT {
                 self.mmtk.scheduler.postpone_prioritized(w);
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessDecs].add(w);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(w);
             }
         }
     }

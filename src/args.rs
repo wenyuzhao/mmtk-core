@@ -43,7 +43,7 @@ pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 
 // ---------- CM/RC Immix flags ---------- //
 pub const EAGER_INCREMENTS: bool = false;
-pub const LAZY_DECREMENTS: bool = !cfg!(feature = "lxr_no_evac");
+pub const LAZY_DECREMENTS: bool = !cfg!(feature = "lxr_no_lazy");
 pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
 pub const RC_NURSERY_EVACUATION: bool = !cfg!(feature = "lxr_no_nursery_evac");
 pub const RC_MATURE_EVACUATION: bool = !cfg!(feature = "lxr_no_mature_evac");

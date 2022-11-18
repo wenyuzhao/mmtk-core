@@ -279,6 +279,7 @@ pub enum WorkBucketStage {
     FinalizableForwarding,
     Compact,
     Release,
+    STWRCDecsAndSweep,
     Final,
 }
 
@@ -292,16 +293,6 @@ impl WorkBucketStage {
 
     pub const RCProcessIncs: Self = Self::Initial;
     pub const RCEvacuateMature: Self = Self::Closure;
-    pub const RCReleaseNursery: Self = Self::Release;
-    #[cfg(not(feature = "instrumentation"))]
-    pub const RCFullHeapRelease: Self = Self::RefForwarding;
-    #[cfg(not(feature = "instrumentation"))]
-    pub const RCProcessDecs: Self = Self::Release;
-
-    #[cfg(feature = "instrumentation")]
-    pub const RCFullHeapRelease: Self = Self::Compact;
-    #[cfg(feature = "instrumentation")]
-    pub const RCProcessDecs: Self = Self::RefForwarding;
 }
 
 pub const LAST_CLOSURE_BUCKET: WorkBucketStage = WorkBucketStage::PhantomRefClosure;
