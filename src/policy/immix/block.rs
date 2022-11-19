@@ -124,7 +124,7 @@ impl Region for Block {
             if cfg!(feature = "large_tlab") {
                 17
             } else {
-                20
+                15
             }
         }
     };
