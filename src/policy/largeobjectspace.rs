@@ -350,7 +350,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 self.treadmill.copy(cell, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
-                if !self.rc_enabled && nursery_object && self.common.needs_log_bit {
+                if !self.rc_enabled && self.common.needs_log_bit {
                     if self.common.needs_field_log_bit {
                         for i in (0..object.get_size::<VM>()).step_by(8) {
                             let a = object.to_address() + i;

@@ -1,7 +1,6 @@
 use super::barrier::LXRFieldBarrierSemantics;
 use super::LXR;
 use crate::plan::barriers::FieldBarrier;
-use crate::plan::lxr::global::ACTIVE_BARRIER;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
 use crate::plan::mutator_context::Mutator;
@@ -12,7 +11,6 @@ use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
-use crate::BarrierSelector;
 use crate::MMTK;
 use enum_map::EnumMap;
 
@@ -69,11 +67,7 @@ pub fn create_lxr_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
-        barrier: if ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier) {
-            unimplemented!()
-        } else {
-            Box::new(FieldBarrier::new(LXRFieldBarrierSemantics::new(mmtk)))
-        },
+        barrier: Box::new(FieldBarrier::new(LXRFieldBarrierSemantics::new(mmtk))),
         mutator_tls,
         config,
         plan: &*mmtk.plan,

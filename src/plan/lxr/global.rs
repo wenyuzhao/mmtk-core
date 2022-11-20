@@ -74,8 +74,6 @@ pub struct LXR<VM: VMBinding> {
     in_concurrent_marking: AtomicBool,
 }
 
-pub static ACTIVE_BARRIER: BarrierSelector = BarrierSelector::FieldBarrier;
-
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
     moves_objects: true,
     gc_header_bits: 2,
@@ -83,11 +81,9 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     num_specialized_scans: 1,
     /// Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-    barrier: ACTIVE_BARRIER,
-    needs_log_bit: crate::args::BARRIER_MEASUREMENT
-        || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier),
-    needs_field_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::FieldBarrier)
-        || (crate::args::BARRIER_MEASUREMENT && ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)),
+    barrier: BarrierSelector::FieldBarrier,
+    needs_log_bit: true,
+    needs_field_log_bit: true,
     ..PlanConstraints::default()
 });
 
@@ -460,17 +456,11 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Box<Self> {
         let mut heap = HeapMeta::new(&options);
-        let immix_specs = if crate::args::BARRIER_MEASUREMENT
-            || !ACTIVE_BARRIER.equals(BarrierSelector::NoBarrier)
-        {
-            metadata::extract_side_metadata(&[
-                RC_LOCK_BIT_SPEC,
-                MetadataSpec::OnSide(RC_TABLE),
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
-            ])
-        } else {
-            vec![]
-        };
+        let immix_specs = metadata::extract_side_metadata(&[
+            RC_LOCK_BIT_SPEC,
+            MetadataSpec::OnSide(RC_TABLE),
+            *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+        ]);
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let mut immix_space = ImmixSpace::new(
             "immix",
@@ -911,7 +901,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn gc_init(&mut self, options: &Options) {
-        crate::args::validate_features(ACTIVE_BARRIER, options);
+        crate::args::validate_features(BarrierSelector::FieldBarrier, options);
         self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
         self.common.los.rc_enabled = true;
         unsafe {

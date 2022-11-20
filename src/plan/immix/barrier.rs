@@ -1,19 +1,14 @@
 //! Read/Write barrier implementations.
 
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 
 use atomic::Ordering;
 
-use super::LXR;
 use crate::plan::barriers::BarrierSemantics;
 use crate::plan::barriers::LOGGED_VALUE;
-use crate::plan::immix::Pause;
-use crate::plan::lxr::cm::ProcessModBufSATB;
-use crate::plan::lxr::rc::ProcessDecs;
-use crate::plan::lxr::rc::ProcessIncs;
-use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::VectorQueue;
+use crate::scheduler::gc_work::DummyPacket;
+use crate::scheduler::gc_work::UnlogEdges;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
@@ -21,7 +16,6 @@ use crate::util::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::*;
-use crate::LazySweepingJobsCounter;
 use crate::MMTK;
 
 pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
@@ -31,15 +25,14 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub const UNLOCKED_VALUE: u8 = 0b0;
 pub const LOCKED_VALUE: u8 = 0b1;
 
-pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
+pub struct ImmixFakeFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
-    lxr: &'static LXR<VM>,
 }
 
-impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
+impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     const UNLOG_BITS: SideMetadataSpec = *<VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -52,7 +45,6 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             incs: VectorQueue::default(),
             decs: VectorQueue::default(),
             refs: VectorQueue::default(),
-            lxr: mmtk.plan.downcast_ref::<LXR<VM>>().unwrap(),
         }
     }
 
@@ -130,48 +122,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     #[inline(always)]
     fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
-        #[cfg(any(
-            feature = "sanity",
-            feature = "field_barrier_validation",
-            debug_assertions
-        ))]
-        assert!(
-            old.is_null() || crate::util::rc::count(old) != 0,
-            "zero rc count {:?} -> {:?}",
-            edge,
-            old
-        );
-        if cfg!(feature = "field_barrier_validation") {
-            let o = super::LAST_REFERENTS
-                .lock()
-                .unwrap()
-                .get(&edge.to_address())
-                .cloned()
-                .expect(&format!("Unknown edge {:?} -> {:?}", edge, old));
-            if old != o {
-                println!("barrier {:?} old={:?}", edge, old);
-                {
-                    let _g = super::LAST_REFERENTS.lock();
-                    println!("{:?} {}", old, VM::VMObjectModel::dump_object_s(old));
-                    println!("{:?} {}", _src, VM::VMObjectModel::dump_object_s(_src));
-                }
-                assert!(
-                    old == o,
-                    "Untracked old referent {:?} -> {:?} should be {:?}  ",
-                    edge,
-                    old,
-                    o,
-                )
-            }
-        }
-        // Reference counting
         if !old.is_null() {
             self.decs.push(old);
             if self.decs.is_full() {
-                self.flush_decs_and_satb();
+                self.flush_decs();
             }
         }
-        crate::util::rc::inc_inc_buffer_size();
         self.incs.push(edge);
         if self.incs.is_full() {
             self.flush_incs();
@@ -196,65 +152,39 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    #[inline(always)]
-    fn should_create_satb_packets(&self) -> bool {
-        self.lxr.concurrent_marking_enabled()
-            && (self.lxr.concurrent_marking_in_progress()
-                || self.lxr.current_pause() == Some(Pause::FinalMark))
-    }
-
     #[cold]
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
-                _,
-                { EDGE_KIND_MATURE },
-            >::new(
-                incs
-            ));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(UnlogEdges(incs));
         }
     }
 
     #[cold]
-    fn flush_decs_and_satb(&mut self) {
-        if !self.decs.is_empty() {
-            let w = if self.should_create_satb_packets() {
-                let decs = Arc::new(self.decs.take());
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                    .add(ProcessModBufSATB::new_arc(decs.clone()));
-                ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_desc())
-            } else {
-                let decs = self.decs.take();
-                ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc())
-            };
-            if crate::args::LAZY_DECREMENTS {
-                self.mmtk.scheduler.postpone_prioritized(w);
-            } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(w);
-            }
+    fn flush_decs(&mut self) {
+        if !self.refs.is_empty() {
+            let decs = self.decs.take();
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(DummyPacket(decs));
         }
     }
 
     #[cold]
     fn flush_weak_refs(&mut self) {
         if !self.refs.is_empty() {
-            debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                .add(ProcessModBufSATB::new(nodes));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(DummyPacket(nodes));
         }
     }
 }
 
-impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
+impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     type VM = VM;
 
     #[cold]
     fn flush(&mut self) {
         self.flush_weak_refs();
         self.flush_incs();
-        self.flush_decs_and_satb();
+        self.flush_decs();
     }
 
     fn object_reference_write_slow(

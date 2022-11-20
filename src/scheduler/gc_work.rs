@@ -848,21 +848,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     }
 }
 
-pub struct UnlogEdges<VM: VMBinding> {
-    edges: Vec<VM::VMEdge>,
-}
-
-impl<VM: VMBinding> UnlogEdges<VM> {
-    pub fn new(edges: Vec<VM::VMEdge>) -> Self {
-        Self { edges }
-    }
-}
+pub struct UnlogEdges<VM: VMBinding>(pub Vec<VM::VMEdge>);
 
 impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
     #[inline(always)]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        if !self.edges.is_empty() {
-            for edge in &self.edges {
+        if !self.0.is_empty() {
+            for edge in &self.0 {
                 let ptr = address_to_meta_address(
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
                     edge.to_address(),
@@ -873,6 +865,12 @@ impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
             }
         }
     }
+}
+
+pub struct DummyPacket<T: 'static + Send>(pub T);
+
+impl<T: 'static + Send, VM: VMBinding> GCWork<VM> for DummyPacket<T> {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {}
 }
 
 use crate::mmtk::MMTK;

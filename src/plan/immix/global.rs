@@ -17,7 +17,8 @@ use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::options::Options;
-use crate::vm::VMBinding;
+use crate::vm::*;
+use crate::BarrierSelector;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -44,6 +45,15 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     num_specialized_scans: 1,
     /// Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+    needs_log_bit: crate::args::BARRIER_MEASUREMENT,
+    needs_field_log_bit: crate::args::BARRIER_MEASUREMENT,
+    barrier: if crate::args::BARRIER_MEASUREMENT
+        && !cfg!(feature = "barrier_measurement_no_barrier")
+    {
+        BarrierSelector::FieldBarrier
+    } else {
+        BarrierSelector::NoBarrier
+    },
     ..PlanConstraints::default()
 };
 
@@ -141,7 +151,16 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Self {
         let mut heap = HeapMeta::new(&options);
-        let global_metadata_specs = SideMetadataContext::new_global_specs(&[]);
+        let global_metadata_specs = if crate::args::BARRIER_MEASUREMENT {
+            crate::util::metadata::extract_side_metadata(&[
+                crate::util::rc::RC_LOCK_BIT_SPEC,
+                crate::util::metadata::MetadataSpec::OnSide(crate::util::rc::RC_TABLE),
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            ])
+        } else {
+            vec![]
+        };
+        let global_metadata_specs = SideMetadataContext::new_global_specs(&global_metadata_specs);
         let immix = Immix {
             immix_space: ImmixSpace::new(
                 "immix",
