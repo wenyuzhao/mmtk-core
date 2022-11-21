@@ -225,7 +225,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
-        let lower_priority_for_concurrent_work = *crate::args::LOWER_CONCURRENT_GC_THREAD_PRIORITY;
+        let lower_priority_for_concurrent_work = crate::args().lower_concurrent_worker_priority;
         let mut low_priority = false;
         loop {
             let mut work = self.poll();
@@ -261,7 +261,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.ordinal
             < usize::max(
                 1,
-                (self.scheduler().num_workers() * *crate::args::CONCURRENT_GC_THREADS_RATIO / 100)
+                (self.scheduler().num_workers() * crate::args().concurrent_worker_ratio / 100)
                     as usize,
             )
     }

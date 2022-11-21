@@ -1,6 +1,5 @@
 use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
-    args::LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE,
     policy::space::Space,
     util::{VMMutatorThread, VMThread},
     vm::*,
@@ -11,7 +10,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
 static LOCK_FREE_BLOCKS_CAPACITY: Lazy<usize> =
-    Lazy::new(|| usize::max(*LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE << 2, 32768 * 4));
+    Lazy::new(|| usize::max(crate::args().lock_free_blocks << 2, 32768 * 4));
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: Option<&'static ImmixSpace<VM>>,
@@ -33,7 +32,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             buffer: (0..*LOCK_FREE_BLOCKS_CAPACITY)
                 .map(|_| Atomic::new(Block::ZERO))
                 .collect(),
-            refill_count: *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE, // num_cpus::get(),
+            refill_count: crate::args().lock_free_blocks, // num_cpus::get(),
             previously_allocated_nursery_blocks: AtomicUsize::new(0),
         }
     }

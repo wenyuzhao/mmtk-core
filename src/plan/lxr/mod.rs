@@ -71,13 +71,13 @@ impl SurvivalRatioPredictor {
         let prev = self.prev_ratio.load(Ordering::Relaxed);
         let curr = self.promote_vol.load(Ordering::Relaxed) as f64
             / self.alloc_vol.load(Ordering::Relaxed) as f64;
-        let ratio = if *crate::args::SURVIVAL_PREDICTOR_WEIGHTED {
+        let ratio = if crate::args().survival_predictor_weighted {
             if curr > prev {
                 (curr * 3f64 + prev) / 4f64
             } else {
                 (curr + 3f64 * prev) / 4f64
             }
-        } else if *crate::args::SURVIVAL_PREDICTOR_HARMONIC_MEAN {
+        } else if crate::args().survival_predictor_harmonic_mean {
             if curr >= prev {
                 2f64 * curr * prev / (curr + prev)
             } else {

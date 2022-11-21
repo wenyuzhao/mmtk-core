@@ -1,11 +1,88 @@
-use spin::Lazy;
-use std::env;
-
 use crate::{
     policy::immix::{block::Block, line::Line},
     util::{linear_scan::Region, options::Options},
     BarrierSelector,
 };
+use std::fmt::Debug;
+use std::mem::MaybeUninit;
+use std::{env, str::FromStr};
+
+#[derive(Debug)]
+pub(crate) struct RuntimeArgs {
+    pub(crate) incs_limit: Option<usize>,
+    pub(crate) no_mutator_line_recycling: bool,
+    pub(crate) lock_free_blocks: usize,
+    pub(crate) nursery_blocks: Option<usize>,
+    pub(crate) nursery_ratio: Option<usize>,
+    pub(crate) lower_concurrent_worker_priority: bool,
+    pub(crate) concurrent_worker_ratio: usize,
+    pub(crate) concurrent_marking_threshold: usize,
+    #[allow(unused)]
+    pub(crate) max_mature_defrag_percent: usize,
+    pub(crate) max_pause_millis: Option<usize>,
+    pub(crate) max_copy_size: usize,
+    pub(crate) concurrent_marking_stop_blocks: usize,
+    pub(crate) max_survival_mb: Option<usize>,
+    pub(crate) survival_predictor_harmonic_mean: bool,
+    pub(crate) survival_predictor_weighted: bool,
+    pub(crate) trace_threshold: usize,
+}
+
+impl Default for RuntimeArgs {
+    fn default() -> Self {
+        fn env_arg<T: FromStr + Debug>(name: &str) -> Option<T>
+        where
+            T::Err: Debug,
+        {
+            env::var(name).map(|x| T::from_str(&x).unwrap()).ok()
+        }
+        fn env_bool_arg(name: &str) -> Option<bool> {
+            env::var(name)
+                .map(|x| x == "1" || x == "true" || x == "TRUE")
+                .ok()
+        }
+        Self {
+            incs_limit: env_arg("INCS_LIMIT"),
+            no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
+            lock_free_blocks: env_arg("LOCK_FREE_BLOCKS").unwrap_or_else(|| 1 * num_cpus::get()),
+            nursery_blocks: env_arg("NURSERY_BLOCKS"),
+            nursery_ratio: env_arg("NURSERY_RATIO"),
+            lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
+                .unwrap_or(false),
+            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
+            concurrent_marking_threshold: env_arg("CONCURRENT_MARKING_THRESHOLD").unwrap_or(90),
+            max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
+            max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
+            max_copy_size: env_arg("MAX_COPY_SIZE").unwrap_or(512),
+            concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
+            max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB")
+                .map(|x| Some(x))
+                .unwrap_or(Some(128)),
+            survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
+                .unwrap_or(false),
+            survival_predictor_weighted: env_bool_arg("SURVIVAL_PREDICTOR_WEIGHTED")
+                .unwrap_or(true),
+            trace_threshold: env_arg("TRACE_THRESHOLD2")
+                .or_else(|| env_arg("TRACE_THRESHOLD"))
+                .unwrap_or(5),
+        }
+    }
+}
+
+static mut ARGS: MaybeUninit<RuntimeArgs> = MaybeUninit::uninit();
+
+impl RuntimeArgs {
+    pub fn init() {
+        unsafe {
+            ARGS.write(RuntimeArgs::default());
+            println!("{:?}", ARGS);
+        }
+    }
+    #[inline(always)]
+    pub fn get() -> &'static Self {
+        unsafe { &*ARGS.as_ptr() }
+    }
+}
 
 pub const CM_LARGE_ARRAY_OPTIMIZATION: bool = false;
 pub const BUFFER_SIZE: usize = {
@@ -23,14 +100,8 @@ pub const BUFFER_SIZE: usize = {
 };
 
 pub const HEAP_HEALTH_GUIDED_GC: bool = true;
-pub static NO_GC_UNTIL_LAZY_SWEEPING_FINISHED: Lazy<bool> = Lazy::new(|| {
-    env::var("NO_GC_UNTIL_LAZY_SWEEPING_FINISHED").unwrap_or_else(|_| "0".to_string()) != "0"
-});
 pub const HOLE_COUNTING: bool = cfg!(feature = "lxr_hole_counting");
 pub const NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY: bool = false;
-
-pub static INC_BUFFER_LIMIT: Lazy<Option<usize>> =
-    Lazy::new(|| env::var("INCS_LIMIT").map(|x| x.parse().unwrap()).ok());
 
 // ---------- Immix flags ---------- //
 pub const CYCLE_TRIGGER_THRESHOLD: usize = 1024;
@@ -71,74 +142,6 @@ pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = {
 };
 pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
     !cfg!(feature = "lxr_evacuate_nursery_in_recycled_lines");
-pub static DISABLE_MUTATOR_LINE_REUSING: Lazy<bool> =
-    Lazy::new(|| env::var("DISABLE_MUTATOR_LINE_REUSING").is_ok());
-pub static LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE: Lazy<usize> = Lazy::new(|| {
-    env::var("LOCK_FREE_BLOCKS")
-        .map(|x| x.parse().unwrap())
-        .ok()
-        .unwrap_or_else(|| 1 * num_cpus::get())
-});
-pub static NURSERY_BLOCKS: Lazy<Option<usize>> =
-    Lazy::new(|| env::var("NURSERY_BLOCKS").map(|x| x.parse().unwrap()).ok());
-pub static NURSERY_RATIO: Lazy<Option<usize>> =
-    Lazy::new(|| env::var("NURSERY_RATIO").map(|x| x.parse().unwrap()).ok());
-// pub static MIN_NURSERY_BLOCKS: Lazy<usize> = Lazy::new(|| {
-//     env::var("MIN_NURSERY_BLOCKS")
-//         .map(|x| x.parse().unwrap())
-//         .unwrap_or(*LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE)
-// });
-// pub static MAX_NURSERY_BLOCKS: Lazy<Option<usize>> = Lazy::new(|| {
-//     env::var("MAX_NURSERY_BLOCKS")
-//         .map(|x| x.parse().unwrap())
-//         .ok()
-// });
-// pub static INITIAL_NURSERY_BLOCKS: Lazy<usize> =
-//     Lazy::new(|| NURSERY_BLOCKS.unwrap_or((1 << (22 - Block::LOG_BYTES)) * num_cpus::get()));
-// pub static ADAPTIVE_NURSERY_BLOCKS: Lazy<AtomicUsize> =
-//     Lazy::new(|| AtomicUsize::new(*INITIAL_NURSERY_BLOCKS));
-pub static LOWER_CONCURRENT_GC_THREAD_PRIORITY: Lazy<bool> = Lazy::new(|| {
-    env::var("LOWER_CONCURRENT_GC_THREAD_PRIORITY").unwrap_or_else(|_| "0".to_string()) != "0"
-});
-pub static CONCURRENT_GC_THREADS_RATIO: Lazy<usize> = Lazy::new(|| {
-    env::var("CONCURRENT_GC_THREADS_RATIO")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(50)
-});
-pub static CONCURRENT_MARKING_THRESHOLD: Lazy<usize> = Lazy::new(|| {
-    env::var("CONCURRENT_MARKING_THRESHOLD")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(90)
-});
-// Do a tracing GC if the previous pause cannot yield more tnan 20% of clean blocks.
-pub static TRACE_THRESHOLD: Lazy<f32> = Lazy::new(|| {
-    env::var("TRACE_THRESHOLD")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(20f32)
-});
-pub static MAX_MATURE_DEFRAG_PERCENT: Lazy<usize> = Lazy::new(|| {
-    env::var("MAX_MATURE_DEFRAG_PERCENT")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(15)
-});
-
-pub static MAX_PAUSE_MILLIS: Lazy<Option<usize>> = Lazy::new(|| {
-    env::var("MAX_PAUSE_MILLIS")
-        .map(|x| x.parse().unwrap())
-        .ok()
-});
-
-pub static MAX_COPY_SIZE: Lazy<usize> = Lazy::new(|| {
-    env::var("MAX_COPY_SIZE")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(512)
-});
-
-pub static CM_STOP_BLOCKS: Lazy<usize> = Lazy::new(|| {
-    env::var("CM_STOP_BLOCKS")
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(128)
-});
 pub const MIN_REUSE_LINES: usize = if cfg!(feature = "large_tlab") { 16 } else { 1 };
 
 // ---------- Barrier flags ---------- //
@@ -156,29 +159,6 @@ pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 pub const INC_MAX_COPY_DEPTH: bool = false;
 
-pub static MAX_SURVIVAL_MB: Lazy<Option<usize>> = Lazy::new(|| {
-    env::var("MAX_SURVIVAL_MB")
-        .map(|x| x.parse().unwrap())
-        .ok()
-        .or(Some(128))
-});
-
-pub static SURVIVAL_PREDICTOR_HARMONIC_MEAN: Lazy<bool> = Lazy::new(|| {
-    env::var("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
-        .map(|x| x != "0")
-        .unwrap_or(false)
-});
-pub static SURVIVAL_PREDICTOR_WEIGHTED: Lazy<bool> = Lazy::new(|| {
-    env::var("SURVIVAL_PREDICTOR_WEIGHTED")
-        .map(|x| x != "0")
-        .unwrap_or(true)
-});
-pub static TRACE_THRESHOLD2: Lazy<Option<usize>> = Lazy::new(|| {
-    env::var("TRACE_THRESHOLD2")
-        .map(|x| x.parse().unwrap())
-        .ok()
-        .or(Some(5))
-});
 // ---------- Derived flags ---------- //
 pub static IGNORE_REUSING_BLOCKS: bool = true;
 
@@ -195,7 +175,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     println!("-------------------- Immix Args --------------------");
 
     dump_feature!("barrier", format!("{:?}", active_barrier));
-
     dump_feature!("barrier_measurement");
     dump_feature!("instrumentation");
     dump_feature!("ix_block_only");
@@ -204,54 +183,20 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("lxr_enable_initial_alloc_limit");
-
-    dump_feature!(
-        "disable_mutator_line_reusing",
-        *DISABLE_MUTATOR_LINE_REUSING
-    );
-    dump_feature!("lock_free_blocks", *LOCK_FREE_BLOCK_ALLOCATION_BUFFER_SIZE);
-    dump_feature!("nursery_blocks", *NURSERY_BLOCKS);
-    dump_feature!("nursery_ratio", *NURSERY_RATIO);
-    dump_feature!(
-        "low_concurrent_worker_priority",
-        *LOWER_CONCURRENT_GC_THREAD_PRIORITY
-    );
-    dump_feature!("concurrent_worker_ratio", *CONCURRENT_GC_THREADS_RATIO);
-    dump_feature!(
-        "concurrent_marking_threshold",
-        *CONCURRENT_MARKING_THRESHOLD
-    );
     dump_feature!("ignore_reusing_blocks", IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
-    dump_feature!("max_mature_defrag_percent", *MAX_MATURE_DEFRAG_PERCENT);
-    dump_feature!(
-        "no_gc_until_lazy_sweeping_finished",
-        *NO_GC_UNTIL_LAZY_SWEEPING_FINISHED
-    );
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
     dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
-    dump_feature!("max_pause_millis", *MAX_PAUSE_MILLIS);
-    dump_feature!("incs_limit", *INC_BUFFER_LIMIT);
     dump_feature!("lxr_rc_only");
-
-    dump_feature!("lxr_trace_threshold", *TRACE_THRESHOLD);
-
-    dump_feature!("max_survival_mb", *MAX_SURVIVAL_MB);
-    dump_feature!(
-        "survival_predictor_harmonic_mean",
-        *SURVIVAL_PREDICTOR_HARMONIC_MEAN
-    );
-    dump_feature!("survival_predictor_weighted", *SURVIVAL_PREDICTOR_WEIGHTED);
-    dump_feature!("trace_threshold2", *TRACE_THRESHOLD2);
-    dump_feature!("max_copy_size", *MAX_COPY_SIZE);
     dump_feature!("buffer_size", BUFFER_SIZE);
     dump_feature!("nontemporal");
     dump_feature!("cm_large_array_optimization", CM_LARGE_ARRAY_OPTIMIZATION);
     dump_feature!("inc_max_copy_depth", INC_MAX_COPY_DEPTH);
-
     dump_feature!("no_finalizer", *options.no_finalizer);
     dump_feature!("no_reference_types", *options.no_reference_types);
+
+    println!("\n{:#?}", RuntimeArgs::get());
 
     println!("----------------------------------------------------");
 }

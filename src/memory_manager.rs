@@ -99,6 +99,7 @@ pub fn mmtk_init<VM: VMBinding>(builder: &MMTKBuilder) -> Box<MMTK<VM>> {
             }
         }
     }
+    crate::args::RuntimeArgs::init();
     let mmtk = builder.build();
     info!("Initialized MMTk with {:?}", *mmtk.options.plan);
     #[cfg(feature = "extreme_assertions")]

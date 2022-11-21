@@ -251,6 +251,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
+        if crate::args().no_mutator_line_recycling && !self.copy {
+            return false;
+        }
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);

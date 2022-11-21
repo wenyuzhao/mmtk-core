@@ -65,10 +65,7 @@ pub struct LXR<VM: VMBinding> {
     next_gc_may_perform_cycle_collection: AtomicBool,
     last_gc_was_defrag: AtomicBool,
     nursery_blocks: Option<usize>,
-    inc_buffer_limit: Option<usize>,
-    max_survival_mb: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
-    cm_threshold: usize,
     zeroing_packets_scheduled: AtomicBool,
     next_gc_selected: (Mutex<bool>, Condvar),
     in_concurrent_marking: AtomicBool,
@@ -110,7 +107,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        if self
+        if crate::args()
             .max_survival_mb
             .map(|x| {
                 self.immix_space.block_allocation.nursery_mb() as f64
@@ -130,8 +127,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         if crate::args::LXR_RC_ONLY {
-            let inc_overflow = self
-                .inc_buffer_limit
+            let inc_overflow = crate::args()
+                .incs_limit
                 .map(|x| rc::inc_buffer_size() >= x)
                 .unwrap_or(false);
             let alloc_overflow = self
@@ -159,8 +156,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // inc limits
         if !crate::args::LXR_RC_ONLY
             && crate::args::HEAP_HEALTH_GUIDED_GC
-            && self
-                .inc_buffer_limit
+            && crate::args()
+                .incs_limit
                 .map(|x| rc::inc_buffer_size() >= x)
                 .unwrap_or(false)
         {
@@ -183,8 +180,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .nursery_blocks
                 .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
                 .unwrap_or(false)
-                || self
-                    .inc_buffer_limit
+                || crate::args()
+                    .incs_limit
                     .map(|x| rc::inc_buffer_size() >= x)
                     .unwrap_or(false))
         {
@@ -206,7 +203,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             && !self.concurrent_marking_in_progress()
             && self.base().gc_status() == GcStatus::NotInGC
             && self.get_reserved_pages()
-                >= self.get_total_pages() * *crate::args::CONCURRENT_MARKING_THRESHOLD / 100
+                >= self.get_total_pages() * crate::args().concurrent_marking_threshold / 100
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -488,11 +485,8 @@ impl<VM: VMBinding> LXR<VM> {
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
-            nursery_blocks: *crate::args::NURSERY_BLOCKS,
-            inc_buffer_limit: None,
-            max_survival_mb: *crate::args::MAX_SURVIVAL_MB,
+            nursery_blocks: crate::args().nursery_blocks,
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
-            cm_threshold: 0,
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
@@ -550,7 +544,6 @@ impl<VM: VMBinding> LXR<VM> {
             0
         };
         let total_pages = self.get_total_pages();
-        let threshold = crate::args::TRACE_THRESHOLD2.unwrap();
         let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
         // println!(
         //     "garbage {} / {} livemature={} ratio={:.4}",
@@ -560,8 +553,8 @@ impl<VM: VMBinding> LXR<VM> {
         //     (garbage as f64) / (total_pages as f64)
         // );
         if !self.concurrent_marking_in_progress()
-            && garbage * 100 >= threshold as usize * total_pages
-            || available_blocks < *crate::args::CM_STOP_BLOCKS
+            && garbage * 100 >= crate::args().trace_threshold as usize * total_pages
+            || available_blocks < crate::args().concurrent_marking_stop_blocks
         {
             if crate::args::LOG_PER_GC_STATE {
                 println!(
@@ -950,15 +943,11 @@ impl<VM: VMBinding> LXR<VM> {
                 me.decide_next_gc_may_perform_cycle_collection();
             }));
         }
-        if let Some(nursery_ratio) = *crate::args::NURSERY_RATIO {
+        if let Some(nursery_ratio) = crate::args().nursery_ratio {
             let total_blocks = *options.heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
             self.nursery_blocks = Some(nursery_blocks);
         }
-        if let Some(inc_buffer_limit) = *crate::args::INC_BUFFER_LIMIT {
-            self.inc_buffer_limit = Some(inc_buffer_limit);
-        }
-        self.cm_threshold = *crate::args::CONCURRENT_MARKING_THRESHOLD;
     }
 
     fn set_concurrent_marking_state(&self, active: bool) {

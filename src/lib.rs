@@ -533,3 +533,8 @@ static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 pub fn gc_worker_id() -> Option<usize> {
     crate::scheduler::current_worker_ordinal()
 }
+
+#[inline(always)]
+pub(crate) fn args() -> &'static crate::args::RuntimeArgs {
+    crate::args::RuntimeArgs::get()
+}

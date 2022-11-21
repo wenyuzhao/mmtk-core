@@ -33,7 +33,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     concurrent_marking_in_progress: bool,
     no_evac: bool,
     slice: Option<&'static [ObjectReference]>,
-    max_copy: usize,
     depth: usize,
 }
 
@@ -62,7 +61,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: Some(slice),
-            max_copy: *crate::args::MAX_COPY_SIZE,
             depth: 1,
         }
     }
@@ -77,7 +75,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             concurrent_marking_in_progress: false,
             no_evac: false,
             slice: None,
-            max_copy: *crate::args::MAX_COPY_SIZE,
             depth: 1,
         }
     }
@@ -253,7 +250,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        if o.get_size::<VM>() >= self.max_copy {
+        if o.get_size::<VM>() >= crate::args().max_copy_size {
             return true;
         }
         false
@@ -475,7 +472,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
-            let over_time = crate::args::MAX_PAUSE_MILLIS
+            let over_time = crate::args()
+                .max_pause_millis
                 .map(|threshold| {
                     crate::GC_START_TIME
                         .load(Ordering::Relaxed)
