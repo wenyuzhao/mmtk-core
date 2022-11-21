@@ -75,7 +75,6 @@ impl RuntimeArgs {
     pub fn init() {
         unsafe {
             ARGS.write(RuntimeArgs::default());
-            println!("{:?}", ARGS);
         }
     }
     #[inline(always)]
