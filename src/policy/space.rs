@@ -689,15 +689,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // VM.memory.setHeapRange(index, start, start.plus(extent));
         vm_map.insert(start, extent, rtn.descriptor);
 
-        // For contiguous space, we know its address range so we reserve metadata memory for its range.
-        if rtn
-            .metadata
-            .try_map_metadata_address_range(rtn.start, rtn.extent)
-            .is_err()
-        {
-            // TODO(Javad): handle meta space allocation failure
-            panic!("failed to mmap meta memory");
-        }
 
         debug!(
             "Created space {} [{}, {}) for {} bytes",
@@ -713,6 +704,17 @@ impl<VM: VMBinding> CommonSpace<VM> {
     pub fn initialize_sft(&self, sft: &(dyn SFT + Sync + 'static)) {
         // For contiguous space, we eagerly initialize SFT map based on its address range.
         if self.contiguous {
+            // FIXME(wenyuzhao):
+            // Move this if-block from CommonSpace::new to here, to fix the mutator performance
+            // issue on 32-core Zen3 machines (dacapo-evaluation-git-6e411f33, h2o, 7341M heap)
+            if self
+                .metadata
+                .try_map_metadata_address_range(self.start, self.extent)
+                .is_err()
+            {
+                // TODO(Javad): handle meta space allocation failure
+                panic!("failed to mmap meta memory");
+            }
             // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks
             // as new chunks (new_chunks = true). In that case, in grow_space(), we do not set SFT when new_chunks = false.
             // We can fix this by either of these:
