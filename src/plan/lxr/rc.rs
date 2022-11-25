@@ -225,14 +225,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     #[inline(always)]
-    fn process_inc(&mut self, _o: ObjectReference) -> ObjectReference {
-        unreachable!();
-        // let r = self::inc(o);
-        // // println!(" - inc e={:?} {:?} rc: {:?} -> {:?}", _e, o, r, count(o));
-        // if let Ok(0) = r {
-        //     self.promote(o, false, self.immix().los().in_space(o));
-        // }
-        // o
+    fn process_inc(&mut self, o: ObjectReference, depth: usize) -> ObjectReference {
+        if let Ok(0) = self::inc(o) {
+            self.promote(o, false, self.lxr().los().in_space(o), depth);
+        }
+        o
     }
 
     #[inline(always)]
@@ -350,7 +347,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
         o.verify();
         let new = if !crate::args::RC_NURSERY_EVACUATION {
-            self.process_inc(o)
+            self.process_inc(o, depth)
         } else {
             self.process_inc_and_evacuate(o, cc, depth)
         };
