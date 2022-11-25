@@ -121,11 +121,7 @@ impl Region for Block {
         } else if cfg!(feature = "lxr_block_1m") {
             20
         } else {
-            if cfg!(feature = "large_tlab") {
-                17
-            } else {
-                15
-            }
+            15
         }
     };
     #[cfg(feature = "immix_smaller_block")]
@@ -724,7 +720,7 @@ impl Block {
                 } else if !found_free_line {
                     found_free_line = true;
                 }
-                if free_lines >= crate::args::MIN_REUSE_LINES {
+                if free_lines >= crate::args().min_reuse_lines {
                     return true;
                 }
             } else {
@@ -782,7 +778,7 @@ impl Block {
         let mut cursor = 0;
         while let Some(end) = search_next_hole(cursor) {
             cursor = end;
-            if end - cursor >= crate::args::MIN_REUSE_LINES {
+            if end - cursor >= crate::args().min_reuse_lines {
                 holes += 1;
             }
         }

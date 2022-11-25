@@ -1052,7 +1052,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
-        if Line::steps_between(&start, &end).unwrap() < crate::args::MIN_REUSE_LINES && !copy {
+        if Line::steps_between(&start, &end).unwrap() < crate::args().min_reuse_lines {
             if end == block.end_line() {
                 return None;
             } else {
@@ -1112,7 +1112,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             cursor += 1;
         }
         let end = search_start.next_nth(cursor - start_cursor);
-        if Line::steps_between(&start, &end).unwrap() < crate::args::MIN_REUSE_LINES {
+        if Line::steps_between(&start, &end).unwrap() < crate::args().min_reuse_lines {
             if end == block.end_line() {
                 return None;
             } else {

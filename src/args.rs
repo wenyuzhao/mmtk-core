@@ -26,6 +26,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) survival_predictor_harmonic_mean: bool,
     pub(crate) survival_predictor_weighted: bool,
     pub(crate) trace_threshold: usize,
+    pub(crate) min_reuse_lines: usize,
 }
 
 impl Default for RuntimeArgs {
@@ -65,6 +66,7 @@ impl Default for RuntimeArgs {
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .unwrap_or(5),
+            min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
         }
     }
 }
@@ -141,7 +143,6 @@ pub const LOG_BYTES_PER_RC_LOCK_BIT: usize = {
 };
 pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
     !cfg!(feature = "lxr_evacuate_nursery_in_recycled_lines");
-pub const MIN_REUSE_LINES: usize = if cfg!(feature = "large_tlab") { 16 } else { 1 };
 
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");

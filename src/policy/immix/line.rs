@@ -35,7 +35,15 @@ impl From<Line> for Address {
 }
 
 impl Region for Line {
-    const LOG_BYTES: usize = 8;
+    const LOG_BYTES: usize = {
+        if cfg!(feature = "lxr_line_512b") {
+            9
+        } else if cfg!(feature = "lxr_line_1k") {
+            10
+        } else {
+            8
+        }
+    };
 }
 
 #[allow(clippy::assertions_on_constants)]
