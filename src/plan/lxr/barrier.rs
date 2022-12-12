@@ -15,6 +15,8 @@ use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
+use crate::util::address::CLDScanPolicy;
+use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::util::*;
@@ -280,7 +282,10 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _>(false, |e| {
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+            if !e.to_address().is_mapped() {
+                return;
+            }
             self.enqueue_node(obj, e, None);
         })
     }

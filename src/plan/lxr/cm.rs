@@ -2,6 +2,7 @@ use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
+use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::Edge;
@@ -154,7 +155,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            object.iterate_fields::<VM, _>(true, |e| {
+            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
                 let t: ObjectReference = e.load();
                 if t.is_null() || crate::util::rc::count(t) == 0 {
                     return;
@@ -415,7 +416,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
 impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
     #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
-        object.iterate_fields::<VM, _>(true, |e| {
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
                 self.flush();
@@ -514,7 +515,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
     #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
-        object.iterate_fields::<VM, _>(false, |e| {
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
                 self.flush();

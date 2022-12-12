@@ -443,6 +443,21 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let _ = rc::inc(reference);
         let _ = rc::inc(referent);
     }
+
+    fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
+        let pause = self.current_pause().unwrap();
+        pause != Pause::FullTraceFast
+    }
+
+    fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
+        let pause = self.current_pause().unwrap();
+        pause == Pause::InitialMark || pause == Pause::FullTraceFast
+    }
+
+    fn current_gc_should_perform_class_unloading(&self) -> bool {
+        let pause = self.current_pause().unwrap();
+        pause == Pause::FinalMark || pause == Pause::FullTraceFast
+    }
 }
 
 impl<VM: VMBinding> LXR<VM> {

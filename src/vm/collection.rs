@@ -28,15 +28,18 @@ pub trait Collection<VM: VMBinding> {
     ///
     /// Arguments:
     /// * `tls`: The thread pointer for the GC controller/coordinator.
-    fn stop_all_mutators<F>(tls: VMWorkerThread, mutator_visitor: F)
-    where
+    fn stop_all_mutators<F>(
+        tls: VMWorkerThread,
+        mutator_visitor: F,
+        current_gc_should_unload_classes: bool,
+    ) where
         F: FnMut(&'static mut Mutator<VM>);
 
     /// Resume all the mutator threads, the opposite of the above. When a GC is finished, MMTk calls this method.
     ///
     /// Arguments:
     /// * `tls`: The thread pointer for the GC controller/coordinator.
-    fn resume_mutators(tls: VMWorkerThread);
+    fn resume_mutators(tls: VMWorkerThread, lxr: bool, current_gc_should_unload_classes: bool);
 
     /// Block the current thread for GC. This is called when an allocation request cannot be fulfilled and a GC
     /// is needed. MMTk calls this method to inform the VM that the current thread needs to be blocked as a GC

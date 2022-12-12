@@ -50,7 +50,10 @@ impl<VM: VMBinding> RemSet<VM> {
 
     #[inline(always)]
     pub fn record(&self, e: VM::VMEdge, space: &ImmixSpace<VM>) {
-        let v = if space.address_in_space(e.to_address()) {
+        // FIXME: performance?
+        let v = if !e.to_address().is_mapped() {
+            0
+        } else if space.address_in_space(e.to_address()) {
             Line::of(e.to_address()).currrent_validity_state()
         } else {
             LargeObjectSpace::<VM>::currrent_validity_state(e.to_address())

@@ -689,7 +689,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // VM.memory.setHeapRange(index, start, start.plus(extent));
         vm_map.insert(start, extent, rtn.descriptor);
 
-
         debug!(
             "Created space {} [{}, {}) for {} bytes",
             rtn.name,

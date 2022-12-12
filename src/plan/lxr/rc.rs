@@ -5,6 +5,8 @@ use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
 use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::ScanObjects;
+use crate::util::address::CLDScanPolicy;
+use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::rc::*;
@@ -193,24 +195,36 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             let discovery =
                 self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark;
-            o.iterate_fields::<VM, _>(discovery, |edge| {
-                let target = edge.load();
-                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
-                if !target.is_null() {
-                    if !self::rc_stick(target) {
-                        // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                        self.new_incs.push(edge);
-                        if self.new_incs.is_full() {
-                            self.flush()
+            o.iterate_fields::<VM, _>(
+                if self.current_pause != Pause::FullTraceFast {
+                    CLDScanPolicy::Claim
+                } else {
+                    CLDScanPolicy::Follow
+                },
+                if discovery {
+                    RefScanPolicy::Discover
+                } else {
+                    RefScanPolicy::Follow
+                },
+                |edge| {
+                    let target = edge.load();
+                    // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                    if !target.is_null() {
+                        if !self::rc_stick(target) {
+                            // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
+                            self.new_incs.push(edge);
+                            if self.new_incs.is_full() {
+                                self.flush()
+                            }
+                        } else {
+                            super::record_edge_for_validation(edge, target);
+                            self.record_mature_evac_remset(edge, target, false);
                         }
                     } else {
                         super::record_edge_for_validation(edge, target);
-                        self.record_mature_evac_remset(edge, target, false);
                     }
-                } else {
-                    super::record_edge_for_validation(edge, target);
-                }
-            });
+                },
+            );
         }
     }
 
@@ -702,7 +716,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     .bulk_add(packets);
             }
         } else {
-            o.iterate_fields::<VM, _>(false, |edge| {
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
                 let x = edge.load();
                 if !x.is_null() {
                     // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);

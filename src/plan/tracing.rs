@@ -146,6 +146,8 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge)> {
     f: F,
     should_discover_references: bool,
+    should_claim_clds: bool,
+    should_follow_clds: bool,
     _p: PhantomData<VM>,
 }
 
@@ -153,6 +155,14 @@ impl<VM: VMBinding, F: FnMut(VM::VMEdge)> EdgeVisitor<VM::VMEdge> for EdgeIterat
     #[inline(always)]
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
+    }
+    #[inline(always)]
+    fn should_claim_clds(&self) -> bool {
+        self.should_claim_clds
+    }
+    #[inline(always)]
+    fn should_follow_clds(&self) -> bool {
+        self.should_follow_clds
     }
     #[inline(always)]
     fn visit_edge(&mut self, slot: VM::VMEdge) {
@@ -169,11 +179,15 @@ impl<VM: VMBinding> EdgeIterator<VM> {
     pub fn iterate(
         o: ObjectReference,
         should_discover_references: bool,
+        should_claim_clds: bool,
+        should_follow_clds: bool,
         f: impl FnMut(VM::VMEdge),
     ) {
         let mut x = EdgeIteratorImpl::<VM, _> {
             f,
             should_discover_references,
+            should_claim_clds,
+            should_follow_clds,
             _p: PhantomData,
         };
         <VM::VMScanning as Scanning<VM>>::scan_object(

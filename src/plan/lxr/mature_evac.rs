@@ -40,9 +40,11 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     #[inline(always)]
     fn address_is_valid_oop_edge(&self, e: Address, epoch: u8, lxr: &LXR<VM>) -> bool {
-        // Skip edges not in the mmtk heap
+        // Keep edges not in the mmtk heap
+        // These should be edges in the c++ `ClassLoaderData` objects. We remember these edges
+        // in the remembered-set to avoid expensive CLD scanning.
         if !lxr.immix_space.address_in_space(e) && !lxr.los().address_in_space(e) {
-            return false;
+            return true;
         }
         // Skip edges in collection set
         if lxr.address_in_defrag(e) {
@@ -71,7 +73,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     #[inline]
     fn process_edge(&mut self, e: Address, epoch: u8, lxr: &LXR<VM>) -> bool {
-        debug_assert!(e.is_mapped());
         // Skip edges that does not contain a real oop
         if !self.address_is_valid_oop_edge(e, epoch, lxr) {
             return false;

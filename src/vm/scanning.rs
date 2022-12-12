@@ -10,6 +10,14 @@ pub trait EdgeVisitor<ES: Edge> {
     fn should_discover_references(&self) -> bool {
         true
     }
+    #[inline(always)]
+    fn should_follow_clds(&self) -> bool {
+        true
+    }
+    #[inline(always)]
+    fn should_claim_clds(&self) -> bool {
+        true
+    }
     /// Call this function for each edge.
     fn visit_edge(&mut self, edge: ES);
 }

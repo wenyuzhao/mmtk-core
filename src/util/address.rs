@@ -720,9 +720,38 @@ impl ObjectReference {
     }
 
     #[inline(always)]
-    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(self, ref_discovery: bool, f: F) {
-        EdgeIterator::<VM>::iterate(self, ref_discovery, f)
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(
+        self,
+        cld_scan: CLDScanPolicy,
+        ref_scan: RefScanPolicy,
+        f: F,
+    ) {
+        EdgeIterator::<VM>::iterate(
+            self,
+            ref_scan == RefScanPolicy::Discover,
+            cld_scan == CLDScanPolicy::Claim,
+            cld_scan != CLDScanPolicy::Ignore,
+            f,
+        )
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CLDScanPolicy {
+    /// Don't scan CLDs
+    Ignore,
+    /// Scan CLDs
+    Follow,
+    /// Scan and mark CLDs. CLDs that are previously marked will be ignored.
+    Claim,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RefScanPolicy {
+    /// Treat weak or soft edges as strong
+    Follow,
+    /// Perform weak/soft/phantom/final reference discovery
+    Discover,
 }
 
 /// allows print Address as upper-case hex value

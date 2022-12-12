@@ -10,6 +10,8 @@ use crate::plan::VectorQueue;
 use crate::scheduler::gc_work::DummyPacket;
 use crate::scheduler::gc_work::UnlogEdges;
 use crate::scheduler::WorkBucketStage;
+use crate::util::address::CLDScanPolicy;
+use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::util::*;
@@ -210,7 +212,7 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _>(false, |e| {
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
             self.enqueue_node(obj, e, None);
         })
     }

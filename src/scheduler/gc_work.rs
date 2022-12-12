@@ -205,11 +205,16 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
 
         trace!("stop_all_mutators start");
         mmtk.plan.base().prepare_for_stack_scanning();
-        <E::VM as VMBinding>::VMCollection::stop_all_mutators(worker.tls, |mutator| {
-            mutator.flush();
-            mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                .add(ScanStackRoot::<E>(mutator));
-        });
+        <E::VM as VMBinding>::VMCollection::stop_all_mutators(
+            worker.tls,
+            |mutator| {
+                mutator.flush();
+                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    .add(ScanStackRoot::<E>(mutator));
+            },
+            mmtk.get_plan()
+                .current_gc_should_prepare_for_class_unloading(),
+        );
         trace!("stop_all_mutators end");
         if crate::args::LOG_PER_GC_STATE {
             crate::RESERVED_PAGES_AT_GC_START
@@ -259,6 +264,7 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
+        let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)
             .elapsed()
@@ -316,7 +322,12 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         // Reset the triggering information.
         mmtk.plan.base().reset_collection_trigger();
 
-        <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
+        let is_lxr = mmtk.plan.downcast_ref::<LXR<VM>>().is_some();
+        <VM as VMBinding>::VMCollection::resume_mutators(
+            worker.tls,
+            is_lxr,
+            perform_class_unloading,
+        );
     }
 }
 
