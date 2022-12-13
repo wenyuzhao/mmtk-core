@@ -1,10 +1,7 @@
 use super::sft::*;
+use crate::util::heap::layout::vm_layout_constants::VMLayoutConstants;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
-#[cfg(debug_assertions)]
-use crate::util::ObjectReference;
-#[cfg(debug_assertions)]
-use crate::vm::VMBinding;
 
 /// SFTMap manages the SFT table, and mapping between addresses with indices in the table. The trait allows
 /// us to have multiple implementations of the SFT table.
@@ -63,39 +60,37 @@ pub trait SFTMap {
     /// Otherwise, the caller should check with `has_sft_entry()` before calling this method.
     unsafe fn clear(&self, address: Address);
 
-    /// Make sure we have valid SFT entries for the object reference.
-    #[cfg(debug_assertions)]
-    fn assert_valid_entries_for_object<VM: VMBinding>(&self, object: ObjectReference) {
-        use crate::vm::ObjectModel;
-        let object_sft = self.get_checked(object.to_address());
-        let object_start_sft = self.get_checked(VM::VMObjectModel::object_start_ref(object));
+    // Make sure we have valid SFT entries for the object reference.
+    // #[cfg(debug_assertions)]
+    // fn assert_valid_entries_for_object<VM: VMBinding>(&self, object: ObjectReference) {
+    //     use crate::vm::ObjectModel;
+    //     let object_sft = self.get_checked(object.to_address());
+    //     let object_start_sft = self.get_checked(VM::VMObjectModel::object_start_ref(object));
 
-        debug_assert!(
-            object_sft.name() != EMPTY_SFT_NAME,
-            "Object {} has empty SFT",
-            object
-        );
-        debug_assert_eq!(
-            object_sft.name(),
-            object_start_sft.name(),
-            "Object {} has incorrect SFT entries (object start = {}, object = {}).",
-            object,
-            object_start_sft.name(),
-            object_sft.name()
-        );
-    }
+    //     debug_assert!(
+    //         object_sft.name() != EMPTY_SFT_NAME,
+    //         "Object {} has empty SFT",
+    //         object
+    //     );
+    //     debug_assert_eq!(
+    //         object_sft.name(),
+    //         object_start_sft.name(),
+    //         "Object {} has incorrect SFT entries (object start = {}, object = {}).",
+    //         object,
+    //         object_start_sft.name(),
+    //         object_sft.name()
+    //     );
+    // }
 }
 
-cfg_if::cfg_if! {
-    if #[cfg(all(feature = "malloc_mark_sweep", target_pointer_width = "64"))] {
-        // 64-bit malloc mark sweep needs a chunk-based SFT map, but the sparse map is not suitable for 64bits.
-        pub type SFTMapType<'a> = dense_chunk_map::SFTDenseChunkMap<'a>;
-    } else if #[cfg(target_pointer_width = "64")] {
-        pub type SFTMapType<'a> = space_map::SFTSpaceMap<'a>;
-    } else if #[cfg(target_pointer_width = "32")] {
-        pub type SFTMapType<'a> = sparse_chunk_map::SFTSparseChunkMap<'a>;
+pub fn create_sft_map() -> Box<dyn SFTMap> {
+    #[cfg(all(feature = "malloc_mark_sweep", target_pointer_width = "64"))]
+    return Box::new(dense_chunk_map::SFTDenseChunkMap::<'static>::new());
+    #[cfg(target_pointer_width = "64")]
+    if !VMLayoutConstants::get_address_space().pointer_compression() {
+        return Box::new(space_map::SFTSpaceMap::<'static>::new());
     } else {
-        compile_err!("Cannot figure out which SFT map to use.");
+        return Box::new(sparse_chunk_map::SFTSparseChunkMap::<'static>::new());
     }
 }
 
