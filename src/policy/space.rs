@@ -1,4 +1,3 @@
-use crate::plan::VectorObjectQueue;
 use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
 use crate::util::Address;
@@ -13,7 +12,10 @@ use crate::util::conversions;
 use crate::util::opaque_pointer::*;
 
 use crate::mmtk::SFT_MAP;
-use crate::scheduler::GCWorker;
+#[cfg(debug_assertions)]
+use crate::policy::sft::EMPTY_SFT_NAME;
+use crate::policy::sft::SFT;
+use crate::policy::sft_map::SFTMap;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::layout::map::Map;
@@ -21,9 +23,6 @@ use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::HeapMeta;
 use crate::util::memory;
-
-#[cfg(feature = "is_mmtk_object")]
-use crate::util::alloc_bit;
 
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
@@ -198,7 +197,7 @@ const EMPTY_SPACE_SFT: EmptySpaceSFT = EmptySpaceSFT {};
 impl<'a> SFTMap<'a> {
     pub fn new() -> Self {
         SFTMap {
-            sft: vec![&EMPTY_SPACE_SFT; VM_LAYOUT_CONSTANTS.max_chunks()],
+            sft: vec![&EMPTY_SPACE_SFT; MAX_CHUNKS],
         }
     }
     // This is a temporary solution to allow unsafe mut reference. We do not want several occurrence
@@ -211,7 +210,7 @@ impl<'a> SFTMap<'a> {
     }
 
     pub fn get(&self, address: Address) -> &'a dyn SFT {
-        debug_assert!(address.chunk_index() < VM_LAYOUT_CONSTANTS.max_chunks());
+        debug_assert!(address.chunk_index() < MAX_CHUNKS);
         let res = unsafe { *self.sft.get_unchecked(address.chunk_index()) };
         if DEBUG_SFT {
             trace!(
@@ -429,24 +428,41 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         res.new_chunk
                     );
                     let bytes = conversions::pages_to_bytes(res.pages);
-                    self.grow_space(res.start, bytes, res.new_chunk);
 
-                    // Once we finish grow_space, we can drop the lock.
-                    drop(lock);
+                    let map_sidemetadata = || {
+                        // Mmap the pages and the side metadata, and handle error. In case of any error,
+                        // we will either call back to the VM for OOM, or simply panic.
+                        if let Err(mmap_error) = self
+                            .common()
+                            .mmapper
+                            .ensure_mapped(res.start, res.pages)
+                            .and(
+                                self.common()
+                                    .metadata
+                                    .try_map_metadata_space(res.start, bytes),
+                            )
+                        {
+                            memory::handle_mmap_error::<VM>(mmap_error, tls);
+                        }
+                    };
+                    let grow_space = || {
+                        self.grow_space(res.start, bytes, res.new_chunk);
+                    };
 
-                    // Mmap the pages and the side metadata, and handle error. In case of any error,
-                    // we will either call back to the VM for OOM, or simply panic.
-                    if let Err(mmap_error) = self
-                        .common()
-                        .mmapper
-                        .ensure_mapped(res.start, res.pages)
-                        .and(
-                            self.common()
-                                .metadata
-                                .try_map_metadata_space(res.start, bytes),
-                        )
-                    {
-                        memory::handle_mmap_error::<VM>(mmap_error, tls);
+                    // The scope of the lock is important in terms of performance when we have many allocator threads.
+                    if SFT_MAP.get_side_metadata().is_some() {
+                        // If the SFT map uses side metadata, so we have to initialize side metadata first.
+                        map_sidemetadata();
+                        // then grow space, which will use the side metadata we mapped above
+                        grow_space();
+                        // then we can drop the lock after grow_space()
+                        drop(lock);
+                    } else {
+                        // In normal cases, we can drop lock immediately after grow_space()
+                        grow_space();
+                        drop(lock);
+                        // and map side metadata without holding the lock
+                        map_sidemetadata();
                     }
 
                     // TODO: Concurrent zeroing
@@ -458,7 +474,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     {
                         // --- Assert the start of the allocated region ---
                         // The start address SFT should be correct.
-                        debug_assert_eq!(SFT_MAP.get(res.start).name(), self.get_name());
+                        debug_assert_eq!(SFT_MAP.get_checked(res.start).name(), self.get_name());
                         // The start address is in our space.
                         debug_assert!(self.address_in_space(res.start));
                         // The descriptor should be correct.
@@ -470,7 +486,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         // --- Assert the last byte in the allocated region ---
                         let last_byte = res.start + bytes - 1;
                         // The SFT for the last byte in the allocated memory should be correct.
-                        debug_assert_eq!(SFT_MAP.get(last_byte).name(), self.get_name());
+                        debug_assert_eq!(SFT_MAP.get_checked(last_byte).name(), self.get_name());
                         // The last byte in the allocated memory should be in this space.
                         debug_assert!(self.address_in_space(last_byte));
                         // The descriptor for the last byte should be correct.
@@ -536,27 +552,27 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         #[cfg(debug_assertions)]
         if !new_chunk {
             debug_assert!(
-                SFT_MAP.get(start).name() != EMPTY_SFT_NAME,
+                SFT_MAP.get_checked(start).name() != EMPTY_SFT_NAME,
                 "In grow_space(start = {}, bytes = {}, new_chunk = {}), we have empty SFT entries (chunk for {} = {})",
                 start,
                 bytes,
                 new_chunk,
                 start,
-                SFT_MAP.get(start).name()
+                SFT_MAP.get_checked(start).name()
             );
             debug_assert!(
-                SFT_MAP.get(start + bytes - 1).name() != EMPTY_SFT_NAME,
+                SFT_MAP.get_checked(start + bytes - 1).name() != EMPTY_SFT_NAME,
                 "In grow_space(start = {}, bytes = {}, new_chunk = {}), we have empty SFT entries (chunk for {} = {})",
                 start,
                 bytes,
                 new_chunk,
                 start + bytes - 1,
-                SFT_MAP.get(start + bytes - 1).name()
+                SFT_MAP.get_checked(start + bytes - 1).name()
             );
         }
 
         if new_chunk {
-            SFT_MAP.update(self.as_sft(), start, bytes);
+            unsafe { SFT_MAP.update(self.as_sft(), start, bytes) };
         }
     }
 
@@ -826,7 +842,13 @@ impl<VM: VMBinding> CommonSpace<VM> {
     pub fn initialize_sft(&self, sft: &(dyn SFT + Sync + 'static)) {
         // For contiguous space, we eagerly initialize SFT map based on its address range.
         if self.contiguous {
-            SFT_MAP.update(sft, self.start, self.extent);
+            // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks
+            // as new chunks (new_chunks = true). In that case, in grow_space(), we do not set SFT when new_chunks = false.
+            // We can fix this by either of these:
+            // * fix page resource, so it propelry returns new_chunk
+            // * change grow_space() so it sets SFT no matter what the new_chunks value is.
+            // FIXME: eagerly initializing SFT is not a good idea.
+            unsafe { SFT_MAP.eager_initialize(sft, self.start, self.extent) };
         }
     }
 
