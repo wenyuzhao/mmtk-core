@@ -47,19 +47,19 @@ pub struct GenImmix<VM: VMBinding> {
 }
 
 lazy_static! {
-pub static ref GENIMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
-    // The maximum object size that can be allocated without LOS is restricted by the max immix object size.
-    // This might be too restrictive, as our default allocator is bump pointer (nursery allocator) which
-    // can allocate objects larger than max immix object size. However, for copying, we haven't implemented
-    // copying to LOS so we always copy from nursery to the mature immix space. In this case, we should not
-    // allocate objects larger than the max immix object size to nursery as well.
-    // TODO: We may want to fix this, as this possibly has negative performance impact.
-    max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
-        crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-        crate::plan::generational::GEN_CONSTRAINTS.max_non_los_default_alloc_bytes,
-    ),
-    ..*crate::plan::generational::GEN_CONSTRAINTS
-};
+    pub static ref GENIMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
+        // The maximum object size that can be allocated without LOS is restricted by the max immix object size.
+        // This might be too restrictive, as our default allocator is bump pointer (nursery allocator) which
+        // can allocate objects larger than max immix object size. However, for copying, we haven't implemented
+        // copying to LOS so we always copy from nursery to the mature immix space. In this case, we should not
+        // allocate objects larger than the max immix object size to nursery as well.
+        // TODO: We may want to fix this, as this possibly has negative performance impact.
+        max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
+            crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+            crate::plan::generational::GEN_CONSTRAINTS.max_non_los_default_alloc_bytes,
+        ),
+        ..*crate::plan::generational::GEN_CONSTRAINTS
+    };
 }
 
 impl<VM: VMBinding> Plan for GenImmix<VM> {

@@ -240,7 +240,6 @@ impl Map64 {
             return None;
         }
         Some(addr >> VM_LAYOUT_CONSTANTS.space_shift_64)
-        // Some((addr - HEAP_START) >> SPACE_SHIFT_64)
     }
 
     fn is_space_start(base: Address) -> bool {

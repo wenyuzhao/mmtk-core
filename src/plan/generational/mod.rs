@@ -41,20 +41,20 @@ pub const ACTIVE_BARRIER: BarrierSelector = BarrierSelector::ObjectBarrier;
 pub const FULL_NURSERY_GC: bool = false;
 
 lazy_static! {
-/// Constraints for generational plans. Each generational plan should overwrite based on this constant.
-pub static ref GEN_CONSTRAINTS: PlanConstraints = PlanConstraints {
-    moves_objects: true,
-    gc_header_bits: 2,
-    gc_header_words: 0,
-    num_specialized_scans: 1,
-    needs_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier),
-    barrier: ACTIVE_BARRIER,
-    max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
-        crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
-        *crate::util::options::NURSERY_SIZE,
-    ),
-    ..PlanConstraints::default()
-};
+    /// Constraints for generational plans. Each generational plan should overwrite based on this constant.
+    pub static ref GEN_CONSTRAINTS: PlanConstraints = PlanConstraints {
+        moves_objects: true,
+        gc_header_bits: 2,
+        gc_header_words: 0,
+        num_specialized_scans: 1,
+        needs_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier),
+        barrier: ACTIVE_BARRIER,
+        max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
+            crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
+            *crate::util::options::NURSERY_SIZE,
+        ),
+        ..PlanConstraints::default()
+    };
 }
 
 /// Create global side metadata specs for generational plans. This will call SideMetadataContext::new_global_specs().

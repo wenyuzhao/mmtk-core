@@ -460,11 +460,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         // The start address SFT should be correct.
                         debug_assert_eq!(SFT_MAP.get(res.start).name(), self.get_name());
                         // The start address is in our space.
-                        debug_assert!(
-                            self.address_in_space(res.start),
-                            "res.start {:?} not in space",
-                            res.start
-                        );
+                        debug_assert!(self.address_in_space(res.start));
                         // The descriptor should be correct.
                         debug_assert_eq!(
                             self.common().vm_map().get_descriptor_for_address(res.start),
