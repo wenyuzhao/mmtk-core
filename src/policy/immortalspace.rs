@@ -13,7 +13,6 @@ use crate::plan::{ObjectQueue, VectorObjectQueue};
 use crate::plan::PlanConstraints;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::space::SpaceOptions;
-use crate::policy::space::*;
 use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
