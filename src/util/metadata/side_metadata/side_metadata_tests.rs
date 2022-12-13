@@ -422,7 +422,7 @@ mod tests {
                 || {
                     // We need to do this because of the static NO_METADATA
                     // sanity::reset();
-                    let data_addr = vm_layout_constants::HEAP_START
+                    let data_addr = vm_layout_constants::VM_LAYOUT_CONSTANTS.heap_start
                         + (vm_layout_constants::BYTES_IN_CHUNK << 1);
 
                     let metadata_1_spec = SideMetadataSpec {
