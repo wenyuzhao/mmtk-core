@@ -296,9 +296,8 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             self.mprotect(first, pages as _);
         }
 
-        let _sync = self.sync.lock().unwrap();
-        // FIXME
         let mut sync = self.sync.lock().unwrap();
+        // FIXME
         #[allow(clippy::cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const _ as *mut Self) };
         self.common.accounting.release(pages as _);
