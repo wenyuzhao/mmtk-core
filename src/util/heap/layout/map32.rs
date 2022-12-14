@@ -1,8 +1,7 @@
 use super::map::Map;
 use crate::mmtk::SFT_MAP;
-use crate::policy::sft_map::SFTMap;
 use crate::util::conversions;
-use crate::util::generic_freelist::GenericFreeList;
+use crate::util::generic_freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout_constants::*;
@@ -31,25 +30,29 @@ pub struct Map32 {
     cumulative_committed_pages: AtomicUsize,
 }
 
-impl Map for Map32 {
-    type FreeList = IntArrayFreeList;
-
-    fn new() -> Self {
+impl Map32 {
+    pub fn new() -> Self {
         Map32 {
-            prev_link: vec![0; MAX_CHUNKS],
-            next_link: vec![0; MAX_CHUNKS],
-            region_map: IntArrayFreeList::new(MAX_CHUNKS, MAX_CHUNKS as _, 1),
+            prev_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
+            next_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
+            region_map: IntArrayFreeList::new(
+                VM_LAYOUT_CONSTANTS.max_chunks(),
+                VM_LAYOUT_CONSTANTS.max_chunks() as _,
+                1,
+            ),
             global_page_map: IntArrayFreeList::new(1, 1, MAX_SPACES),
             shared_discontig_fl_count: 0,
             shared_fl_map: vec![None; MAX_SPACES],
             total_available_discontiguous_chunks: 0,
             finalized: false,
             sync: Mutex::new(()),
-            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; MAX_CHUNKS],
+            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; VM_LAYOUT_CONSTANTS.max_chunks()],
             cumulative_committed_pages: AtomicUsize::new(0),
         }
     }
+}
 
+impl Map for Map32 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
@@ -61,18 +64,18 @@ impl Map for Map32 {
                 self.descriptor_map[index].is_empty(),
                 "Conflicting virtual address request"
             );
-            debug!(
-                "Set descriptor {:?} for Chunk {}",
-                descriptor,
-                conversions::chunk_index_to_address(index)
-            );
+            // println!(
+            //     "Set descriptor {:?} for Chunk {}",
+            //     descriptor,
+            //     conversions::chunk_index_to_address(index)
+            // );
             self_mut.descriptor_map[index] = descriptor;
             //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
             e += BYTES_IN_CHUNK;
         }
     }
 
-    fn create_freelist(&self, pr: &CommonFreeListPageResource) -> Box<Self::FreeList> {
+    fn create_freelist(&self, pr: &CommonFreeListPageResource) -> Box<dyn FreeList> {
         Box::new(IntArrayFreeList::from_parent(
             &self.global_page_map,
             self.get_discontig_freelist_pr_ordinal(pr) as _,
@@ -84,7 +87,7 @@ impl Map for Map32 {
         _pr: &CommonFreeListPageResource,
         units: usize,
         grain: i32,
-    ) -> Box<Self::FreeList> {
+    ) -> Box<dyn FreeList> {
         Box::new(IntArrayFreeList::new(units, grain, 1))
     }
 
@@ -177,7 +180,7 @@ impl Map for Map32 {
         let first_chunk = start_address.chunk_index();
         let last_chunk = to.chunk_index();
         let unavail_start_chunk = last_chunk + 1;
-        let trailing_chunks = MAX_CHUNKS - unavail_start_chunk;
+        let trailing_chunks = VM_LAYOUT_CONSTANTS.max_chunks() - unavail_start_chunk;
         let pages = (1 + last_chunk - first_chunk) * PAGES_IN_CHUNK;
         // start_address=0xb0000000, first_chunk=704, last_chunk=703, unavail_start_chunk=704, trailing_chunks=320, pages=0
         // startAddress=0x68000000 firstChunk=416 lastChunk=703 unavailStartChunk=704 trailingChunks=320 pages=294912

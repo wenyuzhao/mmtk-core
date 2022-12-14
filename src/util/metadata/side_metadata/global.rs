@@ -140,7 +140,6 @@ impl SideMetadataSpec {
     /// Check with the mmapper to see if side metadata is mapped for the spec for the data address.
     #[inline]
     pub(crate) fn is_mapped(&self, data_addr: Address) -> bool {
-        use crate::util::heap::layout::Mmapper;
         use crate::MMAPPER;
         let meta_addr = address_to_meta_address(self, data_addr);
         MMAPPER.is_mapped_address(meta_addr)
@@ -716,12 +715,9 @@ impl SideMetadataContext {
         #[cfg(feature = "global_alloc_bit")]
         ret.push(ALLOC_SIDE_METADATA_SPEC);
 
-        {
-            use crate::policy::sft_map::SFTMap;
-            if let Some(spec) = crate::mmtk::SFT_MAP.get_side_metadata() {
-                if spec.is_global {
-                    ret.push(*spec);
-                }
+        if let Some(spec) = crate::mmtk::SFT_MAP.get_side_metadata() {
+            if spec.is_global {
+                ret.push(*spec);
             }
         }
 
@@ -1031,7 +1027,7 @@ mod tests {
             let mut sanity = SideMetadataSanity::new();
             sanity.verify_metadata_context("TestPolicy", &context);
 
-            let data_addr = vm_layout_constants::HEAP_START;
+            let data_addr = vm_layout_constants::VM_LAYOUT_CONSTANTS.heap_start;
             let meta_addr = address_to_meta_address(&spec, data_addr);
             with_cleanup(
                 || {

@@ -3,8 +3,7 @@ use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSani
 use crate::util::Address;
 use crate::util::ObjectReference;
 
-use crate::util::heap::layout::vm_layout_constants::{AVAILABLE_BYTES, LOG_BYTES_IN_CHUNK};
-use crate::util::heap::layout::vm_layout_constants::{AVAILABLE_END, AVAILABLE_START};
+use crate::util::heap::layout::vm_layout_constants::{LOG_BYTES_IN_CHUNK, VM_LAYOUT_CONSTANTS};
 use crate::util::heap::{PageResource, VMRequest};
 use crate::vm::{ActivePlan, Collection, ObjectModel};
 
@@ -16,13 +15,10 @@ use crate::mmtk::SFT_MAP;
 #[cfg(debug_assertions)]
 use crate::policy::sft::EMPTY_SFT_NAME;
 use crate::policy::sft::SFT;
-use crate::policy::sft_map::SFTMap;
 use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::map::Map;
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-use crate::util::heap::layout::Mmapper as IMmapper;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::HeapMeta;
 use crate::util::memory;
@@ -355,7 +351,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 // Mmap the pages and the side metadata, and handle error. In case of any error,
                 // we will either call back to the VM for OOM, or simply panic.
                 if res.new_chunk {
-                    use crate::util::heap::layout::mmapper::Mmapper;
                     if let Err(mmap_error) = self
                         .common()
                         .mmapper
@@ -388,8 +383,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
 
     #[inline(always)]
     fn address_in_space(&self, start: Address) -> bool {
-        debug_assert!(self.common().descriptor.is_contiguous());
-        start >= self.common().start && start < self.common().start + self.common().extent
+        if !self.common().descriptor.is_contiguous() {
+            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+        } else {
+            start >= self.common().start && start < self.common().start + self.common().extent
+        }
     }
 
     #[inline(always)]
@@ -456,7 +454,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
             panic!("failed to mmap meta memory");
         }
 
-        use crate::util::heap::layout::mmapper::Mmapper;
         self.common()
             .mmapper
             .mark_as_mapped(self.common().start, self.common().extent);
@@ -582,8 +579,8 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
     pub head_discontiguous_region: Address,
 
-    pub vm_map: &'static VMMap,
-    pub mmapper: &'static Mmapper,
+    pub vm_map: &'static dyn Map,
+    pub mmapper: &'static dyn Mmapper,
 
     pub metadata: SideMetadataContext,
 
@@ -612,8 +609,8 @@ pub struct SpaceOptions {
 impl<VM: VMBinding> CommonSpace<VM> {
     pub fn new(
         opt: SpaceOptions,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         heap: &mut HeapMeta,
     ) -> Self {
         let mut rtn = CommonSpace {
@@ -724,16 +721,21 @@ impl<VM: VMBinding> CommonSpace<VM> {
         }
     }
 
-    pub fn vm_map(&self) -> &'static VMMap {
+    pub fn vm_map(&self) -> &'static dyn Map {
         self.vm_map
     }
 }
 
 fn get_frac_available(frac: f32) -> usize {
-    trace!("AVAILABLE_START={}", AVAILABLE_START);
-    trace!("AVAILABLE_END={}", AVAILABLE_END);
-    let bytes = (frac * AVAILABLE_BYTES as f32) as usize;
-    trace!("bytes={}*{}={}", frac, AVAILABLE_BYTES, bytes);
+    trace!("AVAILABLE_START={}", VM_LAYOUT_CONSTANTS.available_start());
+    trace!("AVAILABLE_END={}", VM_LAYOUT_CONSTANTS.available_end());
+    let bytes = (frac * VM_LAYOUT_CONSTANTS.available_bytes() as f32) as usize;
+    trace!(
+        "bytes={}*{}={}",
+        frac,
+        VM_LAYOUT_CONSTANTS.available_bytes(),
+        bytes
+    );
     let mb = bytes >> LOG_BYTES_IN_MBYTE;
     let rtn = mb << LOG_BYTES_IN_MBYTE;
     trace!("rtn={}", rtn);

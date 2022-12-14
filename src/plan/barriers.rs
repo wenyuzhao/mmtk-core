@@ -61,7 +61,11 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
         target: ObjectReference,
     ) {
         self.object_reference_write_pre(src, slot, target);
-        slot.store(target);
+        if <VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
+            slot.store::<true>(target);
+        } else {
+            slot.store::<false>(target);
+        }
         self.object_reference_write_post(src, slot, target);
     }
 
@@ -266,11 +270,12 @@ impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
 
     fn object_reference_write_pre(
         &mut self,
-        _src: ObjectReference,
-        _slot: <S::VM as VMBinding>::VMEdge,
-        _target: ObjectReference,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
     ) {
-        unimplemented!()
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
     }
 
     fn object_reference_write_post(

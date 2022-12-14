@@ -21,7 +21,7 @@ use std::{
 
 use super::LXR;
 
-pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
+pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
     plan: &'static LXR<VM>,
     mmtk: &'static MMTK<VM>,
     objects: Option<Vec<ObjectReference>>,
@@ -31,9 +31,12 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     worker: *mut GCWorker<VM>,
 }
 
-unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
+unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send
+    for LXRConcurrentTraceObjects<VM, COMPRESSED>
+{
+}
 
-impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRESSED> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
@@ -89,7 +92,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let new_nodes = self.next_objects.take();
             // This packet is executed in concurrent.
             debug_assert!(self.plan.concurrent_marking_enabled());
-            let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, self.mmtk);
+            let w = LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(new_nodes, self.mmtk);
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
     }
@@ -139,7 +142,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 }
 
-impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
+    for LXRConcurrentTraceObjects<VM, COMPRESSED>
+{
     #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
         let should_check_remset = !self.plan.in_defrag(object);
@@ -155,30 +160,36 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
-                let t: ObjectReference = e.load();
-                if t.is_null() || crate::util::rc::count(t) == 0 {
-                    return;
-                }
-                if crate::args::RC_MATURE_EVACUATION
-                    && should_check_remset
-                    && self.plan.in_defrag(t)
-                {
-                    self.plan
-                        .immix_space
-                        .remset
-                        .record(e, &self.plan.immix_space);
-                }
-                self.next_objects.push(t);
-                if self.next_objects.is_full() {
-                    self.flush();
-                }
-            });
+            object.iterate_fields::<VM, _, COMPRESSED>(
+                CLDScanPolicy::Claim,
+                RefScanPolicy::Discover,
+                |e| {
+                    let t: ObjectReference = e.load::<COMPRESSED>();
+                    if t.is_null() || crate::util::rc::count(t) == 0 {
+                        return;
+                    }
+                    if crate::args::RC_MATURE_EVACUATION
+                        && should_check_remset
+                        && self.plan.in_defrag(t)
+                    {
+                        self.plan
+                            .immix_space
+                            .remset
+                            .record(e, &self.plan.immix_space);
+                    }
+                    self.next_objects.push(t);
+                    if self.next_objects.is_full() {
+                        self.flush();
+                    }
+                },
+            );
         }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
+    for LXRConcurrentTraceObjects<VM, COMPRESSED>
+{
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
@@ -242,30 +253,47 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+        let compressed = VM::VMObjectModel::compressed_pointers_enabled();
         if let Some(nodes) = self.nodes.take() {
             if nodes.is_empty() {
                 return;
             }
-            GCWork::do_work(
-                &mut LXRConcurrentTraceObjects::<VM>::new(nodes, mmtk),
-                worker,
-                mmtk,
-            );
+            if compressed {
+                GCWork::do_work(
+                    &mut LXRConcurrentTraceObjects::<VM, true>::new(nodes, mmtk),
+                    worker,
+                    mmtk,
+                );
+            } else {
+                GCWork::do_work(
+                    &mut LXRConcurrentTraceObjects::<VM, false>::new(nodes, mmtk),
+                    worker,
+                    mmtk,
+                );
+            }
         }
         if let Some(nodes) = self.nodes_arc.take() {
             if nodes.is_empty() {
                 return;
             }
-            GCWork::do_work(
-                &mut LXRConcurrentTraceObjects::<VM>::new_arc(nodes, mmtk),
-                worker,
-                mmtk,
-            );
+            if compressed {
+                GCWork::do_work(
+                    &mut LXRConcurrentTraceObjects::<VM, true>::new_arc(nodes, mmtk),
+                    worker,
+                    mmtk,
+                );
+            } else {
+                GCWork::do_work(
+                    &mut LXRConcurrentTraceObjects::<VM, false>::new_arc(nodes, mmtk),
+                    worker,
+                    mmtk,
+                );
+            }
         }
     }
 }
 
-pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
+pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
@@ -273,7 +301,9 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     next_edges: VectorQueue<EdgeOf<Self>>,
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
+    for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
+{
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
@@ -333,18 +363,18 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 
     #[inline]
-    fn process_edges(&mut self) {
+    fn process_edges<const COMPRESSED2: bool>(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         if self.roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
         if self.pause == Pause::FullTraceFast {
             for i in 0..self.edges.len() {
-                self.process_mark_edge(self.edges[i].to_address())
+                self.process_mark_edge::<COMPRESSED2>(self.edges[i])
             }
         } else {
             for i in 0..self.edges.len() {
-                ProcessEdgesWork::process_edge(self, self.edges[i])
+                ProcessEdgesWork::process_edge::<COMPRESSED2>(self, self.edges[i])
             }
         }
         self.flush();
@@ -357,11 +387,11 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store(new_object);
+            slot.store::<COMPRESSED2>(new_object);
         }
         super::record_edge_for_validation(slot, new_object);
     }
@@ -372,7 +402,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
     #[inline(always)]
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null()
@@ -403,29 +433,35 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     }
 
     #[inline]
-    fn process_mark_edge(&mut self, slot: Address) {
-        let object = unsafe { slot.load::<ObjectReference>() };
+    fn process_mark_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_and_mark_object(object);
         super::record_edge_for_validation(slot, new_object);
         if Self::OVERWRITE_REFERENCE {
-            unsafe { slot.store(new_object) };
+            slot.store::<COMPRESSED2>(new_object);
         }
     }
 }
 
-impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
+    for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
+{
     #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
-            self.next_edges.push(e);
-            if self.next_edges.is_full() {
-                self.flush();
-            }
-        })
+        object.iterate_fields::<VM, _, COMPRESSED>(
+            CLDScanPolicy::Claim,
+            RefScanPolicy::Discover,
+            |e| {
+                self.next_edges.push(e);
+                if self.next_edges.is_full() {
+                    self.flush();
+                }
+            },
+        )
     }
 }
 
-impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
     type Target = ProcessEdgesBase<VM>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -433,21 +469,25 @@ impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> DerefMut for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> DerefMut
+    for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
+{
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
 }
 
-pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
+pub struct LXRWeakRefProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
     next_edges: VectorQueue<EdgeOf<Self>>,
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
+    for LXRWeakRefProcessEdges<VM, COMPRESSED>
+{
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
@@ -498,10 +538,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     }
 
     #[inline]
-    fn process_edges(&mut self) {
+    fn process_edges<const COMPRESSED2: bool>(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge(self, self.edges[i])
+            ProcessEdgesWork::process_edge::<COMPRESSED2>(self, self.edges[i])
         }
         self.flush();
     }
@@ -512,19 +552,23 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue for LXRWeakRefProcessEdges<VM, COMPRESSED> {
     #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
-            self.next_edges.push(e);
-            if self.next_edges.is_full() {
-                self.flush();
-            }
-        })
+        object.iterate_fields::<VM, _, COMPRESSED>(
+            CLDScanPolicy::Claim,
+            RefScanPolicy::Follow,
+            |e| {
+                self.next_edges.push(e);
+                if self.next_edges.is_full() {
+                    self.flush();
+                }
+            },
+        )
     }
 }
 
-impl<VM: VMBinding> Deref for LXRWeakRefProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRWeakRefProcessEdges<VM, COMPRESSED> {
     type Target = ProcessEdgesBase<VM>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -532,7 +576,7 @@ impl<VM: VMBinding> Deref for LXRWeakRefProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> DerefMut for LXRWeakRefProcessEdges<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> DerefMut for LXRWeakRefProcessEdges<VM, COMPRESSED> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base

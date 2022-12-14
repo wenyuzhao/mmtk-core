@@ -59,12 +59,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     #[inline(always)]
-    fn get_edge_logging_state(&self, edge: Address) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(edge) }
+    fn get_edge_logging_state(&self, edge: VM::VMEdge) -> u8 {
+        unsafe { Self::UNLOG_BITS.load(edge.to_address()) }
     }
 
     #[inline(always)]
-    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
+    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: VM::VMEdge) -> bool {
         loop {
             // Bailout if logged
             if self.get_edge_logging_state(edge) == LOGGED_VALUE {
@@ -73,7 +73,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             // Attempt to lock the edges
             if Self::LOCK_BITS
                 .compare_exchange_atomic(
-                    edge,
+                    edge.to_address(),
                     UNLOCKED_VALUE,
                     LOCKED_VALUE,
                     Ordering::Relaxed,
@@ -93,24 +93,28 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     #[inline(always)]
-    fn unlock_edge(&self, edge: Address) {
-        RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
+    fn unlock_edge(&self, edge: VM::VMEdge) {
+        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
     #[inline(always)]
-    fn log_and_unlock_edge(&self, edge: Address) {
+    fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
-            unsafe { Self::UNLOG_BITS.store(edge, LOGGED_VALUE) };
+            unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
         } else {
-            Self::UNLOG_BITS.store_atomic(edge, LOGGED_VALUE, Ordering::Relaxed);
+            Self::UNLOG_BITS.store_atomic(edge.to_address(), LOGGED_VALUE, Ordering::Relaxed);
         }
-        RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
+        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
     #[inline(always)]
-    fn log_edge_and_get_old_target(&self, edge: Address) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old: ObjectReference = unsafe { edge.load() };
+            let old = if VM::VMObjectModel::compressed_pointers_enabled() {
+                edge.load::<true>()
+            } else {
+                edge.load::<false>()
+            };
             self.log_and_unlock_edge(edge);
             Ok(old)
         } else {
@@ -120,10 +124,14 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     #[inline(always)]
     #[allow(unused)]
-    fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
-        if !edge.is_logged::<VM>() {
-            let old: ObjectReference = unsafe { edge.load() };
-            edge.log::<VM>();
+    fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
+        if !edge.to_address().is_logged::<VM>() {
+            let old = if VM::VMObjectModel::compressed_pointers_enabled() {
+                edge.load::<true>()
+            } else {
+                edge.load::<false>()
+            };
+            edge.to_address().log::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -190,7 +198,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if let Ok(old) = self.log_edge_and_get_old_target(edge.to_address()) {
+        if let Ok(old) = self.log_edge_and_get_old_target(edge) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
@@ -209,26 +217,35 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
-                _,
-                { EDGE_KIND_MATURE },
-            >::new(
-                incs
-            ));
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    .add(ProcessIncs::<_, EDGE_KIND_MATURE, true>::new(incs));
+            } else {
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    .add(ProcessIncs::<_, EDGE_KIND_MATURE, false>::new(incs));
+            }
         }
     }
 
     #[cold]
     fn flush_decs_and_satb(&mut self) {
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.flush_decs_and_satb_impl::<true>()
+        } else {
+            self.flush_decs_and_satb_impl::<false>()
+        }
+    }
+
+    fn flush_decs_and_satb_impl<const COMPRESSED: bool>(&mut self) {
         if !self.decs.is_empty() {
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
                     .add(ProcessModBufSATB::new_arc(decs.clone()));
-                ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_desc())
+                ProcessDecs::<_, COMPRESSED>::new_arc(decs, LazySweepingJobsCounter::new_desc())
             } else {
                 let decs = self.decs.take();
-                ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc())
+                ProcessDecs::<_, COMPRESSED>::new(decs, LazySweepingJobsCounter::new_desc())
             };
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);
@@ -282,11 +299,21 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-            if !e.to_address().is_mapped() {
-                return;
-            }
-            self.enqueue_node(obj, e, None);
-        })
+        let compressed = VM::VMObjectModel::compressed_pointers_enabled();
+        if compressed {
+            obj.iterate_fields::<VM, _, true>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+                if !e.to_address().is_mapped() {
+                    return;
+                }
+                self.enqueue_node(obj, e, None);
+            })
+        } else {
+            obj.iterate_fields::<VM, _, false>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+                if !e.to_address().is_mapped() {
+                    return;
+                }
+                self.enqueue_node(obj, e, None);
+            })
+        }
     }
 }

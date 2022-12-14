@@ -7,8 +7,8 @@ use crate::plan::PlanConstraints;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::heap::layout::heap_layout::Map;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::HeapMeta;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
@@ -86,7 +86,11 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
 }
 
 impl<VM: VMBinding> PageProtect<VM> {
-    pub fn new(vm_map: &'static VMMap, mmapper: &'static Mmapper, options: Arc<Options>) -> Self {
+    pub fn new(
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
+        options: Arc<Options>,
+    ) -> Self {
         // Warn users that the plan may fail due to maximum mapping allowed.
         warn!(
             "PageProtect uses a high volume of memory mappings. \

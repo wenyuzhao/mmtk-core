@@ -15,7 +15,7 @@ use crate::policy::sft::SFT;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::copy::*;
-use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
+use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
@@ -251,8 +251,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn new(
         name: &'static str,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         heap: &mut HeapMeta,
         scheduler: Arc<GCWorkScheduler<VM>>,
         global_side_metadata_specs: Vec<SideMetadataSpec>,

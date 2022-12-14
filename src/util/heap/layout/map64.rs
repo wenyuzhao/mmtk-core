@@ -1,7 +1,7 @@
 use super::map::Map;
 use crate::util::constants::*;
 use crate::util::conversions;
-use crate::util::generic_freelist::GenericFreeList;
+use crate::util::generic_freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout_constants::*;
@@ -27,10 +27,8 @@ pub struct Map64 {
     cumulative_committed_pages: AtomicUsize,
 }
 
-impl Map for Map64 {
-    type FreeList = RawMemoryFreeList;
-
-    fn new() -> Self {
+impl Map64 {
+    pub fn new() -> Self {
         let mut high_water = vec![Address::ZERO; MAX_SPACES];
         let mut base_address = vec![Address::ZERO; MAX_SPACES];
 
@@ -41,7 +39,7 @@ impl Map for Map64 {
         }
 
         Self {
-            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; MAX_CHUNKS],
+            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; VM_LAYOUT_CONSTANTS.max_chunks()],
             high_water,
             base_address,
             fl_page_resources: vec![None; MAX_SPACES],
@@ -50,10 +48,11 @@ impl Map for Map64 {
             cumulative_committed_pages: AtomicUsize::new(0),
         }
     }
+}
 
+impl Map for Map64 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        debug_assert!(Self::is_space_start(start));
-        debug_assert!(extent <= SPACE_SIZE_64);
+        debug_assert!(extent <= VM_LAYOUT_CONSTANTS.space_size_64);
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
         let self_mut = unsafe { self.mut_self() };
@@ -61,8 +60,8 @@ impl Map for Map64 {
         self_mut.descriptor_map[index] = descriptor;
     }
 
-    fn create_freelist(&self, pr: &CommonFreeListPageResource) -> Box<Self::FreeList> {
-        let units = SPACE_SIZE_64 >> LOG_BYTES_IN_PAGE;
+    fn create_freelist(&self, pr: &CommonFreeListPageResource) -> Box<dyn FreeList> {
+        let units = VM_LAYOUT_CONSTANTS.space_size_64 >> LOG_BYTES_IN_PAGE;
         self.create_parent_freelist(pr, units, units as _)
     }
 
@@ -71,10 +70,16 @@ impl Map for Map64 {
         pr: &CommonFreeListPageResource,
         mut units: usize,
         grain: i32,
-    ) -> Box<Self::FreeList> {
+    ) -> Box<dyn FreeList> {
         // This is only called during creating a page resource/space/plan/mmtk instance, which is single threaded.
         let self_mut = unsafe { self.mut_self() };
         let start = pr.get_start();
+        assert!(
+            start < VM_LAYOUT_CONSTANTS.heap_end,
+            "{:?} {:?}",
+            start,
+            VM_LAYOUT_CONSTANTS.heap_end
+        );
         let index = Self::space_index(start).unwrap();
 
         units = (units as f64 * NON_MAP_FRACTION) as _;
@@ -231,14 +236,14 @@ impl Map64 {
     }
 
     fn space_index(addr: Address) -> Option<usize> {
-        if addr > HEAP_END {
+        if addr > VM_LAYOUT_CONSTANTS.heap_end {
             return None;
         }
-        Some(addr >> SPACE_SHIFT_64)
+        Some(addr >> VM_LAYOUT_CONSTANTS.space_shift_64)
     }
 
     fn is_space_start(base: Address) -> bool {
-        (base & !SPACE_MASK_64) == 0
+        (base & !VM_LAYOUT_CONSTANTS.space_mask_64) == 0
     }
 }
 

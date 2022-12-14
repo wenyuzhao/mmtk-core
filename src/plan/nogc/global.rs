@@ -7,8 +7,8 @@ use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::space::Space;
 use crate::scheduler::GCWorkScheduler;
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::heap::layout::heap_layout::Map;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::HeapMeta;
 #[allow(unused_imports)]
 use crate::util::heap::VMRequest;
@@ -85,7 +85,11 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
 }
 
 impl<VM: VMBinding> NoGC<VM> {
-    pub fn new(vm_map: &'static VMMap, mmapper: &'static Mmapper, options: Arc<Options>) -> Self {
+    pub fn new(
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
+        options: Arc<Options>,
+    ) -> Self {
         #[cfg(not(feature = "nogc_lock_free"))]
         let mut heap = HeapMeta::new(&options);
         #[cfg(feature = "nogc_lock_free")]

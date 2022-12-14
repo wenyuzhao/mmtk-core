@@ -551,18 +551,18 @@ pub trait ProcessEdgesWork:
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED>();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store(new_object);
+            slot.store::<COMPRESSED>(new_object);
         }
     }
 
     #[inline]
-    fn process_edges(&mut self) {
+    fn process_edges<const COMPRESSED: bool>(&mut self) {
         for i in 0..self.edges.len() {
-            self.process_edge(self.edges[i])
+            self.process_edge::<COMPRESSED>(self.edges[i])
         }
     }
 }
@@ -572,8 +572,15 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessEdgesWork");
         self.set_worker(worker);
-        self.process_edges();
-        self.flush();
+        let compressed = <<E::VM as VMBinding>::VMObjectModel as ObjectModel<E::VM>>::compressed_pointers_enabled();
+        if compressed {
+            self.process_edges::<true>();
+        } else {
+            self.process_edges::<false>();
+        }
+        if !self.nodes.is_empty() {
+            self.flush();
+        }
         #[cfg(feature = "sanity")]
         if self.roots {
             self.cache_roots_for_sanity_gc();
@@ -605,15 +612,14 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
     #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         use crate::policy::sft::GCWorkerMutRef;
-        use crate::policy::sft_map::SFTMap;
 
         if object.is_null() {
             return object;
         }
 
         // Make sure we have valid SFT entries for the object.
-        #[cfg(debug_assertions)]
-        crate::mmtk::SFT_MAP.assert_valid_entries_for_object::<VM>(object);
+        // #[cfg(debug_assertions)]
+        // crate::mmtk::SFT_MAP.assert_valid_entries_for_object::<VM>(object);
 
         // Erase <VM> type parameter
         let worker = GCWorkerMutRef::new(self.worker());
@@ -707,7 +713,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self;
 
     /// The common code for ScanObjects and PlanScanObjects.
-    fn do_work_common(
+    fn do_work_common<const COMPRESSED: bool>(
         &self,
         buffer: &[ObjectReference],
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
@@ -754,7 +760,11 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
             for object in objects_to_scan.iter().copied() {
                 if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     // If an object supports edge-enqueuing, we enqueue its edges.
-                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
+                    <VM as VMBinding>::VMScanning::scan_object::<_, COMPRESSED>(
+                        tls,
+                        object,
+                        &mut closure,
+                    );
                     self.post_scan_object(object);
                 } else {
                     // If an object does not support edge-enqueuing, we have to use
@@ -854,7 +864,12 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, self.discovery);
+        let compressed = <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled();
+        if compressed {
+            self.do_work_common::<true>(&self.buffer, worker, mmtk, self.discovery);
+        } else {
+            self.do_work_common::<false>(&self.buffer, worker, mmtk, self.discovery);
+        }
         trace!("ScanObjects End");
     }
 }
@@ -933,11 +948,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED>();
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
-            slot.store(new_object);
+            slot.store::<COMPRESSED>(new_object);
         }
     }
 }
@@ -1014,7 +1029,12 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, true);
+        let compressed = <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled();
+        if compressed {
+            self.do_work_common::<true>(&self.buffer, worker, mmtk, true);
+        } else {
+            self.do_work_common::<false>(&self.buffer, worker, mmtk, true);
+        }
         trace!("PlanScanObjects End");
     }
 }

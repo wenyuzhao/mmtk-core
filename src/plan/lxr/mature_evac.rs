@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use crate::util::rc;
 use crate::vm::edge_shape::Edge;
+use crate::vm::ObjectModel;
 use crate::{
     plan::{immix::Pause, lxr::cm::LXRStopTheWorldProcessEdges},
     policy::{
@@ -113,7 +114,12 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
             .map(|e| VM::VMEdge::from_address(Line::decode_validity_state(e.to_address()).0))
             .collect::<Vec<_>>();
         // transitive closure
-        let w = LXRStopTheWorldProcessEdges::new(edges, false, mmtk);
-        worker.add_work(WorkBucketStage::Closure, w);
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            let w = LXRStopTheWorldProcessEdges::<_, true>::new(edges, false, mmtk);
+            worker.add_work(WorkBucketStage::Closure, w);
+        } else {
+            let w = LXRStopTheWorldProcessEdges::<_, false>::new(edges, false, mmtk);
+            worker.add_work(WorkBucketStage::Closure, w);
+        }
     }
 }

@@ -20,8 +20,8 @@ use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
 use crate::util::copy::*;
+use crate::util::heap::layout::heap_layout::Map;
 use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
@@ -462,8 +462,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
 impl<VM: VMBinding> LXR<VM> {
     pub fn new(
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         options: Arc<Options>,
         scheduler: Arc<GCWorkScheduler<VM>>,
     ) -> Box<Self> {
@@ -804,7 +804,11 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Release].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, true>>(self);
+        } else {
+            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, false>>(self);
+        }
     }
 
     fn schedule_emergency_full_heap_collection<E: ProcessEdgesWork<VM = VM>>(
@@ -824,21 +828,37 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Release].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, true>>(self);
+        } else {
+            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, false>>(self);
+        }
     }
 
     fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            let w = ProcessDecs::new(decs, LazySweepingJobsCounter::new_desc());
-            work_packets.push(Box::new(w));
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                let w = ProcessDecs::<_, true>::new(decs, LazySweepingJobsCounter::new_desc());
+                work_packets.push(Box::new(w));
+            } else {
+                let w = ProcessDecs::<_, false>::new(decs, LazySweepingJobsCounter::new_desc());
+                work_packets.push(Box::new(w));
+            }
         }
         if work_packets.is_empty() {
-            work_packets.push(Box::new(ProcessDecs::new(
-                vec![],
-                LazySweepingJobsCounter::new_desc(),
-            )));
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                work_packets.push(Box::new(ProcessDecs::<_, true>::new(
+                    vec![],
+                    LazySweepingJobsCounter::new_desc(),
+                )));
+            } else {
+                work_packets.push(Box::new(ProcessDecs::<_, false>::new(
+                    vec![],
+                    LazySweepingJobsCounter::new_desc(),
+                )));
+            }
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);

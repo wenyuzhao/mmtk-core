@@ -38,11 +38,11 @@ impl<VM: VMBinding> ProcessEdgesWork for GenNurseryProcessEdges<VM> {
             .trace_object_nursery(&mut self.base.nodes, object, worker)
     }
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED>();
         let new_object = self.trace_object(object);
         debug_assert!(!self.gen.nursery.in_space(new_object));
-        slot.store(new_object);
+        slot.store::<COMPRESSED>(new_object);
     }
 
     #[inline(always)]

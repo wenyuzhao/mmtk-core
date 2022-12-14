@@ -6,7 +6,7 @@ use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::GCWorker;
 use crate::util::copy::*;
-use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
+use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 #[cfg(feature = "global_alloc_bit")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
 use crate::util::heap::HeapMeta;
@@ -130,8 +130,8 @@ impl<VM: VMBinding> CopySpace<VM> {
         zeroed: bool,
         vmrequest: VMRequest,
         global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         heap: &mut HeapMeta,
     ) -> Self {
         let local_specs = extract_side_metadata(&[

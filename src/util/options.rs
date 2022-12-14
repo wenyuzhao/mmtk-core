@@ -6,6 +6,8 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use strum_macros::EnumString;
 
+use super::heap::layout::vm_layout_constants::VMLayoutConstants;
+
 #[derive(Copy, Clone, EnumString, Debug)]
 pub enum NurseryZeroingOptions {
     Temporal,
@@ -71,29 +73,28 @@ impl FromStr for PerfEventOptions {
     }
 }
 
-/// The default nursery space size.
-#[cfg(target_pointer_width = "64")]
-pub const NURSERY_SIZE: usize = (1 << 20) << LOG_BYTES_IN_MBYTE;
-/// The default min nursery size. This does not affect the actual space we create as nursery. It is
-/// only used in the GC trigger check.
-#[cfg(target_pointer_width = "64")]
-pub const DEFAULT_MIN_NURSERY: usize = 2 << LOG_BYTES_IN_MBYTE;
-/// The default max nursery size. This does not affect the actual space we create as nursery. It is
-/// only used in the GC trigger check.
-#[cfg(target_pointer_width = "64")]
-pub const DEFAULT_MAX_NURSERY: usize = (1 << 20) << LOG_BYTES_IN_MBYTE;
+/// Get max nursery space size.
+fn max_nursery_size() -> usize {
+    if cfg!(target_pointer_width = "32")
+        || VMLayoutConstants::get_address_space().pointer_compression()
+    {
+        32 << LOG_BYTES_IN_MBYTE
+    } else {
+        (1 << 20) << LOG_BYTES_IN_MBYTE
+    }
+}
 
-/// The default nursery space size.
-#[cfg(target_pointer_width = "32")]
-pub const NURSERY_SIZE: usize = 32 << LOG_BYTES_IN_MBYTE;
+lazy_static! {
+    /// The default nursery space size.
+    pub static ref NURSERY_SIZE: usize = max_nursery_size();
+    /// The default max nursery size. This does not affect the actual space we create as nursery. It is
+    /// only used in the GC trigger check.
+    pub static ref DEFAULT_MAX_NURSERY: usize =  max_nursery_size();
+}
+
 /// The default min nursery size. This does not affect the actual space we create as nursery. It is
 /// only used in the GC trigger check.
-#[cfg(target_pointer_width = "32")]
 pub const DEFAULT_MIN_NURSERY: usize = 2 << LOG_BYTES_IN_MBYTE;
-/// The default max nursery size. This does not affect the actual space we create as nursery. It is
-/// only used in the GC trigger check.
-#[cfg(target_pointer_width = "32")]
-pub const DEFAULT_MAX_NURSERY: usize = 32 << LOG_BYTES_IN_MBYTE;
 
 fn always_valid<T>(_: &T) -> bool {
     true
@@ -373,7 +374,7 @@ pub struct NurserySize {
     /// Minimum nursery size (in bytes)
     pub min: usize,
     /// Maximum nursery size (in bytes)
-    pub max: usize,
+    pub max: Option<usize>,
 }
 
 impl NurserySize {
@@ -382,12 +383,12 @@ impl NurserySize {
             NurseryKind::Bounded => NurserySize {
                 kind,
                 min: DEFAULT_MIN_NURSERY,
-                max: value,
+                max: Some(value),
             },
             NurseryKind::Fixed => NurserySize {
                 kind,
                 min: value,
-                max: value,
+                max: Some(value),
             },
         }
     }
@@ -418,7 +419,7 @@ impl FromStr for NurserySize {
 impl Options {
     /// Return upper bound of the nursery size (in number of bytes)
     pub fn get_max_nursery(&self) -> usize {
-        self.nursery.max
+        self.nursery.max.unwrap_or_else(|| *DEFAULT_MAX_NURSERY)
     }
 
     /// Return lower bound of the nursery size (in number of bytes)
@@ -453,8 +454,8 @@ options! {
     // Bounded nursery only controls the upper bound, whereas the size for a Fixed nursery controls
     // both the upper and lower bounds. The nursery size can be set like "Fixed:8192", for example,
     // to have a Fixed nursery size of 8192 bytes
-    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && v.max > 0 && v.max >= v.min]
-        = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: DEFAULT_MAX_NURSERY },
+    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && (v.max.is_none() || v.max.unwrap() > 0) && (v.max.is_none() || v.max.unwrap() >= v.min)]
+    = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: None },
     // Should a major GC be performed when a system GC is required?
     full_heap_system_gc:   bool                 [env_var: true, command_line: true]  [always_valid] = false,
     // Should we shrink/grow the heap to adjust to application working set? (not supported)
@@ -507,7 +508,8 @@ options! {
     // `MMTK_THREAD_AFFINITY="12" taskset -c 6-12 <program>` will not work, on the other hand, as
     // there is no core with (perceived) id 12.
     // XXX: This option is currently only supported on Linux.
-    thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault
+    thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
+    use_35bit_address_space:        bool                 [env_var: true, command_line: true]  [always_valid] = false
 }
 
 #[cfg(test)]

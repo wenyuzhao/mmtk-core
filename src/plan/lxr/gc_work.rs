@@ -14,12 +14,16 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for LXRGCWorkContext<VM> {
     type ProcessEdgesWorkType = PlanProcessEdges<VM, LXR<VM>, TRACE_KIND_DEFAULT>;
 }
 
-pub(super) struct LXRWeakRefWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
+pub(super) struct LXRWeakRefWorkContext<VM: VMBinding, const COMPRESSED: bool>(
+    std::marker::PhantomData<VM>,
+);
 
-impl<VM: VMBinding> crate::scheduler::GCWorkContext for LXRWeakRefWorkContext<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> crate::scheduler::GCWorkContext
+    for LXRWeakRefWorkContext<VM, COMPRESSED>
+{
     type VM = VM;
     type PlanType = LXR<VM>;
-    type ProcessEdgesWorkType = LXRWeakRefProcessEdges<VM>;
+    type ProcessEdgesWorkType = LXRWeakRefProcessEdges<VM, COMPRESSED>;
 }
 
 pub struct FastRCPrepare;

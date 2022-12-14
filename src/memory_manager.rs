@@ -19,8 +19,7 @@ use crate::scheduler::{GCController, GCWork, GCWorker};
 use crate::scheduler::{WorkBucketStage, LAST_ACTIVATE_TIME};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
-use crate::util::heap::layout::vm_layout_constants::HEAP_END;
-use crate::util::heap::layout::vm_layout_constants::HEAP_START;
+use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
@@ -568,13 +567,13 @@ pub fn free_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
 /// Return the starting address of the heap. *Note that currently MMTk uses
 /// a fixed address range as heap.*
 pub fn starting_heap_address() -> Address {
-    HEAP_START
+    VM_LAYOUT_CONSTANTS.heap_start
 }
 
 /// Return the ending address of the heap. *Note that currently MMTk uses
 /// a fixed address range as heap.*
 pub fn last_heap_address() -> Address {
-    HEAP_END
+    VM_LAYOUT_CONSTANTS.heap_end
 }
 
 /// Return the total memory in bytes.
@@ -680,7 +679,6 @@ pub fn is_mmtk_object(addr: Address) -> bool {
 /// * `object`: The object reference to query.
 pub fn is_in_mmtk_spaces(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP.get_checked(object.to_address()).is_in_space(object)
 }
 

@@ -212,8 +212,15 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-            self.enqueue_node(obj, e, None);
-        })
+        let compressed = VM::VMObjectModel::compressed_pointers_enabled();
+        if compressed {
+            obj.iterate_fields::<VM, _, true>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+                self.enqueue_node(obj, e, None);
+            })
+        } else {
+            obj.iterate_fields::<VM, _, false>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+                self.enqueue_node(obj, e, None);
+            })
+        }
     }
 }

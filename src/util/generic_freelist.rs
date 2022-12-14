@@ -12,7 +12,7 @@ const MULTI_MASK: i32 = 1 << (TOTAL_BITS - 1);
 const COALESC_MASK: i32 = 1 << (TOTAL_BITS - 2);
 const SIZE_MASK: i32 = (1 << UNIT_BITS) - 1;
 
-pub trait GenericFreeList: Sized {
+pub trait FreeList: Sync {
     fn head(&self) -> i32;
     // fn head_mut(&mut self) -> &mut i32;
     fn heads(&self) -> i32;

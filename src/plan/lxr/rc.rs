@@ -25,7 +25,7 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
+pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
     /// Recursively generated new increments
@@ -38,9 +38,14 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     depth: usize,
 }
 
-unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
+unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
+    for ProcessIncs<VM, KIND, COMPRESSED>
+{
+}
 
-impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
+impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
+    ProcessIncs<VM, KIND, COMPRESSED>
+{
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
@@ -184,9 +189,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = Box::new(ProcessIncs::<VM, { EDGE_KIND_NURSERY }>::new_array_slice(
-                    chunk,
-                ));
+                let mut w = Box::new(
+                    ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new_array_slice(chunk),
+                );
                 w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
@@ -195,7 +200,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             let discovery =
                 self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark;
-            o.iterate_fields::<VM, _>(
+            o.iterate_fields::<VM, _, COMPRESSED>(
                 if self.current_pause != Pause::FullTraceFast {
                     CLDScanPolicy::Claim
                 } else {
@@ -207,7 +212,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     RefScanPolicy::Follow
                 },
                 |edge| {
-                    let target = edge.load();
+                    let target = edge.load::<COMPRESSED>();
                     // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                     if !target.is_null() {
                         if !self::rc_stick(target) {
@@ -232,7 +237,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn flush(&mut self) {
         if !self.new_incs.is_empty() {
             let new_incs = self.new_incs.take();
-            let mut w = ProcessIncs::<VM, { EDGE_KIND_NURSERY }>::new(new_incs);
+            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new(new_incs);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -333,7 +338,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         e: VM::VMEdge,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
-        let o = e.load();
+        let o = e.load::<COMPRESSED>();
         // unlog edge
         if K == EDGE_KIND_MATURE {
             e.to_address().unlog::<VM>();
@@ -377,7 +382,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             //     count(new),
             //     K
             // );
-            e.store(new)
+            e.store::<COMPRESSED>(new)
         } else {
             // println!(
             //     " -- inc {:?}: {:?} rc={} {:?}",
@@ -472,7 +477,9 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
     }
 }
 
-impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
+impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
+    for ProcessIncs<VM, KIND, COMPRESSED>
+{
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
@@ -529,13 +536,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
                 worker
                     .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::<VM>::new(roots.clone(), mmtk));
+                    .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(
+                        roots.clone(),
+                        mmtk,
+                    ));
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
                 worker.add_work(
                     WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM>::new(root_edges, true, mmtk),
+                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(root_edges, true, mmtk),
                 )
             } else {
                 unsafe {
@@ -550,7 +560,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             depth += 1;
             incs.clear();
             self.new_incs.swap(&mut incs);
-            self.process_incs::<{ EDGE_KIND_NURSERY }>(
+            self.process_incs::<EDGE_KIND_NURSERY>(
                 AddressBuffer::Ref(&mut incs),
                 copy_context,
                 depth,
@@ -560,7 +570,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     }
 }
 
-pub struct ProcessDecs<VM: VMBinding> {
+pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     /// Decrements to process
     decs: Option<Vec<ObjectReference>>,
     decs_arc: Option<Arc<Vec<ObjectReference>>>,
@@ -574,9 +584,9 @@ pub struct ProcessDecs<VM: VMBinding> {
     mature_sweeping_in_progress: bool,
 }
 
-unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
+unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for ProcessDecs<VM, COMPRESSED> {}
 
-impl<VM: VMBinding> ProcessDecs<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     #[inline(always)]
@@ -642,7 +652,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[inline]
-    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
+    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM, COMPRESSED>) {
         if lxr.current_pause().is_none() {
             self.worker()
                 .add_work_prioritized(WorkBucketStage::Unconstrained, w);
@@ -664,7 +674,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
-            let w = LXRConcurrentTraceObjects::new(objects, unsafe { &*self.mmtk });
+            let w =
+                LXRConcurrentTraceObjects::<_, COMPRESSED>::new(objects, unsafe { &*self.mmtk });
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {
@@ -701,7 +712,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let w = Box::new(ProcessDecs::<VM>::new_array_slice(
+                let w = Box::new(ProcessDecs::<VM, COMPRESSED>::new_array_slice(
                     chunk,
                     not_marked,
                     self.counter.clone_with_decs(),
@@ -716,19 +727,24 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     .bulk_add(packets);
             }
         } else {
-            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
-                let x = edge.load();
-                if !x.is_null() {
-                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                    let rc = self::count(x);
-                    if rc != MAX_REF_COUNT && rc != 0 {
-                        self.recursive_dec(x);
+            o.iterate_fields::<VM, _, COMPRESSED>(
+                CLDScanPolicy::Ignore,
+                RefScanPolicy::Follow,
+                |edge| {
+                    let x = edge.load::<COMPRESSED>();
+                    if !x.is_null() {
+                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                        let rc = self::count(x);
+                        if rc != MAX_REF_COUNT && rc != 0 {
+                            self.recursive_dec(x);
+                        }
+                        if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(x)
+                        {
+                            self.mark_objects.push(x);
+                        }
                     }
-                    if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(x) {
-                        self.mark_objects.push(x);
-                    }
-                }
-            });
+                },
+            );
         }
         let in_ix_space = immix.immix_space.in_space(o);
         if !crate::args::HOLE_COUNTING && in_ix_space {
@@ -796,7 +812,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessDecs<VM, COMPRESSED> {
     #[inline(always)]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.mmtk = mmtk;
@@ -845,10 +861,10 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     }
 
     #[inline(always)]
-    fn process_edges(&mut self) {
+    fn process_edges<const COMPRESSED: bool>(&mut self) {
         if !self.edges.is_empty() {
             let roots = std::mem::take(&mut self.edges);
-            let mut w = ProcessIncs::<_, { EDGE_KIND_ROOT }>::new(roots);
+            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, COMPRESSED>::new(roots);
             GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }

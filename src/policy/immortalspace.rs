@@ -12,7 +12,7 @@ use crate::plan::{ObjectQueue, VectorObjectQueue};
 use crate::plan::PlanConstraints;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::space::SpaceOptions;
-use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
+use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::HeapMeta;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::vm::{ObjectModel, VMBinding};
@@ -144,8 +144,8 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         zeroed: bool,
         vmrequest: VMRequest,
         global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
+        vm_map: &'static dyn Map,
+        mmapper: &'static dyn Mmapper,
         heap: &mut HeapMeta,
         constraints: &'static PlanConstraints,
     ) -> Self {

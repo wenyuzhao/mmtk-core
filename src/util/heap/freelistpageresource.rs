@@ -10,8 +10,7 @@ use crate::util::alloc::embedded_meta_data::*;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::conversions;
 use crate::util::generic_freelist;
-use crate::util::generic_freelist::GenericFreeList;
-use crate::util::heap::layout::heap_layout::VMMap;
+use crate::util::generic_freelist::FreeList;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
@@ -24,7 +23,7 @@ use std::mem::MaybeUninit;
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 
 pub struct CommonFreeListPageResource {
-    free_list: Box<<VMMap as Map>::FreeList>,
+    free_list: Box<dyn FreeList>,
     start: Address,
 }
 
@@ -127,8 +126,6 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         // The meta-data portion of reserved Pages was committed above.
         self.commit_pages(reserved_pages, required_pages, tls);
         if self.protect_memory_on_release && !new_chunk {
-            use crate::util::heap::layout::Mmapper;
-            use crate::MMAPPER;
             // This check is necessary to prevent us from mprotecting an address that is not yet mapped by mmapper.
             // See https://github.com/mmtk/mmtk-core/issues/400.
             // It is possible that one thread gets a new chunk, and returns from this function. However, the Space.acquire()
@@ -139,7 +136,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             // If we want to improve and get rid of this loop, we need to move this munprotect to anywhere after the ensure_mapped() call
             // in Space.acquire(). We can either move it the option of 'protect_on_release' to space, or have a call to page resource
             // after ensure_mapped(). However, I think this is sufficient given that this option is only used for PageProtect for debugging use.
-            while !MMAPPER.is_mapped_address(rtn) {}
+            while !crate::MMAPPER.is_mapped_address(rtn) {}
             self.munprotect(rtn, self.free_list.size(page_offset as _) as _)
         };
         Result::Ok(PRAllocResult {
@@ -151,7 +148,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
 }
 
 impl<VM: VMBinding> FreeListPageResource<VM> {
-    pub fn new_contiguous(start: Address, bytes: usize, vm_map: &'static VMMap) -> Self {
+    pub fn new_contiguous(start: Address, bytes: usize, vm_map: &'static dyn Map) -> Self {
         let pages = conversions::bytes_to_pages(bytes);
         // We use MaybeUninit::uninit().assume_init(), which is nul, for a Box value, which cannot be null.
         // FIXME: We should try either remove this kind of circular dependency or use MaybeUninit<T> instead of Box<T>
@@ -181,7 +178,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         }
     }
 
-    pub fn new_discontiguous(vm_map: &'static VMMap) -> Self {
+    pub fn new_discontiguous(vm_map: &'static dyn Map) -> Self {
         // We use MaybeUninit::uninit().assume_init(), which is nul, for a Box value, which cannot be null.
         // FIXME: We should try either remove this kind of circular dependency or use MaybeUninit<T> instead of Box<T>
         #[allow(invalid_value)]
@@ -189,7 +186,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let common_flpr = unsafe {
             let mut common_flpr = Box::new(CommonFreeListPageResource {
                 free_list: MaybeUninit::uninit().assume_init(),
-                start: AVAILABLE_START,
+                start: VM_LAYOUT_CONSTANTS.available_start(),
             });
             ::std::ptr::write(
                 &mut common_flpr.free_list,

@@ -10,9 +10,7 @@ use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::EdgeIterator;
-use crate::policy::sft_map::SFTMap;
 use crate::util::constants::BYTES_IN_ADDRESS;
-use crate::util::heap::layout::mmapper::Mmapper;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::*;
 
@@ -720,13 +718,13 @@ impl ObjectReference {
     }
 
     #[inline(always)]
-    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge), const COMPRESSED: bool>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate(
+        EdgeIterator::<VM>::iterate::<COMPRESSED, _>(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,
