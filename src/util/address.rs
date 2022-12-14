@@ -670,23 +670,31 @@ impl ObjectReference {
     }
 
     #[inline(always)]
-    pub fn class_pointer(self) -> Address {
-        unsafe { (self.to_address() + BYTES_IN_WORD).load() }
+    pub fn class_pointer<VM: VMBinding>(self) -> Address {
+        VM::VMObjectModel::get_class_pointer(self)
     }
 
     #[inline(always)]
-    pub fn class_is_valid(self) -> bool {
-        let klass = self.class_pointer();
-        ((klass.as_usize() & 0xff00000000000) == 0x700000000000) && klass.is_aligned_to(8)
+    pub fn class_is_valid<VM: VMBinding>(self) -> bool {
+        let klass = self.class_pointer::<VM>();
+        let valid = if VM::VMObjectModel::compressed_pointers_enabled() {
+            ((klass.as_usize() & 0x1_0000_0000) != 0) && klass.is_aligned_to(8)
+        } else {
+            ((klass.as_usize() & 0xff00000000000) == 0x700000000000) && klass.is_aligned_to(8)
+        };
+        if !valid {
+            println!("invalid klass {:?}", klass);
+        }
+        valid
     }
 
     #[inline(always)]
-    fn assert_class_is_valid(self) {
+    fn assert_class_is_valid<VM: VMBinding>(self) {
         assert!(
-            self.class_is_valid(),
+            self.class_is_valid::<VM>(),
             "Invalid class pointer obj={:?} cls={:?}",
             self,
-            self.class_pointer()
+            self.class_pointer::<VM>()
         );
     }
 
@@ -701,7 +709,7 @@ impl ObjectReference {
     }
 
     #[inline(always)]
-    pub fn verify(self) {
+    pub fn verify<VM: VMBinding>(self) {
         if cfg!(debug_assertions) || Self::STRICT_VERIFICATION {
             if self.is_null() {
                 return;
@@ -713,7 +721,7 @@ impl ObjectReference {
                 "object {:?} is dead",
                 self
             );
-            self.assert_class_is_valid();
+            self.assert_class_is_valid::<VM>();
         }
     }
 

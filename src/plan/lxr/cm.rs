@@ -106,7 +106,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         if no_trace {
             return object;
         }
-        if !object.class_is_valid() {
+        if !object.class_is_valid::<VM>() {
             return object;
         }
         if self.plan.immix_space.in_space(object) {
@@ -338,7 +338,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         if object.is_null()
             || !object.is_in_any_space()
             || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid()
+            || !object.class_is_valid::<VM>()
         {
             return object;
         }
@@ -408,7 +408,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         if object.is_null()
             || !object.is_in_any_space()
             || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid()
+            || !object.class_is_valid::<VM>()
         {
             return object;
         }

@@ -88,7 +88,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
 
     #[inline(always)]
     fn promote(&mut self, o: ObjectReference, copied: bool, los: bool, depth: usize) {
-        o.verify();
+        o.verify::<VM>();
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
@@ -279,7 +279,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> ObjectReference {
-        o.verify();
+        o.verify::<VM>();
         crate::stat(|s| {
             s.inc_objects += 1;
             s.inc_volume += o.get_size::<VM>();
@@ -364,7 +364,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             }
         };
         // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
-        o.verify();
+        o.verify::<VM>();
         let new = if !crate::args::RC_NURSERY_EVACUATION {
             self.process_inc(o, depth)
         } else {

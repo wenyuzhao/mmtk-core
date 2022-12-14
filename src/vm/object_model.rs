@@ -410,6 +410,8 @@ pub trait ObjectModel<VM: VMBinding> {
     fn dump_object_s(object: ObjectReference) -> String;
 
     fn compressed_pointers_enabled() -> bool;
+
+    fn get_class_pointer(object: ObjectReference) -> Address;
 }
 
 pub mod specs {
