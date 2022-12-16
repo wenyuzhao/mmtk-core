@@ -504,13 +504,9 @@ pub trait ProcessEdgesWork:
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 
     #[cfg(feature = "sanity")]
-    fn cache_roots_for_sanity_gc(&mut self) {
+    fn cache_roots_for_sanity_gc(&mut self, roots: Vec<EdgeOf<Self>>) {
         assert!(self.roots);
-        self.mmtk()
-            .sanity_checker
-            .lock()
-            .unwrap()
-            .add_roots(self.edges.clone());
+        self.mmtk().sanity_checker.lock().unwrap().add_roots(roots);
     }
 
     /// Start the a scan work packet. If SCAN_OBJECTS_IMMEDIATELY, the work packet will be executed immediately, in this method.
@@ -572,6 +568,12 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessEdgesWork");
         self.set_worker(worker);
+        #[cfg(feature = "sanity")]
+        let roots = if self.roots {
+            Some(self.edges.clone())
+        } else {
+            None
+        };
         let compressed = <<E::VM as VMBinding>::VMObjectModel as ObjectModel<E::VM>>::compressed_pointers_enabled();
         if compressed {
             self.process_edges::<true>();
@@ -583,7 +585,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
         }
         #[cfg(feature = "sanity")]
         if self.roots {
-            self.cache_roots_for_sanity_gc();
+            self.cache_roots_for_sanity_gc(roots.unwrap());
         }
         trace!("ProcessEdgesWork End");
     }

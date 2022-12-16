@@ -176,17 +176,26 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED>();
         self.edge = slot.to_address();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store(new_object);
+            slot.store::<COMPRESSED>(new_object);
         }
     }
 
     #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        if let Some(lxr) = self
+            .mmtk()
+            .get_plan()
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+        {
+            if self.edge.is_mapped() {
+                assert!(!self.edge.is_logged::<VM>(), "{:?} is logged", object);
+            }
+        }
         if object.is_null() {
             return object;
         }
@@ -236,7 +245,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         roots: bool,
     ) -> Self::ScanObjectsWorkType {
         let mut x = ScanObjects::<Self>::new(nodes, false, roots);
-        x.discovery = true;
+        x.discovery = false;
         x
     }
 }
