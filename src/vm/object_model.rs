@@ -489,6 +489,9 @@ pub mod specs {
     }
 
     // Log bit: 1 bit per object, global
+    #[cfg(feature = "unlog_bit_coverage_4b")]
+    define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE - 1);
+    #[cfg(not(feature = "unlog_bit_coverage_4b"))]
     define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE);
     // Forwarding pointer: word size per object, local
     define_vm_metadata_spec!(

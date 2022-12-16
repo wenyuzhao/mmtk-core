@@ -194,6 +194,9 @@ impl Line {
 
     #[inline(always)]
     pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
+        #[cfg(feature = "unlog_bit_coverage_4b")]
+        const LOG_META_BITS_PER_LINE: usize = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize + 1;
+        #[cfg(not(feature = "unlog_bit_coverage_4b"))]
         const LOG_META_BITS_PER_LINE: usize = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize;
         debug_assert!((1 << LOG_META_BITS_PER_LINE) >= 8);
         const LOG_META_BYTES_PER_LINE: usize = LOG_META_BITS_PER_LINE - LOG_BITS_IN_BYTE as usize;
@@ -210,6 +213,9 @@ impl Line {
 
     #[inline(always)]
     pub fn initialize_log_table_as_unlogged<VM: VMBinding>(lines: Range<Line>) {
+        #[cfg(feature = "unlog_bit_coverage_4b")]
+        const LOG_META_BITS_PER_LINE: usize = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize + 1;
+        #[cfg(not(feature = "unlog_bit_coverage_4b"))]
         const LOG_META_BITS_PER_LINE: usize = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize;
         debug_assert!((1 << LOG_META_BITS_PER_LINE) >= 8);
         const LOG_META_BYTES_PER_LINE: usize = LOG_META_BITS_PER_LINE - LOG_BITS_IN_BYTE as usize;

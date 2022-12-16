@@ -141,6 +141,16 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         in_place_promotion: bool,
         depth: usize,
     ) {
+        let heap_bytes_per_unlog_byte = if cfg!(feature = "unlog_bit_coverage_4b") {
+            32usize
+        } else {
+            64
+        };
+        let heap_bytes_per_unlog_bit = if cfg!(feature = "unlog_bit_coverage_4b") {
+            4usize
+        } else {
+            8
+        };
         if los {
             if !VM::VMScanning::is_val_array(o) {
                 let start = side_metadata::address_to_meta_address(
@@ -150,7 +160,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 .to_mut_ptr::<u8>();
                 let limit = side_metadata::address_to_meta_address(
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                    (o.to_address() + o.get_size::<VM>()).align_up(64),
+                    (o.to_address() + o.get_size::<VM>()).align_up(heap_bytes_per_unlog_byte),
                 )
                 .to_mut_ptr::<u8>();
                 let bytes = unsafe { limit.offset_from(start) as usize };
@@ -164,25 +174,25 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         } else if in_place_promotion {
             let size = o.get_size::<VM>();
             let end = o.to_address() + size;
-            let aligned_end = end.align_down(64);
+            let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
             let mut cursor = o.to_address() + 16usize;
             let mut meta = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                cursor.align_up(64),
+                cursor.align_up(heap_bytes_per_unlog_byte),
             );
             while cursor < aligned_end {
-                if cursor.is_aligned_to(64) {
+                if cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
                     unsafe { meta.store(0xffu8) }
                     meta += 1usize;
-                    cursor += 64usize;
+                    cursor += heap_bytes_per_unlog_byte;
                 } else {
                     cursor.unlog::<VM>();
-                    cursor += 8usize;
+                    cursor += heap_bytes_per_unlog_bit;
                 }
             }
             while cursor < end {
                 cursor.unlog::<VM>();
-                cursor += 8usize;
+                cursor += heap_bytes_per_unlog_bit;
             }
         };
         if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 1024 {

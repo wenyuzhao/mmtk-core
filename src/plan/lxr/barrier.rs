@@ -99,7 +99,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     #[inline(always)]
     fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
-        if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
+        let heap_bytes_per_unlog_byte = if cfg!(not(feature = "unlog_bit_coverage_4b")) {
+            32usize
+        } else {
+            64
+        };
+        if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
             unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
         } else {
             Self::UNLOG_BITS.store_atomic(edge.to_address(), LOGGED_VALUE, Ordering::Relaxed);
