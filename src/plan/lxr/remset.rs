@@ -1,9 +1,10 @@
-use std::cell::UnsafeCell;
+use std::{cell::UnsafeCell, marker::PhantomData};
 
 use crate::{
     plan::lxr::LXR,
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{GCWork, GCWorker},
+    util::Address,
     vm::{edge_shape::Edge, VMBinding},
     MMTK,
 };
@@ -12,20 +13,41 @@ use crate::policy::immix::{line::Line, ImmixSpace};
 
 use super::mature_evac::EvacuateMatureObjects;
 
+#[repr(transparent)]
+pub(super) struct RemSetEntry(usize);
+
+impl RemSetEntry {
+    #[inline(always)]
+    fn encode<VM: VMBinding>(edge: VM::VMEdge, epoch: u8) -> Self {
+        Self(edge.to_address().as_usize() | ((epoch as usize) << 48))
+    }
+
+    #[inline(always)]
+    pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, u8) {
+        let v = ((self.0 >> 48) & 0xff) as u8;
+        let p = unsafe { Address::from_usize(self.0 & 0xff00_ffff_ffff_ffff_usize) };
+        (VM::VMEdge::from_address(p), v)
+    }
+}
+
 pub struct RemSet<VM: VMBinding> {
-    pub gc_buffers: Vec<UnsafeCell<Vec<VM::VMEdge>>>,
+    pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
+    _p: PhantomData<VM>,
 }
 
 impl<VM: VMBinding> RemSet<VM> {
     pub fn new(workers: usize) -> Self {
-        let mut rs = RemSet { gc_buffers: vec![] };
+        let mut rs = RemSet {
+            gc_buffers: vec![],
+            _p: PhantomData,
+        };
         rs.gc_buffers
             .resize_with(workers, || UnsafeCell::new(vec![]));
         rs
     }
 
     #[inline(always)]
-    fn gc_buffer(&self, id: usize) -> &mut Vec<VM::VMEdge> {
+    fn gc_buffer(&self, id: usize) -> &mut Vec<RemSetEntry> {
         unsafe { &mut *self.gc_buffers[id].get() }
     }
 
@@ -59,11 +81,7 @@ impl<VM: VMBinding> RemSet<VM> {
             LargeObjectSpace::<VM>::currrent_validity_state(e.to_address())
         };
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffer(id)
-            .push(VM::VMEdge::from_address(Line::encode_validity_state(
-                e.to_address(),
-                v,
-            )));
+        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, v));
         if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush(id, space)
         }

@@ -157,18 +157,6 @@ impl Line {
     }
 
     #[inline(always)]
-    pub fn encode_validity_state(ptr: Address, valid: u8) -> Address {
-        unsafe { Address::from_usize(ptr.as_usize() | ((valid as usize) << 56)) }
-    }
-
-    #[inline(always)]
-    pub fn decode_validity_state(x: Address) -> (Address, u8) {
-        let v = (x.as_usize() >> 56) as u8;
-        let p = unsafe { Address::from_usize(x.as_usize() & 0x0000_ffff_ffff_ffff_usize) };
-        (p, v)
-    }
-
-    #[inline(always)]
     pub fn currrent_validity_state(&self) -> u8 {
         unsafe { Self::VALIDITY_STATE.load(self.start()) }
     }

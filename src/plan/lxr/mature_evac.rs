@@ -13,15 +13,15 @@ use crate::{
         space::Space,
     },
     scheduler::{GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
-    util::{Address, ObjectReference},
     vm::VMBinding,
     MMTK,
 };
 
+use super::remset::RemSetEntry;
 use super::LXR;
 
 pub struct EvacuateMatureObjects<VM: VMBinding> {
-    remset: Vec<VM::VMEdge>,
+    remset: Vec<RemSetEntry>,
     _p: PhantomData<VM>,
 }
 
@@ -31,7 +31,7 @@ unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     pub const CAPACITY: usize = 512;
 
-    pub fn new(remset: Vec<VM::VMEdge>) -> Self {
+    pub(super) fn new(remset: Vec<RemSetEntry>) -> Self {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         Self {
             remset,
@@ -40,32 +40,34 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     #[inline(always)]
-    fn address_is_valid_oop_edge(&self, e: Address, epoch: u8, lxr: &LXR<VM>) -> bool {
+    fn address_is_valid_oop_edge(&self, e: VM::VMEdge, epoch: u8, lxr: &LXR<VM>) -> bool {
         // Keep edges not in the mmtk heap
         // These should be edges in the c++ `ClassLoaderData` objects. We remember these edges
         // in the remembered-set to avoid expensive CLD scanning.
-        if !lxr.immix_space.address_in_space(e) && !lxr.los().address_in_space(e) {
+        if !lxr.immix_space.address_in_space(e.to_address())
+            && !lxr.los().address_in_space(e.to_address())
+        {
             return true;
         }
         // Skip edges in collection set
-        if lxr.address_in_defrag(e) {
+        if lxr.address_in_defrag(e.to_address()) {
             return false;
         }
         if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             return true;
         }
         // Check if it is a real oop field
-        if lxr.immix_space.address_in_space(e) {
-            let block = Block::of(e);
+        if lxr.immix_space.address_in_space(e.to_address()) {
+            let block = Block::of(e.to_address());
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
-            if Line::of(e).pointer_is_valid(epoch) {
+            if Line::of(e.to_address()).pointer_is_valid(epoch) {
                 return true;
             }
             false
         } else {
-            if lxr.los().pointer_is_valid(e, epoch) {
+            if lxr.los().pointer_is_valid(e.to_address(), epoch) {
                 return true;
             }
             false
@@ -73,13 +75,17 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     #[inline]
-    fn process_edge(&mut self, e: Address, epoch: u8, lxr: &LXR<VM>) -> bool {
+    fn process_edge(&mut self, e: VM::VMEdge, epoch: u8, lxr: &LXR<VM>) -> bool {
         // Skip edges that does not contain a real oop
         if !self.address_is_valid_oop_edge(e, epoch, lxr) {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
-        let o = unsafe { e.load::<ObjectReference>() };
+        let o = if VM::VMObjectModel::compressed_pointers_enabled() {
+            e.load::<true>()
+        } else {
+            e.load::<false>()
+        };
         if !lxr.immix_space.in_space(o) || !o.is_in_any_space() {
             return false;
         }
@@ -107,11 +113,14 @@ impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
         let remset = std::mem::take(&mut self.remset);
         let edges = remset
             .into_iter()
-            .filter(|e| {
-                let (e, epoch) = Line::decode_validity_state(e.to_address());
-                self.process_edge(e, epoch, lxr)
+            .filter_map(|entry| {
+                let (e, epoch) = entry.decode::<VM>();
+                if self.process_edge(e, epoch, lxr) {
+                    Some(e)
+                } else {
+                    None
+                }
             })
-            .map(|e| VM::VMEdge::from_address(Line::decode_validity_state(e.to_address()).0))
             .collect::<Vec<_>>();
         // transitive closure
         if VM::VMObjectModel::compressed_pointers_enabled() {
