@@ -152,7 +152,7 @@ pub trait Scanning<VM: VMBinding> {
     }
 
     #[inline(always)]
-    fn obj_array_data(_o: ObjectReference) -> &'static [ObjectReference] {
+    fn obj_array_data(_o: ObjectReference) -> VM::VMMemorySlice {
         unreachable!()
     }
 

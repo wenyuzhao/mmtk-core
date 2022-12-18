@@ -5,7 +5,7 @@ use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
-use crate::vm::edge_shape::Edge;
+use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::{
     plan::ObjectQueue,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
@@ -37,8 +37,6 @@ unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRESSED> {
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
-
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
@@ -67,6 +65,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         }
     }
 
+    #[allow(unused)]
     pub fn new_slice(slice: &'static [ObjectReference], mmtk: &'static MMTK<VM>) -> Self {
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
@@ -99,16 +98,15 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
 
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() || !object.is_in_any_space() {
+        if object.is_null() {
             return object;
         }
+        debug_assert!(object.is_in_any_space());
         let no_trace = crate::util::rc::count(object) == 0;
         if no_trace {
             return object;
         }
-        if !object.class_is_valid::<VM>() {
-            return object;
-        }
+        debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space(object) {
             self.plan.immix_space.fast_trace_object(self, object);
             object
@@ -150,15 +148,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
         let should_check_remset = !self.plan.in_defrag(object);
         if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
             && VM::VMScanning::is_obj_array(object)
-            && VM::VMScanning::obj_array_data(object).len() > 1024
+            && VM::VMScanning::obj_array_data(object).bytes() > 1024
         {
-            let data = VM::VMScanning::obj_array_data(object);
-            let mut packets = vec![];
-            for chunk in data.chunks(Self::CAPACITY) {
-                packets.push((Box::new(Self::new_slice(chunk, self.mmtk))) as Box<dyn GCWork<VM>>);
-            }
-            self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                .bulk_add(packets);
+            // Buggy. Dead array can be recycled at any time.
+            unimplemented!()
         } else {
             object.iterate_fields::<VM, _, COMPRESSED>(
                 CLDScanPolicy::Claim,
@@ -335,13 +328,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
     /// Trace  and evacuate objects.
     #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null()
-            || !object.is_in_any_space()
-            || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid::<VM>()
-        {
+        if object.is_null() {
             return object;
         }
+        debug_assert!(object.is_in_any_space());
+        debug_assert!(object.to_address().is_aligned_to(8));
+        debug_assert!(object.class_is_valid::<VM>());
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
@@ -405,13 +397,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
 impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
     #[inline(always)]
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null()
-            || !object.is_in_any_space()
-            || !object.to_address().is_aligned_to(8)
-            || !object.class_is_valid::<VM>()
-        {
+        if object.is_null() {
             return object;
         }
+        debug_assert!(object.is_in_any_space());
+        debug_assert!(object.to_address().is_aligned_to(8));
+        debug_assert!(object.class_is_valid::<VM>());
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();

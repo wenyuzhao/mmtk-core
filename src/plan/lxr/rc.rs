@@ -10,8 +10,8 @@ use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::rc::*;
-use crate::util::Address;
 use crate::vm::edge_shape::Edge;
+use crate::vm::edge_shape::MemorySlice;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::immix::Pause,
@@ -34,7 +34,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     no_evac: bool,
-    slice: Option<&'static [ObjectReference]>,
+    slice: Option<VM::VMMemorySlice>,
     depth: usize,
 }
 
@@ -59,7 +59,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     }
 
     #[inline]
-    pub fn new_array_slice(slice: &'static [ObjectReference]) -> Self {
+    pub fn new_array_slice(slice: VM::VMMemorySlice) -> Self {
         Self {
             incs: vec![],
             new_incs: VectorQueue::default(),
@@ -172,14 +172,23 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 (o.to_address() + 8usize).unlog_non_atomic::<VM>();
             }
         } else if in_place_promotion {
+            let header_size = if VM::VMObjectModel::compressed_pointers_enabled() {
+                12usize
+            } else {
+                16
+            };
             let size = o.get_size::<VM>();
             let end = o.to_address() + size;
             let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
-            let mut cursor = o.to_address() + 16usize;
+            let mut cursor = o.to_address() + header_size;
             let mut meta = side_metadata::address_to_meta_address(
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
                 cursor.align_up(heap_bytes_per_unlog_byte),
             );
+            while cursor < end && !cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
+                cursor.unlog::<VM>();
+                cursor += heap_bytes_per_unlog_bit;
+            }
             while cursor < aligned_end {
                 if cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
                     unsafe { meta.store(0xffu8) }
@@ -444,13 +453,12 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     #[inline(always)]
     fn process_incs_for_obj_array<const K: EdgeKind>(
         &mut self,
-        slice: &[ObjectReference],
+        slice: VM::VMMemorySlice,
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
-        for e in slice {
-            let e = Address::from_ref(e);
-            self.process_edge::<K>(VM::VMEdge::from_address(e), copy_context, depth);
+        for e in slice.iter_edges() {
+            self.process_edge::<K>(e, copy_context, depth);
         }
         None
     }
@@ -534,7 +542,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             vec![]
         };
         let roots = {
-            if let Some(slice) = self.slice {
+            if let Some(slice) = self.slice.take() {
                 assert_eq!(KIND, EDGE_KIND_NURSERY);
                 self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
             } else {
@@ -717,25 +725,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         // Recursively decrease field ref counts
         if false
             && VM::VMScanning::is_obj_array(o)
-            && VM::VMScanning::obj_array_data(o).len() > 1024
+            && VM::VMScanning::obj_array_data(o).bytes() > 1024
         {
-            let data = VM::VMScanning::obj_array_data(o);
-            let mut packets = vec![];
-            for chunk in data.chunks(Self::CAPACITY) {
-                let w = Box::new(ProcessDecs::<VM, COMPRESSED>::new_array_slice(
-                    chunk,
-                    not_marked,
-                    self.counter.clone_with_decs(),
-                ));
-                packets.push(w as Box<dyn GCWork<VM>>);
-            }
-            if immix.current_pause().is_none() {
-                self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                    .bulk_add_prioritized(packets);
-            } else {
-                self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                    .bulk_add(packets);
-            }
+            // Buggy. Dead array can be recycled at any time.
+            unimplemented!()
         } else {
             o.iterate_fields::<VM, _, COMPRESSED>(
                 CLDScanPolicy::Ignore,
