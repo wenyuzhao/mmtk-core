@@ -620,11 +620,10 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+    pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>, _concurrent: bool) {
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
         if is_in_place_promoted {
-            debug_assert!(!crate::args::LAZY_DECREMENTS || !self.rc_dead());
             self.set_state(BlockState::Reusable {
                 unavailable_lines: 1 as _,
             });

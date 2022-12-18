@@ -1,8 +1,11 @@
 use super::{block::Block, chunk::ChunkState, ImmixSpace};
 use crate::{
+    plan::lxr::LXR,
     policy::space::Space,
+    scheduler::{GCWork, GCWorkScheduler, GCWorker},
     util::{VMMutatorThread, VMThread},
     vm::*,
+    LazySweepingJobsCounter, MMTK,
 };
 use atomic::{Atomic, Ordering};
 use spin::Lazy;
@@ -52,16 +55,28 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
-    pub fn sweep_and_reset(&mut self) {
+    pub fn sweep_and_reset(&mut self, scheduler: &GCWorkScheduler<VM>) {
+        const MAX_STW_SWEEP_BLOCKS: usize = 1024;
         let _guard = self.refill_lock.lock().unwrap();
         let space = self.space();
         // Sweep nursery blocks
         let limit = self
             .previously_allocated_nursery_blocks
             .load(Ordering::SeqCst);
-        for block in &self.buffer[0..limit] {
+        let stw_limit = usize::min(limit, MAX_STW_SWEEP_BLOCKS);
+        for block in &self.buffer[0..stw_limit] {
             let block = block.load(Ordering::Relaxed);
-            block.rc_sweep_nursery(space)
+            block.rc_sweep_nursery(space, false)
+        }
+        if limit > stw_limit {
+            let packets = self.buffer[stw_limit..limit]
+                .chunks(1024)
+                .map(|c| {
+                    let blocks: Vec<Block> = c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+                    Box::new(RCSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
+                })
+                .collect();
+            scheduler.postpone_all_prioritized(packets);
         }
         // Sweep unused pre-allocated blocks
         let cursor = self.cursor.load(Ordering::Relaxed);
@@ -252,6 +267,31 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             } else {
                 return None;
             }
+        }
+    }
+}
+
+pub struct RCSweepNurseryBlocks {
+    blocks: Vec<Block>,
+    _counter: LazySweepingJobsCounter,
+}
+
+impl RCSweepNurseryBlocks {
+    #[inline]
+    pub fn new(blocks: Vec<Block>) -> Self {
+        Self {
+            blocks,
+            _counter: LazySweepingJobsCounter::new_desc(),
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        for block in &self.blocks {
+            block.rc_sweep_nursery(space, true)
         }
     }
 }
