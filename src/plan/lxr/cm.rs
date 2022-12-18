@@ -147,8 +147,8 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     fn enqueue(&mut self, object: ObjectReference) {
         let should_check_remset = !self.plan.in_defrag(object);
         if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
-            && VM::VMScanning::is_obj_array(object)
-            && VM::VMScanning::obj_array_data(object).bytes() > 1024
+            && VM::VMScanning::is_obj_array::<COMPRESSED>(object)
+            && VM::VMScanning::obj_array_data::<COMPRESSED>(object).bytes() > 1024
         {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()

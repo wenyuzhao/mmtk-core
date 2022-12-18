@@ -152,17 +152,17 @@ pub trait Scanning<VM: VMBinding> {
     }
 
     #[inline(always)]
-    fn obj_array_data(_o: ObjectReference) -> VM::VMMemorySlice {
+    fn obj_array_data<const COMPRESSED: bool>(_o: ObjectReference) -> VM::VMMemorySlice {
         unreachable!()
     }
 
     #[inline(always)]
-    fn is_obj_array(_o: ObjectReference) -> bool {
+    fn is_obj_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
         unreachable!()
     }
 
     #[inline(always)]
-    fn is_val_array(_o: ObjectReference) -> bool {
+    fn is_val_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
         unreachable!()
     }
 
