@@ -172,11 +172,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 (o.to_address() + 8usize).unlog_non_atomic::<VM>();
             }
         } else if in_place_promotion {
-            let header_size = if VM::VMObjectModel::compressed_pointers_enabled() {
-                12usize
-            } else {
-                16
-            };
+            let header_size = if COMPRESSED { 12usize } else { 16 };
             let size = o.get_size::<VM>();
             let end = o.to_address() + size;
             let aligned_end = end.align_down(heap_bytes_per_unlog_byte);

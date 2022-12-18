@@ -839,26 +839,30 @@ impl<VM: VMBinding> LXR<VM> {
         let prev_roots = unsafe { &super::PREV_ROOTS };
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                let w = ProcessDecs::<_, true>::new(decs, LazySweepingJobsCounter::new_desc());
-                work_packets.push(Box::new(w));
+            work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
+                Box::new(ProcessDecs::<_, true>::new(
+                    decs,
+                    LazySweepingJobsCounter::new_desc(),
+                ))
             } else {
-                let w = ProcessDecs::<_, false>::new(decs, LazySweepingJobsCounter::new_desc());
-                work_packets.push(Box::new(w));
-            }
+                Box::new(ProcessDecs::<_, false>::new(
+                    decs,
+                    LazySweepingJobsCounter::new_desc(),
+                ))
+            })
         }
         if work_packets.is_empty() {
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                work_packets.push(Box::new(ProcessDecs::<_, true>::new(
+            work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
+                Box::new(ProcessDecs::<_, true>::new(
                     vec![],
                     LazySweepingJobsCounter::new_desc(),
-                )));
+                ))
             } else {
-                work_packets.push(Box::new(ProcessDecs::<_, false>::new(
+                Box::new(ProcessDecs::<_, false>::new(
                     vec![],
                     LazySweepingJobsCounter::new_desc(),
-                )));
-            }
+                ))
+            });
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);

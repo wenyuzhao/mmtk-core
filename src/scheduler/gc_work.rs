@@ -574,8 +574,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
         } else {
             None
         };
-        let compressed = <<E::VM as VMBinding>::VMObjectModel as ObjectModel<E::VM>>::compressed_pointers_enabled();
-        if compressed {
+        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
             self.process_edges::<true>();
         } else {
             self.process_edges::<false>();
@@ -866,8 +865,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        let compressed = <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled();
-        if compressed {
+        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
             self.do_work_common::<true>(&self.buffer, worker, mmtk, self.discovery);
         } else {
             self.do_work_common::<false>(&self.buffer, worker, mmtk, self.discovery);
@@ -1031,8 +1029,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        let compressed = <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled();
-        if compressed {
+        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
             self.do_work_common::<true>(&self.buffer, worker, mmtk, true);
         } else {
             self.do_work_common::<false>(&self.buffer, worker, mmtk, true);

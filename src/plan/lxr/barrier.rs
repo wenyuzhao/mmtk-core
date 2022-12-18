@@ -33,7 +33,7 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub const UNLOCKED_VALUE: u8 = 0b0;
 pub const LOCKED_VALUE: u8 = 0b1;
 
-pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
+pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
     mmtk: &'static MMTK<VM>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
@@ -41,7 +41,7 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     lxr: &'static LXR<VM>,
 }
 
-impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRESSED> {
     const UNLOG_BITS: SideMetadataSpec = *<VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -115,11 +115,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     #[inline(always)]
     fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old = if VM::VMObjectModel::compressed_pointers_enabled() {
-                edge.load::<true>()
-            } else {
-                edge.load::<false>()
-            };
+            let old = edge.load::<COMPRESSED>();
             self.log_and_unlock_edge(edge);
             Ok(old)
         } else {
@@ -131,11 +127,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if !edge.to_address().is_logged::<VM>() {
-            let old = if VM::VMObjectModel::compressed_pointers_enabled() {
-                edge.load::<true>()
-            } else {
-                edge.load::<false>()
-            };
+            let old = edge.load::<COMPRESSED>();
             edge.to_address().log::<VM>();
             Ok(old)
         } else {
@@ -223,31 +215,23 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                    .add(ProcessIncs::<_, EDGE_KIND_MATURE, true>::new(incs));
-            } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                    .add(ProcessIncs::<_, EDGE_KIND_MATURE, false>::new(incs));
-            }
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
+                _,
+                EDGE_KIND_MATURE,
+                COMPRESSED,
+            >::new(
+                incs
+            ));
         }
     }
 
     #[cold]
     fn flush_decs_and_satb(&mut self) {
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.flush_decs_and_satb_impl::<true>()
-        } else {
-            self.flush_decs_and_satb_impl::<false>()
-        }
-    }
-
-    fn flush_decs_and_satb_impl<const COMPRESSED: bool>(&mut self) {
         if !self.decs.is_empty() {
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                    .add(ProcessModBufSATB::new_arc(decs.clone()));
+                    .add(ProcessModBufSATB::<COMPRESSED>::new_arc(decs.clone()));
                 ProcessDecs::<_, COMPRESSED>::new_arc(decs, LazySweepingJobsCounter::new_desc())
             } else {
                 let decs = self.decs.take();
@@ -266,13 +250,18 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
-                .add(ProcessModBufSATB::new(nodes));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial].add(ProcessModBufSATB::<
+                COMPRESSED,
+            >::new(
+                nodes
+            ));
         }
     }
 }
 
-impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
+    for LXRFieldBarrierSemantics<VM, COMPRESSED>
+{
     type VM = VM;
 
     #[cold]
@@ -305,21 +294,11 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        let compressed = VM::VMObjectModel::compressed_pointers_enabled();
-        if compressed {
-            obj.iterate_fields::<VM, _, true>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-                if !e.to_address().is_mapped() {
-                    return;
-                }
-                self.enqueue_node(obj, e, None);
-            })
-        } else {
-            obj.iterate_fields::<VM, _, false>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-                if !e.to_address().is_mapped() {
-                    return;
-                }
-                self.enqueue_node(obj, e, None);
-            })
-        }
+        obj.iterate_fields::<VM, _, COMPRESSED>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+            if !e.to_address().is_mapped() {
+                return;
+            }
+            self.enqueue_node(obj, e, None);
+        })
     }
 }

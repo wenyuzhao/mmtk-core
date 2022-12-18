@@ -75,17 +75,18 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     #[inline]
-    fn process_edge(&mut self, e: VM::VMEdge, epoch: u8, lxr: &LXR<VM>) -> bool {
+    fn process_edge<const COMPRESSED: bool>(
+        &mut self,
+        e: VM::VMEdge,
+        epoch: u8,
+        lxr: &LXR<VM>,
+    ) -> bool {
         // Skip edges that does not contain a real oop
         if !self.address_is_valid_oop_edge(e, epoch, lxr) {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
-        let o = if VM::VMObjectModel::compressed_pointers_enabled() {
-            e.load::<true>()
-        } else {
-            e.load::<false>()
-        };
+        let o = e.load::<COMPRESSED>();
         if !lxr.immix_space.in_space(o) || !o.is_in_any_space() {
             return false;
         }
@@ -99,36 +100,44 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // }
         // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
-}
 
-impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
-    #[inline(always)]
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    #[inline]
+    fn process_edges<const COMPRESSED: bool>(
+        &mut self,
+        mmtk: &'static MMTK<VM>,
+    ) -> Box<dyn GCWork<VM>> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
                 || lxr.current_pause() == Some(Pause::FullTraceFast)
         );
-        // cleanup edges
         let remset = std::mem::take(&mut self.remset);
         let edges = remset
             .into_iter()
             .filter_map(|entry| {
                 let (e, epoch) = entry.decode::<VM>();
-                if self.process_edge(e, epoch, lxr) {
+                if self.process_edge::<COMPRESSED>(e, epoch, lxr) {
                     Some(e)
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
-        // transitive closure
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            let w = LXRStopTheWorldProcessEdges::<_, true>::new(edges, false, mmtk);
-            worker.add_work(WorkBucketStage::Closure, w);
+        Box::new(LXRStopTheWorldProcessEdges::<_, COMPRESSED>::new(
+            edges, false, mmtk,
+        ))
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let work = if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.process_edges::<true>(mmtk)
         } else {
-            let w = LXRStopTheWorldProcessEdges::<_, false>::new(edges, false, mmtk);
-            worker.add_work(WorkBucketStage::Closure, w);
-        }
+            self.process_edges::<false>(mmtk)
+        };
+        // transitive closure
+        worker.add_boxed_work(WorkBucketStage::Closure, work)
     }
 }

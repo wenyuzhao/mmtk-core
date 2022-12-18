@@ -222,12 +222,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
     }
 }
 
-pub struct ProcessModBufSATB {
+pub struct ProcessModBufSATB<const COMPRESSED: bool> {
     nodes: Option<Vec<ObjectReference>>,
     nodes_arc: Option<Arc<Vec<ObjectReference>>>,
 }
 
-impl ProcessModBufSATB {
+impl<const COMPRESSED: bool> ProcessModBufSATB<COMPRESSED> {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
         Self {
             nodes: Some(nodes),
@@ -242,46 +242,29 @@ impl ProcessModBufSATB {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COMPRESSED> {
     #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        let compressed = VM::VMObjectModel::compressed_pointers_enabled();
         if let Some(nodes) = self.nodes.take() {
             if nodes.is_empty() {
                 return;
             }
-            if compressed {
-                GCWork::do_work(
-                    &mut LXRConcurrentTraceObjects::<VM, true>::new(nodes, mmtk),
-                    worker,
-                    mmtk,
-                );
-            } else {
-                GCWork::do_work(
-                    &mut LXRConcurrentTraceObjects::<VM, false>::new(nodes, mmtk),
-                    worker,
-                    mmtk,
-                );
-            }
+            GCWork::do_work(
+                &mut LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(nodes, mmtk),
+                worker,
+                mmtk,
+            );
         }
         if let Some(nodes) = self.nodes_arc.take() {
             if nodes.is_empty() {
                 return;
             }
-            if compressed {
-                GCWork::do_work(
-                    &mut LXRConcurrentTraceObjects::<VM, true>::new_arc(nodes, mmtk),
-                    worker,
-                    mmtk,
-                );
-            } else {
-                GCWork::do_work(
-                    &mut LXRConcurrentTraceObjects::<VM, false>::new_arc(nodes, mmtk),
-                    worker,
-                    mmtk,
-                );
-            }
+            GCWork::do_work(
+                &mut LXRConcurrentTraceObjects::<VM, COMPRESSED>::new_arc(nodes, mmtk),
+                worker,
+                mmtk,
+            );
         }
     }
 }
