@@ -146,7 +146,7 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
 // #[derive(Default)]
 pub struct SanityGCProcessEdges<VM: VMBinding> {
     base: ProcessEdgesBase<VM>,
-    edge: Address,
+    edge: Option<VM::VMEdge>,
 }
 
 impl<VM: VMBinding> Deref for SanityGCProcessEdges<VM> {
@@ -171,14 +171,14 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         Self {
             base: ProcessEdgesBase::new(edges, roots, mmtk),
             // ..Default::default()
-            edge: Address::ZERO,
+            edge: None,
         }
     }
 
     #[inline]
     fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load::<COMPRESSED>();
-        self.edge = slot.to_address();
+        self.edge = Some(slot);
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
             slot.store::<COMPRESSED>(new_object);
@@ -192,8 +192,13 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             .get_plan()
             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
         {
-            if self.edge.is_mapped() {
-                assert!(!self.edge.is_logged::<VM>(), "{:?} is logged", object);
+            if self.edge.unwrap().to_address().is_mapped() {
+                assert!(
+                    !self.edge.unwrap().to_address().is_logged::<VM>(),
+                    "{:?} -> {:?} is logged",
+                    self.edge,
+                    object
+                );
             }
         }
         if object.is_null() {
