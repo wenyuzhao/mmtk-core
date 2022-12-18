@@ -169,8 +169,8 @@ pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
 }
 
 #[inline(always)]
-pub fn promote<VM: VMBinding>(o: ObjectReference) {
-    o.log_start_address::<VM>();
+pub fn promote<VM: VMBinding, const COMPRESSED: bool>(o: ObjectReference) {
+    o.log_start_address::<VM, COMPRESSED>();
     let size = o.get_size::<VM>();
     if size > Line::BYTES {
         self::mark_straddle_object_with_size::<VM>(o, size);

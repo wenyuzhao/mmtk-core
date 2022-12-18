@@ -636,7 +636,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
         if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
-            block.clear_log_table::<VM>();
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                block.clear_log_table::<VM, true>();
+            } else {
+                block.clear_log_table::<VM, false>();
+            }
         }
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
@@ -818,9 +822,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[inline(always)]
-    pub fn rc_trace_object(
+    pub fn rc_trace_object<Q: ObjectQueue, const COMPRESSED: bool>(
         &self,
-        queue: &mut impl ObjectQueue,
+        queue: &mut Q,
         object: ObjectReference,
         semantics: CopySemantics,
         pause: Pause,
@@ -829,7 +833,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ObjectReference {
         debug_assert!(self.rc_enabled);
         if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
-            self.trace_forward_rc_mature_object(queue, object, semantics, pause, worker)
+            self.trace_forward_rc_mature_object::<_, COMPRESSED>(
+                queue, object, semantics, pause, worker,
+            )
         } else if crate::args::RC_MATURE_EVACUATION {
             self.trace_mark_rc_mature_object(queue, object, pause, mark)
         } else {
@@ -856,9 +862,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[allow(clippy::assertions_on_constants)]
     #[inline(always)]
-    pub fn trace_forward_rc_mature_object(
+    pub fn trace_forward_rc_mature_object<Q: ObjectQueue, const COMPRESSED: bool>(
         &self,
-        queue: &mut impl ObjectQueue,
+        queue: &mut Q,
         object: ObjectReference,
         _semantics: CopySemantics,
         _pause: Pause,
@@ -885,7 +891,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
             }
             // Transfer RC count
-            new.log_start_address::<VM>();
+            new.log_start_address::<VM, COMPRESSED>();
             if !crate::args::BLOCK_ONLY && new.get_size::<VM>() > Line::BYTES {
                 rc::mark_straddle_object::<VM>(new);
             }
@@ -993,17 +999,31 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        if self.rc_enabled {
-            self.rc_get_next_available_lines(copy, search_start)
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.get_next_available_lines_impl::<true>(copy, search_start)
         } else {
-            self.normal_get_next_available_lines(search_start)
+            self.get_next_available_lines_impl::<false>(copy, search_start)
+        }
+    }
+
+    #[inline(always)]
+    fn get_next_available_lines_impl<const COMPRESSED: bool>(
+        &self,
+        copy: bool,
+        search_start: Line,
+    ) -> Option<(Line, Line)> {
+        debug_assert!(!super::BLOCK_ONLY);
+        if self.rc_enabled {
+            self.rc_get_next_available_lines::<COMPRESSED>(copy, search_start)
+        } else {
+            self.normal_get_next_available_lines::<COMPRESSED>(search_start)
         }
     }
 
     /// Search holes by ref-counts instead of line marks
     #[allow(clippy::assertions_on_constants)]
     #[inline(always)]
-    pub fn rc_get_next_available_lines(
+    pub fn rc_get_next_available_lines<const COMPRESSED: bool>(
         &self,
         copy: bool,
         search_start: Line,
@@ -1056,14 +1076,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if end == block.end_line() {
                 return None;
             } else {
-                return self.rc_get_next_available_lines(copy, end);
+                return self.rc_get_next_available_lines::<COMPRESSED>(copy, end);
             };
         }
         if self.common.needs_log_bit {
             if !copy {
-                Line::clear_log_table::<VM>(start..end);
+                Line::clear_log_table::<VM, COMPRESSED>(start..end);
             } else {
-                Line::initialize_log_table_as_unlogged::<VM>(start..end);
+                Line::initialize_log_table_as_unlogged::<VM, COMPRESSED>(start..end);
             }
             Line::update_validity(RegionIterator::<Line>::new(start, end));
         }
@@ -1079,7 +1099,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[allow(clippy::assertions_on_constants)]
     #[inline]
-    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
+    pub fn normal_get_next_available_lines<const COMPRESSED: bool>(
+        &self,
+        search_start: Line,
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
@@ -1116,11 +1139,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if end == block.end_line() {
                 return None;
             } else {
-                return self.normal_get_next_available_lines(end);
+                return self.normal_get_next_available_lines::<COMPRESSED>(end);
             };
         }
         if self.common.needs_log_bit {
-            Line::clear_log_table::<VM>(start..end);
+            Line::clear_log_table::<VM, COMPRESSED>(start..end);
         }
         Some((start, end))
     }

@@ -27,17 +27,15 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub const UNLOCKED_VALUE: u8 = 0b0;
 pub const LOCKED_VALUE: u8 = 0b1;
 
-pub struct ImmixFakeFieldBarrierSemantics<VM: VMBinding> {
+pub struct ImmixFakeFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
     mmtk: &'static MMTK<VM>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
 }
 
-impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
-    const UNLOG_BITS: SideMetadataSpec = *<VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-        .as_spec()
-        .extract_side_spec();
+impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, COMPRESSED> {
+    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
     const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]
@@ -113,9 +111,9 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     #[inline(always)]
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
-        if !edge.is_logged::<VM>() {
+        if !edge.is_logged::<VM, COMPRESSED>() {
             let old: ObjectReference = unsafe { edge.load() };
-            edge.log::<VM>();
+            edge.log::<VM, COMPRESSED>();
             Ok(old)
         } else {
             Err(())
@@ -179,7 +177,9 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     }
 }
 
-impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
+    for ImmixFakeFieldBarrierSemantics<VM, COMPRESSED>
+{
     type VM = VM;
 
     #[cold]
@@ -212,15 +212,8 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        let compressed = VM::VMObjectModel::compressed_pointers_enabled();
-        if compressed {
-            obj.iterate_fields::<VM, _, true>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-                self.enqueue_node(obj, e, None);
-            })
-        } else {
-            obj.iterate_fields::<VM, _, false>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-                self.enqueue_node(obj, e, None);
-            })
-        }
+        obj.iterate_fields::<VM, _, COMPRESSED>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+            self.enqueue_node(obj, e, None);
+        })
     }
 }

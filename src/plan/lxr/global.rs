@@ -471,7 +471,7 @@ impl<VM: VMBinding> LXR<VM> {
         let immix_specs = metadata::extract_side_metadata(&[
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
-            *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+            MetadataSpec::OnSide(crate::policy::immix::get_unlog_bit_slow::<VM>()),
         ]);
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let mut immix_space = ImmixSpace::new(

@@ -6,6 +6,7 @@ use crate::plan::GcStatus;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
 use crate::util::metadata::side_metadata::address_to_meta_address;
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -876,20 +877,22 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
 
 pub struct UnlogEdges<VM: VMBinding>(pub Vec<VM::VMEdge>);
 
-impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
-    #[inline(always)]
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> UnlogEdges<VM> {
+    fn unlog_edges(&self, meta: &SideMetadataSpec) {
         if !self.0.is_empty() {
             for edge in &self.0 {
-                let ptr = address_to_meta_address(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                    edge.to_address(),
-                );
+                let ptr = address_to_meta_address(meta, edge.to_address());
                 unsafe {
                     ptr.store(0b11111111u8);
                 }
             }
         }
+    }
+}
+impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
+    #[inline(always)]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.unlog_edges(&crate::policy::immix::get_unlog_bit_slow::<VM>());
     }
 }
 

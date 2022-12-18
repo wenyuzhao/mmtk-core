@@ -197,14 +197,25 @@ impl ChunkMap {
         space: &'static ImmixSpace<VM>,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| {
-            Box::new(PrepareChunk {
-                chunk,
-                defrag_threshold,
-                rc_enabled: space.rc_enabled,
-                cm_enabled: space.cm_enabled,
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.generate_tasks(|chunk| {
+                Box::new(PrepareChunk::<true> {
+                    chunk,
+                    defrag_threshold,
+                    rc_enabled: space.rc_enabled,
+                    cm_enabled: space.cm_enabled,
+                })
             })
-        })
+        } else {
+            self.generate_tasks(|chunk| {
+                Box::new(PrepareChunk::<false> {
+                    chunk,
+                    defrag_threshold,
+                    rc_enabled: space.rc_enabled,
+                    cm_enabled: space.cm_enabled,
+                })
+            })
+        }
     }
 
     pub fn generate_concurrent_mark_table_zeroing_tasks<VM: VMBinding>(
@@ -239,25 +250,34 @@ impl ChunkMap {
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks<VM: VMBinding>(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.generate_tasks(|chunk| {
-            Box::new(SweepDeadCyclesChunk::new(
-                chunk,
-                LazySweepingJobsCounter::new_desc(),
-            ))
-        })
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.generate_tasks(|chunk| {
+                Box::new(SweepDeadCyclesChunk::<_, true>::new(
+                    chunk,
+                    LazySweepingJobsCounter::new_desc(),
+                ))
+            })
+        } else {
+            self.generate_tasks(|chunk| {
+                Box::new(SweepDeadCyclesChunk::<_, false>::new(
+                    chunk,
+                    LazySweepingJobsCounter::new_desc(),
+                ))
+            })
+        }
     }
 }
 
 /// A work packet to prepare each block for GC.
 /// Performs the action on a range of chunks.
-struct PrepareChunk {
+struct PrepareChunk<const COMPRESSED: bool> {
     chunk: Chunk,
     cm_enabled: bool,
     rc_enabled: bool,
     defrag_threshold: Option<usize>,
 }
 
-impl PrepareChunk {
+impl<const COMPRESSED: bool> PrepareChunk<COMPRESSED> {
     /// Clear object mark table
     #[inline(always)]
     #[allow(unused)]
@@ -268,7 +288,7 @@ impl PrepareChunk {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESSED> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
@@ -287,7 +307,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             }
             // Clear unlog table on CM
             if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
-                block.initialize_log_table_as_unlogged::<VM>();
+                block.initialize_log_table_as_unlogged::<VM, COMPRESSED>();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
@@ -335,16 +355,16 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 }
 
 /// Chunk sweeping work packet.
-struct SweepDeadCyclesChunk<VM: VMBinding> {
+struct SweepDeadCyclesChunk<VM: VMBinding, const COMPRESSED: bool> {
     chunk: Chunk,
     _counter: LazySweepingJobsCounter,
     lxr: *const LXR<VM>,
 }
 
-unsafe impl<VM: VMBinding> Send for SweepDeadCyclesChunk<VM> {}
+unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for SweepDeadCyclesChunk<VM, COMPRESSED> {}
 
 #[allow(unused)]
-impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED> {
     const CAPACITY: usize = 1024;
 
     #[inline(always)]
@@ -362,7 +382,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
 
     #[inline(never)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
-        o = o.fix_start_address::<VM>();
+        o = o.fix_start_address::<VM, COMPRESSED>();
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -419,7 +439,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for SweepDeadCyclesChunk<VM, COMPRESSED> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();

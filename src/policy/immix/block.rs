@@ -384,9 +384,7 @@ impl Block {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         #[cfg(feature = "sanity")]
         if !copy && !reuse && space.rc_enabled {
-            self.assert_log_table_cleared::<VM>(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-            );
+            self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
         }
         if space.rc_enabled {
             if !reuse {
@@ -505,10 +503,8 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn clear_log_table<VM: VMBinding>(&self) {
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            .extract_side_spec()
-            .bzero_metadata(self.start(), Block::BYTES);
+    pub fn clear_log_table<VM: VMBinding, const COMPRESSED: bool>(&self) {
+        super::UnlogBit::<VM, COMPRESSED>::SPEC.bzero_metadata(self.start(), Block::BYTES);
     }
 
     #[inline(always)]
@@ -523,8 +519,8 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
-        let meta = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
+    pub fn initialize_log_table_as_unlogged<VM: VMBinding, const COMPRESSED: bool>(&self) {
+        let meta = super::UnlogBit::<VM, COMPRESSED>::SPEC;
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {

@@ -74,6 +74,7 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Note that for this bit, 0 represents logged (default), and 1 represents unlogged.
     /// This bit is also referred to as unlogged bit in Java MMTk for this reason.
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec;
+    const GLOBAL_LOG_BIT_SPEC_COMPRESSED: VMGlobalLogBitSpecCompressed;
 
     /// The metadata specification for the forwarding pointer, used by copying plans. Word size.
     const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec;
@@ -489,10 +490,13 @@ pub mod specs {
     }
 
     // Log bit: 1 bit per object, global
-    #[cfg(feature = "unlog_bit_coverage_4b")]
-    define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE - 1);
-    #[cfg(not(feature = "unlog_bit_coverage_4b"))]
     define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE);
+    define_vm_metadata_spec!(
+        VMGlobalLogBitSpecCompressed,
+        true,
+        0,
+        LOG_MIN_OBJECT_SIZE - 1
+    );
     // Forwarding pointer: word size per object, local
     define_vm_metadata_spec!(
         VMLocalForwardingPointerSpec,

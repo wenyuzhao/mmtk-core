@@ -42,9 +42,7 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRESSED> {
-    const UNLOG_BITS: SideMetadataSpec = *<VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-        .as_spec()
-        .extract_side_spec();
+    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
     const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]
@@ -99,11 +97,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
 
     #[inline(always)]
     fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
-        let heap_bytes_per_unlog_byte = if cfg!(not(feature = "unlog_bit_coverage_4b")) {
-            32usize
-        } else {
-            64
-        };
+        let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
             unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
         } else {
@@ -126,9 +120,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
     #[inline(always)]
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
-        if !edge.to_address().is_logged::<VM>() {
+        if !edge.to_address().is_logged::<VM, COMPRESSED>() {
             let old = edge.load::<COMPRESSED>();
-            edge.to_address().log::<VM>();
+            edge.to_address().log::<VM, COMPRESSED>();
             Ok(old)
         } else {
             Err(())

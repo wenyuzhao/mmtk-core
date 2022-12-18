@@ -320,7 +320,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object(
+            self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -389,7 +389,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object(
+            self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -498,7 +498,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object(
+            self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
                 self,
                 object,
                 CopySemantics::DefaultCopy,

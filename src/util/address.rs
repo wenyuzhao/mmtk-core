@@ -403,20 +403,17 @@ impl Address {
     }
 
     #[inline(always)]
-    pub fn is_logged<VM: VMBinding>(self) -> bool {
+    pub fn is_logged<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
         debug_assert!(!self.is_zero());
         unsafe {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                .extract_side_spec()
-                .load::<u8>(self)
-                == LOGGED_VALUE
+            crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.load::<u8>(self) == LOGGED_VALUE
         }
     }
 
     #[inline(always)]
-    pub fn attempt_log<VM: VMBinding>(self) -> bool {
+    pub fn attempt_log<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
         debug_assert!(!self.is_zero());
-        let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
+        let log_bit = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
         loop {
             let old_value: u8 = log_bit.load_atomic(self, Ordering::SeqCst);
             if old_value == LOGGED_VALUE {
@@ -438,28 +435,30 @@ impl Address {
     }
 
     #[inline(always)]
-    pub fn log<VM: VMBinding>(self) {
+    pub fn log<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_zero());
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            .extract_side_spec()
-            .store_atomic(self, LOGGED_VALUE, Ordering::Relaxed)
+        crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
+            self,
+            LOGGED_VALUE,
+            Ordering::Relaxed,
+        )
     }
 
     #[inline(always)]
-    pub fn unlog<VM: VMBinding>(self) {
+    pub fn unlog<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_zero());
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            .extract_side_spec()
-            .store_atomic(self, UNLOGGED_VALUE, Ordering::Relaxed)
+        crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
+            self,
+            UNLOGGED_VALUE,
+            Ordering::Relaxed,
+        )
     }
 
     #[inline(always)]
-    pub fn unlog_non_atomic<VM: VMBinding>(self) {
+    pub fn unlog_non_atomic<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_zero());
         unsafe {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                .extract_side_spec()
-                .store(self, UNLOGGED_VALUE)
+            crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store(self, UNLOGGED_VALUE)
         }
     }
 }
@@ -656,17 +655,17 @@ impl ObjectReference {
     }
 
     #[inline(always)]
-    pub fn log_start_address<VM: VMBinding>(self) {
+    pub fn log_start_address<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_null());
-        self.to_address().unlog::<VM>();
-        (self.to_address() + BYTES_IN_ADDRESS).log::<VM>();
+        self.to_address().unlog::<VM, COMPRESSED>();
+        (self.to_address() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
     }
 
     #[inline(always)]
-    pub fn clear_start_address_log<VM: VMBinding>(self) {
+    pub fn clear_start_address_log<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_null());
-        self.to_address().log::<VM>();
-        (self.to_address() + BYTES_IN_ADDRESS).log::<VM>();
+        self.to_address().log::<VM, COMPRESSED>();
+        (self.to_address() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
     }
 
     #[inline(always)]
@@ -699,9 +698,9 @@ impl ObjectReference {
     }
 
     #[inline(always)]
-    pub fn fix_start_address<VM: VMBinding>(self) -> Self {
+    pub fn fix_start_address<VM: VMBinding, const COMPRESSED: bool>(self) -> Self {
         let a = unsafe { Address::from_usize(self.to_address().as_usize() >> 4 << 4) };
-        if !(a + BYTES_IN_WORD).is_logged::<VM>() {
+        if !(a + BYTES_IN_WORD).is_logged::<VM, COMPRESSED>() {
             unsafe { (a + BYTES_IN_WORD).to_object_reference() }
         } else {
             unsafe { a.to_object_reference() }

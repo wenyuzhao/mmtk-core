@@ -9,7 +9,7 @@ use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
-use crate::vm::VMBinding;
+use crate::vm::{ObjectModel, VMBinding};
 use crate::MMTK;
 use crate::{
     plan::barriers::NoBarrier,
@@ -71,7 +71,15 @@ pub fn create_immix_mutator<VM: VMBinding>(
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
         barrier: if crate::args::BARRIER_MEASUREMENT {
-            Box::new(FieldBarrier::new(ImmixFakeFieldBarrierSemantics::new(mmtk)))
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                Box::new(FieldBarrier::new(
+                    ImmixFakeFieldBarrierSemantics::<_, true>::new(mmtk),
+                ))
+            } else {
+                Box::new(FieldBarrier::new(
+                    ImmixFakeFieldBarrierSemantics::<_, false>::new(mmtk),
+                ))
+            }
         } else {
             Box::new(NoBarrier)
         },

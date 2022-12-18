@@ -74,15 +74,24 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
-            let step = if VM::VMObjectModel::compressed_pointers_enabled() {
-                4
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                let step = 4;
+                for i in (0..bytes).step_by(step) {
+                    let a = object.to_address() + i;
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED.mark_as_unlogged::<VM>(
+                        unsafe { a.to_object_reference() },
+                        Ordering::SeqCst,
+                    );
+                }
             } else {
-                8
-            };
-            for i in (0..bytes).step_by(step) {
-                let a = object.to_address() + i;
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                    .mark_as_unlogged::<VM>(unsafe { a.to_object_reference() }, Ordering::SeqCst);
+                let step = 8;
+                for i in (0..bytes).step_by(step) {
+                    let a = object.to_address() + i;
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
+                        unsafe { a.to_object_reference() },
+                        Ordering::SeqCst,
+                    );
+                }
             }
         }
         #[cfg(feature = "global_alloc_bit")]

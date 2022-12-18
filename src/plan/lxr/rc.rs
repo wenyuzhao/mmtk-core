@@ -9,6 +9,7 @@ use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::edge_shape::MemorySlice;
@@ -47,6 +48,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     ProcessIncs<VM, KIND, COMPRESSED>
 {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
 
     #[inline(always)]
     fn worker(&self) -> &'static mut GCWorker<VM> {
@@ -105,7 +107,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             if !copied && Block::containing::<VM>(o).get_state() == BlockState::Nursery {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
-            self::promote::<VM>(o);
+            self::promote::<VM, COMPRESSED>(o);
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL
                 .with(|x| x.record_promotion(o.get_size::<VM>()));
         } else {
@@ -141,25 +143,15 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         in_place_promotion: bool,
         depth: usize,
     ) {
-        let heap_bytes_per_unlog_byte = if cfg!(feature = "unlog_bit_coverage_4b") {
-            32usize
-        } else {
-            64
-        };
-        let heap_bytes_per_unlog_bit = if cfg!(feature = "unlog_bit_coverage_4b") {
-            4usize
-        } else {
-            8
-        };
+        let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
+        let heap_bytes_per_unlog_bit = if COMPRESSED { 4usize } else { 8 };
         if los {
             if !VM::VMScanning::is_val_array(o) {
-                let start = side_metadata::address_to_meta_address(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
-                    o.to_address(),
-                )
-                .to_mut_ptr::<u8>();
+                let start =
+                    side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address())
+                        .to_mut_ptr::<u8>();
                 let limit = side_metadata::address_to_meta_address(
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                    &Self::UNLOG_BITS,
                     (o.to_address() + o.get_size::<VM>()).align_up(heap_bytes_per_unlog_byte),
                 )
                 .to_mut_ptr::<u8>();
@@ -168,8 +160,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             } else {
-                o.to_address().unlog_non_atomic::<VM>();
-                (o.to_address() + 8usize).unlog_non_atomic::<VM>();
+                o.to_address().unlog_non_atomic::<VM, COMPRESSED>();
+                (o.to_address() + 8usize).unlog_non_atomic::<VM, COMPRESSED>();
             }
         } else if in_place_promotion {
             let header_size = if COMPRESSED { 12usize } else { 16 };
@@ -178,11 +170,11 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
             let mut cursor = o.to_address() + header_size;
             let mut meta = side_metadata::address_to_meta_address(
-                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec(),
+                &Self::UNLOG_BITS,
                 cursor.align_up(heap_bytes_per_unlog_byte),
             );
             while cursor < end && !cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
-                cursor.unlog::<VM>();
+                cursor.unlog::<VM, COMPRESSED>();
                 cursor += heap_bytes_per_unlog_bit;
             }
             while cursor < aligned_end {
@@ -191,12 +183,12 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     meta += 1usize;
                     cursor += heap_bytes_per_unlog_byte;
                 } else {
-                    cursor.unlog::<VM>();
+                    cursor.unlog::<VM, COMPRESSED>();
                     cursor += heap_bytes_per_unlog_bit;
                 }
             }
             while cursor < end {
-                cursor.unlog::<VM>();
+                cursor.unlog::<VM, COMPRESSED>();
                 cursor += heap_bytes_per_unlog_bit;
             }
         };
@@ -356,7 +348,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         let o = e.load::<COMPRESSED>();
         // unlog edge
         if K == EDGE_KIND_MATURE {
-            e.to_address().unlog::<VM>();
+            e.to_address().unlog::<VM, COMPRESSED>();
         }
         if o.is_null() {
             return None;
@@ -761,7 +753,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                 .immix_space
                 .add_to_possibly_dead_mature_blocks(block, false);
         } else {
-            immix.los().rc_free(o);
+            immix.los().rc_free::<COMPRESSED>(o);
         }
     }
 

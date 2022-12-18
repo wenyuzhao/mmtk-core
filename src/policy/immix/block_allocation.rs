@@ -97,7 +97,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         }
         if self.space().rc_enabled && copy {
-            block.initialize_log_table_as_unlogged::<VM>();
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                block.initialize_log_table_as_unlogged::<VM, true>();
+            } else {
+                block.initialize_log_table_as_unlogged::<VM, false>();
+            }
         }
         // println!("Alloc {:?} {}", block, copy);
         block.init(copy, false, self.space());

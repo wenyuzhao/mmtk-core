@@ -194,7 +194,5 @@ malloc_mimalloc = ["mimalloc-sys"]
 malloc_jemalloc = ["jemalloc-sys"]
 malloc_hoard = ["hoard-sys"]
 
-unlog_bit_coverage_4b = []
-
 # If there are more groups, they should be inserted above this line
 # Group:end
