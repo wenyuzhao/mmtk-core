@@ -259,7 +259,7 @@ impl ReferenceProcessor {
                 debug_assert!(!reff.is_null());
                 debug_assert!(reff.is_in_any_space());
                 let referent = VM::VMReferenceGlue::get_referent(*reff);
-                if !referent.is_null() {
+                if !VM::VMReferenceGlue::is_referent_cleared(referent) {
                     debug_assert!(
                         referent.is_in_any_space(),
                         "Referent {:?} (of reference {:?}) is not in any space",
@@ -273,7 +273,7 @@ impl ReferenceProcessor {
                 debug_assert!(!reff.is_null());
                 debug_assert!(reff.is_in_any_space());
                 let referent = VM::VMReferenceGlue::get_referent(*reff);
-                debug_assert!(referent.is_null());
+                debug_assert!(VM::VMReferenceGlue::is_referent_cleared(referent));
             });
         }
 
@@ -412,7 +412,7 @@ impl ReferenceProcessor {
 
             // Reference is definitely reachable.  Retain the referent.
             let referent = <E::VM as VMBinding>::VMReferenceGlue::get_referent(*reference);
-            if !referent.is_null() {
+            if !<E::VM as VMBinding>::VMReferenceGlue::is_referent_cleared(referent) {
                 Self::keep_referent_alive(trace, referent);
             }
             trace!(" ~> {:?} (retained)", referent.to_address());
@@ -456,8 +456,8 @@ impl ReferenceProcessor {
         // this does not cause the Reference object to be enqueued. We
         // simply allow the Reference object to fall out of our
         // waiting list.
-        if old_referent.is_null() {
-            trace!(" (null referent) ");
+        if <E::VM as VMBinding>::VMReferenceGlue::is_referent_cleared(old_referent) {
+            trace!(" (cleared referent) ");
             return None;
         }
 
