@@ -148,11 +148,11 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         if los {
             if !VM::VMScanning::is_val_array::<COMPRESSED>(o) {
                 let start =
-                    side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address())
+                    side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address::<VM>())
                         .to_mut_ptr::<u8>();
                 let limit = side_metadata::address_to_meta_address(
                     &Self::UNLOG_BITS,
-                    (o.to_address() + o.get_size::<VM>()).align_up(heap_bytes_per_unlog_byte),
+                    (o.to_address::<VM>() + o.get_size::<VM>()).align_up(heap_bytes_per_unlog_byte),
                 )
                 .to_mut_ptr::<u8>();
                 let bytes = unsafe { limit.offset_from(start) as usize };
@@ -160,15 +160,15 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             } else {
-                o.to_address().unlog_non_atomic::<VM, COMPRESSED>();
-                (o.to_address() + 8usize).unlog_non_atomic::<VM, COMPRESSED>();
+                o.to_address::<VM>().unlog_non_atomic::<VM, COMPRESSED>();
+                (o.to_address::<VM>() + 8usize).unlog_non_atomic::<VM, COMPRESSED>();
             }
         } else if in_place_promotion {
             let header_size = if COMPRESSED { 12usize } else { 16 };
             let size = o.get_size::<VM>();
-            let end = o.to_address() + size;
+            let end = o.to_address::<VM>() + size;
             let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
-            let mut cursor = o.to_address() + header_size;
+            let mut cursor = o.to_address::<VM>() + header_size;
             let mut meta = side_metadata::address_to_meta_address(
                 &Self::UNLOG_BITS,
                 cursor.align_up(heap_bytes_per_unlog_byte),
@@ -224,7 +224,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     let target = edge.load::<COMPRESSED>();
                     // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                     if !target.is_null() {
-                        if !self::rc_stick(target) {
+                        if !self::rc_stick::<VM>(target) {
                             // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
                             self.new_incs.push(edge);
                             if self.new_incs.is_full() {
@@ -254,7 +254,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
 
     #[inline(always)]
     fn process_inc(&mut self, o: ObjectReference, depth: usize) -> ObjectReference {
-        if let Ok(0) = self::inc(o) {
+        if let Ok(0) = self::inc::<VM>(o) {
             self.promote(o, false, self.lxr().los().in_space(o), depth);
         }
         o
@@ -266,7 +266,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             return true;
         }
         // Skip mature object
-        if self::count(o) != 0 {
+        if self::count::<VM>(o) != 0 {
             return true;
         }
         // Skip recycled lines
@@ -296,24 +296,24 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let los = self.lxr().los().in_space(o);
         if self.dont_evacuate(o, los) {
-            if let Ok(0) = self::inc(o) {
+            if let Ok(0) = self::inc::<VM>(o) {
                 self.promote(o, false, los, depth);
             }
             return o;
         }
         if object_forwarding::is_forwarded::<VM>(o) {
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            let _ = self::inc(new);
+            let _ = self::inc::<VM>(new);
             return new;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
             let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-            let _ = self::inc(new);
+            let _ = self::inc::<VM>(new);
             new
         } else {
-            let is_nursery = self::count(o) == 0;
+            let is_nursery = self::count::<VM>(o) == 0;
             let copy_depth_reached = crate::args::INC_MAX_COPY_DEPTH && depth > 16;
             if is_nursery && !self.no_evac && !copy_depth_reached {
                 // Evacuate the object
@@ -325,12 +325,12 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 if crate::should_record_copy_bytes() {
                     unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
                 }
-                let _ = self::inc(new);
+                let _ = self::inc::<VM>(new);
                 self.promote(new, true, false, depth);
                 new
             } else {
                 // Object is not moved.
-                let r = self::inc(o);
+                let r = self::inc::<VM>(o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 if let Ok(0) = r {
                     self.promote(o, false, los, depth);
@@ -727,7 +727,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                     let x = edge.load::<COMPRESSED>();
                     if !x.is_null() {
                         // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                        let rc = self::count(x);
+                        let rc = self::count::<VM>(x);
                         if rc != MAX_REF_COUNT && rc != 0 {
                             self.recursive_dec(x);
                         }
@@ -747,7 +747,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             self::unmark_straddle_object::<VM>(o);
         }
         if cfg!(feature = "sanity") || ObjectReference::STRICT_VERIFICATION {
-            unsafe { o.to_address().store(0xdeadusize) };
+            unsafe { o.to_address::<VM>().store(0xdeadusize) };
         }
         if in_ix_space {
             let block = Block::containing::<VM>(o);
@@ -777,7 +777,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                     self.mark_objects.push(*o);
                 }
             }
-            if self::is_dead_or_stick(*o)
+            if self::is_dead_or_stick::<VM>(*o)
                 || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
             {
                 continue;
@@ -789,7 +789,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                     *o
                 };
             let mut dead = false;
-            let _ = self::fetch_update(o, |c| {
+            let _ = self::fetch_update::<VM, _>(o, |c| {
                 if c == 1 && !dead {
                     dead = true;
                     self.process_dead_object(o, lxr);

@@ -441,7 +441,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         reference: ObjectReference,
         referent: ObjectReference,
     ) -> bool {
-        if rc::count(reference) == 0 || rc::count(referent) == 0 {
+        if rc::count::<VM>(reference) == 0 || rc::count::<VM>(referent) == 0 {
             return false;
         }
         true
@@ -450,8 +450,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn discover_reference(&self, reference: ObjectReference, referent: ObjectReference) {
         // Keep weak references and referents alive during SATB.
         // They can only be swept by mature sweeping.
-        let _ = rc::inc(reference);
-        let _ = rc::inc(referent);
+        let _ = rc::inc::<VM>(reference);
+        let _ = rc::inc::<VM>(referent);
     }
 
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {

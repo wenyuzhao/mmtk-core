@@ -386,7 +386,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
             s.dead_mature_tracing_objects += 1;
             s.dead_mature_tracing_volume += o.get_size::<VM>();
 
-            if rc::rc_stick(o) {
+            if rc::rc_stick::<VM>(o) {
                 s.dead_mature_tracing_stuck_objects += 1;
                 s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
             }
@@ -394,7 +394,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
-        rc::set(o, 0);
+        rc::set::<VM>(o, 0);
         if !crate::args::BLOCK_ONLY {
             rc::unmark_straddle_object::<VM>(o)
         }
@@ -407,16 +407,16 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
         let mut cursor = block.start();
         let limit = block.end();
         while cursor < limit {
-            let o = unsafe { cursor.to_object_reference() };
+            let o = unsafe { cursor.to_object_reference::<VM>() };
             cursor = cursor + rc::MIN_OBJECT_SIZE;
-            let c = rc::count(o);
+            let c = rc::count::<VM>(o);
             if c != 0 && !immix_space.is_marked(o) {
-                if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address()) {
-                    if c == 1 && rc::is_straddle_line(Line::from(o.to_address())) {
+                if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address::<VM>()) {
+                    if c == 1 && rc::is_straddle_line::<VM>(Line::from(o.to_address::<VM>())) {
                         continue;
                     } else {
                         std::sync::atomic::fence(Ordering::SeqCst);
-                        if rc::count(o) == 0 {
+                        if rc::count::<VM>(o) == 0 {
                             continue;
                         }
                     }

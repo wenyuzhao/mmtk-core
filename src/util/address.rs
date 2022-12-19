@@ -12,7 +12,7 @@ use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::EdgeIterator;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::rc::RC_LOCK_BITS;
-use crate::vm::*;
+use crate::vm::VMBinding;
 
 use super::constants::BYTES_IN_WORD;
 
@@ -316,16 +316,6 @@ impl Address {
         conversions::raw_is_aligned(self.0, align)
     }
 
-    /// converts the Address into an ObjectReference
-    /// # Safety
-    /// We would expect ObjectReferences point to valid objects,
-    /// but an arbitrary Address may not reside an object. This conversion is unsafe,
-    /// and it is the user's responsibility to ensure the safety.
-    #[inline(always)]
-    pub unsafe fn to_object_reference(self) -> ObjectReference {
-        mem::transmute(self.0)
-    }
-
     /// converts the Address to a pointer
     #[inline(always)]
     pub fn to_ptr<T>(self) -> *const T {
@@ -461,6 +451,13 @@ impl Address {
             crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store(self, UNLOGGED_VALUE)
         }
     }
+
+    #[inline(always)]
+    pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
+        use crate::vm::ObjectModel;
+        debug_assert!(!self.is_zero());
+        VM::VMObjectModel::address_to_ref(self)
+    }
 }
 
 /// allows print Address as upper-case hex value
@@ -574,6 +571,17 @@ mod tests {
 /// operations allowed on ObjectReference are very limited. No address arithmetics
 /// are allowed for ObjectReference. The idea is from the paper
 /// High-level Low-level Programming (VEE09) and JikesRVM.
+///
+/// A runtime may define its "object references" differently. It may define an object reference as
+/// the address of an object, a handle that points to an indirection table entry where a pointer to
+/// the object is held, or anything else. Regardless, MMTk expects each object reference to have a
+/// pointer to the object (an address) in each object reference, and that address should be used
+/// for this `ObjectReference` type.
+///
+/// We currently do not allow an opaque `ObjectReference` type for which a binding can define
+/// their layout. We now only allow a binding to define their semantics through a set of
+/// methods in [`crate::vm::ObjectModel`]. Major refactoring is needed in MMTk to allow
+/// the opaque `ObjectReference` type, and we haven't seen a use case for now.
 #[repr(transparent)]
 #[derive(Copy, Clone, Eq, Hash, PartialOrd, PartialEq)]
 pub struct ObjectReference(usize);
@@ -583,10 +591,51 @@ impl ObjectReference {
     pub const STRICT_VERIFICATION: bool =
         cfg!(debug_assertions) || cfg!(feature = "sanity") || false;
 
-    /// converts the ObjectReference to an Address
+    /// Cast the object reference to its raw address. This method is mostly for the convinience of a binding.
+    ///
+    /// MMTk should not make any assumption on the actual location of the address with the object reference.
+    /// MMTk should not assume the address returned by this method is in our allocation. For the purposes of
+    /// setting object metadata, MMTk should use [`crate::vm::ObjectModel::ref_to_address()`] or [`crate::vm::ObjectModel::ref_to_header()`].
     #[inline(always)]
-    pub fn to_address(self) -> Address {
+    pub fn to_raw_address(self) -> Address {
         Address(self.0)
+    }
+
+    /// Cast a raw address to an object reference. This method is mostly for the convinience of a binding.
+    /// This is how a binding creates `ObjectReference` instances.
+    ///
+    /// MMTk should not assume an arbitrary address can be turned into an object reference. MMTk can use [`crate::vm::ObjectModel::address_to_ref()`]
+    /// to turn addresses that are from [`crate::vm::ObjectModel::ref_to_address()`] back to object.
+    #[inline(always)]
+    pub fn from_raw_address(addr: Address) -> ObjectReference {
+        ObjectReference(addr.0)
+    }
+
+    /// Get the in-heap address from an object reference. This method is used by MMTk to get an in-heap address
+    /// for an object reference. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_address`]. See the
+    /// comments on [`crate::vm::ObjectModel::ref_to_address`].
+    #[inline(always)]
+    pub fn to_address<VM: VMBinding>(self) -> Address {
+        use crate::vm::ObjectModel;
+        VM::VMObjectModel::ref_to_address(self)
+    }
+
+    /// Get the header base address from an object reference. This method is used by MMTk to get a base address for the
+    /// object header, and access the object header. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_header`].
+    /// See the comments on [`crate::vm::ObjectModel::ref_to_header`].
+    #[inline(always)]
+    pub fn to_header<VM: VMBinding>(self) -> Address {
+        use crate::vm::ObjectModel;
+        VM::VMObjectModel::ref_to_header(self)
+    }
+
+    /// Get the object reference from an address that is returned from [`crate::util::address::ObjectReference::to_address`]
+    /// or [`crate::vm::ObjectModel::ref_to_address`]. This method is syntactic sugar for [`crate::vm::ObjectModel::address_to_ref`].
+    /// See the comments on [`crate::vm::ObjectModel::address_to_ref`].
+    #[inline(always)]
+    pub fn from_address<VM: VMBinding>(addr: Address) -> ObjectReference {
+        use crate::vm::ObjectModel;
+        VM::VMObjectModel::address_to_ref(addr)
     }
 
     /// is this object reference null reference?
@@ -642,39 +691,43 @@ impl ObjectReference {
     #[inline(always)]
     pub fn get_size<VM: VMBinding>(self) -> usize {
         debug_assert!(!self.is_null());
+        use crate::vm::ObjectModel;
         VM::VMObjectModel::get_current_size(self)
     }
 
     #[inline(always)]
     pub fn range<VM: VMBinding>(self) -> Range<Address> {
+        use crate::vm::ObjectModel;
         if self.is_null() {
-            return self.to_address()..self.to_address();
+            return self.to_address::<VM>()..self.to_address::<VM>();
         }
-        let a = VM::VMObjectModel::object_start_ref(self);
+        let a = VM::VMObjectModel::ref_to_object_start(self);
         a..a + self.get_size::<VM>()
     }
 
     #[inline(always)]
     pub fn log_start_address<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_null());
-        self.to_address().unlog::<VM, COMPRESSED>();
-        (self.to_address() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
+        self.to_address::<VM>().unlog::<VM, COMPRESSED>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
     }
 
     #[inline(always)]
     pub fn clear_start_address_log<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_null());
-        self.to_address().log::<VM, COMPRESSED>();
-        (self.to_address() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
+        self.to_address::<VM>().log::<VM, COMPRESSED>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
     }
 
     #[inline(always)]
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
+        use crate::vm::ObjectModel;
         VM::VMObjectModel::get_class_pointer(self)
     }
 
     #[inline(always)]
     pub fn class_is_valid<VM: VMBinding>(self) -> bool {
+        use crate::vm::ObjectModel;
         let klass = self.class_pointer::<VM>();
         let valid = if VM::VMObjectModel::compressed_pointers_enabled() {
             ((klass.as_usize() & 0x1_0000_0000) != 0) && klass.is_aligned_to(8)
@@ -699,11 +752,11 @@ impl ObjectReference {
 
     #[inline(always)]
     pub fn fix_start_address<VM: VMBinding, const COMPRESSED: bool>(self) -> Self {
-        let a = unsafe { Address::from_usize(self.to_address().as_usize() >> 4 << 4) };
+        let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
         if !(a + BYTES_IN_WORD).is_logged::<VM, COMPRESSED>() {
-            unsafe { (a + BYTES_IN_WORD).to_object_reference() }
+            (a + BYTES_IN_WORD).to_object_reference::<VM>()
         } else {
-            unsafe { a.to_object_reference() }
+            a.to_object_reference::<VM>()
         }
     }
 
@@ -715,7 +768,7 @@ impl ObjectReference {
             }
             assert!(self.is_in_any_space());
             assert_ne!(
-                unsafe { self.to_address().load::<usize>() },
+                unsafe { self.to_address::<VM>().load::<usize>() },
                 0xdead,
                 "object {:?} is dead",
                 self

@@ -102,7 +102,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             return object;
         }
         debug_assert!(object.is_in_any_space());
-        let no_trace = crate::util::rc::count(object) == 0;
+        let no_trace = crate::util::rc::count::<VM>(object) == 0;
         if no_trace {
             return object;
         }
@@ -123,7 +123,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             for o in objects {
                 if !self.plan.address_in_defrag(Address::from_ref(o))
                     && self.plan.in_defrag(*o)
-                    && crate::util::rc::count(*o) != 0
+                    && crate::util::rc::count::<VM>(*o) != 0
                 {
                     self.plan.immix_space.remset.record(
                         VM::VMEdge::from_address(Address::from_ref(o)),
@@ -158,7 +158,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                 RefScanPolicy::Discover,
                 |e| {
                     let t: ObjectReference = e.load::<COMPRESSED>();
-                    if t.is_null() || crate::util::rc::count(t) == 0 {
+                    if t.is_null() || crate::util::rc::count::<VM>(t) == 0 {
                         return;
                     }
                     if crate::args::RC_MATURE_EVACUATION
@@ -315,7 +315,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             return object;
         }
         debug_assert!(object.is_in_any_space());
-        debug_assert!(object.to_address().is_aligned_to(8));
+        debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         debug_assert!(object.class_is_valid::<VM>());
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
@@ -384,7 +384,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
             return object;
         }
         debug_assert!(object.is_in_any_space());
-        debug_assert!(object.to_address().is_aligned_to(8));
+        debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         debug_assert!(object.class_is_valid::<VM>());
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;

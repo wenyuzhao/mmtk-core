@@ -94,7 +94,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             if self.is_end_of_satb {
                 return self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
             }
-            return crate::util::rc::count(object) > 0
+            return crate::util::rc::count::<VM>(object) > 0
                 || ForwardingWord::is_forwarded::<VM>(object);
         }
         if self.initial_mark_pause {
@@ -124,7 +124,12 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn initialize_object_metadata(&self, _object: ObjectReference, _bytes: usize, _alloc: bool) {
         #[cfg(feature = "global_alloc_bit")]
-        crate::util::alloc_bit::set_alloc_bit(_object);
+        crate::util::alloc_bit::set_alloc_bit::<VM>(_object);
+    }
+    #[cfg(feature = "is_mmtk_object")]
+    #[inline(always)]
+    fn is_mmtk_object(&self, addr: Address) -> bool {
+        crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
     }
     #[inline(always)]
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
@@ -703,7 +708,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
         debug_assert!(
-            crate::util::alloc_bit::is_alloced(object),
+            crate::util::alloc_bit::is_alloced::<VM>(object),
             "{:x}: alloc bit not set",
             object
         );
@@ -724,7 +729,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ObjectReference {
         if self.attempt_mark(object) {
             if self.rc_enabled {
-                let straddle = rc::is_straddle_line(Line::from(Line::align(object.to_address())));
+                let straddle =
+                    rc::is_straddle_line::<VM>(Line::from(Line::align(object.to_address::<VM>())));
                 if straddle {
                     return object;
                 }
@@ -809,7 +815,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 object
             } else {
                 #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::unset_alloc_bit(object);
+                crate::util::alloc_bit::unset_alloc_bit::<VM>(object);
                 ForwardingWord::forward_object::<VM>(object, semantics, copy_context)
             };
             debug_assert!({
@@ -896,7 +902,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if !crate::args::BLOCK_ONLY && new.get_size::<VM>() > Line::BYTES {
                 rc::mark_straddle_object::<VM>(new);
             }
-            rc::set(new, rc::count(object));
+            rc::set::<VM>(new, rc::count::<VM>(object));
             self.attempt_mark(new);
             self.unmark(object);
             queue.enqueue(new);

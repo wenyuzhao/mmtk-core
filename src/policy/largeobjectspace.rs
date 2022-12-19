@@ -59,7 +59,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            return crate::util::rc::count(object) > 0;
+            return crate::util::rc::count::<VM>(object) > 0;
         }
         if self.trace_in_progress {
             return true;
@@ -100,7 +100,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             // TODO: Only mark during concurrent marking
             self.test_and_mark(object, self.mark_state);
             self.update_validity(
-                object.to_address(),
+                object.to_address::<VM>(),
                 (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
             );
             return;
@@ -128,9 +128,13 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         // TODO: Only mark during concurrent marking
         self.test_and_mark(object, self.mark_state);
         #[cfg(feature = "global_alloc_bit")]
-        crate::util::alloc_bit::set_alloc_bit(object);
-        let cell = VM::VMObjectModel::object_start_ref(object);
-        self.treadmill.add_to_treadmill(cell, alloc);
+        crate::util::alloc_bit::set_alloc_bit::<VM>(object);
+        self.treadmill.add_to_treadmill(object, alloc);
+    }
+    #[cfg(feature = "is_mmtk_object")]
+    #[inline(always)]
+    fn is_mmtk_object(&self, addr: Address) -> bool {
+        crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
     }
     #[inline(always)]
     fn sft_trace_object(
@@ -280,7 +284,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
             if self.rc_enabled {
-                rc::set(unsafe { start.to_object_reference() }, 0);
+                rc::set::<VM>(start.to_object_reference::<VM>(), 0);
             }
             self.pr.release_pages_and_reset_unlog_bits(start)
         } else {
@@ -308,8 +312,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             // promote nursery objects or release dead nursery
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
-                if rc::count(o) == 0 {
-                    self.release_object(o.to_address());
+                if rc::count::<VM>(o) == 0 {
+                    self.release_object(o.to_address::<VM>());
                 } else {
                     mature_blocks.insert(o);
                 }
@@ -332,7 +336,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
         debug_assert!(
-            crate::util::alloc_bit::is_alloced(object),
+            crate::util::alloc_bit::is_alloced::<VM>(object),
             "{:x}: alloc bit not set",
             object
         );
@@ -346,8 +350,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
             if self.test_and_mark(object, self.mark_state) {
-                let cell = VM::VMObjectModel::object_start_ref(object);
-                self.treadmill.copy(cell, nursery_object);
+                self.treadmill.copy(object, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
                 if !self.rc_enabled && self.common.needs_log_bit {
@@ -355,19 +358,19 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                         if VM::VMObjectModel::compressed_pointers_enabled() {
                             let step = 4;
                             for i in (0..object.get_size::<VM>()).step_by(step) {
-                                let a = object.to_address() + i;
+                                let a = object.to_address::<VM>() + i;
                                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
                                     .mark_as_unlogged::<VM>(
-                                        unsafe { a.to_object_reference() },
+                                        a.to_object_reference::<VM>(),
                                         Ordering::SeqCst,
                                     );
                             }
                         } else {
                             let step = 8;
                             for i in (0..object.get_size::<VM>()).step_by(step) {
-                                let a = object.to_address() + i;
+                                let a = object.to_address::<VM>() + i;
                                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
-                                    unsafe { a.to_object_reference() },
+                                    a.to_object_reference::<VM>(),
                                     Ordering::SeqCst,
                                 );
                             }
@@ -384,22 +387,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     fn sweep_large_pages(&mut self, sweep_nursery: bool) {
-        // FIXME: borrow checker fighting
-        // didn't call self.release_multiple_pages
-        // so the compiler knows I'm borrowing two different fields
+        let sweep = |object: ObjectReference| {
+            #[cfg(feature = "global_alloc_bit")]
+            crate::util::alloc_bit::unset_alloc_bit::<VM>(object);
+            self.release_object(get_super_page(VM::VMObjectModel::ref_to_object_start(
+                object,
+            )));
+        };
         if sweep_nursery {
-            for cell in self.treadmill.collect_nursery() {
-                // println!("- cn {}", cell);
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                self.release_object(get_super_page(cell));
+            for object in self.treadmill.collect_nursery() {
+                sweep(object);
             }
         } else {
-            for cell in self.treadmill.collect() {
-                // println!("- ts {}", cell);
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                self.release_object(get_super_page(cell));
+            for object in self.treadmill.collect() {
+                sweep(object)
             }
         }
     }
@@ -416,7 +417,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     #[inline]
     pub fn rc_free<const COMPRESSED: bool>(&self, o: ObjectReference) {
-        if o.to_address().attempt_log::<VM, COMPRESSED>() {
+        if o.to_address::<VM>().attempt_log::<VM, COMPRESSED>() {
             // println!(" - add to rc_dead_objects {:?}", o);
             self.rc_dead_objects.push(o);
         }
@@ -527,7 +528,7 @@ impl RCSweepMatureLOS {
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {
-            if !los.is_marked(*o) && rc::count(*o) != 0 {
+            if !los.is_marked(*o) && rc::count::<VM>(*o) != 0 {
                 crate::stat(|s| {
                     s.dead_mature_objects += 1;
                     s.dead_mature_volume += o.get_size::<VM>();
@@ -539,14 +540,14 @@ impl RCSweepMatureLOS {
                     s.dead_mature_tracing_los_objects += 1;
                     s.dead_mature_tracing_los_volume += o.get_size::<VM>();
 
-                    if rc::rc_stick(*o) {
+                    if rc::rc_stick::<VM>(*o) {
                         s.dead_mature_tracing_stuck_objects += 1;
                         s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
                         s.dead_mature_tracing_stuck_los_objects += 1;
                         s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
                     }
                 });
-                rc::set(*o, 0);
+                rc::set::<VM>(*o, 0);
                 los.rc_free::<COMPRESSED>(*o);
             }
         }
@@ -582,9 +583,9 @@ impl RCReleaseMatureLOS {
         let mut mature_objects = los.rc_mature_objects.lock();
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
-            o.to_address().unlog::<VM, COMPRESSED>();
+            o.to_address::<VM>().unlog::<VM, COMPRESSED>();
             if removed {
-                let pages = los.release_object(o.to_address());
+                let pages = los.release_object(o.to_address::<VM>());
                 los.num_pages_released_lazy
                     .fetch_add(pages, Ordering::Relaxed);
             }

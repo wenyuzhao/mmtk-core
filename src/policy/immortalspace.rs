@@ -77,25 +77,26 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
             if VM::VMObjectModel::compressed_pointers_enabled() {
                 let step = 4;
                 for i in (0..bytes).step_by(step) {
-                    let a = object.to_address() + i;
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED.mark_as_unlogged::<VM>(
-                        unsafe { a.to_object_reference() },
-                        Ordering::SeqCst,
-                    );
+                    let a = object.to_address::<VM>() + i;
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
+                        .mark_as_unlogged::<VM>(a.to_object_reference::<VM>(), Ordering::SeqCst);
                 }
             } else {
                 let step = 8;
                 for i in (0..bytes).step_by(step) {
-                    let a = object.to_address() + i;
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
-                        unsafe { a.to_object_reference() },
-                        Ordering::SeqCst,
-                    );
+                    let a = object.to_address::<VM>() + i;
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .mark_as_unlogged::<VM>(a.to_object_reference::<VM>(), Ordering::SeqCst);
                 }
             }
         }
         #[cfg(feature = "global_alloc_bit")]
-        crate::util::alloc_bit::set_alloc_bit(object);
+        crate::util::alloc_bit::set_alloc_bit::<VM>(object);
+    }
+    #[cfg(feature = "is_mmtk_object")]
+    #[inline(always)]
+    fn is_mmtk_object(&self, addr: Address) -> bool {
+        crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
     }
     #[inline(always)]
     fn sft_trace_object(
@@ -235,7 +236,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
         debug_assert!(
-            crate::util::alloc_bit::is_alloced(object),
+            crate::util::alloc_bit::is_alloced::<VM>(object),
             "{:x}: alloc bit not set",
             object
         );

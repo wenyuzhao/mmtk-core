@@ -38,18 +38,26 @@ pub const RC_LOCK_BITS: SideMetadataSpec =
 pub const RC_LOCK_BIT_SPEC: MetadataSpec = MetadataSpec::OnSide(RC_LOCK_BITS);
 
 #[inline(always)]
-pub fn fetch_update(o: ObjectReference, f: impl FnMut(u8) -> Option<u8>) -> Result<u8, u8> {
-    RC_TABLE.fetch_update_atomic(o.to_address(), Ordering::Relaxed, Ordering::Relaxed, f)
+pub fn fetch_update<VM: VMBinding, F: FnMut(u8) -> Option<u8>>(
+    o: ObjectReference,
+    f: F,
+) -> Result<u8, u8> {
+    RC_TABLE.fetch_update_atomic(
+        o.to_address::<VM>(),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+        f,
+    )
 }
 
 #[inline(always)]
-pub fn rc_stick(o: ObjectReference) -> bool {
-    self::count(o) == MAX_REF_COUNT
+pub fn rc_stick<VM: VMBinding>(o: ObjectReference) -> bool {
+    self::count::<VM>(o) == MAX_REF_COUNT
 }
 
 #[inline(always)]
-pub fn inc(o: ObjectReference) -> Result<u8, u8> {
-    fetch_update(o, |x| {
+pub fn inc<VM: VMBinding>(o: ObjectReference) -> Result<u8, u8> {
+    fetch_update::<VM, _>(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == MAX_REF_COUNT {
             None
@@ -60,8 +68,8 @@ pub fn inc(o: ObjectReference) -> Result<u8, u8> {
 }
 
 #[inline(always)]
-pub fn dec(o: ObjectReference) -> Result<u8, u8> {
-    fetch_update(o, |x| {
+pub fn dec<VM: VMBinding>(o: ObjectReference) -> Result<u8, u8> {
+    fetch_update::<VM, _>(o, |x| {
         debug_assert!(x <= MAX_REF_COUNT);
         if x == 0 || x == MAX_REF_COUNT
         /* sticky */
@@ -74,13 +82,13 @@ pub fn dec(o: ObjectReference) -> Result<u8, u8> {
 }
 
 #[inline(always)]
-pub fn set(o: ObjectReference, count: u8) {
-    RC_TABLE.store_atomic(o.to_address(), count, Ordering::Relaxed)
+pub fn set<VM: VMBinding>(o: ObjectReference, count: u8) {
+    RC_TABLE.store_atomic(o.to_address::<VM>(), count, Ordering::Relaxed)
 }
 
 #[inline(always)]
-pub fn count(o: ObjectReference) -> u8 {
-    RC_TABLE.load_atomic(o.to_address(), Ordering::Relaxed)
+pub fn count<VM: VMBinding>(o: ObjectReference) -> u8 {
+    RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed)
 }
 
 pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
@@ -97,27 +105,27 @@ pub fn rc_table_range<UInt: Sized>(b: Block) -> &'static [UInt] {
 
 #[allow(unused)]
 #[inline(always)]
-pub fn is_dead(o: ObjectReference) -> bool {
-    let v: u8 = RC_TABLE.load_atomic(o.to_address(), Ordering::Relaxed);
+pub fn is_dead<VM: VMBinding>(o: ObjectReference) -> bool {
+    let v: u8 = RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed);
     v == 0
 }
 
 #[inline(always)]
-pub fn is_dead_or_stick(o: ObjectReference) -> bool {
-    let v: u8 = RC_TABLE.load_atomic(o.to_address(), Ordering::Relaxed);
+pub fn is_dead_or_stick<VM: VMBinding>(o: ObjectReference) -> bool {
+    let v: u8 = RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed);
     v == 0 || v == MAX_REF_COUNT
 }
 
 #[inline(always)]
-pub fn is_straddle_line(line: Line) -> bool {
+pub fn is_straddle_line<VM: VMBinding>(line: Line) -> bool {
     let v: u8 = RC_STRADDLE_LINES.load_atomic(line.start(), Ordering::Relaxed);
     v != 0
 }
 
 #[inline(always)]
-pub fn address_is_in_straddle_line(a: Address) -> bool {
+pub fn address_is_in_straddle_line<VM: VMBinding>(a: Address) -> bool {
     let line = Line::from(Line::align(a));
-    self::count(unsafe { a.to_object_reference() }) != 0 && self::is_straddle_line(line)
+    self::count::<VM>(a.to_object_reference::<VM>()) != 0 && self::is_straddle_line::<VM>(line)
 }
 
 #[inline(always)]
@@ -125,11 +133,11 @@ fn mark_straddle_object_with_size<VM: VMBinding>(o: ObjectReference, size: usize
     debug_assert!(!crate::args::BLOCK_ONLY);
     debug_assert!(size > Line::BYTES);
     let start_line = Line::containing::<VM>(o).next();
-    let end_line = Line::from(Line::align(o.to_address() + size));
+    let end_line = Line::from(Line::align(o.to_address::<VM>() + size));
     let mut line = start_line;
     while line != end_line {
         RC_STRADDLE_LINES.store_atomic(line.start(), 1u8, Ordering::Relaxed);
-        self::set(unsafe { line.start().to_object_reference() }, 1);
+        self::set::<VM>(line.start().to_object_reference::<VM>(), 1);
         line = line.next();
     }
 }
@@ -147,10 +155,10 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
     let size = VM::VMObjectModel::get_current_size(o);
     if size > Line::BYTES {
         let start_line = Line::containing::<VM>(o).next();
-        let end_line = Line::from(Line::align(o.to_address() + size));
+        let end_line = Line::from(Line::align(o.to_address::<VM>() + size));
         let mut line = start_line;
         while line != end_line {
-            self::set(unsafe { line.start().to_object_reference() }, 0);
+            self::set::<VM>(line.start().to_object_reference::<VM>(), 0);
             // std::sync::atomic::fence(Ordering::Relaxed);
             RC_STRADDLE_LINES.store_atomic(line.start(), 0u8, Ordering::Relaxed);
             // std::sync::atomic::fence(Ordering::Relaxed);
@@ -163,8 +171,8 @@ pub fn unmark_straddle_object<VM: VMBinding>(o: ObjectReference) {
 pub fn assert_zero_ref_count<VM: VMBinding>(o: ObjectReference) {
     let size = VM::VMObjectModel::get_current_size(o);
     for i in (0..size).step_by(MIN_OBJECT_SIZE) {
-        let a = o.to_address() + i;
-        assert_eq!(0, self::count(unsafe { a.to_object_reference() }));
+        let a = o.to_address::<VM>() + i;
+        assert_eq!(0, self::count::<VM>(a.to_object_reference::<VM>()));
     }
 }
 
