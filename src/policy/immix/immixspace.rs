@@ -1,10 +1,6 @@
 use super::block_allocation::BlockAllocation;
 use super::line::*;
-use super::{
-    block::*,
-    chunk::{Chunk, ChunkMap},
-    defrag::Defrag,
-};
+use super::{block::*, defrag::Defrag};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::{RemSet, LXR};
 use crate::plan::PlanConstraints;
@@ -15,6 +11,7 @@ use crate::policy::sft::SFT;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::copy::*;
+use crate::util::heap::chunk_map::*;
 use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::HeapMeta;
@@ -458,18 +455,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     unimplemented!("cyclic mark bits is not supported at the moment");
             // }
             // Reset block mark and object mark table.
-            let space = unsafe { &mut *(self as *mut Self) };
-            let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
+            let work_packets = self.generate_prepare_tasks(None);
             self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
         }
     }
 
     pub fn schedule_mark_table_zeroing_tasks(&self, stage: WorkBucketStage) {
         assert!(crate::args::HEAP_HEALTH_GUIDED_GC);
-        let space = unsafe { &mut *(self as *const Self as *mut Self) };
-        let work_packets = self
-            .chunk_map
-            .generate_concurrent_mark_table_zeroing_tasks::<VM>(space);
+        let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
         self.scheduler().work_buckets[stage].bulk_add(work_packets);
     }
 
@@ -542,7 +535,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
-            let dead_cycle_sweep_packets = self.chunk_map.generate_dead_cycle_sweep_tasks();
+            let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_desc());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
@@ -577,14 +570,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(
-            space,
-            if space.in_defrag() {
-                Some(threshold)
-            } else {
-                None
-            },
-        );
+        let work_packets = self.chunk_map.generate_tasks(|chunk| {
+            Box::new(PrepareBlockState {
+                space,
+                chunk,
+                defrag_threshold: if space.in_defrag() {
+                    Some(threshold)
+                } else {
+                    None
+                },
+            })
+        });
         self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         // Update line mark state
         if !super::BLOCK_ONLY {
@@ -616,15 +612,84 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.reusable_blocks.reset();
         }
         // Sweep chunks and blocks
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_sweep_tasks(space, false);
+        let work_packets = self.generate_sweep_tasks();
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
             self.defrag.release(self);
         }
         self.initial_mark_pause = false;
         did_defrag
+    }
+
+    /// Generate chunk sweep tasks
+    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        self.defrag.mark_histograms.lock().clear();
+        // # Safety: ImmixSpace reference is always valid within this collection cycle.
+        let space = unsafe { &*(self as *const Self) };
+        let epilogue = Arc::new(FlushPageResource {
+            space,
+            counter: AtomicUsize::new(0),
+        });
+        let tasks = self.chunk_map.generate_tasks(|chunk| {
+            Box::new(SweepChunk {
+                space,
+                chunk,
+                epilogue: epilogue.clone(),
+            })
+        });
+        epilogue.counter.store(tasks.len(), Ordering::SeqCst);
+        tasks
+    }
+
+    /// Generate chunk sweep work packets.
+    pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.chunk_map.generate_tasks(|chunk| {
+                Box::new(SweepDeadCyclesChunk::<_, true>::new(
+                    chunk,
+                    LazySweepingJobsCounter::new_desc(),
+                ))
+            })
+        } else {
+            self.chunk_map.generate_tasks(|chunk| {
+                Box::new(SweepDeadCyclesChunk::<_, false>::new(
+                    chunk,
+                    LazySweepingJobsCounter::new_desc(),
+                ))
+            })
+        }
+    }
+
+    /// Generate chunk sweep work packets.
+    pub fn generate_prepare_tasks(
+        &mut self,
+        defrag_threshold: Option<usize>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        let space = unsafe { &mut *(self as *mut Self) };
+        if VM::VMObjectModel::compressed_pointers_enabled() {
+            self.chunk_map.generate_tasks(|chunk| {
+                Box::new(PrepareChunk::<true> {
+                    chunk,
+                    defrag_threshold,
+                    rc_enabled: space.rc_enabled,
+                    cm_enabled: space.cm_enabled,
+                })
+            })
+        } else {
+            self.chunk_map.generate_tasks(|chunk| {
+                Box::new(PrepareChunk::<false> {
+                    chunk,
+                    defrag_threshold,
+                    rc_enabled: space.rc_enabled,
+                    cm_enabled: space.cm_enabled,
+                })
+            })
+        }
+    }
+
+    pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        self.chunk_map
+            .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
     }
 
     /// Release a block.
@@ -1229,7 +1294,11 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let mut blocks = vec![];
         // Iterate over all blocks in this chunk
-        for block in self.chunk.allocated_blocks() {
+        for block in self
+            .chunk
+            .iter_region::<Block>()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+        {
             let state = block.get_state();
             // Skip unallocated blocks.
             if state == BlockState::Unallocated
@@ -1273,6 +1342,106 @@ impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         VM::VMCollection::update_weak_processor(true);
+    }
+}
+
+pub struct PrepareBlockState<VM: VMBinding> {
+    pub space: &'static ImmixSpace<VM>,
+    pub chunk: Chunk,
+    pub defrag_threshold: Option<usize>,
+}
+impl<VM: VMBinding> PrepareBlockState<VM> {
+    /// Clear object mark table
+    #[inline(always)]
+    fn reset_object_mark(chunk: Chunk) {
+        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+            side.bzero_metadata(chunk.start(), Chunk::BYTES);
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
+        // Clear object mark table for this chunk
+        Self::reset_object_mark(self.chunk);
+        // Iterate over all blocks in this chunk
+        for block in self.chunk.iter_region::<Block>() {
+            let state = block.get_state();
+            // Skip unallocated blocks.
+            if state == BlockState::Unallocated {
+                continue;
+            }
+            // Check if this block needs to be defragmented.
+            if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
+                block.set_as_defrag_source(true);
+            } else {
+                block.set_as_defrag_source(false);
+            }
+            // Clear block mark data.
+            block.set_state(BlockState::Unmarked);
+            debug_assert!(!block.get_state().is_reusable());
+            debug_assert_ne!(block.get_state(), BlockState::Marked);
+        }
+    }
+}
+
+/// Chunk sweeping work packet.
+struct SweepChunk<VM: VMBinding> {
+    space: &'static ImmixSpace<VM>,
+    chunk: Chunk,
+    /// A destructor invoked when all `SweepChunk` packets are finished.
+    epilogue: Arc<FlushPageResource<VM>>,
+}
+
+impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let mut histogram = self.space.defrag.new_histogram();
+        if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
+            let line_mark_state = if super::BLOCK_ONLY {
+                None
+            } else {
+                Some(self.space.line_mark_state.load(Ordering::Acquire))
+            };
+            // number of allocated blocks.
+            let mut allocated_blocks = 0;
+            // Iterate over all allocated blocks in this chunk.
+            for block in self
+                .chunk
+                .iter_region::<Block>()
+                .filter(|block| block.get_state() != BlockState::Unallocated)
+            {
+                if !block.sweep(self.space, &mut histogram, line_mark_state) {
+                    // Block is live. Increment the allocated block count.
+                    allocated_blocks += 1;
+                }
+            }
+            // Set this chunk as free if there is not live blocks.
+            if allocated_blocks == 0 {
+                self.space.chunk_map.set(self.chunk, ChunkState::Free)
+            }
+        }
+        self.space.defrag.add_completed_mark_histogram(histogram);
+        self.epilogue.finish_one_work_packet();
+    }
+}
+
+/// Count number of remaining work pacets, and flush page resource if all packets are finished.
+struct FlushPageResource<VM: VMBinding> {
+    space: &'static ImmixSpace<VM>,
+    counter: AtomicUsize,
+}
+
+impl<VM: VMBinding> FlushPageResource<VM> {
+    /// Called after a related work packet is finished.
+    fn finish_one_work_packet(&self) {
+        if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
+            // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
+            // Now flush the BlockPageResource.
+            self.space.flush_page_resource()
+        }
     }
 }
 
@@ -1395,6 +1564,191 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
             lxr.immix_space
                 .num_clean_blocks_released_lazy
                 .fetch_add(count, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Chunk sweeping work packet.
+struct SweepDeadCyclesChunk<VM: VMBinding, const COMPRESSED: bool> {
+    chunk: Chunk,
+    _counter: LazySweepingJobsCounter,
+    lxr: *const LXR<VM>,
+}
+
+unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for SweepDeadCyclesChunk<VM, COMPRESSED> {}
+
+#[allow(unused)]
+impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED> {
+    const CAPACITY: usize = 1024;
+
+    #[inline(always)]
+    fn lxr(&self) -> &LXR<VM> {
+        unsafe { &*self.lxr }
+    }
+
+    pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
+        Self {
+            chunk,
+            lxr: std::ptr::null_mut(),
+            _counter: counter,
+        }
+    }
+
+    #[inline(never)]
+    fn process_dead_object(&mut self, mut o: ObjectReference) {
+        o = o.fix_start_address::<VM, COMPRESSED>();
+        crate::stat(|s| {
+            s.dead_mature_objects += 1;
+            s.dead_mature_volume += o.get_size::<VM>();
+
+            s.dead_mature_tracing_objects += 1;
+            s.dead_mature_tracing_volume += o.get_size::<VM>();
+
+            if rc::rc_stick::<VM>(o) {
+                s.dead_mature_tracing_stuck_objects += 1;
+                s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
+            }
+        });
+        if !crate::args::HOLE_COUNTING {
+            Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
+        }
+        rc::set::<VM>(o, 0);
+        if !crate::args::BLOCK_ONLY {
+            rc::unmark_straddle_object::<VM>(o)
+        }
+    }
+
+    #[inline]
+    fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
+        let mut has_dead_object = false;
+        let mut has_live = false;
+        let mut cursor = block.start();
+        let limit = block.end();
+        while cursor < limit {
+            let o = unsafe { cursor.to_object_reference::<VM>() };
+            cursor = cursor + rc::MIN_OBJECT_SIZE;
+            let c = rc::count::<VM>(o);
+            if c != 0 && !immix_space.is_marked(o) {
+                if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_address::<VM>()) {
+                    if c == 1 && rc::is_straddle_line::<VM>(Line::from(o.to_address::<VM>())) {
+                        continue;
+                    } else {
+                        std::sync::atomic::fence(Ordering::SeqCst);
+                        if rc::count::<VM>(o) == 0 {
+                            continue;
+                        }
+                    }
+                }
+                self.process_dead_object(o);
+                has_dead_object = true;
+            } else {
+                if c != 0 {
+                    has_live = true;
+                }
+            }
+        }
+        if has_dead_object || !has_live {
+            immix_space.add_to_possibly_dead_mature_blocks(block, false);
+        }
+    }
+}
+
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for SweepDeadCyclesChunk<VM, COMPRESSED> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.lxr = lxr;
+        let immix_space = &lxr.immix_space;
+        for block in self
+            .chunk
+            .iter_region::<Block>()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+        {
+            if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
+                continue;
+            } else {
+                self.process_block(block, immix_space)
+            }
+        }
+    }
+}
+
+struct ConcurrentChunkMetadataZeroing {
+    chunk: Chunk,
+}
+
+impl ConcurrentChunkMetadataZeroing {
+    /// Clear object mark table
+    #[inline(always)]
+    #[allow(unused)]
+    fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(chunk.start(), Chunk::BYTES);
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        Self::reset_object_mark::<VM>(self.chunk);
+    }
+}
+
+/// A work packet to prepare each block for GC.
+/// Performs the action on a range of chunks.
+struct PrepareChunk<const COMPRESSED: bool> {
+    chunk: Chunk,
+    cm_enabled: bool,
+    rc_enabled: bool,
+    defrag_threshold: Option<usize>,
+}
+
+impl<const COMPRESSED: bool> PrepareChunk<COMPRESSED> {
+    /// Clear object mark table
+    #[inline(always)]
+    #[allow(unused)]
+    fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(chunk.start(), Chunk::BYTES);
+    }
+}
+
+impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESSED> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
+        if !self.rc_enabled || !crate::args::HEAP_HEALTH_GUIDED_GC {
+            Self::reset_object_mark::<VM>(self.chunk);
+        }
+        // Iterate over all blocks in this chunk
+        for block in self.chunk.iter_region::<Block>() {
+            let state = block.get_state();
+            if self.rc_enabled {
+                block.clear_line_validity_states();
+            }
+            // Skip unallocated blocks.
+            if state == BlockState::Unallocated {
+                continue;
+            }
+            // Clear unlog table on CM
+            if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
+                block.initialize_log_table_as_unlogged::<VM, COMPRESSED>();
+            }
+            // Check if this block needs to be defragmented.
+            if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
+                block.set_as_defrag_source(true);
+            } else if !self.rc_enabled {
+                block.set_as_defrag_source(false);
+            }
+            // Clear block mark data.
+            if block.get_state() != BlockState::Nursery {
+                block.set_state(BlockState::Unmarked);
+            }
+            debug_assert!(!block.get_state().is_reusable());
+            debug_assert_ne!(block.get_state(), BlockState::Marked);
+            // debug_assert_ne!(block.get_state(), BlockState::Nursery);
         }
     }
 }

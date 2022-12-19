@@ -572,7 +572,7 @@ mod tests {
         serial_test(|| {
             with_cleanup(
                 || {
-                    let data_addr = vm_layout_constants::HEAP_START;
+                    let data_addr = vm_layout_constants::VM_LAYOUT_CONSTANTS.heap_start;
 
                     // 1 bit per 8 bytes
                     let spec = SideMetadataSpec {
@@ -629,7 +629,7 @@ mod tests {
         serial_test(|| {
             with_cleanup(
                 || {
-                    let data_addr = vm_layout_constants::HEAP_START;
+                    let data_addr = vm_layout_constants::VM_LAYOUT_CONSTANTS.heap_start;
 
                     // 1 bit per 8 bytes
                     let spec = SideMetadataSpec {

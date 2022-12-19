@@ -390,9 +390,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let sweep = |object: ObjectReference| {
             #[cfg(feature = "global_alloc_bit")]
             crate::util::alloc_bit::unset_alloc_bit::<VM>(object);
-            self.release_object(get_super_page(VM::VMObjectModel::ref_to_object_start(
-                object,
-            )));
+            self.release_object(get_super_page(object.to_object_start::<VM>()));
         };
         if sweep_nursery {
             for object in self.treadmill.collect_nursery() {

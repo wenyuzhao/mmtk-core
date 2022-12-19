@@ -1,9 +1,9 @@
-use super::{block::Block, chunk::ChunkState, ImmixSpace};
+use super::{block::Block, ImmixSpace};
 use crate::{
     plan::lxr::LXR,
     policy::space::Space,
     scheduler::{GCWork, GCWorkScheduler, GCWorker},
-    util::{VMMutatorThread, VMThread, linear_scan::Region},
+    util::{heap::chunk_map::ChunkState, linear_scan::Region, VMMutatorThread, VMThread},
     vm::*,
     LazySweepingJobsCounter, MMTK,
 };

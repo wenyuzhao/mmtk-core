@@ -80,8 +80,6 @@ define_side_metadata_specs!(
     IX_BLOCK_DEFRAG = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Mark blocks by immix
     IX_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
-    // Mark chunks by immix
-    IX_CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::chunk::Chunk::LOG_BYTES),
     // Striddle line marks
     RC_STRADDLE_LINES = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     // LXR Block logging bits
@@ -90,6 +88,27 @@ define_side_metadata_specs!(
     IX_BLOCK_DEAD_WORDS = (global: false, log_num_of_bits: 5 /* u32 */, log_bytes_in_region: Block::LOG_BYTES),
     IX_LINE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     LOS_PAGE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_PAGE as usize),
+    // Mark chunks (any plan that uses the chunk map should include this spec in their local sidemetadata specs)
+    CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
+    // Mark blocks by (native mimalloc) marksweep
+    MS_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // Next block in list for native mimalloc
+    MS_BLOCK_NEXT   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // Previous block in list for native mimalloc
+    MS_BLOCK_PREV   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // Pointer to owning list for blocks for native mimalloc
+    MS_BLOCK_LIST   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // Size of cells in block for native mimalloc FIXME: do we actually need usize?
+    MS_BLOCK_SIZE         = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // TLS of owning mutator of block for native mimalloc
+    MS_BLOCK_TLS    = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // First cell of free list in block for native mimalloc
+    MS_FREE         = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // The following specs are only used for manual malloc/free
+    // First cell of local free list in block for native mimalloc
+    MS_LOCAL_FREE   = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
+    // First cell of thread free list in block for native mimalloc
+    MS_THREAD_FREE  = (global: false, log_num_of_bits: LOG_BITS_IN_ADDRESS, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
 );
 
 #[cfg(test)]

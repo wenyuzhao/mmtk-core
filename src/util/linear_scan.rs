@@ -131,6 +131,11 @@ pub trait Region: Copy + PartialEq + PartialOrd {
         }
         Some((end.start() - start.start()) >> Self::LOG_BYTES)
     }
+    /// Check if the given address is in the region.
+    #[inline(always)]
+    fn includes_address(&self, addr: Address) -> bool {
+        Self::align(addr) == self.start()
+    }
 }
 
 pub struct RegionIterator<R: Region> {
