@@ -3,7 +3,7 @@ use crate::{
     plan::lxr::LXR,
     policy::space::Space,
     scheduler::{GCWork, GCWorkScheduler, GCWorker},
-    util::{VMMutatorThread, VMThread},
+    util::{VMMutatorThread, VMThread, linear_scan::Region},
     vm::*,
     LazySweepingJobsCounter, MMTK,
 };
@@ -174,7 +174,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 .resize_with(len << 1, || Atomic::new(Block::ZERO))
         }
         // Alloc first block
-        let result = Block::from(unsafe {
+        let result = Block::from_aligned_address(unsafe {
             self.space()
                 .bulk_acquire_uninterruptible(tls, Block::PAGES, false)?
         });
@@ -195,7 +195,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 self.space()
                     .bulk_acquire_uninterruptible(tls, Block::PAGES, false)
             } {
-                push_new_block(Block::from(a));
+                push_new_block(Block::from_aligned_address(a));
             } else {
                 break;
             }
@@ -229,7 +229,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             if block_address.is_zero() {
                 return None;
             }
-            Block::from(block_address)
+            Block::from_aligned_address(block_address)
         };
         self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
         if self.space().common().zeroed && !copy && cfg!(feature = "force_zeroing") {
