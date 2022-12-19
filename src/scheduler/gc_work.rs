@@ -121,15 +121,16 @@ impl<C: GCWorkContext> Release<C> {
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Release Global");
+
+        if mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_none() {
+            <C::VM as VMBinding>::VMCollection::update_weak_processor(false);
+        }
+
         <C::VM as VMBinding>::VMCollection::vm_release();
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.release(worker.tls);
-
-        if mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_none() {
-            <C::VM as VMBinding>::VMCollection::update_weak_processor(false);
-        }
 
         if !plan_mut.no_mutator_prepare_release() {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
