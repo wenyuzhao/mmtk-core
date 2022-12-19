@@ -60,26 +60,19 @@ impl Map for Map64 {
         self_mut.descriptor_map[index] = descriptor;
     }
 
-    fn create_freelist(&self, pr: &CommonFreeListPageResource) -> Box<dyn FreeList> {
+    fn create_freelist(&self, start: Address) -> Box<dyn FreeList> {
         let units = VM_LAYOUT_CONSTANTS.space_size_64 >> LOG_BYTES_IN_PAGE;
-        self.create_parent_freelist(pr, units, units as _)
+        self.create_parent_freelist(start, units, units as _)
     }
 
     fn create_parent_freelist(
         &self,
-        pr: &CommonFreeListPageResource,
+        start: Address,
         mut units: usize,
         grain: i32,
     ) -> Box<dyn FreeList> {
         // This is only called during creating a page resource/space/plan/mmtk instance, which is single threaded.
         let self_mut = unsafe { self.mut_self() };
-        let start = pr.get_start();
-        assert!(
-            start < VM_LAYOUT_CONSTANTS.heap_end,
-            "{:?} {:?}",
-            start,
-            VM_LAYOUT_CONSTANTS.heap_end
-        );
         let index = Self::space_index(start).unwrap();
 
         units = (units as f64 * NON_MAP_FRACTION) as _;
@@ -97,11 +90,6 @@ impl Map for Map64 {
             heads,
         ));
 
-        // `CommonFreeListPageResource` lives as a member in space instances.
-        // Since `Space` instances are always stored as global variables, so it is safe here
-        // to turn `&CommonFreeListPageResource` into `&'static CommonFreeListPageResource`
-        self_mut.fl_page_resources[index] =
-            Some(unsafe { &*(pr as *const CommonFreeListPageResource) });
         self_mut.fl_map[index] =
             Some(unsafe { &*(&list as &RawMemoryFreeList as *const RawMemoryFreeList) });
 
@@ -111,6 +99,12 @@ impl Map for Map64 {
         self_mut.high_water[index] = base;
         self_mut.base_address[index] = base;
         list
+    }
+
+    fn bind_freelist(&self, pr: &'static CommonFreeListPageResource) {
+        let index = Self::space_index(pr.get_start()).unwrap();
+        let self_mut = unsafe { self.mut_self() };
+        self_mut.fl_page_resources[index] = Some(pr);
     }
 
     fn allocate_contiguous_chunks(
@@ -205,10 +199,6 @@ impl Map for Map64 {
 
     fn is_finalized(&self) -> bool {
         self.finalized
-    }
-
-    fn get_discontig_freelist_pr_ordinal(&self, _pr: &CommonFreeListPageResource) -> usize {
-        unreachable!()
     }
 
     #[inline]
