@@ -513,7 +513,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn release_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        self.block_allocation.sweep_and_reset();
+        let scheduler = self.scheduler.clone();
+        self.block_allocation.sweep_and_reset(&scheduler);
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
