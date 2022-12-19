@@ -620,7 +620,11 @@ impl Block {
     }
 
     #[inline(always)]
-    pub fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>, _concurrent: bool) {
+    pub fn rc_sweep_nursery<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        _concurrent: bool,
+    ) -> bool {
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
         if is_in_place_promoted {
@@ -628,9 +632,11 @@ impl Block {
                 unavailable_lines: 1 as _,
             });
             space.reusable_blocks.push(*self);
+            false
         } else {
             debug_assert!(self.rc_dead());
             space.release_block(*self, true, false);
+            true
         }
     }
 

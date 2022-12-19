@@ -410,6 +410,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.next_gc_may_perform_cycle_collection
                 .store(perform_cycle_collection, Ordering::SeqCst);
             self.perform_cycle_collection.store(false, Ordering::SeqCst);
+            println!(
+                "gc end next_gc_may_perform_cycle_collection={}",
+                perform_cycle_collection
+            );
         }
         self.avail_pages_at_end_of_last_gc
             .store(self.get_available_pages(), Ordering::SeqCst);

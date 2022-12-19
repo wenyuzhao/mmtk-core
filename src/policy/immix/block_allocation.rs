@@ -66,7 +66,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let stw_limit = usize::min(limit, MAX_STW_SWEEP_BLOCKS);
         for block in &self.buffer[0..stw_limit] {
             let block = block.load(Ordering::Relaxed);
-            block.rc_sweep_nursery(space, false)
+            block.rc_sweep_nursery(space, false);
         }
         if limit > stw_limit {
             let packets = self.buffer[stw_limit..limit]
@@ -291,8 +291,14 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        let mut released_blocks = 0;
         for block in &self.blocks {
-            block.rc_sweep_nursery(space, true)
+            if block.rc_sweep_nursery(space, true) {
+                released_blocks += 1;
+            }
         }
+        space
+            .num_clean_blocks_released_lazy
+            .fetch_add(released_blocks, Ordering::SeqCst);
     }
 }
