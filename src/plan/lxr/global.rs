@@ -163,6 +163,16 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         {
             return true;
         }
+        // fresh young blocks limits
+        if !crate::args::LXR_RC_ONLY
+            && crate::args::HEAP_HEALTH_GUIDED_GC
+            && crate::args()
+                .blocks_limit
+                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                .unwrap_or(false)
+        {
+            return true;
+        }
         // Concurrent tracing finished
         if !crate::args::LXR_RC_ONLY
             && !crate::args::HEAP_HEALTH_GUIDED_GC
