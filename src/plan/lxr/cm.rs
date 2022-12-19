@@ -4,6 +4,7 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
+use crate::util::rc::RefCountHelper;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::{
@@ -29,6 +30,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
     slice: Option<&'static [ObjectReference]>,
     next_objects: VectorQueue<ObjectReference>,
     worker: *mut GCWorker<VM>,
+    rc: RefCountHelper<VM>,
 }
 
 unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send
@@ -48,6 +50,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             slice: None,
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -62,6 +65,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             slice: None,
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -77,6 +81,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             slice: Some(slice),
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -102,7 +107,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             return object;
         }
         debug_assert!(object.is_in_any_space());
-        let no_trace = crate::util::rc::count::<VM>(object) == 0;
+        let no_trace = self.rc.count(object) == 0;
         if no_trace {
             return object;
         }
@@ -123,7 +128,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             for o in objects {
                 if !self.plan.address_in_defrag(Address::from_ref(o))
                     && self.plan.in_defrag(*o)
-                    && crate::util::rc::count::<VM>(*o) != 0
+                    && self.rc.count(*o) != 0
                 {
                     self.plan.immix_space.remset.record(
                         VM::VMEdge::from_address(Address::from_ref(o)),
@@ -158,7 +163,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                 RefScanPolicy::Discover,
                 |e| {
                     let t: ObjectReference = e.load::<COMPRESSED>();
-                    if t.is_null() || crate::util::rc::count::<VM>(t) == 0 {
+                    if t.is_null() || self.rc.count(t) == 0 {
                         return;
                     }
                     if crate::args::RC_MATURE_EVACUATION

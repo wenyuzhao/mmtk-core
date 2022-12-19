@@ -11,7 +11,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::{MatureSweeping, UpdateWeakProcessor};
+use crate::policy::immix::rc_work::{MatureSweeping, UpdateWeakProcessor};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -27,7 +27,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
 use crate::util::options::Options;
-use crate::util::rc::{self, RC_LOCK_BIT_SPEC, RC_TABLE};
+use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
@@ -69,6 +69,7 @@ pub struct LXR<VM: VMBinding> {
     zeroing_packets_scheduled: AtomicBool,
     next_gc_selected: (Mutex<bool>, Condvar),
     in_concurrent_marking: AtomicBool,
+    pub rc: RefCountHelper<VM>,
 }
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -129,7 +130,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if crate::args::LXR_RC_ONLY {
             let inc_overflow = crate::args()
                 .incs_limit
-                .map(|x| rc::inc_buffer_size() >= x)
+                .map(|x| self.rc.inc_buffer_size() >= x)
                 .unwrap_or(false);
             let alloc_overflow = self
                 .nursery_blocks
@@ -158,7 +159,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             && crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args()
                 .incs_limit
-                .map(|x| rc::inc_buffer_size() >= x)
+                .map(|x| self.rc.inc_buffer_size() >= x)
                 .unwrap_or(false)
         {
             return true;
@@ -192,7 +193,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .unwrap_or(false)
                 || crate::args()
                     .incs_limit
-                    .map(|x| rc::inc_buffer_size() >= x)
+                    .map(|x| self.rc.inc_buffer_size() >= x)
                     .unwrap_or(false))
         {
             return true;
@@ -263,7 +264,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 "[{:.3}s][pause] {:?} {}",
                 boot_time,
                 pause,
-                crate::util::rc::inc_buffer_size()
+                self.rc.inc_buffer_size()
             );
         }
         match pause {
@@ -441,7 +442,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         reference: ObjectReference,
         referent: ObjectReference,
     ) -> bool {
-        if rc::count::<VM>(reference) == 0 || rc::count::<VM>(referent) == 0 {
+        if self.rc.count(reference) == 0 || self.rc.count(referent) == 0 {
             return false;
         }
         true
@@ -450,8 +451,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn discover_reference(&self, reference: ObjectReference, referent: ObjectReference) {
         // Keep weak references and referents alive during SATB.
         // They can only be swept by mature sweeping.
-        let _ = rc::inc::<VM>(reference);
-        let _ = rc::inc::<VM>(referent);
+        let _ = self.rc.inc(reference);
+        let _ = self.rc.inc(referent);
     }
 
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
@@ -515,6 +516,7 @@ impl<VM: VMBinding> LXR<VM> {
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
+            rc: RefCountHelper::NEW,
         });
 
         lxr.gc_init(&options);
@@ -852,12 +854,12 @@ impl<VM: VMBinding> LXR<VM> {
             work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
                 Box::new(ProcessDecs::<_, true>::new(
                     decs,
-                    LazySweepingJobsCounter::new_desc(),
+                    LazySweepingJobsCounter::new_decs(),
                 ))
             } else {
                 Box::new(ProcessDecs::<_, false>::new(
                     decs,
-                    LazySweepingJobsCounter::new_desc(),
+                    LazySweepingJobsCounter::new_decs(),
                 ))
             })
         }
@@ -865,12 +867,12 @@ impl<VM: VMBinding> LXR<VM> {
             work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
                 Box::new(ProcessDecs::<_, true>::new(
                     vec![],
-                    LazySweepingJobsCounter::new_desc(),
+                    LazySweepingJobsCounter::new_decs(),
                 ))
             } else {
                 Box::new(ProcessDecs::<_, false>::new(
                     vec![],
-                    LazySweepingJobsCounter::new_desc(),
+                    LazySweepingJobsCounter::new_decs(),
                 ))
             });
         }

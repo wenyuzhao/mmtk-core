@@ -100,7 +100,7 @@ impl LazySweepingJobsCounter {
     }
 
     #[inline(always)]
-    pub fn new_desc() -> Self {
+    pub fn new_decs() -> Self {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         let decs_counter = lazy_sweeping_jobs.curr_decs_counter.as_ref().unwrap();
         decs_counter.fetch_add(1, Ordering::SeqCst);

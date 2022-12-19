@@ -282,7 +282,7 @@ impl RCSweepNurseryBlocks {
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
             blocks,
-            _counter: LazySweepingJobsCounter::new_desc(),
+            _counter: LazySweepingJobsCounter::new_decs(),
         }
     }
 }

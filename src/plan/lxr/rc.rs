@@ -37,6 +37,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     no_evac: bool,
     slice: Option<VM::VMMemorySlice>,
     depth: usize,
+    rc: RefCountHelper<VM>,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -71,6 +72,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             no_evac: false,
             slice: Some(slice),
             depth: 1,
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -85,6 +87,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             no_evac: false,
             slice: None,
             depth: 1,
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -107,7 +110,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             if !copied && Block::containing::<VM>(o).get_state() == BlockState::Nursery {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
-            self::promote::<VM, COMPRESSED>(o);
+            self.rc.promote::<COMPRESSED>(o);
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL
                 .with(|x| x.record_promotion(o.get_size::<VM>()));
         } else {
@@ -224,7 +227,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     let target = edge.load::<COMPRESSED>();
                     // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                     if !target.is_null() {
-                        if !self::rc_stick::<VM>(target) {
+                        if !self.rc.is_stuck(target) {
                             // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
                             self.new_incs.push(edge);
                             if self.new_incs.is_full() {
@@ -254,7 +257,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
 
     #[inline(always)]
     fn process_inc(&mut self, o: ObjectReference, depth: usize) -> ObjectReference {
-        if let Ok(0) = self::inc::<VM>(o) {
+        if let Ok(0) = self.rc.inc(o) {
             self.promote(o, false, self.lxr().los().in_space(o), depth);
         }
         o
@@ -266,7 +269,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             return true;
         }
         // Skip mature object
-        if self::count::<VM>(o) != 0 {
+        if self.rc.count(o) != 0 {
             return true;
         }
         // Skip recycled lines
@@ -296,24 +299,24 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let los = self.lxr().los().in_space(o);
         if self.dont_evacuate(o, los) {
-            if let Ok(0) = self::inc::<VM>(o) {
+            if let Ok(0) = self.rc.inc(o) {
                 self.promote(o, false, los, depth);
             }
             return o;
         }
         if object_forwarding::is_forwarded::<VM>(o) {
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            let _ = self::inc::<VM>(new);
+            let _ = self.rc.inc(new);
             return new;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
             let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-            let _ = self::inc::<VM>(new);
+            let _ = self.rc.inc(new);
             new
         } else {
-            let is_nursery = self::count::<VM>(o) == 0;
+            let is_nursery = self.rc.count(o) == 0;
             let copy_depth_reached = crate::args::INC_MAX_COPY_DEPTH && depth > 16;
             if is_nursery && !self.no_evac && !copy_depth_reached {
                 // Evacuate the object
@@ -325,12 +328,12 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 if crate::should_record_copy_bytes() {
                     unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
                 }
-                let _ = self::inc::<VM>(new);
+                let _ = self.rc.inc(new);
                 self.promote(new, true, false, depth);
                 new
             } else {
                 // Object is not moved.
-                let r = self::inc::<VM>(o);
+                let r = self.rc.inc(o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 if let Ok(0) = r {
                     self.promote(o, false, los, depth);
@@ -590,6 +593,7 @@ pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     mark_objects: VectorQueue<ObjectReference>,
     concurrent_marking_in_progress: bool,
     mature_sweeping_in_progress: bool,
+    rc: RefCountHelper<VM>,
 }
 
 unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for ProcessDecs<VM, COMPRESSED> {}
@@ -614,6 +618,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
             mature_sweeping_in_progress: false,
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -629,6 +634,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
             mature_sweeping_in_progress: false,
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -648,6 +654,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
             mature_sweeping_in_progress: false,
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -727,7 +734,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                     let x = edge.load::<COMPRESSED>();
                     if !x.is_null() {
                         // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                        let rc = self::count::<VM>(x);
+                        let rc = self.rc.count(x);
                         if rc != MAX_REF_COUNT && rc != 0 {
                             self.recursive_dec(x);
                         }
@@ -744,7 +751,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
         if !crate::args::BLOCK_ONLY && in_ix_space {
-            self::unmark_straddle_object::<VM>(o);
+            self.rc.unmark_straddle_object(o);
         }
         if cfg!(feature = "sanity") || ObjectReference::STRICT_VERIFICATION {
             unsafe { o.to_address::<VM>().store(0xdeadusize) };
@@ -777,7 +784,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                     self.mark_objects.push(*o);
                 }
             }
-            if self::is_dead_or_stick::<VM>(*o)
+            if self.rc.is_dead_or_stuck(*o)
                 || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
             {
                 continue;
@@ -789,7 +796,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                     *o
                 };
             let mut dead = false;
-            let _ = self::fetch_update::<VM, _>(o, |c| {
+            let _ = self.rc.clone().fetch_update(o, |c| {
                 if c == 1 && !dead {
                     dead = true;
                     self.process_dead_object(o, lxr);

@@ -20,7 +20,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
-use crate::util::rc;
+use crate::util::rc::RefCountHelper;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
@@ -51,6 +51,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_enabled: bool,
+    rc: RefCountHelper<VM>,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -59,7 +60,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            return crate::util::rc::count::<VM>(object) > 0;
+            return self.rc.count(object) > 0;
         }
         if self.trace_in_progress {
             return true;
@@ -256,6 +257,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_dead_objects: Default::default(),
             num_pages_released_lazy: AtomicUsize::new(0),
             rc_enabled: false,
+            rc: RefCountHelper::NEW,
         }
     }
 
@@ -296,7 +298,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
             if self.rc_enabled {
-                rc::set::<VM>(start.to_object_reference::<VM>(), 0);
+                self.rc.set(start.to_object_reference::<VM>(), 0);
             }
             self.pr.release_pages_and_reset_unlog_bits(start)
         } else {
@@ -324,7 +326,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             // promote nursery objects or release dead nursery
             let mut mature_blocks = self.rc_mature_objects.lock();
             while let Some(o) = self.rc_nursery_objects.pop() {
-                if rc::count::<VM>(o) == 0 {
+                if self.rc.count(o) == 0 {
                     self.release_object(o.to_address::<VM>());
                 } else {
                     mature_blocks.insert(o);
@@ -538,7 +540,7 @@ impl RCSweepMatureLOS {
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {
-            if !los.is_marked(*o) && rc::count::<VM>(*o) != 0 {
+            if !los.is_marked(*o) && los.rc.count(*o) != 0 {
                 crate::stat(|s| {
                     s.dead_mature_objects += 1;
                     s.dead_mature_volume += o.get_size::<VM>();
@@ -550,14 +552,14 @@ impl RCSweepMatureLOS {
                     s.dead_mature_tracing_los_objects += 1;
                     s.dead_mature_tracing_los_volume += o.get_size::<VM>();
 
-                    if rc::rc_stick::<VM>(*o) {
+                    if los.rc.is_stuck(*o) {
                         s.dead_mature_tracing_stuck_objects += 1;
                         s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
                         s.dead_mature_tracing_stuck_los_objects += 1;
                         s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
                     }
                 });
-                rc::set::<VM>(*o, 0);
+                los.rc.set(*o, 0);
                 los.rc_free::<COMPRESSED>(*o);
             }
         }

@@ -173,7 +173,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
                 self.flush_decs_and_satb();
             }
         }
-        crate::util::rc::inc_inc_buffer_size();
+        self.lxr.rc.increase_inc_buffer_size(1);
         self.incs.push(edge);
         if self.incs.is_full() {
             self.flush_incs();
@@ -226,10 +226,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Initial]
                     .add(ProcessModBufSATB::<COMPRESSED>::new_arc(decs.clone()));
-                ProcessDecs::<_, COMPRESSED>::new_arc(decs, LazySweepingJobsCounter::new_desc())
+                ProcessDecs::<_, COMPRESSED>::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
-                ProcessDecs::<_, COMPRESSED>::new(decs, LazySweepingJobsCounter::new_desc())
+                ProcessDecs::<_, COMPRESSED>::new(decs, LazySweepingJobsCounter::new_decs())
             };
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);

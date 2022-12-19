@@ -1,6 +1,5 @@
 use std::marker::PhantomData;
 
-use crate::util::rc;
 use crate::vm::edge_shape::Edge;
 use crate::vm::ObjectModel;
 use crate::{
@@ -90,7 +89,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if !lxr.immix_space.in_space(o) || !o.is_in_any_space() {
             return false;
         }
-        if rc::count::<VM>(o) != 0 && Block::in_defrag_block::<VM>(o) {
+        if lxr.rc.count(o) != 0 && Block::in_defrag_block::<VM>(o) {
             return true;
         }
         false
