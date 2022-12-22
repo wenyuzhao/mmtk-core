@@ -102,7 +102,6 @@ pub const BUFFER_SIZE: usize = {
     }
 };
 
-pub const HEAP_HEALTH_GUIDED_GC: bool = true;
 pub const HOLE_COUNTING: bool = cfg!(feature = "lxr_hole_counting");
 pub const NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY: bool = false;
 
@@ -189,7 +188,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);
-    dump_feature!("heap_health_guided_gc", HEAP_HEALTH_GUIDED_GC);
     dump_feature!("lxr_rc_only");
     dump_feature!("buffer_size", BUFFER_SIZE);
     dump_feature!("nontemporal");

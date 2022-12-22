@@ -33,7 +33,7 @@ use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
-use crate::{BarrierSelector, LazySweepingJobs, LazySweepingJobsCounter};
+use crate::{BarrierSelector, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
@@ -95,16 +95,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
-        // Don't do a GC until we finished the lazy reclaimation.
-        // if crate::args::HEAP_HEALTH_GUIDED_GC && !LazySweepingJobs::all_finished() {
-        //     return false;
-        // }
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
-            if !crate::args::HEAP_HEALTH_GUIDED_GC {
-                self.next_gc_may_perform_cycle_collection
-                    .store(true, Ordering::SeqCst);
-            }
             return true;
         }
         // Survival limits
@@ -156,7 +148,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         // inc limits
         if !crate::args::LXR_RC_ONLY
-            && crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args()
                 .incs_limit
                 .map(|x| self.rc.inc_buffer_size() >= x)
@@ -166,7 +157,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         // fresh young blocks limits
         if !crate::args::LXR_RC_ONLY
-            && crate::args::HEAP_HEALTH_GUIDED_GC
             && crate::args()
                 .blocks_limit
                 .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
@@ -175,46 +165,27 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Concurrent tracing finished
-        if !crate::args::LXR_RC_ONLY
-            && !crate::args::HEAP_HEALTH_GUIDED_GC
-            && self.concurrent_marking_in_progress()
-            && crate::concurrent_marking_packets_drained()
-        {
-            return true;
-        }
-        // RC nursery full
-        if !crate::args::LXR_RC_ONLY
-            && !crate::args::HEAP_HEALTH_GUIDED_GC
-            && !(self.concurrent_marking_in_progress()
-                && crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
-            && (self
-                .nursery_blocks
-                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
-                .unwrap_or(false)
-                || crate::args()
-                    .incs_limit
-                    .map(|x| self.rc.inc_buffer_size() >= x)
-                    .unwrap_or(false))
-        {
-            return true;
-        }
+        // if !crate::args::LXR_RC_ONLY
+        //     && self.concurrent_marking_in_progress()
+        //     && crate::concurrent_marking_packets_drained()
+        // {
+        //     return true;
+        // }
         false
     }
 
     fn concurrent_collection_required(&self) -> bool {
-        if crate::args::HEAP_HEALTH_GUIDED_GC || crate::args::LXR_RC_ONLY {
-            return false;
-        }
+        return false;
         // Don't do a GC until we finished the lazy reclaimation.
-        if !LazySweepingJobs::all_finished() {
-            return false;
-        }
-        self.concurrent_marking_enabled()
-            && !crate::plan::barriers::BARRIER_MEASUREMENT
-            && !self.concurrent_marking_in_progress()
-            && self.base().gc_status() == GcStatus::NotInGC
-            && self.get_reserved_pages()
-                >= self.get_total_pages() * crate::args().concurrent_marking_threshold / 100
+        // if !LazySweepingJobs::all_finished() {
+        //     return false;
+        // }
+        // self.concurrent_marking_enabled()
+        //     && !crate::plan::barriers::BARRIER_MEASUREMENT
+        //     && !self.concurrent_marking_in_progress()
+        //     && self.base().gc_status() == GcStatus::NotInGC
+        //     && self.get_reserved_pages()
+        //         >= self.get_total_pages() * crate::args().concurrent_marking_threshold / 100
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -549,10 +520,6 @@ impl<VM: VMBinding> LXR<VM> {
             *gc_selection_done = true;
             cvar.notify_one();
         };
-        if !crate::args::HEAP_HEALTH_GUIDED_GC {
-            notify();
-            return;
-        }
         let pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst).saturating_sub(
             self.immix_space
                 .num_clean_blocks_released_lazy
@@ -695,7 +662,7 @@ impl<VM: VMBinding> LXR<VM> {
             .load(Ordering::SeqCst);
         let pause = if crate::args::LXR_RC_ONLY {
             Pause::RefCount
-        } else if crate::args::HEAP_HEALTH_GUIDED_GC {
+        } else {
             let pause = self.select_lxr_collection_kind(emergency_collection);
             if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
@@ -709,27 +676,6 @@ impl<VM: VMBinding> LXR<VM> {
                 crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
             }
             pause
-        } else if emergency_collection {
-            crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
-            if concurrent_marking_in_progress {
-                Pause::FinalMark
-            } else {
-                Pause::FullTraceFast
-            }
-        } else if concurrent_marking_in_progress && concurrent_marking_packets_drained {
-            Pause::FinalMark
-        } else if concurrent {
-            Pause::InitialMark
-        } else {
-            if (crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING)
-                && concurrent_marking_in_progress
-            {
-                Pause::FinalMark
-            } else if !force_no_rc || concurrent_marking_in_progress {
-                Pause::RefCount
-            } else {
-                Pause::FullTraceFast
-            }
         };
         if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
             crate::COUNTERS

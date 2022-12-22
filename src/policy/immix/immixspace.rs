@@ -480,7 +480,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn schedule_mark_table_zeroing_tasks(&self, stage: WorkBucketStage) {
-        assert!(crate::args::HEAP_HEALTH_GUIDED_GC);
         let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
         self.scheduler().work_buckets[stage].bulk_add(work_packets);
     }
