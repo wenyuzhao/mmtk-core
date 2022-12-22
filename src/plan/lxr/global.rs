@@ -584,13 +584,13 @@ impl<VM: VMBinding> LXR<VM> {
             || available_blocks < crate::args().concurrent_marking_stop_blocks
         {
             if crate::args::LOG_PER_GC_STATE {
-                println!(
-                    "next trace ({} / {}) {} {}",
-                    garbage,
-                    total_pages,
-                    pages_after_gc,
-                    HEAP_AFTER_GC.load(Ordering::SeqCst)
-                );
+                // println!(
+                //     "next trace ({} / {}) {} {}",
+                //     garbage,
+                //     total_pages,
+                //     pages_after_gc,
+                //     HEAP_AFTER_GC.load(Ordering::SeqCst)
+                // );
             }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
@@ -601,7 +601,7 @@ impl<VM: VMBinding> LXR<VM> {
             }
         } else {
             if crate::args::LOG_PER_GC_STATE {
-                println!("next rc ({} / {}) {}", garbage, total_pages, pages_after_gc);
+                // println!("next rc ({} / {}) {}", garbage, total_pages, pages_after_gc);
             }
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);
@@ -622,7 +622,7 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if crate::args::LOG_PER_GC_STATE {
             println!(
-                "next_gc_may_perform_cycle_collection: {:?}",
+                " - next_gc_may_perform_cycle_collection: {:?}",
                 self.next_gc_may_perform_cycle_collection
                     .load(Ordering::Relaxed)
             );
@@ -959,10 +959,17 @@ impl<VM: VMBinding> LXR<VM> {
                 // me.immix_space.reusable_blocks.flush_all();
                 me.immix_space.flush_page_resource();
                 if crate::args::LOG_PER_GC_STATE {
+                    let pause_time = crate::GC_START_TIME
+                        .load(Ordering::SeqCst)
+                        .elapsed()
+                        .unwrap();
+                    let pause_time = pause_time.as_micros() as f64 / 1000f64;
                     println!(
-                        " - lazy jobs done, heap {:?}M {:?}",
+                        " - lazy jobs finished {}M->{}M({}M) {:.3}ms",
+                        crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
                         me.get_reserved_pages() / 256,
-                        me.previous_pause()
+                        me.get_total_pages() / 256,
+                        pause_time
                     );
                 }
                 // Update counters

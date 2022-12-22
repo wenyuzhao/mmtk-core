@@ -305,6 +305,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 mmtk.plan.get_total_pages() / 256,
                 pause_time
             );
+            crate::RESERVED_PAGES_AT_GC_END.store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
 
         #[cfg(feature = "extreme_assertions")]
