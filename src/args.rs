@@ -17,7 +17,6 @@ pub(crate) struct RuntimeArgs {
     pub(crate) nursery_ratio: Option<usize>,
     pub(crate) lower_concurrent_worker_priority: bool,
     pub(crate) concurrent_worker_ratio: usize,
-    pub(crate) concurrent_marking_threshold: usize,
     #[allow(unused)]
     pub(crate) max_mature_defrag_percent: usize,
     pub(crate) max_pause_millis: Option<usize>,
@@ -53,7 +52,6 @@ impl Default for RuntimeArgs {
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
             concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
-            concurrent_marking_threshold: env_arg("CONCURRENT_MARKING_THRESHOLD").unwrap_or(90),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_copy_size: env_arg("MAX_COPY_SIZE").unwrap_or(512),

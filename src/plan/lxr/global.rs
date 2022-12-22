@@ -633,7 +633,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     #[allow(clippy::collapsible_else_if)]
-    fn select_collection_kind(&self, concurrent: bool) -> Pause {
+    fn select_collection_kind(&self, _concurrent: bool) -> Pause {
         if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
             INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
         }
@@ -655,11 +655,7 @@ impl<VM: VMBinding> LXR<VM> {
             || self.is_emergency_collection()
             || *self.base().options.full_heap_system_gc;
 
-        let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        let force_no_rc = self
-            .next_gc_may_perform_cycle_collection
-            .load(Ordering::SeqCst);
         let pause = if crate::args::LXR_RC_ONLY {
             Pause::RefCount
         } else {
