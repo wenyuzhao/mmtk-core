@@ -25,6 +25,7 @@ use crate::{
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> {
     /// Increments to process
@@ -38,6 +39,8 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     slice: Option<VM::VMMemorySlice>,
     depth: usize,
     rc: RefCountHelper<VM>,
+    promoted_size: usize,
+    incs_count: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -73,6 +76,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             slice: Some(slice),
             depth: 1,
             rc: RefCountHelper::NEW,
+            promoted_size: 0,
+            incs_count: 0,
         }
     }
 
@@ -88,6 +93,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
+            promoted_size: 0,
+            incs_count: 0,
         }
     }
 
@@ -111,10 +118,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self.rc.promote::<COMPRESSED>(o);
-            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL
-                .with(|x| x.record_promotion(o.get_size::<VM>()));
-        } else {
-            // println!("promote los {:?} {}", o, self.immix().is_marked(o));
+            self.promoted_size += o.get_size::<VM>();
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
@@ -415,6 +419,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
+        self.incs_count += incs.len();
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
@@ -450,6 +455,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
+        self.incs_count += slice.len();
         for e in slice.iter_edges() {
             self.process_edge::<K>(e, copy_context, depth);
         }
@@ -525,6 +531,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 }
             }
         }
+        // FIXME: use rdtsc timer
+        let t = SystemTime::now();
         // Process main buffer
         let root_edges = if KIND == EDGE_KIND_ROOT
             && (self.current_pause == Pause::FinalMark
@@ -577,7 +585,13 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 depth,
             );
         }
-        crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL.with(|x| x.sync())
+        let elapsed = t.elapsed().unwrap().as_nanos() as usize;
+        crate::plan::lxr::RUNTIME_STAT
+            .incs_size
+            .fetch_add(elapsed, Ordering::Relaxed);
+        crate::plan::lxr::RUNTIME_STAT
+            .promoted_volume
+            .fetch_add(self.promoted_size, Ordering::Relaxed);
     }
 }
 

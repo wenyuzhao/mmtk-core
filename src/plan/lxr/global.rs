@@ -2,6 +2,7 @@ use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
+use super::PauseTimePredictor;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
@@ -11,6 +12,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
+use crate::policy::immix::line::Line;
 use crate::policy::immix::rc_work::{MatureSweeping, UpdateWeakProcessor};
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -20,9 +22,11 @@ use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
 use crate::util::copy::*;
+use crate::util::exponential_decay::ExponentialDecayValue;
 use crate::util::heap::layout::heap_layout::Map;
 use crate::util::heap::layout::heap_layout::Mmapper;
 use crate::util::heap::HeapMeta;
+use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
@@ -70,6 +74,8 @@ pub struct LXR<VM: VMBinding> {
     next_gc_selected: (Mutex<bool>, Condvar),
     in_concurrent_marking: AtomicBool,
     pub rc: RefCountHelper<VM>,
+    mature_live_predictor: ExponentialDecayValue<f64>,
+    pause_time_predictor: Option<PauseTimePredictor>,
 }
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -99,26 +105,48 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if self.base().collection_required(self, space_full) {
             return true;
         }
-        // Survival limits
-        if crate::args()
-            .max_survival_mb
-            .map(|x| {
-                self.immix_space.block_allocation.nursery_mb() as f64
-                    * super::SURVIVAL_RATIO_PREDICTOR.ratio()
-                    >= x as f64
-            })
-            .unwrap_or(false)
-        {
-            // println!(
-            //     "Survival limits {} * {} > {} blocks={}",
-            //     self.immix_space.block_allocation.nursery_mb(),
-            //     super::SURVIVAL_RATIO_PREDICTOR.ratio(),
-            //     self.max_survival_mb.unwrap(),
-            //     self.immix_space.block_allocation.nursery_blocks()
-            // );
-            SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
-            return true;
+        if let Some(pause_time_predictor) = self.pause_time_predictor.as_ref() {
+            if pause_time_predictor.predict(
+                self.rc.inc_buffer_size(),
+                self.immix_space.block_allocation.nursery_blocks(),
+                1,
+            ) {
+                return true;
+            }
+        } else {
+            // Survival limits
+            if crate::args()
+                .max_survival_mb
+                .map(|x| {
+                    self.immix_space.block_allocation.nursery_mb() as f64
+                        * super::SURVIVAL_RATIO_PREDICTOR.ratio()
+                        >= x as f64
+                })
+                .unwrap_or(false)
+            {
+                SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
+                return true;
+            }
+            // inc limits
+            if !crate::args::LXR_RC_ONLY
+                && crate::args()
+                    .incs_limit
+                    .map(|x| self.rc.inc_buffer_size() >= x)
+                    .unwrap_or(false)
+            {
+                return true;
+            }
+            // fresh young blocks limits
+            if !crate::args::LXR_RC_ONLY
+                && crate::args()
+                    .blocks_limit
+                    .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
+                    .unwrap_or(false)
+            {
+                return true;
+            }
         }
+        // LXR_RC_ONLY triggers
         if crate::args::LXR_RC_ONLY {
             let inc_overflow = crate::args()
                 .incs_limit
@@ -145,24 +173,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                     return true;
                 }
             }
-        }
-        // inc limits
-        if !crate::args::LXR_RC_ONLY
-            && crate::args()
-                .incs_limit
-                .map(|x| self.rc.inc_buffer_size() >= x)
-                .unwrap_or(false)
-        {
-            return true;
-        }
-        // fresh young blocks limits
-        if !crate::args::LXR_RC_ONLY
-            && crate::args()
-                .blocks_limit
-                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
-                .unwrap_or(false)
-        {
-            return true;
         }
         // Concurrent tracing finished
         // if !crate::args::LXR_RC_ONLY
@@ -267,7 +277,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 s.rc_pauses += 1
             }
         });
-        super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         self.common.prepare(
             tls,
             pause == Pause::FullTraceFast || pause == Pause::InitialMark,
@@ -323,12 +332,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.immix_space.flush_page_resource();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
-
-        super::SURVIVAL_RATIO_PREDICTOR
-            .set_alloc_size(self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES);
-        super::SURVIVAL_RATIO_PREDICTOR
-            .pause_start
-            .store(SystemTime::now(), Ordering::SeqCst);
+        super::RUNTIME_STAT.young_blocks.store(
+            self.immix_space.block_allocation.nursery_blocks(),
+            Ordering::SeqCst,
+        );
         let me = unsafe { &mut *(self as *const _ as *mut Self) };
         me.immix_space.rc_eager_prepare(pause);
 
@@ -370,9 +377,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         {
             crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
         }
-        // if pause == Pause::RefCount || pause == Pause::InitialMark {
-        //     self.resize_nursery();
-        // }
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
         crate::LAZY_SWEEPING_JOBS.write().swap();
@@ -386,6 +390,24 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.avail_pages_at_end_of_last_gc
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
+        if let Some(predictor) = self.pause_time_predictor.as_ref() {
+            let recycled_young_volume = self
+                .immix_space
+                .mutator_recycled_lines
+                .load(Ordering::SeqCst)
+                << Line::LOG_BYTES;
+            let young_volume = {
+                let young_blocks = super::RUNTIME_STAT.young_blocks.load(Ordering::Relaxed);
+                (young_blocks << Block::LOG_BYTES) + recycled_young_volume
+            };
+            let mutator_reuse_ratio = recycled_young_volume as f64 / young_volume as f64;
+            let promotion_rate = super::RUNTIME_STAT.promoted_volume.load(Ordering::Relaxed) as f64
+                / young_volume as f64;
+            predictor.update(mutator_reuse_ratio, promotion_rate);
+        } else {
+            super::SURVIVAL_RATIO_PREDICTOR.update();
+        }
+        super::RUNTIME_STAT.reset();
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -488,6 +510,8 @@ impl<VM: VMBinding> LXR<VM> {
             next_gc_selected: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
             rc: RefCountHelper::NEW,
+            mature_live_predictor: ExponentialDecayValue::new(0.0),
+            pause_time_predictor: None,
         });
 
         lxr.gc_init(&options);
@@ -529,14 +553,10 @@ impl<VM: VMBinding> LXR<VM> {
         if self.previous_pause() == Some(Pause::FinalMark)
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {
-            super::MATURE_LIVE_PREDICTOR.update(pages_after_gc)
+            self.mature_live_predictor.update(pages_after_gc as _);
         }
-        let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
-        let garbage = if pages_after_gc > live_mature_pages {
-            pages_after_gc - live_mature_pages
-        } else {
-            0
-        };
+        let live_mature_pages = self.mature_live_predictor.get() as usize;
+        let garbage = pages_after_gc.saturating_sub(live_mature_pages);
         let total_pages = self.get_total_pages();
         let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
         // println!(

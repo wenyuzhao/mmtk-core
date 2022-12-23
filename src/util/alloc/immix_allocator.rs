@@ -1,3 +1,5 @@
+use atomic::Ordering;
+
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use crate::plan::Plan;
 use crate::policy::immix::block::Block;
@@ -40,6 +42,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     mutator_recycled_blocks: Box<Vec<Block>>,
+    mutator_recycled_lines: usize,
     retry: bool,
 }
 
@@ -155,6 +158,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             mutator_recycled_blocks: Box::new(vec![]),
+            mutator_recycled_lines: 0,
             retry: false,
         }
     }
@@ -168,6 +172,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 .lock()
                 .append(&mut v);
         }
+        if self.mutator_recycled_lines != 0 {
+            self.immix_space()
+                .mutator_recycled_lines
+                .fetch_add(self.mutator_recycled_lines, Ordering::Relaxed);
+        }
+        self.mutator_recycled_lines = 0;
     }
 
     #[inline(always)]
