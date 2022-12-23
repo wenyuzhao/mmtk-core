@@ -40,6 +40,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     mutator_recycled_blocks: Box<Vec<Block>>,
+    mutator_recycled_lines: usize,
     retry: bool,
 }
 
@@ -155,6 +156,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             mutator_recycled_blocks: Box::new(vec![]),
+            mutator_recycled_lines: 0,
             retry: false,
         }
     }
