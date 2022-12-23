@@ -532,7 +532,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             }
         }
         // FIXME: use rdtsc timer
-        let t = SystemTime::now();
+        // let t = SystemTime::now();
         // Process main buffer
         let root_edges = if KIND == EDGE_KIND_ROOT
             && (self.current_pause == Pause::FinalMark
@@ -585,10 +585,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 depth,
             );
         }
-        let elapsed = t.elapsed().unwrap().as_nanos() as usize;
-        crate::plan::lxr::RUNTIME_STAT
-            .incs_size
-            .fetch_add(elapsed, Ordering::Relaxed);
+        // let elapsed = t.elapsed().unwrap().as_nanos() as usize;
+        // crate::plan::lxr::RUNTIME_STAT
+        //     .incs_size
+        //     .fetch_add(elapsed, Ordering::Relaxed);
         crate::plan::lxr::RUNTIME_STAT
             .promoted_volume
             .fetch_add(self.promoted_size, Ordering::Relaxed);
