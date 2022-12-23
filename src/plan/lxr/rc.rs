@@ -25,7 +25,6 @@ use crate::{
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> {
     /// Increments to process
