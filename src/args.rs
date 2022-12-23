@@ -23,6 +23,8 @@ pub(crate) struct RuntimeArgs {
     pub(crate) max_copy_size: usize,
     pub(crate) concurrent_marking_stop_blocks: usize,
     pub(crate) max_survival_mb: Option<usize>,
+    pub(crate) survival_predictor_harmonic_mean: bool,
+    pub(crate) survival_predictor_weighted: bool,
     pub(crate) trace_threshold: usize,
     pub(crate) min_reuse_lines: usize,
 }
@@ -57,6 +59,10 @@ impl Default for RuntimeArgs {
             max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB")
                 .map(|x| Some(x))
                 .unwrap_or(Some(128)),
+            survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
+                .unwrap_or(false),
+            survival_predictor_weighted: env_bool_arg("SURVIVAL_PREDICTOR_WEIGHTED")
+                .unwrap_or(true),
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .unwrap_or(5),
