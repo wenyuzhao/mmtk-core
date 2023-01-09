@@ -371,13 +371,14 @@ impl Block {
     #[inline]
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
-        #[cfg(feature = "sanity")]
-        if !copy && !reuse && space.rc_enabled {
-            self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
-        }
+        // #[cfg(feature = "sanity")]
+        // if !copy && !reuse && space.rc_enabled {
+        //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
+        // }
         if space.rc_enabled {
             if !reuse {
                 self.clear_in_place_promoted();
+                debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
             if !copy && reuse {
                 self.set_state(BlockState::Reusing);
@@ -623,7 +624,8 @@ impl Block {
             space.reusable_blocks.push(*self);
             false
         } else {
-            debug_assert!(self.rc_dead());
+            debug_assert!(self.rc_dead(), "{:?} has non-zero rc value", self);
+            debug_assert_ne!(self.get_state(), super::block::BlockState::Unallocated);
             space.release_block(*self, true, false);
             true
         }
@@ -643,7 +645,7 @@ impl Block {
 
     #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        if self.get_state() == BlockState::Unallocated {
+        if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
             return false;
         }
         if defrag || self.rc_dead() {

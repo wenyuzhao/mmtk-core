@@ -66,6 +66,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let stw_limit = usize::min(limit, MAX_STW_SWEEP_BLOCKS);
         for block in &self.buffer[0..stw_limit] {
             let block = block.load(Ordering::Relaxed);
+            debug_assert_ne!(block.get_state(), super::block::BlockState::Unallocated);
             block.rc_sweep_nursery(space, false);
         }
         if limit > stw_limit {
@@ -82,11 +83,19 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         // Sweep unused pre-allocated blocks
         let cursor = self.cursor.load(Ordering::Relaxed);
         let high_water = self.high_water.load(Ordering::Relaxed);
+        debug_assert!(high_water >= cursor);
+        debug_assert!(cursor >= limit);
         for block in &self.buffer[cursor..high_water] {
+            debug_assert_eq!(
+                block.load(Ordering::Relaxed).get_state(),
+                super::block::BlockState::Unallocated
+            );
             space.pr.release_block(block.load(Ordering::Relaxed))
         }
         self.high_water.store(0, Ordering::Relaxed);
         self.cursor.store(0, Ordering::SeqCst);
+        self.previously_allocated_nursery_blocks
+            .store(0, Ordering::SeqCst);
     }
 
     /// Notify a GC pahse has started
@@ -178,6 +187,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             self.space()
                 .bulk_acquire_uninterruptible(tls, Block::PAGES, false)?
         });
+        debug_assert_eq!(result.get_state(), super::block::BlockState::Unallocated);
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
         self_mut.buffer[i].store(result, Ordering::Relaxed);
         self.high_water.store(
@@ -186,6 +196,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         );
         // Alloc other blocks
         let push_new_block = |block: Block| {
+            debug_assert_eq!(block.get_state(), super::block::BlockState::Unallocated);
             let i = self.high_water.load(Ordering::Relaxed);
             self_mut.buffer[i].store(block, Ordering::Relaxed);
             self.high_water.store(i + 1, Ordering::SeqCst);

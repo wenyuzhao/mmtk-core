@@ -210,19 +210,13 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            let discovery =
-                self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark;
             o.iterate_fields::<VM, _, COMPRESSED>(
                 if self.current_pause != Pause::FullTraceFast {
                     CLDScanPolicy::Claim
                 } else {
                     CLDScanPolicy::Follow
                 },
-                if discovery {
-                    RefScanPolicy::Discover
-                } else {
-                    RefScanPolicy::Follow
-                },
+                RefScanPolicy::Follow,
                 |edge| {
                     let target = edge.load::<COMPRESSED>();
                     // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
