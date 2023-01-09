@@ -1,6 +1,5 @@
 use crate::plan::Plan;
 use crate::scheduler::gc_work::*;
-use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -187,14 +186,18 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
 
     #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if let Some(lxr) = self
+        if let Some(_lxr) = self
             .mmtk()
             .get_plan()
             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
         {
             if self.edge.unwrap().to_address().is_mapped() {
                 assert!(
-                    !self.edge.unwrap().to_address().is_logged::<VM>(),
+                    !if VM::VMObjectModel::compressed_pointers_enabled() {
+                        self.edge.unwrap().to_address().is_logged::<VM, true>()
+                    } else {
+                        self.edge.unwrap().to_address().is_logged::<VM, false>()
+                    },
                     "{:?} -> {:?} is logged",
                     self.edge,
                     object
@@ -214,15 +217,11 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                 .downcast_ref::<crate::plan::lxr::LXR<VM>>()
             {
                 assert!(
-                    unsafe { object.to_address().load::<usize>() } != 0xdead,
+                    unsafe { object.to_address::<VM>().load::<usize>() } != 0xdead,
                     "{:?} is killed by decs",
                     object
                 );
-                assert!(
-                    crate::util::rc::count(object) > 0,
-                    "{:?} has zero rc count",
-                    object
-                );
+                assert!(lxr.rc.count(object) > 0, "{:?} has zero rc count", object);
                 assert!(
                     !crate::util::object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
                     "{:?} is forwarded",
