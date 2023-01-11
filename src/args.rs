@@ -65,7 +65,7 @@ impl Default for RuntimeArgs {
                 .unwrap_or(true),
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
-                .unwrap_or(5),
+                .unwrap_or(20),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
         }
     }
