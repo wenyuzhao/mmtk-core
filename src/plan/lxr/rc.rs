@@ -385,7 +385,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             //     e,
             //     o,
             //     new.range::<VM>(),
-            //     count(new),
+            //     self.rc.count(new),
             //     K
             // );
             e.store::<COMPRESSED>(new)
@@ -394,7 +394,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             //     " -- inc {:?}: {:?} rc={} {:?}",
             //     e,
             //     o.range::<VM>(),
-            //     count(o),
+            //     self.rc.count(o),
             //     K
             // );
         }
