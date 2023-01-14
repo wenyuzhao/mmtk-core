@@ -56,7 +56,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     /// Reset allocated_block_buffer and free nursery blocks.
     pub fn sweep_and_reset(&mut self, scheduler: &GCWorkScheduler<VM>) {
-        const MAX_STW_SWEEP_BLOCKS: usize = 1024;
+        const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
         let _guard = self.refill_lock.lock().unwrap();
         let space = self.space();
         // Sweep nursery blocks
