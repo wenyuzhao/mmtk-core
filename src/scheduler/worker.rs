@@ -12,7 +12,6 @@ use crossbeam::queue::ArrayQueue;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use thread_priority::ThreadPriority;
 
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
@@ -226,21 +225,9 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
         let lower_priority_for_concurrent_work = crate::args().lower_concurrent_worker_priority;
-        let mut low_priority = false;
+        assert!(!lower_priority_for_concurrent_work);
         loop {
             let mut work = self.poll();
-
-            if lower_priority_for_concurrent_work {
-                let in_concurrent = self.scheduler().in_concurrent();
-                if in_concurrent && !low_priority {
-                    let _ = thread_priority::set_current_thread_priority(ThreadPriority::Min);
-                    low_priority = true;
-                }
-                if !in_concurrent && low_priority {
-                    let _ = thread_priority::set_current_thread_priority(ThreadPriority::Max);
-                    low_priority = false;
-                }
-            }
 
             if work.should_defer() {
                 mmtk.scheduler.postpone_dyn(work);
