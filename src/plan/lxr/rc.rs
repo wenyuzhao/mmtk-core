@@ -720,7 +720,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()
-        } else {
+        } else if !crate::args().no_recursive_dec {
             o.iterate_fields::<VM, _, COMPRESSED>(
                 CLDScanPolicy::Ignore,
                 RefScanPolicy::Follow,

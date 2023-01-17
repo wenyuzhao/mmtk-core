@@ -27,6 +27,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) survival_predictor_weighted: bool,
     pub(crate) trace_threshold: usize,
     pub(crate) min_reuse_lines: usize,
+    pub(crate) no_recursive_dec: bool,
 }
 
 impl Default for RuntimeArgs {
@@ -67,6 +68,7 @@ impl Default for RuntimeArgs {
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .unwrap_or(20),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
+            no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
         }
     }
 }
