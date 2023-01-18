@@ -63,7 +63,7 @@ pub use mmtk::MMTK;
 use plan::immix::Pause;
 use scheduler::WorkBucketStage;
 use spin::{Lazy, Mutex};
-type RwLock<T> = spin::rwlock::RwLock<T, spin::Yield>;
+type RwLock<T> = spin::rwlock::RwLock<T>;
 
 #[macro_use]
 mod policy;
