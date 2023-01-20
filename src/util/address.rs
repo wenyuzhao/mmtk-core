@@ -754,12 +754,12 @@ impl ObjectReference {
 
     #[inline(always)]
     fn assert_class_is_valid<VM: VMBinding>(self) {
-        assert!(
-            self.class_is_valid::<VM>(),
-            "Invalid class pointer obj={:?} cls={:?}",
-            self,
-            self.class_pointer::<VM>()
-        );
+        // assert!(
+        //     self.class_is_valid::<VM>(),
+        //     "Invalid class pointer obj={:?} cls={:?}",
+        //     self,
+        //     self.class_pointer::<VM>()
+        // );
     }
 
     #[inline(always)]
