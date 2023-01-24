@@ -108,7 +108,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         }
         debug_assert!(object.is_in_any_space());
         let no_trace = self.rc.count(object) == 0;
-        if no_trace {
+        if no_trace || self.plan.is_marked(object) {
             return object;
         }
         debug_assert!(object.class_is_valid::<VM>());

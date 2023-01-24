@@ -281,6 +281,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
     }
 
     fn load_reference(&mut self, o: ObjectReference) {
+        if !self.lxr.concurrent_marking_in_progress() {
+            return;
+        }
         self.refs.push(o);
         if self.refs.is_full() {
             self.flush_weak_refs();
