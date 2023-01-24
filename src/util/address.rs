@@ -742,9 +742,9 @@ impl ObjectReference {
         use crate::vm::ObjectModel;
         let klass = self.class_pointer::<VM>();
         let valid = if VM::VMObjectModel::compressed_pointers_enabled() {
-            ((klass.as_usize() & 0x1_0000_0000) != 0) && klass.is_aligned_to(8)
+            klass.is_aligned_to(8)
         } else {
-            ((klass.as_usize() & 0xff00000000000) == 0x700000000000) && klass.is_aligned_to(8)
+            ((klass.as_usize() & 0xff000_00000000) == 0x7000_00000000) && klass.is_aligned_to(8)
         };
         if !valid {
             println!("invalid klass {:?}", klass);
