@@ -280,6 +280,15 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
     base: ProcessEdgesBase<VM>,
     forwarded_roots: Vec<ObjectReference>,
     next_edges: VectorQueue<EdgeOf<Self>>,
+    remset_recorded_edges: bool,
+}
+
+impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
+    pub(super) fn new_remset(edges: Vec<EdgeOf<Self>>, mmtk: &'static MMTK<VM>) -> Self {
+        let mut me = Self::new(edges, false, mmtk);
+        me.remset_recorded_edges = true;
+        me
+    }
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
@@ -298,6 +307,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             pause: Pause::RefCount,
             forwarded_roots: vec![],
             next_edges: VectorQueue::new(),
+            remset_recorded_edges: false,
         }
     }
 
@@ -319,10 +329,20 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         if object.is_null() {
             return object;
         }
-        debug_assert!(object.is_in_any_space());
-        debug_assert!(object.to_address::<VM>().is_aligned_to(8));
+        // The memory (lines) of these edges can be reused at any time during mature evacuation.
+        // Filter out invalid target objects.
+        if self.remset_recorded_edges && !object.is_in_any_space() {
+            return object;
+        }
+        debug_assert!(object.is_in_any_space(), "Invalid {:?}", object);
+        debug_assert!(
+            object.to_address::<VM>().is_aligned_to(8),
+            "Invalid {:?} remset={}",
+            object,
+            self.remset_recorded_edges
+        );
         debug_assert!(object.class_is_valid::<VM>());
-        let x = if self.lxr.immix_space.in_space(object) {
+        let new_object = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
@@ -337,9 +357,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             object
         };
         if self.roots {
-            self.forwarded_roots.push(x)
+            self.forwarded_roots.push(new_object)
         }
-        x
+        new_object
     }
 
     #[inline]
@@ -370,8 +390,18 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
     fn process_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE {
-            slot.store::<COMPRESSED2>(new_object);
+        if Self::OVERWRITE_REFERENCE && new_object != object {
+            if !self.remset_recorded_edges {
+                slot.store::<COMPRESSED2>(new_object);
+            } else {
+                // Don't do the store if the original is already overwritten
+                let _ = slot.compare_exchange::<COMPRESSED2>(
+                    object,
+                    new_object,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+            }
         }
         super::record_edge_for_validation(slot, new_object);
     }

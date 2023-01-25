@@ -2,7 +2,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::{fmt::Debug, ops::Range};
 
-use atomic::Atomic;
+use atomic::{Atomic, Ordering};
 
 use crate::util::constants::{BYTES_IN_ADDRESS, LOG_BYTES_IN_ADDRESS};
 use crate::util::{Address, ObjectReference};
@@ -45,6 +45,16 @@ pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash + Sized {
 
     /// Store the object reference `object` into the edge.
     fn store<const COMPRESSED: bool>(&self, object: ObjectReference);
+
+    fn compare_exchange<const COMPRESSED: bool>(
+        &self,
+        _old_object: ObjectReference,
+        _new_object: ObjectReference,
+        _success: Ordering,
+        _failure: Ordering,
+    ) -> Result<ObjectReference, ObjectReference> {
+        unimplemented!()
+    }
 
     /// Prefetch the edge so that a subsequent `load` will be faster.
     #[inline(always)]

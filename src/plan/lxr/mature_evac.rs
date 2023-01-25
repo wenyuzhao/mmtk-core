@@ -11,7 +11,7 @@ use crate::{
         },
         space::Space,
     },
-    scheduler::{GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
+    scheduler::{GCWork, GCWorker, WorkBucketStage},
     vm::VMBinding,
     MMTK,
 };
@@ -122,8 +122,8 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 }
             })
             .collect::<Vec<_>>();
-        Box::new(LXRStopTheWorldProcessEdges::<_, COMPRESSED>::new(
-            edges, false, mmtk,
+        Box::new(LXRStopTheWorldProcessEdges::<_, COMPRESSED>::new_remset(
+            edges, mmtk,
         ))
     }
 }
