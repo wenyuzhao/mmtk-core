@@ -534,6 +534,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
+        } else {
+            debug_assert_ne!(pause, Pause::FullTraceFast);
         }
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb = false;
@@ -556,6 +558,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
+                debug_assert_ne!(pause, Pause::FullTraceFast);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {

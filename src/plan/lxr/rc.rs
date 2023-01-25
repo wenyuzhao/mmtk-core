@@ -369,7 +369,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 return None;
             }
         };
-        // println!(" - inc {:?}: {:?} rc={}", e, o, count(o));
+        // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         o.verify::<VM>();
         let new = if !crate::args::RC_NURSERY_EVACUATION {
             self.process_inc(o, depth)

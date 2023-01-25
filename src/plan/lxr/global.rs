@@ -356,6 +356,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_end(&self) {
+        crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
         self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
@@ -427,8 +428,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
-        let pause = self.current_pause().unwrap();
-        pause != Pause::FullTraceFast
+        true
     }
 
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
@@ -706,7 +706,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
-        if crate::args::LAZY_DECREMENTS {
+        if crate::args::LAZY_DECREMENTS && pause != Pause::FullTraceFast {
             scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
         }
     }
@@ -769,6 +769,7 @@ impl<VM: VMBinding> LXR<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
+        crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         Self::process_prev_roots(scheduler);
