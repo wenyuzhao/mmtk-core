@@ -511,9 +511,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             if over_space || over_time {
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
-                if crate::args::LOG_PER_GC_STATE {
+                if *self.lxr().options().verbose >= 2 {
                     println!(
-                        " - no evac over_space={} over_time={}",
+                        "[{:.3}s][info][gc]  - Stop evacuation. over_space={} over_time={}",
+                        crate::boot_time_secs(),
                         over_space, over_time
                     );
                 }

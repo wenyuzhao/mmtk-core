@@ -221,6 +221,11 @@ static PAUSE_CONCURRENT_MARKING: AtomicBool = AtomicBool::new(false);
 static MOVE_CONCURRENT_MARKING_TO_STW: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
+fn boot_time_secs() -> f64 {
+    crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64
+}
+
+#[inline(always)]
 fn gc_trigger_time() -> u128 {
     crate::GC_TRIGGER_TIME
         .load(Ordering::SeqCst)

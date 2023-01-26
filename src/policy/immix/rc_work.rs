@@ -82,7 +82,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             lxr.immix_space.select_mature_evacuation_candidates(
                 lxr.current_pause().unwrap(),
-                mmtk.plan.get_total_pages(),
+                mmtk.plan.get_total_pages(), 
             )
         }
     }

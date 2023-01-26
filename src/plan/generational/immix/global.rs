@@ -236,6 +236,7 @@ impl<VM: VMBinding> GenImmix<VM> {
             global_metadata_specs.clone(),
             &GENIMMIX_CONSTRAINTS,
             false,
+            options.clone(),
         );
 
         let genimmix = GenImmix {

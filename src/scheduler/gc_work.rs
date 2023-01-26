@@ -218,7 +218,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 .current_gc_should_prepare_for_class_unloading(),
         );
         trace!("stop_all_mutators end");
-        if crate::args::LOG_PER_GC_STATE {
+        if *mmtk.options.verbose >= 2 {
             crate::RESERVED_PAGES_AT_GC_START
                 .store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
@@ -278,12 +278,11 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .map(|ix| ix.current_pause().unwrap())
             .unwrap_or(Pause::FullTraceFast);
         crate::add_pause_time(pause, pause_time.as_nanos());
-        if crate::args::LOG_PER_GC_STATE {
+        if *mmtk.options.verbose >= 2 {
             let _released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
             let _released =
                 crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
-            // println!("Released {} blocks ({} nursery)", released, released_n);
             crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
 
@@ -296,7 +295,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 _ => "Full",
             };
             println!(
-                "[{:.3}s][info][gc] GC({}) Pause {} {}M->{}M({}M) {:.3}ms",
+                "[{:.3}s][info][gc] GC({}) {} finished. {}M->{}M({}M) pause-time={:.3}ms",
                 boot_time,
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,

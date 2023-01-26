@@ -109,12 +109,10 @@ impl<VM: VMBinding> MMTK<VM> {
         if cfg!(target_pointer_width = "32") {
             VMLayoutConstants::set_address_space(AddressSpaceKind::_32Bits);
         } else if *options.use_35bit_address_space {
-            println!("Enable 35-bit address space");
             VMLayoutConstants::set_address_space(AddressSpaceKind::_64BitsWithPointerCompression {
                 heap_size: *options.heap_size,
             });
         } else {
-            println!("Enable 47-bit address space");
             VMLayoutConstants::set_address_space(AddressSpaceKind::_64Bits);
         }
 

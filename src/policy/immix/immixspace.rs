@@ -22,6 +22,7 @@ use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
+use crate::util::options::Options;
 use crate::util::rc::RefCountHelper;
 use crate::util::{Address, ObjectReference};
 use crate::{
@@ -80,6 +81,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub rc_enabled: bool,
     pub is_end_of_satb: bool,
     pub rc: RefCountHelper<VM>,
+    options: Arc<Options>,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -278,6 +280,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         global_side_metadata_specs: Vec<SideMetadataSpec>,
         constraints: &'static PlanConstraints,
         rc_enabled: bool,
+        options: Arc<Options>,
     ) -> Self {
         #[cfg(feature = "immix_no_defrag")]
         info!(
@@ -305,7 +308,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mmapper,
             heap,
         );
-        println!("Workers: {}", scheduler.num_workers());
         ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
                 BlockPageResource::new_discontiguous(
@@ -348,6 +350,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             rc_enabled,
             is_end_of_satb: false,
             rc: RefCountHelper::NEW,
+            options,
         }
     }
 
@@ -439,9 +442,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 break;
             }
         }
-        if crate::args::LOG_PER_GC_STATE {
+        if *self.options.verbose >= 2 {
             println!(
-                " - Defrag {} mature bytes ({} blocks)",
+                "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks)",
+                crate::boot_time_secs(),
                 live_bytes, num_blocks
             );
         }
@@ -721,7 +725,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         //     nursery,
         //     block.is_defrag_source()
         // );
-        if crate::args::LOG_PER_GC_STATE {
+        if *self.options.verbose >= 2 {
             if nursery {
                 RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
             }

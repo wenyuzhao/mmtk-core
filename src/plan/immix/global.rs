@@ -173,6 +173,7 @@ impl<VM: VMBinding> Immix<VM> {
                 global_metadata_specs.clone(),
                 &IMMIX_CONSTRAINTS,
                 false,
+                options.clone(),
             ),
             common: CommonPlan::new(
                 vm_map,

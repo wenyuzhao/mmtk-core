@@ -509,7 +509,8 @@ options! {
     // there is no core with (perceived) id 12.
     // XXX: This option is currently only supported on Linux.
     thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
-    use_35bit_address_space:        bool                 [env_var: true, command_line: true]  [always_valid] = false
+    use_35bit_address_space:        bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    verbose:                       usize                 [env_var: true, command_line: true] [|v: &usize| *v <= 3]  = 0
 }
 
 #[cfg(test)]

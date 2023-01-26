@@ -1,6 +1,6 @@
 use crate::{
     policy::immix::{block::Block, line::Line},
-    util::{linear_scan::Region, options::Options},
+    util::{linear_scan::Region, options::Options, heap::layout::vm_layout_constants::VMLayoutConstants},
     BarrierSelector,
 };
 use std::fmt::Debug;
@@ -152,7 +152,6 @@ pub const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 
 // ---------- Debugging flags ---------- //
 pub const HARNESS_PRETTY_PRINT: bool = false || cfg!(feature = "log_gc");
-pub const LOG_PER_GC_STATE: bool = cfg!(feature = "log_gc");
 pub const LOG_STAGES: bool = cfg!(feature = "log_stages");
 pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
@@ -173,6 +172,9 @@ macro_rules! dump_feature {
 }
 
 fn dump_features(active_barrier: BarrierSelector, options: &Options) {
+    if *options.verbose == 0 {
+        return
+    }
     println!("-------------------- Immix Args --------------------");
 
     dump_feature!("barrier", format!("{:?}", active_barrier));
@@ -195,6 +197,8 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("inc_max_copy_depth", INC_MAX_COPY_DEPTH);
     dump_feature!("no_finalizer", *options.no_finalizer);
     dump_feature!("no_reference_types", *options.no_reference_types);
+    dump_feature!("workers", *options.threads);
+    dump_feature!("address_space", VMLayoutConstants::get_address_space());
 
     println!("\n{:#?}", RuntimeArgs::get());
 

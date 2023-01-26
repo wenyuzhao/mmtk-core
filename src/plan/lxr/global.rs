@@ -229,11 +229,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
-        if crate::args::LOG_PER_GC_STATE {
-            let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
+        if *self.options().verbose >= 2 {
             println!(
-                "[{:.3}s][pause] {:?} {}",
-                boot_time,
+                "[{:.3}s][info][gc] GC({}) {:?} start. incs={}",
+                crate::boot_time_secs(),
+                crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 self.rc.inc_buffer_size()
             );
@@ -465,6 +465,7 @@ impl<VM: VMBinding> LXR<VM> {
             global_metadata_specs.clone(),
             &LXR_CONSTRAINTS,
             true,
+            options.clone(),
         );
         immix_space.cm_enabled = true;
         let mut lxr = Box::new(LXR {
@@ -539,26 +540,10 @@ impl<VM: VMBinding> LXR<VM> {
         };
         let total_pages = self.get_total_pages();
         let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
-        // println!(
-        //     "garbage {} / {} livemature={} ratio={:.4}",
-        //     garbage,
-        //     total_pages,
-        //     live_mature_pages,
-        //     (garbage as f64) / (total_pages as f64)
-        // );
         if !self.concurrent_marking_in_progress()
             && garbage * 100 >= crate::args().trace_threshold as usize * total_pages
             || available_blocks < crate::args().concurrent_marking_stop_blocks
         {
-            if crate::args::LOG_PER_GC_STATE {
-                // println!(
-                //     "next trace ({} / {}) {} {}",
-                //     garbage,
-                //     total_pages,
-                //     pages_after_gc,
-                //     HEAP_AFTER_GC.load(Ordering::SeqCst)
-                // );
-            }
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
             if self.concurrent_marking_enabled() && !self.concurrent_marking_in_progress() {
@@ -567,9 +552,6 @@ impl<VM: VMBinding> LXR<VM> {
                     .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
             }
         } else {
-            if crate::args::LOG_PER_GC_STATE {
-                // println!("next rc ({} / {}) {}", garbage, total_pages, pages_after_gc);
-            }
             self.next_gc_may_perform_cycle_collection
                 .store(false, Ordering::SeqCst);
         }
@@ -587,9 +569,10 @@ impl<VM: VMBinding> LXR<VM> {
         }
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        if crate::args::LOG_PER_GC_STATE {
+        if *self.options().verbose >= 2 {
             println!(
-                " - next_gc_may_perform_cycle_collection: {:?}",
+                "[{:.3}s][info][gc]  - next_gc_may_perform_cycle_collection = {}",
+                crate::boot_time_secs(),
                 self.next_gc_may_perform_cycle_collection
                     .load(Ordering::Relaxed)
             );
@@ -901,14 +884,15 @@ impl<VM: VMBinding> LXR<VM> {
             lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
                 // me.immix_space.reusable_blocks.flush_all();
                 me.immix_space.flush_page_resource();
-                if crate::args::LOG_PER_GC_STATE {
+                if *me.options().verbose >= 2 {
                     let pause_time = crate::GC_START_TIME
                         .load(Ordering::SeqCst)
                         .elapsed()
                         .unwrap();
                     let pause_time = pause_time.as_micros() as f64 / 1000f64;
                     println!(
-                        " - lazy jobs finished {}M->{}M({}M) {:.3}ms",
+                        "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
+                        crate::boot_time_secs(),
                         crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
                         me.get_reserved_pages() / 256,
                         me.get_total_pages() / 256,
@@ -954,5 +938,10 @@ impl<VM: VMBinding> LXR<VM> {
     fn set_concurrent_marking_state(&self, active: bool) {
         <VM as VMBinding>::VMCollection::set_concurrent_marking_state(active);
         self.in_concurrent_marking.store(active, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub fn options(&self) -> &Options {
+        &self.common.base.options
     }
 }
