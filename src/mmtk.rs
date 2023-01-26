@@ -91,7 +91,7 @@ impl Default for MMTKBuilder {
 /// An MMTk instance. MMTk allows multiple instances to run independently, and each instance gives users a separate heap.
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
-    pub(crate) options: Arc<Options>,
+    pub options: Arc<Options>,
     pub(crate) plan: Box<dyn Plan<VM = VM>>,
     pub reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
