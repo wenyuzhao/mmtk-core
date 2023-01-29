@@ -266,6 +266,9 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
+        if mmtk.get_plan().downcast_ref::<LXR<VM>>().is_some() {
+            <VM as VMBinding>::VMCollection::update_weak_processor(true);
+        }
         let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)

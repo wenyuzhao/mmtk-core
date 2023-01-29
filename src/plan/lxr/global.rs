@@ -428,7 +428,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
-        true
+        self.current_pause().unwrap() != Pause::FullTraceFast
     }
 
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
@@ -585,7 +585,7 @@ impl<VM: VMBinding> LXR<VM> {
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
-        if emergency {
+        if emergency || self.base().user_triggered_collection.load(Ordering::Relaxed) {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {
