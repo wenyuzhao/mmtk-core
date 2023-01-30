@@ -39,10 +39,11 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
         crate::COUNTERS.yield_nanos.fetch_add(t, Ordering::Relaxed);
     }
 
-    if crate::args::LOG_STAGES {
+    if *mmtk.options.verbose >= 3 {
         println!(
-            " - [{:.6}ms] Safepoint start",
-            crate::gc_trigger_time() as f64 / 1000000f64
+            "[{:.3}s][info][gc]  - ({:.6}ms) Safepoint start",
+            crate::boot_time_secs(),
+            crate::gc_trigger_time() as f64 / 1000000f64,
         );
         unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
     }

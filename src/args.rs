@@ -152,7 +152,6 @@ pub const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 
 // ---------- Debugging flags ---------- //
 pub const HARNESS_PRETTY_PRINT: bool = false || cfg!(feature = "log_gc");
-pub const LOG_STAGES: bool = cfg!(feature = "log_stages");
 pub const LOG_WORK_PACKETS: bool = cfg!(feature = "log_work_packets");
 pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_rc_in_cm");
 pub const SLOW_CONCURRENT_MARKING: bool = false;

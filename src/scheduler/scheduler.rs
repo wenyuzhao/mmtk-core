@@ -441,7 +441,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let bucket_opened = bucket.update(self);
-            if (crate::args::LOG_STAGES || cfg!(feature = "pause_time")) && bucket_opened {
+            let verbose = *GCWorker::<VM>::current().mmtk.options.verbose >= 3;
+            if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
                 unsafe {
                     let since_prev_stage = LAST_ACTIVATE_TIME
                         .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
@@ -449,8 +450,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                         .unwrap()
                         .as_nanos();
                     crate::add_bucket_time(id, since_prev_stage);
-                    if crate::args::LOG_STAGES {
-                        println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                    if verbose {
+                        println!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                            crate::boot_time_secs(),
                             crate::gc_trigger_time() as f64 / 1000000f64,
                             id, since_prev_stage,
                             crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
@@ -710,18 +712,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
             second_stw_bucket.activate();
             unsafe {
-                if crate::args::LOG_STAGES {
+                if *mmtk.options.verbose >= 3 {
                     let since_prev_stage = LAST_ACTIVATE_TIME
                         .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
                         .elapsed()
                         .unwrap()
                         .as_nanos();
-                    println!(" - [{:.6}ms] Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
-                    crate::gc_trigger_time() as f64 / 1000000f64,
-                    WorkBucketStage::from_usize(2), since_prev_stage,
-                    crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                    crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                );
+                    println!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                        crate::boot_time_secs(),
+                        crate::gc_trigger_time() as f64 / 1000000f64,
+                        WorkBucketStage::from_usize(2), since_prev_stage,
+                        crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                        crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
+                    );
                 }
             }
         }

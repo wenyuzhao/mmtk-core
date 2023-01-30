@@ -222,10 +222,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
             crate::RESERVED_PAGES_AT_GC_START
                 .store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
-        if crate::args::LOG_STAGES {
+        if *mmtk.options.verbose >= 3 {
             println!(
-                " - [{:.6}ms] Stop mutators done",
-                crate::gc_trigger_time() as f64 / 1000000f64
+                "[{:.3}s][info][gc]  - ({:.6}ms) Mutators stopped",
+                crate::boot_time_secs(),
+                crate::gc_trigger_time() as f64 / 1000000f64,
             );
         }
         mmtk.plan.gc_pause_start(&mmtk.scheduler);
