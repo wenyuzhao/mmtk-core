@@ -38,6 +38,8 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     slice: Option<VM::VMMemorySlice>,
     depth: usize,
     rc: RefCountHelper<VM>,
+    pub cld_roots: bool,
+    pub weak_cld_roots: bool,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -73,6 +75,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             slice: Some(slice),
             depth: 1,
             rc: RefCountHelper::NEW,
+            cld_roots:false,
+            weak_cld_roots:false,
         }
     }
 
@@ -88,6 +92,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
+            cld_roots:false,
+            weak_cld_roots:false,
         }
     }
 
@@ -551,9 +557,9 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             {
                 worker.add_work(
                     WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(root_edges, true, mmtk),
+                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(root_edges, !self.cld_roots, mmtk),
                 )
-            } else {
+            } else if !self.cld_roots {
                 unsafe {
                     crate::plan::lxr::CURR_ROOTS.push(roots);
                 }
@@ -860,6 +866,10 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         if !self.edges.is_empty() {
             let roots = std::mem::take(&mut self.edges);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, COMPRESSED>::new(roots);
+            if self.cld_roots {
+                w.cld_roots = true;
+                w.weak_cld_roots = self.weak_cld_roots;
+            }
             GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }

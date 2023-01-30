@@ -70,6 +70,10 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     /// * `edges`: A vector of edges.
     fn create_process_edge_roots_work(&mut self, edges: Vec<ES>);
 
+    fn create_process_edge_roots_work_for_cld_roots(&mut self, _edges: Vec<ES>, _weak: bool) {
+        unimplemented!()
+    }
+
     /// Create work packets to handle nodes pointed by root edges.
     ///
     /// The work packet cannot update root edges, therefore it cannot move the objects.  This

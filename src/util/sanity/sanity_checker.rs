@@ -78,8 +78,6 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
                 SanityGCProcessEdges::<P::VM>::new(roots.clone(), true, mmtk),
             );
         }
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(ScanVMSpecificRoots::<SanityGCProcessEdges<P::VM>>::new());
         // Prepare global/collectors/mutators
         worker.scheduler().work_buckets[WorkBucketStage::Prepare]
             .add(SanityPrepare::<P>::new(plan.downcast_ref::<P>().unwrap()));
@@ -230,9 +228,10 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                 if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark {
                     assert!(
                         lxr.is_marked(object),
-                        "{:?} -> {:?} is not marked",
+                        "{:?} -> {:?} is not marked, roots={}",
                         self.edge,
-                        object
+                        object,
+                        self.roots
                     )
                 }
             }

@@ -52,6 +52,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_enabled: bool,
     rc: RefCountHelper<VM>,
+    pub is_end_of_satb_or_full_gc: bool,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -60,6 +61,9 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
+            if self.is_end_of_satb_or_full_gc {
+                return self.is_marked(object);
+            }
             return self.rc.count(object) > 0;
         }
         if self.trace_in_progress {
@@ -258,6 +262,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             num_pages_released_lazy: AtomicUsize::new(0),
             rc_enabled: false,
             rc: RefCountHelper::NEW,
+            is_end_of_satb_or_full_gc: false,
         }
     }
 

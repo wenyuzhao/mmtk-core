@@ -79,7 +79,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub remset: RemSet<VM>,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
-    pub is_end_of_satb: bool,
+    pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
     options: Arc<Options>,
 }
@@ -92,7 +92,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            if self.is_end_of_satb {
+            if self.is_end_of_satb_or_full_gc {
                 return self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
             }
             return self.rc.count(object) > 0 || ForwardingWord::is_forwarded::<VM>(object);
@@ -348,7 +348,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             num_clean_blocks_released_lazy: Default::default(),
             cm_enabled: false,
             rc_enabled,
-            is_end_of_satb: false,
+            is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
             options,
         }
@@ -527,7 +527,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         blocks.clear();
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
-            self.is_end_of_satb = true;
+            self.is_end_of_satb_or_full_gc = true;
+        } else if pause == Pause::FullTraceFast {
+            self.is_end_of_satb_or_full_gc = true;
         }
     }
 
@@ -542,7 +544,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             debug_assert_ne!(pause, Pause::FullTraceFast);
         }
         self.rc.reset_inc_buffer_size();
-        self.is_end_of_satb = false;
+        self.is_end_of_satb_or_full_gc = false;
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {

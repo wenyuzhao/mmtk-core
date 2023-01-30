@@ -268,6 +268,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }
         });
         super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
+        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+            self.common.los.is_end_of_satb_or_full_gc = true;
+        }
         self.common.prepare(
             tls,
             pause == Pause::FullTraceFast || pause == Pause::InitialMark,
@@ -283,8 +286,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        VM::VMCollection::update_weak_processor(true);
         let pause = self.current_pause().unwrap();
+        VM::VMCollection::update_weak_processor(pause == Pause::RefCount || pause == Pause::InitialMark);
+        self.common.los.is_end_of_satb_or_full_gc = false;
         self.common.release(
             tls,
             pause == Pause::FullTraceFast || pause == Pause::FinalMark,
@@ -427,8 +431,21 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let _ = self.rc.inc(referent);
     }
 
+    /// Don't scan weak CLDs on FullGC pause
+    /// 
+    /// Note:
+    ///  - Full/FinalMark pause: Use mark bit as liveness test when updating WeakProcessor
+    ///  - Do not apply decs to all CLD roots
+    /// 
+    /// TODO:
+    ///  - Remset for CLDs. So we don't need to scan them all during RC pauses
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
         self.current_pause().unwrap() != Pause::FullTraceFast
+    }
+
+    fn current_gc_should_claim_weak_classloader_roots(&self) -> bool {
+        let pause = self.current_pause().unwrap();
+        pause == Pause::InitialMark || pause == Pause::FullTraceFast
     }
 
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {

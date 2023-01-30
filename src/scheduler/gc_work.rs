@@ -266,9 +266,6 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
-        if mmtk.get_plan().downcast_ref::<LXR<VM>>().is_some() {
-            <VM as VMBinding>::VMCollection::update_weak_processor(true);
-        }
         let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)
@@ -432,6 +429,8 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     // Because a copying gc will dereference this pointer at least once for every object copy.
     worker: *mut GCWorker<VM>,
     pub roots: bool,
+    pub cld_roots: bool,
+    pub weak_cld_roots: bool,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
@@ -453,6 +452,8 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             mmtk,
             worker: std::ptr::null_mut(),
             roots,
+            cld_roots: false,
+            weak_cld_roots: false,
         }
     }
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
@@ -657,6 +658,21 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
                 WorkBucketStage::Closure
             },
             E::new(edges, true, self.mmtk),
+        );
+    }
+    
+    fn create_process_edge_roots_work_for_cld_roots(&mut self, edges: Vec<EdgeOf<E>>, weak: bool) {
+        let mut w = E::new(edges, true, self.mmtk);
+        w.cld_roots = true;
+        w.weak_cld_roots = weak;
+        crate::memory_manager::add_work_packet(
+            self.mmtk,
+            if E::RC_ROOTS {
+                WorkBucketStage::RCProcessIncs
+            } else {
+                WorkBucketStage::Closure
+            },
+            w,
         );
     }
 

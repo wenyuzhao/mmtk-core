@@ -386,6 +386,10 @@ pub trait Plan: 'static + Sync + Downcast {
         false
     }
 
+    fn current_gc_should_claim_weak_classloader_roots(&self) -> bool {
+        true
+    }
+
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
         true
     }
