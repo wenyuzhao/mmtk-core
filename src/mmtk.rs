@@ -60,6 +60,7 @@ pub struct MMTKBuilder {
 impl MMTKBuilder {
     /// Create an MMTK builder with default options
     pub fn new() -> Self {
+        std::env::set_var("RUST_BACKTRACE", "1");
         MMTKBuilder {
             options: Options::default(),
         }

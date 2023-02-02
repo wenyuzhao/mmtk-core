@@ -69,6 +69,7 @@ log_work_packets = ["log_stages"]
 no_meta_counting = []
 field_barrier_validation = []
 force_zeroing = []
+no_map_fixed_noreplace = []
 
 # IX Features
 ix_block_only = []
