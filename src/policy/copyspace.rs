@@ -360,6 +360,6 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
 impl<VM: VMBinding> CopySpaceCopyContext<VM> {
     pub fn rebind(&mut self, space: &CopySpace<VM>) {
         self.copy_allocator
-            .rebind(unsafe { &*{ space as *const _ } });
+            .rebind(unsafe { &*{ space as *const CopySpace<VM> } });
     }
 }

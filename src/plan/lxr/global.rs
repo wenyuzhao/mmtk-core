@@ -335,7 +335,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         super::SURVIVAL_RATIO_PREDICTOR
             .pause_start
             .store(SystemTime::now(), Ordering::SeqCst);
-        let me = unsafe { &mut *(self as *const _ as *mut Self) };
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
         me.immix_space.rc_eager_prepare(pause);
 
         if pause == Pause::FinalMark {

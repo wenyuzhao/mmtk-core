@@ -268,7 +268,7 @@ impl Map32 {
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
     unsafe fn mut_self(&self) -> &mut Self {
-        &mut *(self as *const _ as *mut _)
+        &mut *(self as *const Self as *mut Self)
     }
 
     fn mut_self_with_sync(&self) -> (MutexGuard<()>, &mut Self) {

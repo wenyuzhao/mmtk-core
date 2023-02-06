@@ -97,7 +97,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
     ) -> Result<PRAllocResult, PRAllocFail> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
-        let self_mut: &mut Self = unsafe { &mut *(self as *const _ as *mut _) };
+        let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
         let mut new_chunk = false;
         let mut page_offset = self_mut.free_list.alloc(required_pages as _);
@@ -158,7 +158,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // Since `Space` instances are always stored as global variables, so it is okay here
             // to turn `&CommonFreeListPageResource` into `&'static CommonFreeListPageResource`
             vm_map.bind_freelist(unsafe {
-                &*(&common_flpr as &CommonFreeListPageResource as *const _)
+                &*(&common_flpr as &CommonFreeListPageResource as *const CommonFreeListPageResource)
             });
             common_flpr
         };
@@ -186,7 +186,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // Since `Space` instances are always stored as global variables, so it is okay here
             // to turn `&CommonFreeListPageResource` into `&'static CommonFreeListPageResource`
             vm_map.bind_freelist(unsafe {
-                &*(&common_flpr as &CommonFreeListPageResource as *const _)
+                &*(&common_flpr as &CommonFreeListPageResource as *const CommonFreeListPageResource)
             });
             common_flpr
         };
@@ -239,7 +239,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         assert!(self.common.growable);
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
-        let self_mut: &mut Self = unsafe { &mut *(self as *const _ as *mut _) };
+        let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
         let page_offset =
             self_mut.allocate_contiguous_chunks(space_descriptor, PAGES_IN_CHUNK, &mut sync);
@@ -328,7 +328,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         // FIXME
         #[allow(clippy::cast_ref_to_mut)]
-        let me = unsafe { &mut *(self as *const _ as *mut Self) };
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
         self.common.accounting.release(pages as _);
         let freed = me.free_list.free(page_offset as _, true);
         sync.pages_currently_on_freelist += pages as usize;
@@ -354,7 +354,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         // FIXME
         #[allow(clippy::cast_ref_to_mut)]
-        let me = unsafe { &mut *(self as *const _ as *mut Self) };
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
         self.common.accounting.release(pages as _);
         let freed = me.free_list.free(page_offset as _, true);
         sync.pages_currently_on_freelist += pages as usize;

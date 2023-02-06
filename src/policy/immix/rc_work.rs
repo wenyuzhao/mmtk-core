@@ -26,7 +26,7 @@ pub struct MatureSweeping;
 impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        let lxr_mut = unsafe { &mut *(lxr as *const _ as *mut LXR<VM>) };
+        let lxr_mut = unsafe { &mut *(lxr as *const LXR<VM> as *mut LXR<VM>) };
         lxr_mut
             .immix_space
             .schedule_mature_sweeping(lxr.current_pause().unwrap())

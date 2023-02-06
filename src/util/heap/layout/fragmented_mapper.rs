@@ -232,7 +232,7 @@ impl FragmentedMapper {
     #[allow(clippy::mut_from_ref)]
     #[inline(always)]
     unsafe fn mut_self(&self) -> &mut Self {
-        &mut *(self as *const _ as *mut _)
+        &mut *(self as *const Self as *mut Self)
     }
 
     #[inline(always)]

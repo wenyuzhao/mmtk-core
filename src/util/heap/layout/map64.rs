@@ -127,7 +127,7 @@ impl Map for Map64 {
         let free_list = self.fl_map[Self::space_index(descriptor.get_start()).unwrap()];
         if let Some(free_list) = free_list {
             let free_list =
-                unsafe { &mut *(free_list as *const _ as usize as *mut RawMemoryFreeList) };
+                unsafe { &mut *(free_list as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
             free_list.grow_freelist(conversions::bytes_to_pages(extent) as _);
             let base_page = conversions::bytes_to_pages(rtn - self.base_address[index]);
             for offset in (0..(chunks * PAGES_IN_CHUNK)).step_by(PAGES_IN_CHUNK) {
@@ -174,7 +174,8 @@ impl Map for Map64 {
         for pr in 0..MAX_SPACES {
             if let Some(fl) = self_mut.fl_map[pr] {
                 #[allow(clippy::cast_ref_to_mut)]
-                let fl_mut: &mut RawMemoryFreeList = unsafe { &mut *(fl as *const _ as *mut _) };
+                let fl_mut: &mut RawMemoryFreeList =
+                    unsafe { &mut *(fl as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
                 fl_mut.grow_freelist(0);
             }
         }
@@ -187,8 +188,10 @@ impl Map for Map64 {
         for pr in 0..MAX_SPACES {
             if let Some(fl) = self_mut.fl_page_resources[pr] {
                 #[allow(clippy::cast_ref_to_mut)]
-                let fl_mut: &mut CommonFreeListPageResource =
-                    unsafe { &mut *(fl as *const _ as *mut _) };
+                let fl_mut: &mut CommonFreeListPageResource = unsafe {
+                    &mut *(fl as *const CommonFreeListPageResource
+                        as *mut CommonFreeListPageResource)
+                };
                 fl_mut.resize_freelist(conversions::chunk_align_up(
                     self.fl_map[pr].unwrap().get_limit(),
                 ));
@@ -222,7 +225,7 @@ impl Map64 {
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
     unsafe fn mut_self(&self) -> &mut Self {
-        &mut *(self as *const _ as *mut _)
+        &mut *(self as *const Self as *mut Self)
     }
 
     fn space_index(addr: Address) -> Option<usize> {

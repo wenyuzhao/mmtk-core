@@ -154,7 +154,7 @@ mod space_map {
         #[allow(clippy::cast_ref_to_mut)]
         #[allow(clippy::mut_from_ref)]
         unsafe fn mut_self(&self) -> &mut Self {
-            &mut *(self as *const _ as *mut _)
+            &mut *(self as *const Self as *mut Self)
         }
 
         #[inline(always)]
@@ -367,7 +367,7 @@ mod dense_chunk_map {
         #[allow(clippy::cast_ref_to_mut)]
         #[allow(clippy::mut_from_ref)]
         unsafe fn mut_self(&self) -> &mut Self {
-            &mut *(self as *const _ as *mut _)
+            &mut *(self as *const Self as *mut Self)
         }
 
         #[inline(always)]
@@ -461,7 +461,7 @@ mod sparse_chunk_map {
         #[allow(clippy::cast_ref_to_mut)]
         #[allow(clippy::mut_from_ref)]
         unsafe fn mut_self(&self) -> &mut Self {
-            &mut *(self as *const _ as *mut _)
+            &mut *(self as *const Self as *mut Self)
         }
 
         fn log_update(&self, space: &(dyn SFT + Sync + 'static), start: Address, bytes: usize) {

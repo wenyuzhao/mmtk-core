@@ -50,7 +50,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
+        let plan_mut: &mut C::PlanType =
+            unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.prepare(worker.tls);
 
         if !plan_mut.no_mutator_prepare_release() {
@@ -129,7 +130,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         <C::VM as VMBinding>::VMCollection::vm_release();
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
+        let plan_mut: &mut C::PlanType =
+            unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.release(worker.tls);
 
         if !plan_mut.no_mutator_prepare_release() {
@@ -389,7 +391,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanStackRoot<E> {
         let factory = ProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
         <E::VM as VMBinding>::VMScanning::scan_thread_root(
             worker.tls,
-            unsafe { &mut *(self.0 as *mut _) },
+            unsafe { &mut *(self.0 as *mut Mutator<E::VM>) },
             factory,
         );
         self.0.prepare(worker.tls);
