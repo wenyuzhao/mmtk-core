@@ -36,13 +36,6 @@ pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredi
     pause_start: Atomic::new(SystemTime::UNIX_EPOCH),
 };
 
-thread_local! {
-    pub static SURVIVAL_RATIO_PREDICTOR_LOCAL: SurvivalRatioPredictorLocal =
-        SurvivalRatioPredictorLocal {
-            promote_vol: AtomicUsize::new(0),
-        };
-}
-
 pub struct SurvivalRatioPredictor {
     prev_ratio: Atomic<f64>,
     alloc_vol: AtomicUsize,
@@ -113,7 +106,6 @@ impl SurvivalRatioPredictorLocal {
         SURVIVAL_RATIO_PREDICTOR
             .promote_vol
             .fetch_add(self.promote_vol.load(Ordering::Relaxed), Ordering::Relaxed);
-        self.promote_vol.store(0, Ordering::Relaxed);
     }
 }
 

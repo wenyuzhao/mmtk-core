@@ -1,5 +1,6 @@
 use super::cm::LXRConcurrentTraceObjects;
 use super::cm::LXRStopTheWorldProcessEdges;
+use super::SurvivalRatioPredictorLocal;
 use super::LXR;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
@@ -40,6 +41,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     rc: RefCountHelper<VM>,
     pub cld_roots: bool,
     pub weak_cld_roots: bool,
+    survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -77,6 +79,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             rc: RefCountHelper::NEW,
             cld_roots: false,
             weak_cld_roots: false,
+            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
         }
     }
 
@@ -94,6 +97,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             rc: RefCountHelper::NEW,
             cld_roots: false,
             weak_cld_roots: false,
+            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
         }
     }
 
@@ -117,8 +121,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self.rc.promote::<COMPRESSED>(o);
-            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL
-                .with(|x| x.record_promotion(o.get_size::<VM>()));
+            self.survival_ratio_predictor_local
+                .record_promotion(o.get_size::<VM>());
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }
@@ -583,7 +587,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 depth,
             );
         }
-        crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR_LOCAL.with(|x| x.sync())
+        self.survival_ratio_predictor_local.sync();
     }
 }
 
