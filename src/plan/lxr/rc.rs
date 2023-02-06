@@ -75,8 +75,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             slice: Some(slice),
             depth: 1,
             rc: RefCountHelper::NEW,
-            cld_roots:false,
-            weak_cld_roots:false,
+            cld_roots: false,
+            weak_cld_roots: false,
         }
     }
 
@@ -92,8 +92,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
-            cld_roots:false,
-            weak_cld_roots:false,
+            cld_roots: false,
+            weak_cld_roots: false,
         }
     }
 
@@ -521,7 +521,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                     println!(
                         "[{:.3}s][info][gc]  - Stop evacuation. over_space={} over_time={}",
                         crate::boot_time_secs(),
-                        over_space, over_time
+                        over_space,
+                        over_time
                     );
                 }
             }
@@ -557,7 +558,11 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             {
                 worker.add_work(
                     WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(root_edges, !self.cld_roots, mmtk),
+                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(
+                        root_edges,
+                        !self.cld_roots,
+                        mmtk,
+                    ),
                 )
             } else if !self.cld_roots {
                 unsafe {

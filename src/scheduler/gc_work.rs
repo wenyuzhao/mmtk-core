@@ -661,7 +661,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
             E::new(edges, true, self.mmtk),
         );
     }
-    
+
     fn create_process_edge_roots_work_for_cld_roots(&mut self, edges: Vec<EdgeOf<E>>, weak: bool) {
         let mut w = E::new(edges, true, self.mmtk);
         w.cld_roots = true;

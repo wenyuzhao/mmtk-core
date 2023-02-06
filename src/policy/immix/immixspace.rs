@@ -446,7 +446,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             println!(
                 "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks)",
                 crate::boot_time_secs(),
-                live_bytes, num_blocks
+                live_bytes,
+                num_blocks
             );
         }
         self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);

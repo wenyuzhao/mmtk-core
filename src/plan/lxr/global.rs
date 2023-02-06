@@ -287,7 +287,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn release(&mut self, tls: VMWorkerThread) {
         let pause = self.current_pause().unwrap();
-        VM::VMCollection::update_weak_processor(pause == Pause::RefCount || pause == Pause::InitialMark);
+        VM::VMCollection::update_weak_processor(
+            pause == Pause::RefCount || pause == Pause::InitialMark,
+        );
         self.common.los.is_end_of_satb_or_full_gc = false;
         self.common.release(
             tls,
@@ -432,11 +434,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     /// Don't scan weak CLDs on FullGC pause
-    /// 
+    ///
     /// Note:
     ///  - Full/FinalMark pause: Use mark bit as liveness test when updating WeakProcessor
     ///  - Do not apply decs to all CLD roots
-    /// 
+    ///
     /// TODO:
     ///  - Remset for CLDs. So we don't need to scan them all during RC pauses
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
@@ -602,7 +604,12 @@ impl<VM: VMBinding> LXR<VM> {
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
-        if emergency || self.base().user_triggered_collection.load(Ordering::Relaxed) {
+        if emergency
+            || self
+                .base()
+                .user_triggered_collection
+                .load(Ordering::Relaxed)
+        {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {

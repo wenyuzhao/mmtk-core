@@ -1,6 +1,8 @@
 use crate::{
     policy::immix::{block::Block, line::Line},
-    util::{linear_scan::Region, options::Options, heap::layout::vm_layout_constants::VMLayoutConstants},
+    util::{
+        heap::layout::vm_layout_constants::VMLayoutConstants, linear_scan::Region, options::Options,
+    },
     BarrierSelector,
 };
 use std::fmt::Debug;
@@ -172,7 +174,7 @@ macro_rules! dump_feature {
 
 fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     if *options.verbose == 0 {
-        return
+        return;
     }
     println!("-------------------- Immix Args --------------------");
 

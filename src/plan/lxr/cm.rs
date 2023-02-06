@@ -331,7 +331,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         }
         // The memory (lines) of these edges can be reused at any time during mature evacuation.
         // Filter out invalid target objects.
-        if self.remset_recorded_edges && (!object.is_in_any_space() || !object.to_address::<VM>().is_aligned_to(8))  {
+        if self.remset_recorded_edges
+            && (!object.is_in_any_space() || !object.to_address::<VM>().is_aligned_to(8))
+        {
             return object;
         }
         debug_assert!(object.is_in_any_space(), "Invalid {:?}", object);
