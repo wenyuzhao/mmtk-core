@@ -22,11 +22,14 @@ thread_local! {
     static _WORKER: Atomic<Option<*mut ()>> = Atomic::new(None);
 }
 
-static mut _WORKERS: Vec<*mut ()> = Vec::new();
+lazy_static! {
+    static ref _WORKERS: Mutex<Vec<OpaquePointer>> = Mutex::new(Vec::new());
+}
 
 pub fn reset_workers<VM: VMBinding>() {
-    for w in unsafe { &_WORKERS } {
-        let w = (*w) as *mut GCWorker<VM>;
+    let workers = _WORKERS.lock().unwrap();
+    for w in workers.iter() {
+        let w = w.as_mut_ptr::<GCWorker<VM>>();
         unsafe {
             (*w).get_copy_context_mut().release();
         }
@@ -218,9 +221,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
         let worker = self as *mut Self;
         _WORKER.with(|x| x.store(Some(self as *mut Self as *mut ()), Ordering::SeqCst));
-        unsafe {
-            _WORKERS.push(worker as *mut ());
-        }
+        _WORKERS.lock().unwrap().push(OpaquePointer::from_mut_ptr(worker));
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);

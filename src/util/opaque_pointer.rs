@@ -26,6 +26,14 @@ impl OpaquePointer {
         OpaquePointer(addr.to_mut_ptr::<c_void>())
     }
 
+    pub fn from_mut_ptr<T>(ptr: *mut T) -> Self {
+        OpaquePointer(ptr as *mut c_void)
+    }
+
+    pub fn as_mut_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+
     pub fn is_null(self) -> bool {
         self.0.is_null()
     }

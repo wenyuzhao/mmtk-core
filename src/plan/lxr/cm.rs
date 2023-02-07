@@ -336,6 +336,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         {
             return object;
         }
+        if self.lxr.rc.count(object) == 0 {
+            return object;
+        }
         debug_assert!(object.is_in_any_space(), "Invalid {:?}", object);
         debug_assert!(
             object.to_address::<VM>().is_aligned_to(8),
