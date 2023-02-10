@@ -139,7 +139,6 @@ impl Shl<usize> for Address {
 
 /// Default constructor
 impl Default for Address {
-    #[inline(always)]
     fn default() -> Self {
         Self::ZERO
     }
@@ -150,18 +149,15 @@ impl Address {
     pub const MAX: Self = Address(usize::max_value());
 
     /// creates Address from a pointer
-    #[inline(always)]
     pub fn from_ptr<T>(ptr: *const T) -> Address {
         Address(ptr as usize)
     }
 
-    #[inline(always)]
     pub fn from_ref<T>(r: &T) -> Address {
         Address(r as *const T as usize)
     }
 
     /// creates Address from a mutable pointer
-    #[inline(always)]
     pub fn from_mut_ptr<T>(ptr: *mut T) -> Address {
         Address(ptr as usize)
     }
@@ -170,7 +166,6 @@ impl Address {
     /// # Safety
     /// It is unsafe and the user needs to be aware that they are creating an invalid address.
     /// The zero address should only be used as unininitialized or sentinel values in performance critical code (where you dont want to use Option<Address>).
-    #[inline(always)]
     pub const unsafe fn zero() -> Address {
         Address(0)
     }
@@ -179,7 +174,6 @@ impl Address {
     /// # Safety
     /// It is unsafe and the user needs to be aware that they are creating an invalid address.
     /// The max address should only be used as unininitialized or sentinel values in performance critical code (where you dont want to use Option<Address>).
-    #[inline(always)]
     pub unsafe fn max() -> Address {
         use std::usize;
         Address(usize::MAX)
@@ -190,13 +184,11 @@ impl Address {
     /// It is unsafe and the user needs to be aware that they may create an invalid address.
     /// This creates arbitrary addresses which may not be valid. This should only be used for hard-coded addresses. Any other uses of this function could be
     /// replaced with more proper alternatives.
-    #[inline(always)]
     pub const unsafe fn from_usize(raw: usize) -> Address {
         Address(raw)
     }
 
     /// shifts the address by N T-typed objects (returns addr + N * size_of(T))
-    #[inline(always)]
     pub fn shift<T>(self, offset: isize) -> Self {
         self + mem::size_of::<T>() as isize * offset
     }
@@ -204,12 +196,10 @@ impl Address {
     // These const functions are duplicated with the operator traits. But we need them,
     // as we need them to declare constants.
 
-    #[inline(always)]
     pub const fn get_extent(self, other: Address) -> ByteSize {
         self.0 - other.0
     }
 
-    #[inline(always)]
     pub const fn get_offset(self, other: Address) -> ByteOffset {
         self.0 as isize - other.0 as isize
     }
@@ -218,7 +208,6 @@ impl Address {
     // The add() function is const fn, and we can use it to declare Address constants.
     // The Add trait function cannot be const.
     #[allow(clippy::should_implement_trait)]
-    #[inline(always)]
     pub const fn add(self, size: usize) -> Address {
         Address(self.0 + size)
     }
@@ -227,7 +216,6 @@ impl Address {
     // The sub() function is const fn, and we can use it to declare Address constants.
     // The Sub trait function cannot be const.
     #[allow(clippy::should_implement_trait)]
-    #[inline(always)]
     pub const fn sub(self, size: usize) -> Address {
         Address(self.0 - size)
     }
@@ -244,7 +232,6 @@ impl Address {
     /// loads a value of type T from the address
     /// # Safety
     /// This could throw a segment fault if the address is invalid
-    #[inline(always)]
     pub unsafe fn load<T: Copy>(self) -> T {
         *(self.0 as *mut T)
     }
@@ -252,7 +239,6 @@ impl Address {
     /// stores a value of type T to the address
     /// # Safety
     /// This could throw a segment fault if the address is invalid
-    #[inline(always)]
     pub unsafe fn store<T>(self, value: T) {
         *(self.0 as *mut T) = value;
     }
@@ -260,7 +246,6 @@ impl Address {
     /// atomic operation: load
     /// # Safety
     /// This could throw a segment fault if the address is invalid
-    #[inline(always)]
     pub unsafe fn atomic_load<T: Atomic>(self, order: Ordering) -> T::Type {
         let loc = &*(self.0 as *const T);
         loc.load(order)
@@ -269,7 +254,6 @@ impl Address {
     /// atomic operation: store
     /// # Safety
     /// This could throw a segment fault if the address is invalid
-    #[inline(always)]
     pub unsafe fn atomic_store<T: Atomic>(self, val: T::Type, order: Ordering) {
         let loc = &*(self.0 as *const T);
         loc.store(val, order)
@@ -278,7 +262,6 @@ impl Address {
     /// atomic operation: compare and exchange usize
     /// # Safety
     /// This could throw a segment fault if the address is invalid
-    #[inline(always)]
     pub unsafe fn compare_exchange<T: Atomic>(
         self,
         old: T::Type,
@@ -291,20 +274,17 @@ impl Address {
     }
 
     /// is this address zero?
-    #[inline(always)]
     pub fn is_zero(self) -> bool {
         self.0 == 0
     }
 
     /// aligns up the address to the given alignment
-    #[inline(always)]
     pub const fn align_up(self, align: ByteSize) -> Address {
         use crate::util::conversions;
         Address(conversions::raw_align_up(self.0, align))
     }
 
     /// aligns down the address to the given alignment
-    #[inline(always)]
     pub const fn align_down(self, align: ByteSize) -> Address {
         use crate::util::conversions;
         Address(conversions::raw_align_down(self.0, align))
@@ -317,13 +297,11 @@ impl Address {
     }
 
     /// converts the Address to a pointer
-    #[inline(always)]
     pub fn to_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
     /// converts the Address to a mutable pointer
-    #[inline(always)]
     pub fn to_mut_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
@@ -332,26 +310,22 @@ impl Address {
     ///
     /// # Safety
     /// The caller must guarantee the address actually points to a Rust object.
-    #[inline(always)]
     pub unsafe fn as_ref<'a, T>(self) -> &'a T {
         &*self.to_mut_ptr()
     }
 
     /// converts the Address to a pointer-sized integer
-    #[inline(always)]
     pub const fn as_usize(self) -> usize {
         self.0
     }
 
     /// returns the chunk index for this address
-    #[inline(always)]
     pub fn chunk_index(self) -> usize {
         use crate::util::conversions;
         conversions::address_to_chunk_index(self)
     }
 
     /// return true if the referenced memory is mapped
-    #[inline(always)]
     pub fn is_mapped(self) -> bool {
         if self.0 == 0 {
             false
@@ -360,13 +334,11 @@ impl Address {
         }
     }
 
-    #[inline(always)]
     pub fn unlock<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
         RC_LOCK_BITS.store_atomic(self, UNLOCKED_VALUE, Ordering::Relaxed)
     }
 
-    #[inline(always)]
     pub fn lock(&self) {
         loop {
             // Attempt to lock the edges
@@ -386,13 +358,11 @@ impl Address {
         }
     }
 
-    #[inline(always)]
     pub fn is_locked<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
         unsafe { RC_LOCK_BITS.load::<u8>(self) == LOCKED_VALUE }
     }
 
-    #[inline(always)]
     pub fn is_logged<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
         debug_assert!(!self.is_zero());
         unsafe {
@@ -400,7 +370,6 @@ impl Address {
         }
     }
 
-    #[inline(always)]
     pub fn attempt_log<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
         debug_assert!(!self.is_zero());
         let log_bit = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
@@ -424,7 +393,6 @@ impl Address {
         }
     }
 
-    #[inline(always)]
     pub fn log<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_zero());
         crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
@@ -434,7 +402,6 @@ impl Address {
         )
     }
 
-    #[inline(always)]
     pub fn unlog<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_zero());
         crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
@@ -444,7 +411,6 @@ impl Address {
         )
     }
 
-    #[inline(always)]
     pub fn unlog_non_atomic<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_zero());
         unsafe {
@@ -452,7 +418,6 @@ impl Address {
         }
     }
 
-    #[inline(always)]
     pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
         use crate::vm::ObjectModel;
         debug_assert!(!self.is_zero());
@@ -596,7 +561,6 @@ impl ObjectReference {
     /// MMTk should not make any assumption on the actual location of the address with the object reference.
     /// MMTk should not assume the address returned by this method is in our allocation. For the purposes of
     /// setting object metadata, MMTk should use [`crate::vm::ObjectModel::ref_to_address()`] or [`crate::vm::ObjectModel::ref_to_header()`].
-    #[inline(always)]
     pub fn to_raw_address(self) -> Address {
         Address(self.0)
     }
@@ -606,7 +570,6 @@ impl ObjectReference {
     ///
     /// MMTk should not assume an arbitrary address can be turned into an object reference. MMTk can use [`crate::vm::ObjectModel::address_to_ref()`]
     /// to turn addresses that are from [`crate::vm::ObjectModel::ref_to_address()`] back to object.
-    #[inline(always)]
     pub fn from_raw_address(addr: Address) -> ObjectReference {
         ObjectReference(addr.0)
     }
@@ -614,7 +577,6 @@ impl ObjectReference {
     /// Get the in-heap address from an object reference. This method is used by MMTk to get an in-heap address
     /// for an object reference. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_address`]. See the
     /// comments on [`crate::vm::ObjectModel::ref_to_address`].
-    #[inline(always)]
     pub fn to_address<VM: VMBinding>(self) -> Address {
         use crate::vm::ObjectModel;
         let to_address = VM::VMObjectModel::ref_to_address(self);
@@ -625,13 +587,11 @@ impl ObjectReference {
     /// Get the header base address from an object reference. This method is used by MMTk to get a base address for the
     /// object header, and access the object header. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_header`].
     /// See the comments on [`crate::vm::ObjectModel::ref_to_header`].
-    #[inline(always)]
     pub fn to_header<VM: VMBinding>(self) -> Address {
         use crate::vm::ObjectModel;
         VM::VMObjectModel::ref_to_header(self)
     }
 
-    #[inline(always)]
     pub fn to_object_start<VM: VMBinding>(self) -> Address {
         use crate::vm::ObjectModel;
         let object_start = VM::VMObjectModel::ref_to_object_start(self);
@@ -642,7 +602,6 @@ impl ObjectReference {
     /// Get the object reference from an address that is returned from [`crate::util::address::ObjectReference::to_address`]
     /// or [`crate::vm::ObjectModel::ref_to_address`]. This method is syntactic sugar for [`crate::vm::ObjectModel::address_to_ref`].
     /// See the comments on [`crate::vm::ObjectModel::address_to_ref`].
-    #[inline(always)]
     pub fn from_address<VM: VMBinding>(addr: Address) -> ObjectReference {
         use crate::vm::ObjectModel;
         let obj = VM::VMObjectModel::address_to_ref(addr);
@@ -651,7 +610,6 @@ impl ObjectReference {
     }
 
     /// is this object reference null reference?
-    #[inline(always)]
     pub fn is_null(self) -> bool {
         self.0 == 0
     }
@@ -663,7 +621,6 @@ impl ObjectReference {
 
     /// Is the object reachable, determined by the policy?
     /// Note: Objects in ImmortalSpace may have `is_live = true` but are actually unreachable.
-    #[inline(always)]
     pub fn is_reachable(self) -> bool {
         if self.is_null() {
             false
@@ -686,7 +643,6 @@ impl ObjectReference {
     }
 
     /// Get forwarding pointer if the object is forwarded.
-    #[inline(always)]
     pub fn get_forwarded_object(self) -> Option<Self> {
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
@@ -700,14 +656,12 @@ impl ObjectReference {
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_sane()
     }
 
-    #[inline(always)]
     pub fn get_size<VM: VMBinding>(self) -> usize {
         debug_assert!(!self.is_null());
         use crate::vm::ObjectModel;
         VM::VMObjectModel::get_current_size(self)
     }
 
-    #[inline(always)]
     pub fn range<VM: VMBinding>(self) -> Range<Address> {
         use crate::vm::ObjectModel;
         if self.is_null() {
@@ -717,27 +671,23 @@ impl ObjectReference {
         a..a + self.get_size::<VM>()
     }
 
-    #[inline(always)]
     pub fn log_start_address<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_null());
         self.to_address::<VM>().unlog::<VM, COMPRESSED>();
         (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
     }
 
-    #[inline(always)]
     pub fn clear_start_address_log<VM: VMBinding, const COMPRESSED: bool>(self) {
         debug_assert!(!self.is_null());
         self.to_address::<VM>().log::<VM, COMPRESSED>();
         (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
     }
 
-    #[inline(always)]
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
         use crate::vm::ObjectModel;
         VM::VMObjectModel::get_class_pointer(self)
     }
 
-    #[inline(always)]
     pub fn class_is_valid<VM: VMBinding>(self) -> bool {
         use crate::vm::ObjectModel;
         let klass = self.class_pointer::<VM>();
@@ -752,7 +702,6 @@ impl ObjectReference {
         valid
     }
 
-    #[inline(always)]
     fn assert_class_is_valid<VM: VMBinding>(self) {
         // assert!(
         //     self.class_is_valid::<VM>(),
@@ -762,7 +711,6 @@ impl ObjectReference {
         // );
     }
 
-    #[inline(always)]
     pub fn fix_start_address<VM: VMBinding, const COMPRESSED: bool>(self) -> Self {
         let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
         if !(a + BYTES_IN_WORD).is_logged::<VM, COMPRESSED>() {
@@ -772,7 +720,6 @@ impl ObjectReference {
         }
     }
 
-    #[inline(always)]
     pub fn verify<VM: VMBinding>(self) {
         if cfg!(debug_assertions) || Self::STRICT_VERIFICATION {
             if self.is_null() {
@@ -789,7 +736,6 @@ impl ObjectReference {
         }
     }
 
-    #[inline(always)]
     pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge), const COMPRESSED: bool>(
         self,
         cld_scan: CLDScanPolicy,

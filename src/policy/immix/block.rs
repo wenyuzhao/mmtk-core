@@ -39,7 +39,6 @@ impl BlockState {
 }
 
 impl From<u8> for BlockState {
-    #[inline(always)]
     fn from(state: u8) -> Self {
         match state {
             Self::MARK_UNALLOCATED => BlockState::Unallocated,
@@ -53,7 +52,6 @@ impl From<u8> for BlockState {
 }
 
 impl From<BlockState> for u8 {
-    #[inline(always)]
     fn from(state: BlockState) -> Self {
         match state {
             BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
@@ -105,13 +103,11 @@ impl Region for Block {
     #[cfg(feature = "immix_smaller_block")]
     const LOG_BYTES: usize = 13;
 
-    #[inline(always)]
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
     }
 
-    #[inline(always)]
     fn start(&self) -> Address {
         self.0
     }
@@ -145,7 +141,6 @@ impl Block {
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
 
-    #[inline(always)]
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
         let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
         let words = bytes >> LOG_BYTES_IN_WORD;
@@ -157,7 +152,6 @@ impl Block {
         unsafe { Self::DEAD_WORDS.store(self.start(), new) };
     }
 
-    #[inline(always)]
     pub fn dec_dead_bytes_sloppy(&self, bytes: u32) {
         let words = bytes >> LOG_BYTES_IN_WORD;
         let old: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
@@ -165,13 +159,11 @@ impl Block {
         unsafe { Self::DEAD_WORDS.store(self.start(), new) };
     }
 
-    #[inline(always)]
     pub fn inc_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
         let block = Block::containing::<VM>(o);
         block.inc_dead_bytes_sloppy(o.get_size::<VM>() as u32);
     }
 
-    #[inline(always)]
     pub fn calc_dead_lines(&self) -> usize {
         let mut dead_lines = 0;
         let rc_array = RCArray::of(*self);
@@ -193,20 +185,17 @@ impl Block {
         dead_lines
     }
 
-    #[inline(always)]
     pub fn dead_bytes(&self) -> u32 {
         let v: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
         v << LOG_BYTES_IN_WORD
     }
 
-    #[inline(always)]
     fn reset_dead_bytes(&self) {
         unsafe { Self::DEAD_WORDS.store(self.start(), 0u32) };
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
 
-    #[inline(always)]
     pub fn is_zero(&self) -> bool {
         self.0.is_zero()
     }
@@ -218,20 +207,17 @@ impl Block {
 
     /// Get the block from a given address.
     /// The address must be block-aligned.
-    #[inline(always)]
     pub fn from(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
     }
 
-    #[inline(always)]
     pub fn of(a: Address) -> Self {
         Self::from(Self::align(a))
     }
 
     /// Get the block containing the given address.
     /// The input address does not need to be aligned.
-    #[inline(always)]
     pub fn containing<VM: VMBinding>(object: ObjectReference) -> Self {
         Self(VM::VMObjectModel::ref_to_address(object).align_down(Self::BYTES))
     }
@@ -247,35 +233,30 @@ impl Block {
     }
 
     /// Get the chunk containing the block.
-    #[inline(always)]
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
     }
 
     /// Get the address range of the block's line mark table.
     #[allow(clippy::assertions_on_constants)]
-    #[inline(always)]
     pub fn line_mark_table(&self) -> MetadataByteArrayRef<{ Block::LINES }> {
         debug_assert!(!super::BLOCK_ONLY);
         MetadataByteArrayRef::<{ Block::LINES }>::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
     }
 
     /// Get block mark state.
-    #[inline(always)]
     pub fn get_state(&self) -> BlockState {
         let byte = Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         byte.into()
     }
 
     /// Set block mark state.
-    #[inline(always)]
     pub fn set_state(&self, state: BlockState) {
         let state = u8::from(state);
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
     /// Set block mark state.
-    #[inline(always)]
     pub fn fetch_update_state(
         &self,
         mut f: impl FnMut(BlockState) -> Option<BlockState>,
@@ -304,31 +285,26 @@ impl Block {
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
 
     /// Test if the block is marked for defragmentation.
-    #[inline(always)]
     pub fn is_defrag_source(&self) -> bool {
         let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         debug_assert!(byte == 0 || byte == Self::DEFRAG_SOURCE_STATE);
         byte == Self::DEFRAG_SOURCE_STATE
     }
 
-    #[inline(always)]
     pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
         Block::containing::<VM>(o).is_defrag_source()
     }
 
-    #[inline(always)]
     pub fn address_in_defrag_block(a: Address) -> bool {
         Block::from(Block::align(a)).is_defrag_source()
     }
 
     /// Mark the block for defragmentation.
-    #[inline(always)]
     pub fn set_as_defrag_source(&self, defrag: bool) {
         let byte = if defrag { Self::DEFRAG_SOURCE_STATE } else { 0 };
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), byte, Ordering::SeqCst);
     }
 
-    #[inline(always)]
     pub fn attempt_to_set_as_defrag_source(&self) -> bool {
         loop {
             let old_value: u8 =
@@ -354,13 +330,11 @@ impl Block {
     }
 
     /// Record the number of holes in the block.
-    #[inline(always)]
     pub fn set_holes(&self, holes: usize) {
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), holes as u8, Ordering::SeqCst);
     }
 
     /// Get the number of holes.
-    #[inline(always)]
     pub fn get_holes(&self) -> usize {
         let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         debug_assert_ne!(byte, Self::DEFRAG_SOURCE_STATE);
@@ -368,7 +342,6 @@ impl Block {
     }
 
     /// Initialize a clean block after acquired from page-resource.
-    #[inline]
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
         // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         // #[cfg(feature = "sanity")]
@@ -404,7 +377,6 @@ impl Block {
     }
 
     /// Deinitalize a block before releasing.
-    #[inline]
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
@@ -418,40 +390,33 @@ impl Block {
         }
     }
 
-    #[inline(always)]
     pub fn start_line(&self) -> Line {
         Line::from_aligned_address(self.start())
     }
 
-    #[inline(always)]
     pub fn end_line(&self) -> Line {
         Line::from_aligned_address(self.end())
     }
 
     /// Get the range of lines within the block.
     #[allow(clippy::assertions_on_constants)]
-    #[inline(always)]
     pub fn lines(&self) -> RegionIterator<Line> {
         debug_assert!(!super::BLOCK_ONLY);
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
-    #[inline(always)]
     pub fn clear_line_validity_states(&self) {
         Line::VALIDITY_STATE.bzero_metadata(self.start(), Block::BYTES);
     }
 
-    #[inline(always)]
     pub fn clear_rc_table<VM: VMBinding>(&self) {
         crate::util::rc::RC_TABLE.bzero_metadata(self.start(), Block::BYTES);
     }
 
-    #[inline(always)]
     pub fn clear_striddle_table<VM: VMBinding>(&self) {
         crate::util::rc::RC_STRADDLE_LINES.bzero_metadata(self.start(), Block::BYTES);
     }
 
-    #[inline(always)]
     pub fn log(&self) -> bool {
         loop {
             let old_value: u8 = Self::LOG_TABLE.load_atomic(self.start(), Ordering::Relaxed);
@@ -467,37 +432,30 @@ impl Block {
         }
     }
 
-    #[inline(always)]
     pub fn set_as_in_place_promoted(&self) {
         Self::NURSERY_PROMOTION_STATE_TABLE.fetch_or_atomic(self.start(), 1u8, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     pub fn is_in_place_promoted(&self) -> bool {
         Self::NURSERY_PROMOTION_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
     }
 
-    #[inline(always)]
     pub fn clear_in_place_promoted(&self) {
         Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed)
     }
 
-    #[inline(always)]
     pub fn unlog(&self) {
         Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     pub fn unlog_non_atomic(&self) {
         unsafe { Self::LOG_TABLE.store(self.start(), 0u8) };
     }
 
-    #[inline(always)]
     pub fn clear_log_table<VM: VMBinding, const COMPRESSED: bool>(&self) {
         super::UnlogBit::<VM, COMPRESSED>::SPEC.bzero_metadata(self.start(), Block::BYTES);
     }
 
-    #[inline(always)]
     pub fn assert_log_table_cleared<VM: VMBinding>(&self, meta: &SideMetadataSpec) {
         assert!(cfg!(debug_assertions) || cfg!(feature = "sanity"));
         let start = address_to_meta_address(meta, self.start()).to_ptr::<u128>();
@@ -508,7 +466,6 @@ impl Block {
         }
     }
 
-    #[inline(always)]
     pub fn initialize_log_table_as_unlogged<VM: VMBinding, const COMPRESSED: bool>(&self) {
         let meta = super::UnlogBit::<VM, COMPRESSED>::SPEC;
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
@@ -519,7 +476,6 @@ impl Block {
         }
     }
 
-    #[inline(always)]
     pub fn rc_dead(&self) -> bool {
         type UInt = u128;
         const LOG_BITS_IN_UINT: usize =
@@ -544,7 +500,6 @@ impl Block {
 
     /// Sweep this block.
     /// Return true if the block is swept.
-    #[inline(always)]
     pub fn sweep<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
@@ -609,7 +564,6 @@ impl Block {
         }
     }
 
-    #[inline(always)]
     pub fn rc_sweep_nursery<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
@@ -631,7 +585,6 @@ impl Block {
         }
     }
 
-    #[inline(always)]
     pub fn attempt_mutator_reuse(&self) -> bool {
         self.fetch_update_state(|s| {
             if let BlockState::Reusable { .. } = s {
@@ -643,7 +596,6 @@ impl Block {
         .is_ok()
     }
 
-    #[inline(always)]
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
         if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
             return false;
@@ -695,12 +647,10 @@ impl Block {
         false
     }
 
-    #[inline(always)]
     pub fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 
-    #[inline(always)]
     pub fn has_holes(&self) -> bool {
         let rc_array = RCArray::of(*self);
         let mut found_free_line = false;
@@ -723,7 +673,6 @@ impl Block {
         false
     }
 
-    #[inline(always)]
     pub fn calc_holes(&self) -> usize {
         let rc_array = RCArray::of(*self);
         let search_next_hole = |start: usize| -> Option<usize> {
@@ -794,19 +743,16 @@ impl ReusableBlockPool {
     }
 
     /// Get number of blocks in this list.
-    #[inline(always)]
     pub fn len(&self) -> usize {
         self.queue.len()
     }
 
     /// Add a block to the list.
-    #[inline(always)]
     pub fn push(&self, block: Block) {
         self.queue.push(block)
     }
 
     /// Pop a block out of the list.
-    #[inline(always)]
     pub fn pop(&self) -> Option<Block> {
         self.queue.pop()
     }
@@ -817,7 +763,6 @@ impl ReusableBlockPool {
     }
 
     /// Iterate all the blocks in the queue. Call the visitor for each reported block.
-    #[inline]
     pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
         self.queue.iterate_blocks(&mut f);
     }

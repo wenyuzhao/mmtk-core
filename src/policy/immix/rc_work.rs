@@ -42,7 +42,6 @@ pub(super) struct SelectDefragBlocksInChunk {
 }
 
 impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
-    #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let mut blocks = vec![];
         // Iterate over all blocks in this chunk
@@ -91,7 +90,6 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
 pub struct UpdateWeakProcessor;
 
 impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
-    #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         VM::VMCollection::update_weak_processor(true);
     }
@@ -154,7 +152,6 @@ unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for SweepDeadCyclesChunk
 impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED> {
     const CAPACITY: usize = 1024;
 
-    #[inline(always)]
     fn lxr(&self) -> &LXR<VM> {
         unsafe { &*self.lxr }
     }
@@ -168,7 +165,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
         }
     }
 
-    #[inline(never)]
     fn process_dead_object(&mut self, mut o: ObjectReference) {
         o = o.fix_start_address::<VM, COMPRESSED>();
         crate::stat(|s| {
@@ -192,7 +188,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
         }
     }
 
-    #[inline]
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
         let mut has_dead_object = false;
         let mut has_live = false;
@@ -228,7 +223,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for SweepDeadCyclesChunk<VM, COMPRESSED> {
-    #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.lxr = lxr;
@@ -253,7 +247,6 @@ pub(super) struct ConcurrentChunkMetadataZeroing {
 
 impl ConcurrentChunkMetadataZeroing {
     /// Clear object mark table
-    #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
@@ -263,7 +256,6 @@ impl ConcurrentChunkMetadataZeroing {
 }
 
 impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
-    #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         Self::reset_object_mark::<VM>(self.chunk);
     }
@@ -280,7 +272,6 @@ pub(super) struct PrepareChunk<const COMPRESSED: bool> {
 
 impl<const COMPRESSED: bool> PrepareChunk<COMPRESSED> {
     /// Clear object mark table
-    #[inline(always)]
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
@@ -290,7 +281,6 @@ impl<const COMPRESSED: bool> PrepareChunk<COMPRESSED> {
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESSED> {
-    #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         if !self.rc_enabled {

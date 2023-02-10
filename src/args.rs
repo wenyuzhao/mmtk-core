@@ -83,7 +83,6 @@ impl RuntimeArgs {
             ARGS.write(RuntimeArgs::default());
         }
     }
-    #[inline(always)]
     pub fn get() -> &'static Self {
         unsafe { &*ARGS.as_ptr() }
     }

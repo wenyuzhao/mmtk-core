@@ -175,7 +175,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    #[inline]
     fn acquire_no_lock(&self, tls: VMThread, pages: usize) -> Address {
         trace!("Space.acquire, tls={:?}", tls);
         // Should we poll to attempt to GC?
@@ -381,7 +380,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    #[inline(always)]
     fn address_in_space(&self, start: Address) -> bool {
         if !self.common().descriptor.is_contiguous() {
             self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
@@ -390,7 +388,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    #[inline(always)]
     fn in_space(&self, object: ObjectReference) -> bool {
         self.address_in_space(object.to_address::<VM>())
     }

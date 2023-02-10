@@ -44,19 +44,16 @@ pub struct SurvivalRatioPredictor {
 }
 
 impl SurvivalRatioPredictor {
-    #[inline(always)]
     pub fn set_alloc_size(&self, size: usize) {
         // println!("set_alloc_size {}", size);
         assert_eq!(self.alloc_vol.load(Ordering::Relaxed), 0);
         self.alloc_vol.store(size, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     pub fn ratio(&self) -> f64 {
         self.prev_ratio.load(Ordering::Relaxed)
     }
 
-    #[inline(always)]
     pub fn update_ratio(&self) -> f64 {
         if self.alloc_vol.load(Ordering::Relaxed) == 0 {
             return self.ratio();
@@ -93,7 +90,6 @@ pub struct SurvivalRatioPredictorLocal {
 }
 
 impl SurvivalRatioPredictorLocal {
-    #[inline(always)]
     pub fn record_promotion(&self, size: usize) {
         self.promote_vol.store(
             self.promote_vol.load(Ordering::Relaxed) + size,
@@ -101,7 +97,6 @@ impl SurvivalRatioPredictorLocal {
         );
     }
 
-    #[inline(always)]
     pub fn sync(&self) {
         SURVIVAL_RATIO_PREDICTOR
             .promote_vol
@@ -118,12 +113,10 @@ pub struct MatureLivePredictor {
 }
 
 impl MatureLivePredictor {
-    #[inline(always)]
     pub fn live_pages(&self) -> f64 {
         self.live_pages.load(Ordering::Relaxed)
     }
 
-    #[inline(always)]
     pub fn update(&self, live_pages: usize) {
         // println!("live_pages {}", live_pages);
         let prev = self.live_pages.load(Ordering::Relaxed);
@@ -144,7 +137,6 @@ lazy_static! {
     static ref LAST_REFERENTS: Mutex<HashMap<Address, ObjectReference>> = Default::default();
 }
 
-#[inline(always)]
 pub fn record_edge_for_validation(slot: impl Edge, obj: ObjectReference) {
     if cfg!(feature = "field_barrier_validation") {
         LAST_REFERENTS

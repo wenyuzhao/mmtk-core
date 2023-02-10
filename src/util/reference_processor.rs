@@ -201,7 +201,6 @@ impl ReferenceProcessor {
     }
 
     /// Add a candidate.
-    #[inline(always)]
     pub fn add_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
         if !self.allow_new_candidate.load(Ordering::SeqCst) {
             return;
@@ -223,7 +222,6 @@ impl ReferenceProcessor {
     // and 2. to get the new object reference if the object is copied. The functions are intended to make the code
     // easier to understand.
 
-    #[inline(always)]
     fn get_forwarded_referent<E: ProcessEdgesWork>(
         e: &mut E,
         referent: ObjectReference,
@@ -231,7 +229,6 @@ impl ReferenceProcessor {
         e.trace_object(referent)
     }
 
-    #[inline(always)]
     fn get_forwarded_reference<E: ProcessEdgesWork>(
         e: &mut E,
         object: ObjectReference,
@@ -239,7 +236,6 @@ impl ReferenceProcessor {
         e.trace_object(object)
     }
 
-    #[inline(always)]
     fn keep_referent_alive<E: ProcessEdgesWork>(
         e: &mut E,
         referent: ObjectReference,
@@ -294,7 +290,6 @@ impl ReferenceProcessor {
         debug!("Starting ReferenceProcessor.forward({:?})", self.semantics);
 
         // Forward a single reference
-        #[inline(always)]
         fn forward_reference<E: ProcessEdgesWork>(
             trace: &mut E,
             reference: ObjectReference,

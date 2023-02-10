@@ -16,7 +16,6 @@ pub fn zero(start: Address, len: usize) {
     unsafe { std::ptr::write_bytes::<u8>(start.to_mut_ptr(), 0, len) }
 }
 
-#[inline(always)]
 pub fn zero_w(start: Address, len: usize) {
     unsafe { std::ptr::write_bytes::<u128>(start.to_mut_ptr(), 0, len >> 4) }
 }
@@ -69,7 +68,7 @@ pub fn dzmmap_noreplace(start: Address, size: usize) -> Result<()> {
 pub fn mmap_noreserve(start: Address, size: usize) -> Result<()> {
     let prot = PROT_NONE;
     #[cfg(feature = "no_map_fixed_noreplace")]
-    let flags = libc::MAP_ANON | libc::MAP_PRIVATE  | libc::MAP_NORESERVE;
+    let flags = libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_NORESERVE;
     #[cfg(not(feature = "no_map_fixed_noreplace"))]
     let flags =
         libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED_NOREPLACE | libc::MAP_NORESERVE;

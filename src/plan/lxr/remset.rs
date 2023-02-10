@@ -17,12 +17,10 @@ use super::mature_evac::EvacuateMatureObjects;
 pub(super) struct RemSetEntry(usize);
 
 impl RemSetEntry {
-    #[inline(always)]
     fn encode<VM: VMBinding>(edge: VM::VMEdge, epoch: u8) -> Self {
         Self(edge.to_address().as_usize() | ((epoch as usize) << 48))
     }
 
-    #[inline(always)]
     pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, u8) {
         let v = ((self.0 >> 48) & 0xff) as u8;
         let p = unsafe { Address::from_usize(self.0 & 0xff00_ffff_ffff_ffff_usize) };
@@ -46,7 +44,6 @@ impl<VM: VMBinding> RemSet<VM> {
         rs
     }
 
-    #[inline(always)]
     fn gc_buffer(&self, id: usize) -> &mut Vec<RemSetEntry> {
         unsafe { &mut *self.gc_buffers[id].get() }
     }
@@ -70,7 +67,6 @@ impl<VM: VMBinding> RemSet<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn record(&self, e: VM::VMEdge, space: &ImmixSpace<VM>) {
         // FIXME: performance?
         let v = if !e.to_address().is_mapped() {

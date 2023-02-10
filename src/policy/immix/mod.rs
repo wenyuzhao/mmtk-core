@@ -62,7 +62,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> UnlogBit<VM, COMPRESSED> {
     };
 }
 
-#[inline(always)]
 pub fn get_unlog_bit_slow<VM: VMBinding>() -> SideMetadataSpec {
     if VM::VMObjectModel::compressed_pointers_enabled() {
         *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED.extract_side_spec()

@@ -38,7 +38,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    #[inline(always)]
     fn address_is_valid_oop_edge(&self, e: VM::VMEdge, epoch: u8, lxr: &LXR<VM>) -> bool {
         // Keep edges not in the mmtk heap
         // These should be edges in the c++ `ClassLoaderData` objects. We remember these edges
@@ -73,7 +72,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    #[inline]
     fn process_edge<const COMPRESSED: bool>(
         &mut self,
         e: VM::VMEdge,
@@ -100,7 +98,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 
-    #[inline]
     fn process_edges<const COMPRESSED: bool>(
         &mut self,
         mmtk: &'static MMTK<VM>,
@@ -129,7 +126,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
-    #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let work = if VM::VMObjectModel::compressed_pointers_enabled() {
             self.process_edges::<true>(mmtk)

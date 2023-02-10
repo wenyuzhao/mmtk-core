@@ -36,7 +36,6 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
     fn is_live(&self, _object: ObjectReference) -> bool {
         true
     }
-    #[inline(always)]
     fn is_reachable(&self, object: ObjectReference) -> bool {
         let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
@@ -106,11 +105,9 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         crate::util::alloc_bit::set_alloc_bit::<VM>(object);
     }
     #[cfg(feature = "is_mmtk_object")]
-    #[inline(always)]
     fn is_mmtk_object(&self, addr: Address) -> bool {
         crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
     }
-    #[inline(always)]
     fn sft_trace_object(
         &self,
         queue: &mut VectorObjectQueue,
@@ -148,7 +145,6 @@ use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSpace<VM> {
-    #[inline(always)]
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
@@ -158,7 +154,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
     ) -> ObjectReference {
         self.trace_object(queue, object)
     }
-    #[inline(always)]
     fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
         false
     }

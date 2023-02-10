@@ -172,7 +172,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
     }
 
-    #[inline]
     fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load::<COMPRESSED>();
         self.edge = Some(slot);
@@ -182,7 +181,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
     }
 
-    #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if let Some(_lxr) = self
             .mmtk()

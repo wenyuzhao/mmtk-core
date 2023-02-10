@@ -315,12 +315,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.immix_space.reserved_pages() + self.common.get_used_pages()
     }
 
-    #[inline(always)]
     fn base(&self) -> &BasePlan<VM> {
         &self.common.base
     }
 
-    #[inline(always)]
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }
@@ -400,17 +398,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         println!("Warning: User attempted a collection request. The request is ignored.");
     }
 
-    #[inline(always)]
     fn no_mutator_prepare_release(&self) -> bool {
         true
     }
 
-    #[inline(always)]
     fn no_worker_prepare(&self) -> bool {
         true
     }
 
-    #[inline(always)]
     fn fast_worker_release(&self) -> bool {
         true
     }
@@ -523,12 +518,10 @@ impl<VM: VMBinding> LXR<VM> {
         lxr
     }
 
-    #[inline(always)]
     pub fn concurrent_marking_enabled(&self) -> bool {
         self.immix_space.cm_enabled
     }
 
-    #[inline(always)]
     pub fn concurrent_marking_in_progress(&self) -> bool {
         self.concurrent_marking_enabled() && self.in_concurrent_marking.load(Ordering::Relaxed)
     }
@@ -834,32 +827,26 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn perform_cycle_collection(&self) -> bool {
         self.perform_cycle_collection.load(Ordering::SeqCst)
     }
 
-    #[inline(always)]
     pub fn current_pause(&self) -> Option<Pause> {
         self.current_pause.load(Ordering::SeqCst)
     }
 
-    #[inline(always)]
     pub fn previous_pause(&self) -> Option<Pause> {
         self.previous_pause.load(Ordering::SeqCst)
     }
 
-    #[inline(always)]
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
         self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
     }
 
-    #[inline(always)]
     pub fn address_in_defrag(&self, a: Address) -> bool {
         self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
     }
 
-    #[inline(always)]
     pub fn mark(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
         if self.immix_space.in_space(o) {
@@ -869,7 +856,6 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn mark2(&self, o: ObjectReference, los: bool) -> bool {
         debug_assert!(!o.is_null());
         if !los {
@@ -879,7 +865,6 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn is_marked(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
         if self.immix_space.in_space(o) {
@@ -889,7 +874,6 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
     }
@@ -964,7 +948,6 @@ impl<VM: VMBinding> LXR<VM> {
         self.in_concurrent_marking.store(active, Ordering::SeqCst);
     }
 
-    #[inline(always)]
     pub fn options(&self) -> &Options {
         &self.common.base.options
     }

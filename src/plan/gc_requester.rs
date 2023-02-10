@@ -39,7 +39,6 @@ impl<VM: VMBinding> GCRequester<VM> {
         }
     }
 
-    #[inline]
     pub fn is_concurrent_collection(&self) -> bool {
         self.concurrent.load(Ordering::SeqCst)
     }

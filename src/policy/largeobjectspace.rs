@@ -149,11 +149,9 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         self.treadmill.add_to_treadmill(object, alloc);
     }
     #[cfg(feature = "is_mmtk_object")]
-    #[inline(always)]
     fn is_mmtk_object(&self, addr: Address) -> bool {
         crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
     }
-    #[inline(always)]
     fn sft_trace_object(
         &self,
         queue: &mut VectorObjectQueue,
@@ -171,7 +169,6 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     fn as_sft(&self) -> &(dyn SFT + Sync + 'static) {
         self
     }
-    #[inline(always)]
     fn get_page_resource(&self) -> &dyn PageResource<VM> {
         &self.pr
     }
@@ -180,7 +177,6 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
         self.common().initialize_sft(self.as_sft())
     }
 
-    #[inline(always)]
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
@@ -193,7 +189,6 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
 use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjectSpace<VM> {
-    #[inline(always)]
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
@@ -203,7 +198,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     ) -> ObjectReference {
         self.trace_object(queue, object)
     }
-    #[inline(always)]
     fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
         false
     }
@@ -266,7 +260,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    #[inline(always)]
     fn update_validity(&self, start: Address, pages: usize) {
         if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             LOS_PAGE_VALIDITY.bzero_metadata(start, pages << LOG_BYTES_IN_PAGE);
@@ -284,20 +277,17 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
-    #[inline(always)]
     pub fn currrent_validity_state(e: Address) -> u8 {
         let page = e.align_down(BYTES_IN_PAGE);
         unsafe { LOS_PAGE_VALIDITY.load::<u8>(page) }
     }
 
-    #[inline(always)]
     pub fn pointer_is_valid(&self, e: Address, epoch: u8) -> bool {
         let page = e.align_down(BYTES_IN_PAGE);
         let recorded = unsafe { LOS_PAGE_VALIDITY.load::<u8>(page) };
         epoch == recorded
     }
 
-    #[inline]
     fn release_object(&self, start: Address) -> usize {
         if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
@@ -427,12 +417,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.acquire(tls, pages)
     }
 
-    #[inline]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         self.test_and_mark(object, self.mark_state)
     }
 
-    #[inline]
     pub fn rc_free<const COMPRESSED: bool>(&self, o: ObjectReference) {
         if o.to_address::<VM>().attempt_log::<VM, COMPRESSED>() {
             // println!(" - add to rc_dead_objects {:?}", o);
@@ -440,12 +428,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
         self.test_mark_bit(object, self.mark_state)
     }
 
-    #[inline(always)]
     fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {
         loop {
             let mask = if self.rc_enabled {
@@ -594,7 +580,6 @@ impl RCReleaseMatureLOS {
         Self { _counter: counter }
     }
 
-    #[inline(always)]
     fn do_work_impl<VM: VMBinding, const COMPRESSED: bool>(&self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
         let mut mature_objects = los.rc_mature_objects.lock();

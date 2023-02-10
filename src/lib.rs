@@ -88,7 +88,6 @@ pub struct LazySweepingJobsCounter {
     counter: Arc<AtomicUsize>,
 }
 impl LazySweepingJobsCounter {
-    #[inline(always)]
     pub fn new() -> Self {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         let counter = lazy_sweeping_jobs.curr_counter.as_ref().unwrap();
@@ -99,7 +98,6 @@ impl LazySweepingJobsCounter {
         }
     }
 
-    #[inline(always)]
     pub fn new_decs() -> Self {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         let decs_counter = lazy_sweeping_jobs.curr_decs_counter.as_ref().unwrap();
@@ -112,7 +110,6 @@ impl LazySweepingJobsCounter {
         }
     }
 
-    #[inline(always)]
     #[allow(clippy::should_implement_trait)]
     pub fn clone(&self) -> Self {
         self.counter.fetch_add(1, Ordering::SeqCst);
@@ -122,7 +119,6 @@ impl LazySweepingJobsCounter {
         }
     }
 
-    #[inline(always)]
     pub fn clone_with_decs(&self) -> Self {
         self.decs_counter
             .as_ref()
@@ -137,7 +133,6 @@ impl LazySweepingJobsCounter {
 }
 
 impl Drop for LazySweepingJobsCounter {
-    #[inline(always)]
     fn drop(&mut self) {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         if let Some(decs) = self.decs_counter.as_ref() {
@@ -175,7 +170,6 @@ impl LazySweepingJobs {
         }
     }
 
-    #[inline(always)]
     pub fn all_finished() -> bool {
         LAZY_SWEEPING_JOBS
             .read()
@@ -197,14 +191,12 @@ impl LazySweepingJobs {
 static LAZY_SWEEPING_JOBS: Lazy<RwLock<LazySweepingJobs>> =
     Lazy::new(|| RwLock::new(LazySweepingJobs::new()));
 
-#[inline(always)]
 fn concurrent_marking_packets_drained() -> bool {
     crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst) == 0
 }
 
 static DISABLE_LASY_DEC_FOR_CURRENT_GC: AtomicBool = AtomicBool::new(false);
 
-#[inline(always)]
 fn disable_lasy_dec_for_current_gc() -> bool {
     crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.load(Ordering::SeqCst)
 }
@@ -220,12 +212,10 @@ static SATB_START: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static PAUSE_CONCURRENT_MARKING: AtomicBool = AtomicBool::new(false);
 static MOVE_CONCURRENT_MARKING_TO_STW: AtomicBool = AtomicBool::new(false);
 
-#[inline(always)]
 fn boot_time_secs() -> f64 {
     crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64
 }
 
-#[inline(always)]
 fn gc_trigger_time() -> u128 {
     crate::GC_TRIGGER_TIME
         .load(Ordering::SeqCst)
@@ -234,7 +224,6 @@ fn gc_trigger_time() -> u128 {
         .as_nanos()
 }
 
-#[inline(always)]
 #[allow(unused)]
 fn inside_harness() -> bool {
     crate::INSIDE_HARNESS.load(Ordering::Relaxed)
@@ -448,7 +437,6 @@ static STAT: Mutex<GCStat> = Mutex::new(GCStat {
     inc_volume: 0,
 });
 
-#[inline(always)]
 fn stat(f: impl Fn(&mut GCStat)) {
     if !cfg!(feature = "instrumentation") {
         return;
@@ -459,14 +447,12 @@ fn stat(f: impl Fn(&mut GCStat)) {
     f(&mut STAT.lock())
 }
 
-#[inline(always)]
 fn should_record_copy_bytes() -> bool {
     false
 }
 
 static mut SLOPPY_COPY_BYTES: usize = 0;
 
-#[inline(always)]
 fn add_copy_bytes(bytes: usize) {
     if should_record_copy_bytes() {
         COPY_BYTES.push(bytes);
@@ -476,7 +462,6 @@ fn add_copy_bytes(bytes: usize) {
     }
 }
 
-#[inline(always)]
 fn add_incs(incs: usize) {
     if should_record_copy_bytes() {
         INCS.push(incs);
@@ -486,17 +471,14 @@ fn add_incs(incs: usize) {
 static COPY_BYTES: SegQueue<usize> = SegQueue::new();
 static INCS: SegQueue<usize> = SegQueue::new();
 
-#[inline(always)]
 fn should_record_pause_time() -> bool {
     cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
 }
 
-#[inline(always)]
 fn add_bucket_time(_stage: WorkBucketStage, _nanos: u128) {}
 
 static SRV: SegQueue<(f64, f64)> = SegQueue::new();
 
-#[inline(always)]
 fn add_survival_ratio(srv: f64, predict: f64) {
     if cfg!(feature = "survival_ratio") && INSIDE_HARNESS.load(Ordering::SeqCst) {
         SRV.push((srv, predict));
@@ -516,7 +498,6 @@ fn output_survival_ratios() {
 
 static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();
 
-#[inline(always)]
 fn add_pause_time(_pause: Pause, nanos: u128) {
     if should_record_pause_time() {
         PAUSE_TIMES.push(nanos);
@@ -535,12 +516,10 @@ fn output_pause_time() {
 static NO_EVAC: AtomicBool = AtomicBool::new(false);
 static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 
-#[inline(always)]
 pub fn gc_worker_id() -> Option<usize> {
     crate::scheduler::current_worker_ordinal()
 }
 
-#[inline(always)]
 pub(crate) fn args() -> &'static crate::args::RuntimeArgs {
     crate::args::RuntimeArgs::get()
 }

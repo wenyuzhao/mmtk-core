@@ -150,7 +150,6 @@ impl Mmapper for FragmentedMapper {
      * @param addr The address in question.
      * @return {@code true} if the given address has been mmapped
      */
-    #[inline(always)]
     fn is_mapped_address(&self, addr: Address) -> bool {
         let mapped = self.slab_table(addr);
         match mapped {
@@ -206,7 +205,6 @@ impl FragmentedMapper {
         mapped
     }
 
-    #[inline(always)]
     fn hash(addr: Address) -> usize {
         let mut initial = (addr & !MMAP_SLAB_MASK) >> LOG_MMAP_SLAB_BYTES;
         let mut hash = 0;
@@ -217,7 +215,6 @@ impl FragmentedMapper {
         hash
     }
 
-    #[inline(always)]
     fn slab_table(&self, addr: Address) -> Option<&Slab> {
         unsafe { self.mut_self() }.get_slab_table(addr)
     }
@@ -230,12 +227,10 @@ impl FragmentedMapper {
 
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
-    #[inline(always)]
     unsafe fn mut_self(&self) -> &mut Self {
         &mut *(self as *const Self as *mut Self)
     }
 
-    #[inline(always)]
     fn get_slab_table(&mut self, addr: Address) -> Option<&Slab> {
         if addr == SENTINEL {
             return None;
@@ -296,7 +291,6 @@ impl FragmentedMapper {
         }
     }
 
-    #[inline(always)]
     fn slab_table_for(&self, _addr: Address, index: usize) -> Option<&Slab> {
         debug_assert!(self.slab_table[index].is_some());
         self.slab_table[index].as_ref().map(|x| x as &Slab)
@@ -329,7 +323,6 @@ impl FragmentedMapper {
      * @param addr an address
      * @return the base address of the enclosing slab
      */
-    #[inline(always)]
     fn slab_align_down(addr: Address) -> Address {
         unsafe { Address::from_usize(addr & !MMAP_SLAB_MASK) }
     }
@@ -347,7 +340,6 @@ impl FragmentedMapper {
      * @param addr Address within a chunk (could be in the next slab)
      * @return The index of the chunk within the slab (could be beyond the end of the slab)
      */
-    #[inline(always)]
     fn chunk_index(slab: Address, addr: Address) -> usize {
         let delta = addr - slab;
         delta >> LOG_MMAP_CHUNK_BYTES

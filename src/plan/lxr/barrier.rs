@@ -56,12 +56,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         }
     }
 
-    #[inline(always)]
     fn get_edge_logging_state(&self, edge: VM::VMEdge) -> u8 {
         unsafe { Self::UNLOG_BITS.load(edge.to_address()) }
     }
 
-    #[inline(always)]
     fn attempt_to_lock_edge_bailout_if_logged(&self, edge: VM::VMEdge) -> bool {
         loop {
             // Bailout if logged
@@ -90,12 +88,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         }
     }
 
-    #[inline(always)]
     fn unlock_edge(&self, edge: VM::VMEdge) {
         RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
         let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
@@ -106,7 +102,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
             let old = edge.load::<COMPRESSED>();
@@ -117,7 +112,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         }
     }
 
-    #[inline(always)]
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if !edge.to_address().is_logged::<VM, COMPRESSED>() {
@@ -129,7 +123,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         }
     }
 
-    #[inline(always)]
     fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
         // FIXME: This assertion may fail!
         // #[cfg(any(
@@ -180,7 +173,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         }
     }
 
-    #[inline(always)]
     fn enqueue_node(
         &mut self,
         src: ObjectReference,
@@ -198,7 +190,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         }
     }
 
-    #[inline(always)]
     fn should_create_satb_packets(&self) -> bool {
         self.lxr.concurrent_marking_enabled()
             && (self.lxr.concurrent_marking_in_progress()

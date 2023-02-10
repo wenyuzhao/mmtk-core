@@ -57,13 +57,11 @@ pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash + Sized {
     }
 
     /// Prefetch the edge so that a subsequent `load` will be faster.
-    #[inline(always)]
     fn prefetch_load(&self) {
         // no-op by default
     }
 
     /// Prefetch the edge so that a subsequent `store` will be faster.
-    #[inline(always)]
     fn prefetch_store(&self) {
         // no-op by default
     }
@@ -90,7 +88,6 @@ impl SimpleEdge {
     ///
     /// Arguments:
     /// *   `address`: The address in memory where an `ObjectReference` is stored.
-    #[inline(always)]
     pub fn from_address(address: Address) -> Self {
         Self {
             slot_addr: address.to_mut_ptr(),
@@ -100,7 +97,6 @@ impl SimpleEdge {
     /// Get the address of the edge.
     ///
     /// Return the address at which the `ObjectReference` is stored.
-    #[inline(always)]
     pub fn as_address(&self) -> Address {
         Address::from_mut_ptr(self.slot_addr)
     }
@@ -109,12 +105,10 @@ impl SimpleEdge {
 unsafe impl Send for SimpleEdge {}
 
 impl Edge for SimpleEdge {
-    #[inline(always)]
     fn load<const COMPRESSED: bool>(&self) -> ObjectReference {
         unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) }
     }
 
-    #[inline(always)]
     fn store<const COMPRESSED: bool>(&self, object: ObjectReference) {
         unsafe { (*self.slot_addr).store(object, atomic::Ordering::Relaxed) }
     }
@@ -131,22 +125,18 @@ impl Edge for SimpleEdge {
 /// simply as an `ObjectReference`.  The intention and the semantics are clearer with
 /// `SimpleEdge`.
 impl Edge for Address {
-    #[inline(always)]
     fn load<const COMPRESSED: bool>(&self) -> ObjectReference {
         unsafe { Address::load(*self) }
     }
 
-    #[inline(always)]
     fn store<const COMPRESSED: bool>(&self, object: ObjectReference) {
         unsafe { Address::store(*self, object) }
     }
 
-    #[inline(always)]
     fn to_address(&self) -> Address {
         *self
     }
 
-    #[inline(always)]
     fn from_address(a: Address) -> Self {
         a
     }
@@ -188,7 +178,6 @@ pub struct AddressRangeIterator {
 impl Iterator for AddressRangeIterator {
     type Item = Address;
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor >= self.limit {
             None
@@ -205,7 +194,6 @@ impl MemorySlice for Range<Address> {
     type EdgeIterator = AddressRangeIterator;
     type ChunkIterator = UnimplementedMemorySliceChunkIterator<Self>;
 
-    #[inline]
     fn iter_edges(&self) -> Self::EdgeIterator {
         AddressRangeIterator {
             cursor: self.start,
@@ -217,22 +205,18 @@ impl MemorySlice for Range<Address> {
         unimplemented!()
     }
 
-    #[inline]
     fn start(&self) -> Address {
         self.start
     }
 
-    #[inline]
     fn bytes(&self) -> usize {
         self.end - self.start
     }
 
-    #[inline]
     fn len(&self) -> usize {
         (self.end - self.start) >> LOG_BYTES_IN_ADDRESS
     }
 
-    #[inline]
     fn copy(src: &Self, tgt: &Self) {
         debug_assert_eq!(src.bytes(), tgt.bytes());
         debug_assert_eq!(

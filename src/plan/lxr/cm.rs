@@ -85,7 +85,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         }
     }
 
-    #[inline(always)]
     fn worker(&self) -> &mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
@@ -101,7 +100,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         }
     }
 
-    #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
@@ -148,7 +146,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
 impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     for LXRConcurrentTraceObjects<VM, COMPRESSED>
 {
-    #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
         let should_check_remset = !self.plan.in_defrag(object);
         if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
@@ -191,7 +188,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
-    #[inline(always)]
     fn should_move_to_stw(&self) -> Option<WorkBucketStage> {
         if crate::MOVE_CONCURRENT_MARKING_TO_STW.load(Ordering::SeqCst) {
             Some(WorkBucketStage::RCProcessIncs)
@@ -199,11 +195,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
             None
         }
     }
-    #[inline(always)]
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
-    #[inline]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         if let Some(objects) = self.objects.take() {
@@ -248,7 +242,6 @@ impl<const COMPRESSED: bool> ProcessModBufSATB<COMPRESSED> {
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COMPRESSED> {
-    #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         if let Some(nodes) = self.nodes.take() {
@@ -324,7 +317,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
     }
 
     /// Trace  and evacuate objects.
-    #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
@@ -367,7 +359,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         new_object
     }
 
-    #[inline]
     fn process_edges<const COMPRESSED2: bool>(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         if self.roots {
@@ -391,7 +382,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         }
     }
 
-    #[inline]
     fn process_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_object(object);
@@ -411,14 +401,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         super::record_edge_for_validation(slot, new_object);
     }
 
-    #[inline(always)]
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
     }
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
-    #[inline(always)]
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
@@ -446,7 +434,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         x
     }
 
-    #[inline]
     fn process_mark_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_and_mark_object(object);
@@ -460,7 +447,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
 impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
 {
-    #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _, COMPRESSED>(
             CLDScanPolicy::Claim,
@@ -477,7 +463,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
 
 impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
     type Target = ProcessEdgesBase<VM>;
-    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.base
     }
@@ -486,7 +471,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRStopTheWorldProcessEdge
 impl<VM: VMBinding, const COMPRESSED: bool> DerefMut
     for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
 {
-    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
@@ -530,7 +514,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
     }
 
     /// Trace  and evacuate objects.
-    #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
@@ -551,7 +534,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         }
     }
 
-    #[inline]
     fn process_edges<const COMPRESSED2: bool>(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         for i in 0..self.edges.len() {
@@ -560,14 +542,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         self.flush();
     }
 
-    #[inline(always)]
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
     }
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue for LXRWeakRefProcessEdges<VM, COMPRESSED> {
-    #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _, COMPRESSED>(
             CLDScanPolicy::Claim,
@@ -584,14 +564,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue for LXRWeakRefProcessEdg
 
 impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRWeakRefProcessEdges<VM, COMPRESSED> {
     type Target = ProcessEdgesBase<VM>;
-    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> DerefMut for LXRWeakRefProcessEdges<VM, COMPRESSED> {
-    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }

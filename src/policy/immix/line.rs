@@ -28,7 +28,6 @@ impl Region for Line {
         }
     };
 
-    #[inline(always)]
     #[allow(clippy::assertions_on_constants)] // make sure line is not used when BLOCK_ONLY is turned on.
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(!super::BLOCK_ONLY);
@@ -36,7 +35,6 @@ impl Region for Line {
         Self(address)
     }
 
-    #[inline(always)]
     fn start(&self) -> Address {
         self.0
     }
@@ -55,14 +53,12 @@ impl Line {
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_VALIDITY;
 
     /// Align the give address to the line boundary.
-    #[inline(always)]
     pub fn align(address: Address) -> Address {
         debug_assert!(!super::BLOCK_ONLY);
         address.align_down(Self::BYTES)
     }
 
     /// Test if the given address is line-aligned
-    #[inline(always)]
     pub fn is_aligned(address: Address) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         Self::align(address).as_usize() == address.as_usize()
@@ -70,52 +66,44 @@ impl Line {
 
     /// Get the line from a given address.
     /// The address must be line-aligned.
-    #[inline(always)]
     pub fn from(address: Address) -> Self {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
     }
 
-    #[inline(always)]
     pub fn of(a: Address) -> Self {
         Self(a.align_down(Self::BYTES))
     }
 
-    #[inline(always)]
     pub fn containing<VM: VMBinding>(object: ObjectReference) -> Self {
         Self(VM::VMObjectModel::ref_to_address(object).align_down(Self::BYTES))
     }
 
     /// Get the block containing the line.
-    #[inline(always)]
     pub fn block(&self) -> Block {
         debug_assert!(!super::BLOCK_ONLY);
         Block::from_unaligned_address(self.0)
     }
 
     /// Get line start address
-    #[inline(always)]
     pub const fn start(&self) -> Address {
         debug_assert!(!super::BLOCK_ONLY);
         self.0
     }
 
-    #[inline(always)]
     pub const fn end(&self) -> Address {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe { Address::from_usize(self.0.as_usize() + Self::BYTES) }
     }
 
     /// Get line index within its containing block.
-    #[inline(always)]
     pub const fn get_index_within_block(&self) -> usize {
         let addr = self.start();
         addr.get_extent(Block::align(addr)) >> Line::LOG_BYTES
     }
 
     /// Mark the line. This will update the side line mark table.
-    #[inline]
     pub fn mark(&self, state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe {
@@ -124,14 +112,12 @@ impl Line {
     }
 
     /// Test line mark state.
-    #[inline(always)]
     pub fn is_marked(&self, state: u8) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
     }
 
     /// Mark all lines the object is spanned to.
-    #[inline]
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
         debug_assert!(!super::BLOCK_ONLY);
         let start = object.to_object_start::<VM>();
@@ -152,17 +138,14 @@ impl Line {
         marked_lines
     }
 
-    #[inline(always)]
     pub fn currrent_validity_state(&self) -> u8 {
         unsafe { Self::VALIDITY_STATE.load(self.start()) }
     }
 
-    #[inline(always)]
     pub fn pointer_is_valid(&self, pointer_epoch: u8) -> bool {
         pointer_epoch == self.currrent_validity_state()
     }
 
-    #[inline(always)]
     pub fn update_validity(lines: RegionIterator<Line>) {
         if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             return;
@@ -176,7 +159,6 @@ impl Line {
         assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
-    #[inline(always)]
     pub fn clear_log_table<VM: VMBinding, const COMPRESSED: bool>(lines: Range<Line>) {
         let log_meta_bits_per_line =
             Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize + if COMPRESSED { 1 } else { 0 };
@@ -190,7 +172,6 @@ impl Line {
         crate::util::memory::zero(meta_start, meta_bytes)
     }
 
-    #[inline(always)]
     pub fn initialize_log_table_as_unlogged<VM: VMBinding, const COMPRESSED: bool>(
         lines: Range<Line>,
     ) {
@@ -208,7 +189,6 @@ impl Line {
         }
     }
 
-    #[inline(always)]
     pub fn clear_mark_table<VM: VMBinding>(lines: Range<Line>) {
         // FIXME: Performance
         let start = lines.start.start();
@@ -231,7 +211,6 @@ pub struct Uint<const BITS: usize> {}
 
 impl UintType for Uint<8> {
     type Type = u8;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == 0
     }
@@ -239,7 +218,6 @@ impl UintType for Uint<8> {
 
 impl UintType for Uint<16> {
     type Type = u16;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == 0
     }
@@ -247,7 +225,6 @@ impl UintType for Uint<16> {
 
 impl UintType for Uint<32> {
     type Type = u32;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == 0
     }
@@ -255,7 +232,6 @@ impl UintType for Uint<32> {
 
 impl UintType for Uint<64> {
     type Type = u64;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == 0
     }
@@ -263,7 +239,6 @@ impl UintType for Uint<64> {
 
 impl UintType for Uint<128> {
     type Type = u128;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == 0
     }
@@ -275,7 +250,6 @@ pub struct UInt512([u8; 512 / 8]);
 
 impl UintType for Uint<512> {
     type Type = UInt512;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == UInt512([0; 512 / 8])
     }
@@ -287,7 +261,6 @@ pub struct UInt1024([u8; 1024 / 8]);
 
 impl UintType for Uint<1024> {
     type Type = UInt1024;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == UInt1024([0; 1024 / 8])
     }
@@ -299,7 +272,6 @@ pub struct UInt2048([u8; 2048 / 8]);
 
 impl UintType for Uint<2048> {
     type Type = UInt2048;
-    #[inline(always)]
     fn is_zero(v: Self::Type) -> bool {
         v == UInt2048([0; 2048 / 8])
     }
@@ -316,14 +288,12 @@ pub struct RCArray {
 }
 
 impl RCArray {
-    #[inline(always)]
     pub fn of(block: Block) -> Self {
         Self {
             table: unsafe { &*block.rc_table_start().to_ptr() },
         }
     }
 
-    #[inline(always)]
     pub fn is_dead(&self, i: usize) -> bool {
         <Uint<{ BITS_PER_LINE }> as UintType>::is_zero(self.table[i])
     }

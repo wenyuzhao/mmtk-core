@@ -140,7 +140,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         })
     }
 
-    #[inline]
     pub fn pause_concurrent_work_packets_during_gc(&self) {
         let mut old_queue = Injector::new();
         old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(old_queue);
@@ -150,7 +149,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
 
-    #[inline]
     pub fn process_lazy_decrement_packets(&self) {
         let mut no_postpone = vec![];
         let mut cm_packets = vec![];
@@ -178,13 +176,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
     }
 
-    #[inline]
     pub fn postpone(&self, w: impl GCWork<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(Box::new(w))
     }
 
-    #[inline]
     pub fn postpone_prioritized(&self, w: impl GCWork<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized
@@ -192,33 +188,28 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .push(Box::new(w))
     }
 
-    #[inline]
     pub fn postpone_dyn(&self, w: Box<dyn GCWork<VM>>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(w)
     }
 
-    #[inline]
     pub fn postpone_dyn_prioritized(&self, w: Box<dyn GCWork<VM>>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized.read().push(w)
     }
 
-    #[inline]
     pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
         let postponed_concurrent_work = self.postponed_concurrent_work.read();
         ws.into_iter()
             .for_each(|w| postponed_concurrent_work.push(w));
     }
 
-    #[inline]
     pub fn postpone_all_prioritized(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
         let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
         ws.into_iter()
             .for_each(|w| postponed_concurrent_work.push(w));
     }
 
-    #[inline]
     pub fn num_workers(&self) -> usize {
         self.worker_group.as_ref().worker_count()
     }
@@ -532,13 +523,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .unwrap();
     }
 
-    #[inline(always)]
     pub fn in_concurrent(&self) -> bool {
         !self.in_gc_pause.load(Ordering::SeqCst)
     }
 
     /// Check if all the work buckets are empty
-    #[inline(always)]
     fn all_activated_buckets_are_empty(&self) -> bool {
         for bucket in self.work_buckets.values() {
             if bucket.is_activated() && !bucket.is_drained() {
@@ -549,7 +538,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    #[inline(always)]
     fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
         let mut should_retry = false;
         // Try find a packet that can be processed only by this worker.
@@ -586,7 +574,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet.
-    #[inline]
     fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
         // Loop until we successfully get a packet.
         loop {
@@ -607,7 +594,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called by workers to get a schedulable work packet.
     /// Park the worker if there're no available packets.
-    #[inline]
     pub fn poll(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
         self.poll_schedulable_work(worker)
             .unwrap_or_else(|| self.poll_slow(worker))

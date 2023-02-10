@@ -6,15 +6,12 @@ use crate::vm::VMBinding;
 
 /// Callback trait of scanning functions that report edges.
 pub trait EdgeVisitor<ES: Edge> {
-    #[inline(always)]
     fn should_discover_references(&self) -> bool {
         true
     }
-    #[inline(always)]
     fn should_follow_clds(&self) -> bool {
         true
     }
-    #[inline(always)]
     fn should_claim_clds(&self) -> bool {
         true
     }
@@ -111,7 +108,6 @@ pub trait Scanning<VM: VMBinding> {
     /// Arguments:
     /// * `tls`: The VM-specific thread-local storage for the current worker.
     /// * `object`: The object to be scanned.
-    #[inline(always)]
     fn support_edge_enqueuing(_tls: VMWorkerThread, _object: ObjectReference) -> bool {
         true
     }
@@ -156,17 +152,14 @@ pub trait Scanning<VM: VMBinding> {
         unreachable!("scan_object_and_trace_edges() will not be called when support_edge_enqueue() is always true.")
     }
 
-    #[inline(always)]
     fn obj_array_data<const COMPRESSED: bool>(_o: ObjectReference) -> VM::VMMemorySlice {
         unreachable!()
     }
 
-    #[inline(always)]
     fn is_obj_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
         unreachable!()
     }
 
-    #[inline(always)]
     fn is_val_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
         unreachable!()
     }

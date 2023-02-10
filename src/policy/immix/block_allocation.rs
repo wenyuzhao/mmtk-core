@@ -40,12 +40,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
     }
 
-    #[inline]
     pub fn nursery_blocks(&self) -> usize {
         self.cursor.load(Ordering::SeqCst)
     }
 
-    #[inline]
     pub fn nursery_mb(&self) -> usize {
         self.nursery_blocks() << Block::LOG_BYTES >> 20
     }
@@ -110,7 +108,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.space.unwrap()
     }
 
-    #[inline(always)]
     fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
@@ -135,7 +132,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             .set(block.chunk(), ChunkState::Allocated);
     }
 
-    #[inline(always)]
     fn alloc_clean_block_fast(&self) -> Option<Block> {
         let i = self
             .cursor
@@ -215,7 +211,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Allocate a clean block.
-    #[inline(always)]
     fn alloc_clean_block(&self, tls: VMThread) -> Option<Block> {
         if let Some(block) = self.alloc_clean_block_fast() {
             return Some(block);
@@ -231,7 +226,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Allocate a clean block.
-    #[inline(never)]
     pub fn get_clean_block(&self, tls: VMThread, copy: bool, lock_free: bool) -> Option<Block> {
         let block = if lock_free {
             self.alloc_clean_block(tls)?
@@ -250,7 +244,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Pop a reusable block from the reusable block list.
-    #[inline(always)]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
         if super::BLOCK_ONLY {
             return None;
@@ -289,7 +282,6 @@ pub struct RCSweepNurseryBlocks {
 }
 
 impl RCSweepNurseryBlocks {
-    #[inline]
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
             blocks,
@@ -299,7 +291,6 @@ impl RCSweepNurseryBlocks {
 }
 
 impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks {
-    #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
         let mut released_blocks = 0;

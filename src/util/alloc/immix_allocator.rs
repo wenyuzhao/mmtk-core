@@ -72,7 +72,6 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         crate::policy::immix::block::Block::BYTES
     }
 
-    #[inline(always)]
     fn alloc(&mut self, size: usize, align: usize, offset: isize) -> Address {
         // debug_assert!(
         //     size <= crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
@@ -172,7 +171,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
         self.space
     }

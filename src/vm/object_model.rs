@@ -100,7 +100,6 @@ pub trait ObjectModel<VM: VMBinding> {
     ///
     /// # Safety
     /// This is a non-atomic load, thus not thread-safe.
-    #[inline(always)]
     unsafe fn load_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -119,7 +118,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `object`: is a reference to the target object.
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     /// * `atomic_ordering`: is the atomic ordering for the load operation.
-    #[inline(always)]
     fn load_metadata_atomic<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -141,7 +139,6 @@ pub trait ObjectModel<VM: VMBinding> {
     ///
     /// # Safety
     /// This is a non-atomic store, thus not thread-safe.
-    #[inline(always)]
     unsafe fn store_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -161,7 +158,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `val`: is the new metadata value to be stored.
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     /// * `atomic_ordering`: is the optional atomic ordering for the store operation.
-    #[inline(always)]
     fn store_metadata_atomic<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -185,7 +181,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     /// * `success_order`: is the atomic ordering used if the operation is successful.
     /// * `failure_order`: is the atomic ordering used if the operation fails.
-    #[inline(always)]
     fn compare_exchange_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -216,7 +211,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `object`: is a reference to the target object.
     /// * `val`: is the value to be added to the current value of the metadata.
     /// * `order`: is the atomic ordering of the fetch-and-add operation.
-    #[inline(always)]
     fn fetch_add_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -237,7 +231,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `object`: is a reference to the target object.
     /// * `val`: is the value to be subtracted from the current value of the metadata.
     /// * `order`: is the atomic ordering of the fetch-and-add operation.
-    #[inline(always)]
     fn fetch_sub_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -257,7 +250,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `object`: is a reference to the target object.
     /// * `val`: is the value to bit-and with the current value of the metadata.
     /// * `order`: is the atomic ordering of the fetch-and-add operation.
-    #[inline(always)]
     fn fetch_and_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -277,7 +269,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `object`: is a reference to the target object.
     /// * `val`: is the value to bit-or with the current value of the metadata.
     /// * `order`: is the atomic ordering of the fetch-and-add operation.
-    #[inline(always)]
     fn fetch_or_metadata<T: MetadataValue>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -299,7 +290,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// * `order`: is the atomic ordering of the fetch-and-add operation.
     ///
     /// # Returns the old metadata value.
-    #[inline(always)]
     fn fetch_update_metadata<T: MetadataValue, F: FnMut(T) -> Option<T> + Copy>(
         metadata_spec: &HeaderMetadataSpec,
         object: ObjectReference,
@@ -510,7 +500,6 @@ pub mod specs {
                         log_bytes_in_region: $side_min_obj_size as usize,
                     }))
                 }
-                #[inline(always)]
                 pub const fn as_spec(&self) -> &MetadataSpec {
                     &self.0
                 }
@@ -520,7 +509,6 @@ pub mod specs {
             }
             impl std::ops::Deref for $spec_name {
                 type Target = MetadataSpec;
-                #[inline(always)]
                 fn deref(&self) -> &Self::Target {
                     self.as_spec()
                 }

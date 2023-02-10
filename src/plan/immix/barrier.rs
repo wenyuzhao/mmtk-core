@@ -48,12 +48,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, C
         }
     }
 
-    #[inline(always)]
     fn get_edge_logging_state(&self, edge: Address) -> u8 {
         unsafe { Self::UNLOG_BITS.load(edge) }
     }
 
-    #[inline(always)]
     fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
         loop {
             // Bailout if logged
@@ -82,12 +80,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, C
         }
     }
 
-    #[inline(always)]
     fn unlock_edge(&self, edge: Address) {
         RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     fn log_and_unlock_edge(&self, edge: Address) {
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
             unsafe { Self::UNLOG_BITS.store(edge, LOGGED_VALUE) };
@@ -97,7 +93,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, C
         RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    #[inline(always)]
     fn log_edge_and_get_old_target(&self, edge: Address) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
             let old: ObjectReference = unsafe { edge.load() };
@@ -108,7 +103,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, C
         }
     }
 
-    #[inline(always)]
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
         if !edge.is_logged::<VM, COMPRESSED>() {
@@ -120,7 +114,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, C
         }
     }
 
-    #[inline(always)]
     fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
         if !old.is_null() {
             self.decs.push(old);
@@ -134,7 +127,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ImmixFakeFieldBarrierSemantics<VM, C
         }
     }
 
-    #[inline(always)]
     fn enqueue_node(
         &mut self,
         src: ObjectReference,

@@ -55,17 +55,14 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
 
-    #[inline(always)]
     fn worker(&self) -> &'static mut GCWorker<VM> {
         GCWorker::<VM>::current()
     }
 
-    #[inline(always)]
     fn lxr(&self) -> &'static LXR<VM> {
         unsafe { &*self.lxr }
     }
 
-    #[inline]
     pub fn new_array_slice(slice: VM::VMMemorySlice) -> Self {
         Self {
             incs: vec![],
@@ -83,7 +80,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
     }
 
-    #[inline]
     pub fn new(incs: Vec<VM::VMEdge>) -> Self {
         Self {
             incs,
@@ -101,7 +97,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
     }
 
-    #[inline(always)]
     fn promote(&mut self, o: ObjectReference, copied: bool, los: bool, depth: usize) {
         o.verify::<VM>();
         crate::stat(|s| {
@@ -133,7 +128,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         self.scan_nursery_object(o, los, !copied, depth);
     }
 
-    #[inline(always)]
     fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference, force: bool) {
         if !(crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
@@ -148,7 +142,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
     }
 
-    #[inline(always)]
     fn scan_nursery_object(
         &mut self,
         o: ObjectReference,
@@ -259,7 +252,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
     }
 
-    #[inline(always)]
     fn process_inc(&mut self, o: ObjectReference, depth: usize) -> ObjectReference {
         if let Ok(0) = self.rc.inc(o) {
             self.promote(o, false, self.lxr().los().in_space(o), depth);
@@ -267,7 +259,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         o
     }
 
-    #[inline(always)]
     fn dont_evacuate(&self, o: ObjectReference, los: bool) -> bool {
         if los {
             return true;
@@ -288,7 +279,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         false
     }
 
-    #[inline(always)]
     fn process_inc_and_evacuate(
         &mut self,
         o: ObjectReference,
@@ -348,7 +338,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     }
 
     /// Return `None` if the increment of the edge should be delayed
-    #[inline(always)]
     fn unlog_and_load_rc_object<const K: EdgeKind>(
         &mut self,
         e: VM::VMEdge,
@@ -365,7 +354,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         Some(o)
     }
 
-    #[inline(always)]
     fn process_edge<const K: EdgeKind>(
         &mut self,
         e: VM::VMEdge,
@@ -412,7 +400,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         Some(new)
     }
 
-    #[inline(always)]
     fn process_incs<const K: EdgeKind>(
         &mut self,
         mut incs: AddressBuffer<'_, VM::VMEdge>,
@@ -447,7 +434,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
     }
 
-    #[inline(always)]
     fn process_incs_for_obj_array<const K: EdgeKind>(
         &mut self,
         slice: VM::VMMemorySlice,
@@ -473,7 +459,6 @@ enum AddressBuffer<'a, E: Edge> {
 
 impl<E: Edge> Deref for AddressBuffer<'_, E> {
     type Target = Vec<E>;
-    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Owned(x) => x,
@@ -483,7 +468,6 @@ impl<E: Edge> Deref for AddressBuffer<'_, E> {
 }
 
 impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
-    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Owned(x) => x,
@@ -495,7 +479,6 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
 impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
     for ProcessIncs<VM, KIND, COMPRESSED>
 {
-    #[inline(always)]
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
@@ -611,12 +594,10 @@ unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for ProcessDecs<VM, COMP
 impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
-    #[inline(always)]
     fn worker(&self) -> &mut GCWorker<VM> {
         GCWorker::<VM>::current()
     }
 
-    #[inline]
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             decs: Some(decs),
@@ -632,7 +613,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    #[inline]
     pub fn new_arc(decs: Arc<Vec<ObjectReference>>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             decs: None,
@@ -648,7 +628,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    #[inline]
     pub fn new_array_slice(
         slice: &'static [ObjectReference],
         not_marked: bool,
@@ -668,7 +647,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    #[inline(always)]
     pub fn recursive_dec(&mut self, o: ObjectReference) {
         self.new_decs.push(o);
         if self.new_decs.is_full() {
@@ -676,7 +654,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    #[inline]
     fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM, COMPRESSED>) {
         if lxr.current_pause().is_none() {
             self.worker()
@@ -686,7 +663,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    #[inline]
     pub fn flush(&mut self) {
         if !self.new_decs.is_empty() {
             let new_decs = self.new_decs.take();
@@ -776,7 +752,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    #[inline]
     fn process_decs(
         &mut self,
         decs: &[ObjectReference],
@@ -823,7 +798,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessDecs<VM, COMPRESSED> {
-    #[inline(always)]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.mmtk = mmtk;
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
@@ -859,7 +833,6 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     const RC_ROOTS: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    #[inline(always)]
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
@@ -870,7 +843,6 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         unreachable!()
     }
 
-    #[inline(always)]
     fn process_edges<const COMPRESSED: bool>(&mut self) {
         if !self.edges.is_empty() {
             let roots = std::mem::take(&mut self.edges);
@@ -894,14 +866,12 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
 
 impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
     type Target = ProcessEdgesBase<VM>;
-    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
 impl<VM: VMBinding> DerefMut for RCImmixCollectRootEdges<VM> {
-    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }

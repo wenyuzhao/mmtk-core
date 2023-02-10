@@ -15,8 +15,8 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MyGCWorkContext<VM> {
 // ANCHOR_END: workcontext_sft
 
 // ANCHOR: workcontext_plan
-use crate::scheduler::gc_work::PlanProcessEdges;
 use crate::policy::gc_work::DEFAULT_TRACE;
+use crate::scheduler::gc_work::PlanProcessEdges;
 pub struct MyGCWorkContext2<VM: VMBinding>(std::marker::PhantomData<VM>);
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for MyGCWorkContext2<VM> {
     type VM = VM;
@@ -25,10 +25,10 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MyGCWorkContext2<VM> {
 }
 // ANCHOR: workcontext_plan
 
-use crate::util::{Address, ObjectReference};
-use crate::util::copy::CopySemantics;
-use crate::MMTK;
 use crate::policy::space::Space;
+use crate::util::copy::CopySemantics;
+use crate::util::{Address, ObjectReference};
+use crate::MMTK;
 
 // ANCHOR: mygc_process_edges
 pub struct MyGCProcessEdges<VM: VMBinding> {
@@ -38,7 +38,7 @@ pub struct MyGCProcessEdges<VM: VMBinding> {
 // ANCHOR_END: mygc_process_edges
 
 // ANCHOR: mygc_process_edges_impl
-impl<VM:VMBinding> ProcessEdgesWork for MyGCProcessEdges<VM> {
+impl<VM: VMBinding> ProcessEdgesWork for MyGCProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
 
@@ -74,7 +74,6 @@ impl<VM:VMBinding> ProcessEdgesWork for MyGCProcessEdges<VM> {
         }
     }
 
-    #[inline(always)]
     fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
         ScanObjects::<Self>::new(nodes, false, roots)
     }
@@ -84,14 +83,12 @@ impl<VM:VMBinding> ProcessEdgesWork for MyGCProcessEdges<VM> {
 // ANCHOR: mygc_process_edges_deref
 impl<VM: VMBinding> Deref for MyGCProcessEdges<VM> {
     type Target = ProcessEdgesBase<VM>;
-    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
 impl<VM: VMBinding> DerefMut for MyGCProcessEdges<VM> {
-    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
