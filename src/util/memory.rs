@@ -50,7 +50,7 @@ pub unsafe fn dzmmap(start: Address, size: usize) -> Result<()> {
 pub fn dzmmap_noreplace(start: Address, size: usize) -> Result<()> {
     let prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     #[cfg(feature = "no_map_fixed_noreplace")]
-    let flags = libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED;
+    let flags = libc::MAP_ANON | libc::MAP_PRIVATE;
     #[cfg(not(feature = "no_map_fixed_noreplace"))]
     let flags = libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED_NOREPLACE;
     let ret = mmap_fixed(start, size, prot, flags);
@@ -69,7 +69,7 @@ pub fn dzmmap_noreplace(start: Address, size: usize) -> Result<()> {
 pub fn mmap_noreserve(start: Address, size: usize) -> Result<()> {
     let prot = PROT_NONE;
     #[cfg(feature = "no_map_fixed_noreplace")]
-    let flags = libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED | libc::MAP_NORESERVE;
+    let flags = libc::MAP_ANON | libc::MAP_PRIVATE  | libc::MAP_NORESERVE;
     #[cfg(not(feature = "no_map_fixed_noreplace"))]
     let flags =
         libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED_NOREPLACE | libc::MAP_NORESERVE;
