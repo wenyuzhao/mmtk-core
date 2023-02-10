@@ -42,6 +42,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     pub cld_roots: bool,
     pub weak_cld_roots: bool,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
+    full_gc_cld_edges: Vec<VM::VMEdge>,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -80,6 +81,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             cld_roots: false,
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
+            full_gc_cld_edges: vec![],
         }
     }
 
@@ -98,6 +100,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             cld_roots: false,
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
+            full_gc_cld_edges: vec![],
         }
     }
 
@@ -221,11 +224,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 .bulk_add(packets);
         } else {
             o.iterate_fields::<VM, _, COMPRESSED>(
-                if self.current_pause != Pause::FullTraceFast {
-                    CLDScanPolicy::Claim
-                } else {
-                    CLDScanPolicy::Follow
-                },
+                CLDScanPolicy::Claim,
                 RefScanPolicy::Follow,
                 |edge| {
                     let target = edge.load::<COMPRESSED>();
@@ -243,6 +242,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                         }
                     } else {
                         super::record_edge_for_validation(edge, target);
+                    }
+                    if self.current_pause == Pause::FullTraceFast && !edge.to_address().is_mapped()
+                    {
+                        self.full_gc_cld_edges.push(edge);
                     }
                 },
             );
@@ -586,6 +589,13 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 copy_context,
                 depth,
             );
+        }
+        let mark_edges = std::mem::take(&mut self.full_gc_cld_edges);
+        if !mark_edges.is_empty() {
+            worker.add_work(
+                WorkBucketStage::Closure,
+                LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(mark_edges, false, mmtk),
+            )
         }
         self.survival_ratio_predictor_local.sync();
     }
