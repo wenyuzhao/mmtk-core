@@ -426,6 +426,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         true
     }
 
+    fn current_gc_should_prepare_for_ref_cleanup(&self) -> bool {
+        let pause = self.current_pause().unwrap();
+        pause == Pause::InitialMark || pause == Pause::FullTraceFast
+    }
+
     fn discover_reference(&self, reference: ObjectReference, referent: ObjectReference) {
         // Keep weak references and referents alive during SATB.
         // They can only be swept by mature sweeping.

@@ -397,6 +397,10 @@ pub trait Plan: 'static + Sync + Downcast {
     fn current_gc_should_perform_class_unloading(&self) -> bool {
         true
     }
+
+    fn current_gc_should_prepare_for_ref_cleanup(&self) -> bool {
+        true
+    }
 }
 
 impl_downcast!(Plan assoc VM);

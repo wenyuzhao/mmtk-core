@@ -778,6 +778,11 @@ impl ObjectReference {
             if self.is_null() {
                 return;
             }
+            assert!(
+                self.to_address::<VM>().is_mapped(),
+                "unmapped object {:?}",
+                self
+            );
             assert!(self.is_in_any_space());
             assert_ne!(
                 unsafe { self.to_address::<VM>().load::<usize>() },
