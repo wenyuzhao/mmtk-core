@@ -231,9 +231,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 crate::gc_trigger_time() as f64 / 1000000f64,
             );
         }
-        if mmtk.plan.current_gc_should_prepare_for_ref_cleanup() {
-            <E::VM as VMBinding>::VMCollection::abandon_partial_discovery();
-        }
         mmtk.plan.gc_pause_start(&mmtk.scheduler);
         if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
             // Prepare mutators if necessary

@@ -113,6 +113,4 @@ pub trait Collection<VM: VMBinding> {
     fn update_weak_processor(_lxr: bool) {}
 
     fn set_concurrent_marking_state(_active: bool) {}
-
-    fn abandon_partial_discovery() {}
 }

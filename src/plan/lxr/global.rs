@@ -426,11 +426,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         true
     }
 
-    fn current_gc_should_prepare_for_ref_cleanup(&self) -> bool {
-        let pause = self.current_pause().unwrap();
-        pause == Pause::InitialMark || pause == Pause::FullTraceFast
-    }
-
     fn discover_reference(&self, reference: ObjectReference, referent: ObjectReference) {
         // Keep weak references and referents alive during SATB.
         // They can only be swept by mature sweeping.
@@ -570,7 +565,10 @@ impl<VM: VMBinding> LXR<VM> {
         {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-            if self.concurrent_marking_enabled() && !self.concurrent_marking_in_progress() {
+            if self.concurrent_marking_enabled()
+                && !self.concurrent_marking_in_progress()
+                && !cfg!(feature = "sanity")
+            {
                 self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
                 self.immix_space
                     .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);

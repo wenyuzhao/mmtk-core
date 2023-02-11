@@ -219,13 +219,20 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                     "{:?} is killed by decs",
                     object
                 );
-                assert!(lxr.rc.count(object) > 0, "{:?} has zero rc count", object);
+                assert!(
+                    lxr.rc.count(object) > 0,
+                    "{:?} => {:?} has zero rc count",
+                    self.edge,
+                    object
+                );
                 assert!(
                     !crate::util::object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
                     "{:?} is forwarded",
                     object
                 );
-                if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark {
+                if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark
+                    || lxr.current_pause().unwrap() == crate::plan::immix::Pause::FullTraceFast
+                {
                     assert!(
                         lxr.is_marked(object),
                         "{:?} -> {:?} is not marked, roots={}",

@@ -43,6 +43,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     pub weak_cld_roots: bool,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
     full_gc_cld_edges: Vec<VM::VMEdge>,
+    should_record_edges_for_marking: bool,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -82,6 +83,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             full_gc_cld_edges: vec![],
+            should_record_edges_for_marking: false,
         }
     }
 
@@ -101,6 +103,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             full_gc_cld_edges: vec![],
+            should_record_edges_for_marking: false,
         }
     }
 
@@ -230,6 +233,27 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     let target = edge.load::<COMPRESSED>();
                     // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                     if !target.is_null() {
+                        debug_assert!(
+                            target.to_address::<VM>().is_mapped(),
+                            "Unmapped obj {:?}.{:?} -> {:?}",
+                            o,
+                            edge,
+                            target
+                        );
+                        debug_assert!(
+                            target.is_in_any_space(),
+                            "Unmapped obj {:?}.{:?} -> {:?}",
+                            o,
+                            edge,
+                            target
+                        );
+                        debug_assert!(
+                            target.class_is_valid::<VM>(),
+                            "Invalid object {:?}.{:?} -> {:?}",
+                            o,
+                            edge,
+                            target
+                        );
                         if !self.rc.is_stuck(target) {
                             // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
                             self.new_incs.push(edge);
@@ -243,8 +267,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     } else {
                         super::record_edge_for_validation(edge, target);
                     }
-                    if self.current_pause == Pause::FullTraceFast && !edge.to_address().is_mapped()
-                    {
+                    if self.should_record_edges_for_marking {
                         self.full_gc_cld_edges.push(edge);
                     }
                 },
@@ -504,6 +527,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.current_pause = self.lxr().current_pause().unwrap();
         self.concurrent_marking_in_progress = self.lxr().concurrent_marking_in_progress();
+        self.should_record_edges_for_marking = self.concurrent_marking_in_progress
+            || self.current_pause == Pause::FullTraceFast
+            || self.current_pause == Pause::FinalMark
+            || self.current_pause == Pause::InitialMark;
         let copy_context = self.worker().get_copy_context_mut();
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
@@ -592,10 +619,21 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
         }
         let mark_edges = std::mem::take(&mut self.full_gc_cld_edges);
         if !mark_edges.is_empty() {
-            worker.add_work(
-                WorkBucketStage::Closure,
-                LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(mark_edges, false, mmtk),
-            )
+            if self.current_pause == Pause::FullTraceFast || self.current_pause == Pause::FinalMark
+            {
+                worker.add_work(
+                    WorkBucketStage::Closure,
+                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(mark_edges, false, mmtk),
+                )
+            } else {
+                let objs = mark_edges
+                    .iter()
+                    .map(|a| unsafe { a.to_address().load() })
+                    .collect();
+                worker
+                    .scheduler()
+                    .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(objs, mmtk));
+            }
         }
         self.survival_ratio_predictor_local.sync();
     }
