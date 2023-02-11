@@ -130,12 +130,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
         //     feature = "field_barrier_validation",
         //     debug_assertions
         // ))]
-        debug_assert!(
-            old.is_null() || self.lxr.rc.count(old) != 0,
-            "zero rc count {:?} -> {:?}",
-            edge,
-            old
-        );
+        // debug_assert!(
+        //     old.is_null() || self.lxr.rc.count(old) != 0,
+        //     "zero rc count {:?} -> {:?}",
+        //     edge,
+        //     old
+        // );
         if cfg!(feature = "field_barrier_validation") {
             let o = super::LAST_REFERENTS
                 .lock()

@@ -347,11 +347,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
                 object,
                 CopySemantics::DefaultCopy,
                 pause,
-                false,
+                true,
                 worker,
             )
         } else {
-            object
+            self.lxr.los().trace_object(self, object)
         };
         if self.roots {
             self.forwarded_roots.push(new_object)
