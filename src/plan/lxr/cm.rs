@@ -104,11 +104,16 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         if object.is_null() {
             return object;
         }
-        debug_assert!(object.is_in_any_space());
+        debug_assert!(
+            object.to_address::<VM>().is_mapped(),
+            "Invalid obj {:?}",
+            object
+        );
         let no_trace = self.rc.count(object) == 0;
         if no_trace || self.plan.is_marked(object) {
             return object;
         }
+        debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space(object) {
             self.plan.immix_space.fast_trace_object(self, object);

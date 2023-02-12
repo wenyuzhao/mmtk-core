@@ -609,10 +609,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                     LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(mark_edges, false, mmtk),
                 )
             } else {
-                let objs = mark_edges
-                    .iter()
-                    .map(|a| unsafe { a.to_address().load() })
-                    .collect();
+                let objs = mark_edges.iter().map(|a| a.load::<COMPRESSED>()).collect();
                 worker
                     .scheduler()
                     .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(objs, mmtk));
