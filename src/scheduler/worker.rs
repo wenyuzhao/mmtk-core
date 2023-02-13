@@ -221,7 +221,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
         let worker = self as *mut Self;
         _WORKER.with(|x| x.store(Some(self as *mut Self as *mut ()), Ordering::SeqCst));
-        _WORKERS.lock().unwrap().push(OpaquePointer::from_mut_ptr(worker));
+        _WORKERS
+            .lock()
+            .unwrap()
+            .push(OpaquePointer::from_mut_ptr(worker));
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
@@ -230,10 +233,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         loop {
             let mut work = self.poll();
 
-            if work.should_defer() {
-                mmtk.scheduler.postpone_dyn(work);
-                continue;
-            }
+            // if work.should_defer() {
+            //     mmtk.scheduler.postpone_dyn(work);
+            //     continue;
+            // }
             if let Some(stage) = work.should_move_to_stw() {
                 if !self.scheduler.work_buckets[stage].is_activated() {
                     self.scheduler.work_buckets[stage].add_boxed(work);
