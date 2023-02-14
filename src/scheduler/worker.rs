@@ -228,10 +228,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         loop {
             let mut work = self.poll();
 
-            if work.should_defer() {
-                mmtk.scheduler.postpone_dyn(work);
-                continue;
-            }
+            // if work.should_defer() {
+            //     mmtk.scheduler.postpone_dyn(work);
+            //     continue;
+            // }
             if let Some(stage) = work.should_move_to_stw() {
                 if !self.scheduler.work_buckets[stage].is_activated() {
                     self.scheduler.work_buckets[stage].add_boxed(work);
