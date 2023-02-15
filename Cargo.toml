@@ -39,8 +39,8 @@ spin = {version = "0.9.4", features = ["std"]}
 env_logger = "0.8.4"
 pfm = { version = "0.1.0-beta.1", optional = true }
 atomic_refcell = "0.1.8"
-strum = "0.23.0"
-strum_macros = "0.23.1"
+strum = "0.24.1"
+strum_macros = "0.24.3"
 cfg-if = "1.0.0"
 itertools = "0.10.5"
 
