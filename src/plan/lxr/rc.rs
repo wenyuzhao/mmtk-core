@@ -37,6 +37,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     concurrent_marking_in_progress: bool,
     no_evac: bool,
     slice: Option<VM::VMMemorySlice>,
+    root_objects: Option<Vec<ObjectReference>>,
     depth: usize,
     rc: RefCountHelper<VM>,
     pub cld_roots: bool,
@@ -81,6 +82,27 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             full_gc_cld_edges: vec![],
             should_record_edges_for_marking: false,
+            root_objects: None,
+        }
+    }
+
+    pub fn new_objects(objects: Vec<ObjectReference>) -> Self {
+        Self {
+            incs: vec![],
+            new_incs: VectorQueue::default(),
+            lxr: std::ptr::null(),
+            current_pause: Pause::RefCount,
+            concurrent_marking_in_progress: false,
+            no_evac: false,
+            slice: None,
+            depth: 1,
+            rc: RefCountHelper::NEW,
+            cld_roots: false,
+            weak_cld_roots: false,
+            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
+            full_gc_cld_edges: vec![],
+            should_record_edges_for_marking: false,
+            root_objects: Some(objects),
         }
     }
 
@@ -100,6 +122,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             full_gc_cld_edges: vec![],
             should_record_edges_for_marking: false,
+            root_objects: None,
         }
     }
 
@@ -380,6 +403,18 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         Some(o)
     }
 
+    fn process_object<const K: EdgeKind>(
+        &mut self,
+        o: ObjectReference,
+        cc: &mut GCWorkerCopyContext<VM>,
+    ) -> ObjectReference {
+        if !crate::args::RC_NURSERY_EVACUATION {
+            self.process_inc(o, 0)
+        } else {
+            self.process_inc_and_evacuate(o, cc, 0)
+        }
+    }
+
     fn process_edge<const K: EdgeKind>(
         &mut self,
         e: VM::VMEdge,
@@ -557,6 +592,11 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             if let Some(slice) = self.slice.take() {
                 assert_eq!(KIND, EDGE_KIND_NURSERY);
                 self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
+            } else if let Some(objects) = self.root_objects.take() {
+                for o in objects {
+                    self.process_object::<KIND>(o, copy_context);
+                }
+                None
             } else {
                 let incs = std::mem::take(&mut self.incs);
                 self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context, self.depth)
@@ -573,14 +613,16 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
-                worker.add_work(
-                    WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(
-                        root_edges,
-                        !self.cld_roots,
-                        mmtk,
-                    ),
-                )
+                if !root_edges.is_empty() {
+                    worker.add_work(
+                        WorkBucketStage::Closure,
+                        LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(
+                            root_edges,
+                            !self.cld_roots,
+                            mmtk,
+                        ),
+                    )
+                }
             } else if !self.cld_roots {
                 unsafe {
                     crate::plan::lxr::CURR_ROOTS.push(roots);

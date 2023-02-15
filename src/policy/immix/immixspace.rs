@@ -93,7 +93,14 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
             if self.is_end_of_satb_or_full_gc {
-                return self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
+                if self.is_marked(object) {
+                    return true;
+                } else if ForwardingWord::is_forwarded::<VM>(object) {
+                    let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
+                    return self.is_marked(forwarded);
+                } else {
+                    return false;
+                }
             }
             return self.rc.count(object) > 0 || ForwardingWord::is_forwarded::<VM>(object);
         }

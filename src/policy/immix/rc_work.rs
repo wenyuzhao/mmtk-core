@@ -182,6 +182,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
         if !crate::args::HOLE_COUNTING {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
+        if ObjectReference::STRICT_VERIFICATION {
+            unsafe {
+                o.to_address::<VM>().store(0xdeadusize);
+            }
+        }
         self.rc.set(o, 0);
         if !crate::args::BLOCK_ONLY {
             self.rc.unmark_straddle_object(o)

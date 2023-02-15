@@ -1,6 +1,7 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::immix::Pause;
+use crate::plan::lxr::rc::{ProcessIncs, EDGE_KIND_ROOT};
 use crate::plan::lxr::LXR;
 use crate::plan::GcStatus;
 use crate::plan::ObjectsClosure;
@@ -670,19 +671,29 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
     }
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
-        // Note: Node roots cannot be moved.  Currently, this implies that the plan must never
-        // move objects.  However, in the future, if we start to support object pinning, then
-        // moving plans that support object pinning (such as Immix) can still use node roots.
-        assert!(
-            !self.mmtk.plan.constraints().moves_objects,
-            "Attempted to add node roots when using a plan that moves objects.  Plan: {:?}",
-            *self.mmtk.options.plan
-        );
-
-        // We want to use E::create_scan_work.
-        let process_edges_work = E::new(vec![], true, self.mmtk);
-        let work = process_edges_work.create_scan_work(nodes, true);
-        crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
+        if let Some(_lxr) = self.mmtk.plan.downcast_ref::<LXR<E::VM>>() {
+            if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
+                let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT, true>::new_objects(nodes);
+                w.cld_roots = true;
+                w.weak_cld_roots = false;
+                crate::memory_manager::add_work_packet(
+                    self.mmtk,
+                    WorkBucketStage::RCProcessIncs,
+                    w,
+                );
+            } else {
+                let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT, false>::new_objects(nodes);
+                w.cld_roots = true;
+                w.weak_cld_roots = false;
+                crate::memory_manager::add_work_packet(
+                    self.mmtk,
+                    WorkBucketStage::RCProcessIncs,
+                    w,
+                );
+            }
+        } else {
+            unreachable!()
+        }
     }
 }
 

@@ -266,7 +266,7 @@ pub enum WorkBucketStage {
 // Alias
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
-        pub fn first_stw_stage() -> Self {
+    pub fn first_stw_stage() -> Self {
         WorkBucketStage::from_usize(1)
     }
 
