@@ -692,7 +692,7 @@ impl ObjectReference {
         use crate::vm::ObjectModel;
         let klass = self.class_pointer::<VM>();
         let v = klass.as_usize();
-        if -1 == unsafe{libc::msync((v >> 12 << 12) as *mut libc::c_void, 4096, 0)} {
+        if -1 == unsafe { libc::msync((v >> 12 << 12) as *mut libc::c_void, 4096, 0) } {
             println!("Unmapped klass {:?} object {:?}", klass, self);
             return false;
         }

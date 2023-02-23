@@ -272,7 +272,11 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
-    pub(super) fn new_remset(edges: Vec<EdgeOf<Self>>, refs: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
+    pub(super) fn new_remset(
+        edges: Vec<EdgeOf<Self>>,
+        refs: Vec<ObjectReference>,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
         let mut me = Self::new(edges, false, mmtk);
         me.remset_recorded_edges = true;
         me.refs = refs;
@@ -337,7 +341,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         );
         debug_assert!(object.class_is_valid::<VM>());
         let new_object = if self.lxr.immix_space.in_space(object) {
-            if self.lxr.rc.address_is_in_straddle_line(object.to_address::<VM>()) {
+            if self
+                .lxr
+                .rc
+                .address_is_in_straddle_line(object.to_address::<VM>())
+            {
                 return object;
             }
             let pause = self.pause;

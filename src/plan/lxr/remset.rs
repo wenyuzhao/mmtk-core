@@ -1,5 +1,7 @@
 use std::{cell::UnsafeCell, marker::PhantomData};
 
+use crate::policy::immix::{line::Line, ImmixSpace};
+use crate::util::ObjectReference;
 use crate::{
     plan::lxr::LXR,
     policy::{largeobjectspace::LargeObjectSpace, space::Space},
@@ -8,8 +10,6 @@ use crate::{
     vm::{edge_shape::Edge, VMBinding},
     MMTK,
 };
-use crate::util::ObjectReference;
-use crate::policy::immix::{line::Line, ImmixSpace};
 
 use super::mature_evac::EvacuateMatureObjects;
 

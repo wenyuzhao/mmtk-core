@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::ObjectModel;
 use crate::{
@@ -15,7 +16,6 @@ use crate::{
     vm::VMBinding,
     MMTK,
 };
-use crate::util::ObjectReference;
 
 use super::remset::RemSetEntry;
 use super::LXR;
