@@ -62,7 +62,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
             if self.is_end_of_satb_or_full_gc {
-                return self.is_marked(object);
+                return self.is_marked(object) && self.rc.count(object) > 0;
             }
             return self.rc.count(object) > 0;
         }

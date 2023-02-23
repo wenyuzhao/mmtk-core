@@ -94,7 +94,20 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.rc_enabled {
             if self.is_end_of_satb_or_full_gc {
                 if self.is_marked(object) {
-                    return true;
+                    let block = Block::containing::<VM>(object);
+                    let block_state = block.get_state();
+                    if block_state == BlockState::Unallocated {
+                        return false;
+                    }
+                    if block.is_defrag_source() {
+                        if ForwardingWord::is_forwarded::<VM>(object) {
+                            let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
+                            return self.is_marked(forwarded);
+                        } else {
+                            return false;
+                        }
+                    }
+                    return self.rc.count(object) > 0;
                 } else if ForwardingWord::is_forwarded::<VM>(object) {
                     let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
                     return self.is_marked(forwarded);
