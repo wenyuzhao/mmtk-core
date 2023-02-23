@@ -70,6 +70,10 @@ pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash + Sized {
         unimplemented!()
     }
 
+    fn raw_address(&self) -> Address {
+        unimplemented!()
+    }
+
     fn from_address(_: Address) -> Self {
         unimplemented!()
     }

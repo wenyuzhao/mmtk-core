@@ -8,23 +8,23 @@ use crate::{
     vm::{edge_shape::Edge, VMBinding},
     MMTK,
 };
-
+use crate::util::ObjectReference;
 use crate::policy::immix::{line::Line, ImmixSpace};
 
 use super::mature_evac::EvacuateMatureObjects;
 
-#[repr(transparent)]
-pub(super) struct RemSetEntry(usize);
+#[repr(C)]
+pub(super) struct RemSetEntry(usize, ObjectReference);
 
 impl RemSetEntry {
-    fn encode<VM: VMBinding>(edge: VM::VMEdge, epoch: u8) -> Self {
-        Self(edge.to_address().as_usize() | ((epoch as usize) << 48))
+    fn encode<VM: VMBinding>(edge: VM::VMEdge, epoch: u8, o: ObjectReference) -> Self {
+        Self(edge.raw_address().as_usize() | ((epoch as usize) << 48), o)
     }
 
-    pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, u8) {
+    pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, u8, ObjectReference) {
         let v = ((self.0 >> 48) & 0xff) as u8;
         let p = unsafe { Address::from_usize(self.0 & 0xff00_ffff_ffff_ffff_usize) };
-        (VM::VMEdge::from_address(p), v)
+        (VM::VMEdge::from_address(p), v, self.1)
     }
 }
 
@@ -67,7 +67,7 @@ impl<VM: VMBinding> RemSet<VM> {
         }
     }
 
-    pub fn record(&self, e: VM::VMEdge, space: &ImmixSpace<VM>) {
+    pub fn record(&self, e: VM::VMEdge, o: ObjectReference, space: &ImmixSpace<VM>) {
         // FIXME: performance?
         let v = if !e.to_address().is_mapped() {
             0
@@ -77,7 +77,7 @@ impl<VM: VMBinding> RemSet<VM> {
             LargeObjectSpace::<VM>::currrent_validity_state(e.to_address())
         };
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, v));
+        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, v, o));
         if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush(id, space)
         }

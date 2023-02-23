@@ -5,7 +5,7 @@ use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::rc::RefCountHelper;
-use crate::util::{Address, ObjectReference};
+use crate::util::ObjectReference;
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::{
     plan::ObjectQueue,
@@ -128,18 +128,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
     // FIXME: Compressed pointers
     fn process_objects(&mut self, objects: &[ObjectReference], slice: bool) {
         if slice {
-            for o in objects {
-                if !self.plan.address_in_defrag(Address::from_ref(o))
-                    && self.plan.in_defrag(*o)
-                    && self.rc.count(*o) != 0
-                {
-                    self.plan.immix_space.remset.record(
-                        VM::VMEdge::from_address(Address::from_ref(o)),
-                        &self.plan.immix_space,
-                    );
-                }
-                self.trace_object(*o);
-            }
+            unreachable!()
         } else {
             for i in 0..objects.len() {
                 self.trace_object(objects[i]);
@@ -175,7 +164,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                         self.plan
                             .immix_space
                             .remset
-                            .record(e, &self.plan.immix_space);
+                            .record(e, t, &self.plan.immix_space);
                     }
                     self.next_objects.push(t);
                     if self.next_objects.is_full() {
@@ -279,12 +268,14 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
     forwarded_roots: Vec<ObjectReference>,
     next_edges: VectorQueue<EdgeOf<Self>>,
     remset_recorded_edges: bool,
+    refs: Vec<ObjectReference>,
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
-    pub(super) fn new_remset(edges: Vec<EdgeOf<Self>>, mmtk: &'static MMTK<VM>) -> Self {
+    pub(super) fn new_remset(edges: Vec<EdgeOf<Self>>, refs: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         let mut me = Self::new(edges, false, mmtk);
         me.remset_recorded_edges = true;
+        me.refs = refs;
         me
     }
 }
@@ -306,6 +297,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             forwarded_roots: vec![],
             next_edges: VectorQueue::new(),
             remset_recorded_edges: false,
+            refs: vec![],
         }
     }
 
@@ -345,6 +337,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         );
         debug_assert!(object.class_is_valid::<VM>());
         let new_object = if self.lxr.immix_space.in_space(object) {
+            if self.lxr.rc.address_is_in_straddle_line(object.to_address::<VM>()) {
+                return object;
+            }
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
@@ -373,6 +368,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             for i in 0..self.edges.len() {
                 self.process_mark_edge::<COMPRESSED2>(self.edges[i])
             }
+        } else if self.remset_recorded_edges {
+            for i in 0..self.edges.len() {
+                self.process_remset_edge::<COMPRESSED2>(self.edges[i], i)
+            }
         } else {
             for i in 0..self.edges.len() {
                 ProcessEdgesWork::process_edge::<COMPRESSED2>(self, self.edges[i])
@@ -391,17 +390,8 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            if !self.remset_recorded_edges {
-                slot.store::<COMPRESSED2>(new_object);
-            } else {
-                // Don't do the store if the original is already overwritten
-                let _ = slot.compare_exchange::<COMPRESSED2>(
-                    object,
-                    new_object,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
-            }
+            debug_assert!(!self.remset_recorded_edges);
+            slot.store::<COMPRESSED2>(new_object);
         }
         super::record_edge_for_validation(slot, new_object);
     }
@@ -437,6 +427,25 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
             self.forwarded_roots.push(x)
         }
         x
+    }
+
+    fn process_remset_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>, i: usize) {
+        let object = slot.load::<COMPRESSED2>();
+        if object != self.refs[i] {
+            return;
+        }
+        let new_object = self.trace_object(object);
+        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
+            debug_assert!(self.remset_recorded_edges);
+            // Don't do the store if the original is already overwritten
+            let _ = slot.compare_exchange::<COMPRESSED2>(
+                object,
+                new_object,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+        super::record_edge_for_validation(slot, new_object);
     }
 
     fn process_mark_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {

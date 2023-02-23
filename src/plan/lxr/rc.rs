@@ -167,7 +167,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             self.lxr()
                 .immix_space
                 .remset
-                .record(e, &self.lxr().immix_space);
+                .record(e, o, &self.lxr().immix_space);
         }
     }
 
@@ -283,7 +283,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     } else {
                         super::record_edge_for_validation(edge, target);
                     }
-                    if self.should_record_edges_for_marking {
+                    if self.should_record_edges_for_marking && !edge.to_address().is_mapped() {
                         self.full_gc_cld_edges.push(edge);
                     }
                 },

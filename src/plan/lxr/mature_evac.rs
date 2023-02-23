@@ -15,6 +15,7 @@ use crate::{
     vm::VMBinding,
     MMTK,
 };
+use crate::util::ObjectReference;
 
 use super::remset::RemSetEntry;
 use super::LXR;
@@ -76,6 +77,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         &mut self,
         e: VM::VMEdge,
         epoch: u8,
+        old_ref: ObjectReference,
         lxr: &LXR<VM>,
     ) -> bool {
         // Skip edges that does not contain a real oop
@@ -84,6 +86,9 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
         // Skip objects that are dead or out of the collection set.
         let o = e.load::<COMPRESSED>();
+        if old_ref != o {
+            return false;
+        }
         if !lxr.immix_space.in_space(o) || !o.is_in_any_space() {
             return false;
         }
@@ -108,19 +113,17 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 || lxr.current_pause() == Some(Pause::FullTraceFast)
         );
         let remset = std::mem::take(&mut self.remset);
-        let edges = remset
-            .into_iter()
-            .filter_map(|entry| {
-                let (e, epoch) = entry.decode::<VM>();
-                if self.process_edge::<COMPRESSED>(e, epoch, lxr) {
-                    Some(e)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut edges = vec![];
+        let mut refs = vec![];
+        for entry in remset {
+            let (e, epoch, o) = entry.decode::<VM>();
+            if self.process_edge::<COMPRESSED>(e, epoch, o, lxr) {
+                edges.push(e);
+                refs.push(o);
+            }
+        }
         Box::new(LXRStopTheWorldProcessEdges::<_, COMPRESSED>::new_remset(
-            edges, mmtk,
+            edges, refs, mmtk,
         ))
     }
 }
