@@ -43,8 +43,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     pub cld_roots: bool,
     pub weak_cld_roots: bool,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
-    full_gc_cld_edges: Vec<VM::VMEdge>,
-    should_record_edges_for_marking: bool,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
@@ -80,8 +78,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             cld_roots: false,
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            full_gc_cld_edges: vec![],
-            should_record_edges_for_marking: false,
             root_objects: None,
         }
     }
@@ -100,8 +96,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             cld_roots: false,
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            full_gc_cld_edges: vec![],
-            should_record_edges_for_marking: false,
             root_objects: Some(objects),
         }
     }
@@ -120,8 +114,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             cld_roots: false,
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            full_gc_cld_edges: vec![],
-            should_record_edges_for_marking: false,
             root_objects: None,
         }
     }
@@ -243,7 +235,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 .bulk_add(packets);
         } else {
             o.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Claim,
+                CLDScanPolicy::Ignore,
                 RefScanPolicy::Follow,
                 |edge| {
                     let target = edge.load::<COMPRESSED>();
@@ -282,9 +274,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                         }
                     } else {
                         super::record_edge_for_validation(edge, target);
-                    }
-                    if self.should_record_edges_for_marking && !edge.to_address().is_mapped() {
-                        self.full_gc_cld_edges.push(edge);
                     }
                 },
             );
@@ -545,10 +534,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.current_pause = self.lxr().current_pause().unwrap();
         self.concurrent_marking_in_progress = self.lxr().concurrent_marking_in_progress();
-        self.should_record_edges_for_marking = self.concurrent_marking_in_progress
-            || self.current_pause == Pause::FullTraceFast
-            || self.current_pause == Pause::FinalMark
-            || self.current_pause == Pause::InitialMark;
         let copy_context = self.worker().get_copy_context_mut();
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
@@ -641,21 +626,6 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 copy_context,
                 depth,
             );
-        }
-        let mark_edges = std::mem::take(&mut self.full_gc_cld_edges);
-        if !mark_edges.is_empty() {
-            if self.current_pause == Pause::FullTraceFast || self.current_pause == Pause::FinalMark
-            {
-                worker.add_work(
-                    WorkBucketStage::Closure,
-                    LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(mark_edges, false, mmtk),
-                )
-            } else {
-                let objs = mark_edges.iter().map(|a| a.load::<COMPRESSED>()).collect();
-                worker
-                    .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(objs, mmtk));
-            }
         }
         self.survival_ratio_predictor_local.sync();
     }
