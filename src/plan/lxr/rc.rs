@@ -318,7 +318,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
         // Skip recycled lines
         if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-            && Block::containing::<VM>(o).get_state() == BlockState::Reusing
+            && Block::containing::<VM>(o).get_state() != BlockState::Nursery
         {
             return true;
         }
