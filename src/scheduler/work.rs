@@ -1,5 +1,4 @@
 use super::worker::*;
-use super::WorkBucketStage;
 use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
 #[cfg(feature = "work_packet_stats")]
@@ -16,9 +15,6 @@ pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
 pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     fn should_defer(&self) -> bool {
         false
-    }
-    fn should_move_to_stw(&self) -> Option<WorkBucketStage> {
-        None
     }
     fn is_concurrent_marking_work(&self) -> bool {
         false

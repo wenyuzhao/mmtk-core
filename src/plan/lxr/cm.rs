@@ -182,13 +182,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
-    fn should_move_to_stw(&self) -> Option<WorkBucketStage> {
-        if crate::MOVE_CONCURRENT_MARKING_TO_STW.load(Ordering::SeqCst) {
-            Some(WorkBucketStage::RCProcessIncs)
-        } else {
-            None
-        }
-    }
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
@@ -238,25 +231,25 @@ impl<const COMPRESSED: bool> ProcessModBufSATB<COMPRESSED> {
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COMPRESSED> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        if let Some(nodes) = self.nodes.take() {
+        let mut w = if let Some(nodes) = self.nodes.take() {
             if nodes.is_empty() {
                 return;
             }
-            GCWork::do_work(
-                &mut LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(nodes, mmtk),
-                worker,
-                mmtk,
-            );
-        }
-        if let Some(nodes) = self.nodes_arc.take() {
+            LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(nodes, mmtk)
+        } else if let Some(nodes) = self.nodes_arc.take() {
             if nodes.is_empty() {
                 return;
             }
-            GCWork::do_work(
-                &mut LXRConcurrentTraceObjects::<VM, COMPRESSED>::new_arc(nodes, mmtk),
-                worker,
-                mmtk,
-            );
+            LXRConcurrentTraceObjects::<VM, COMPRESSED>::new_arc(nodes, mmtk)
+        } else {
+            return;
+        };
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        let pause = lxr.current_pause().unwrap();
+        if pause == Pause::FinalMark {
+            GCWork::do_work(&mut w, worker, mmtk);
+        } else {
+            worker.scheduler().postpone(w);
         }
     }
 }

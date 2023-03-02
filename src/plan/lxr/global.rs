@@ -8,6 +8,7 @@ use crate::plan::global::GcStatus;
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
 use crate::plan::AllocationSemantics;
+use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
@@ -31,7 +32,7 @@ use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
-use crate::vm::{Collection, ObjectModel, VMBinding};
+use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -335,6 +336,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(SystemTime::now(), Ordering::SeqCst);
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         me.immix_space.rc_eager_prepare(pause);
+
+        for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+            mutator.flush();
+        }
 
         if pause == Pause::FinalMark {
             self.set_concurrent_marking_state(false);

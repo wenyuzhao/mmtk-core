@@ -227,17 +227,6 @@ impl<VM: VMBinding> GCWorker<VM> {
         assert!(!lower_priority_for_concurrent_work);
         loop {
             let mut work = self.poll();
-
-            // if work.should_defer() {
-            //     mmtk.scheduler.postpone_dyn(work);
-            //     continue;
-            // }
-            if let Some(stage) = work.should_move_to_stw() {
-                if !self.scheduler.work_buckets[stage].is_activated() {
-                    self.scheduler.work_buckets[stage].add_boxed(work);
-                    continue;
-                }
-            }
             work.do_work_with_stat(self, mmtk);
         }
     }
