@@ -95,7 +95,6 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             if self.is_end_of_satb_or_full_gc {
                 if self.is_marked(object) {
                     let block = Block::containing::<VM>(object);
-                    let block_state = block.get_state();
                     if block.is_defrag_source() {
                         if ForwardingWord::is_forwarded::<VM>(object) {
                             let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
@@ -952,7 +951,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn trace_mark_rc_mature_object(
         &self,
         queue: &mut impl ObjectQueue,
-        mut object: ObjectReference,
+        object: ObjectReference,
         _pause: Pause,
         mark: bool,
     ) -> ObjectReference {
