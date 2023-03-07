@@ -812,6 +812,9 @@ impl SideMetadataContext {
         #[cfg(feature = "global_alloc_bit")]
         ret.push(ALLOC_SIDE_METADATA_SPEC);
 
+        #[cfg(feature = "sanity")]
+        ret.push(crate::util::metadata::side_metadata::spec_defs::SANITY_MARK_BITS);
+
         if let Some(spec) = crate::mmtk::SFT_MAP.get_side_metadata() {
             if spec.is_global {
                 ret.push(*spec);

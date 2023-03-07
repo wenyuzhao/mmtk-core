@@ -65,6 +65,8 @@ define_side_metadata_specs!(
     RC_TABLE = (global: true, log_num_of_bits: crate::util::rc::LOG_REF_COUNT_BITS, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
     // Field barrier lock bits
     RC_LOCK_BITS = (global: true, log_num_of_bits: 0, log_bytes_in_region: crate::args::LOG_BYTES_PER_RC_LOCK_BIT),
+    // Mark table for sanity GC
+    SANITY_MARK_BITS = (global: true, log_num_of_bits: 3, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
 );
 
 // This defines all LOCAL side metadata used by mmtk-core.

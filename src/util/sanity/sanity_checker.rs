@@ -1,5 +1,8 @@
 use crate::plan::Plan;
+use crate::policy::immix::block::{Block, BlockState};
+use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -7,7 +10,7 @@ use crate::MMTK;
 use crate::{scheduler::*, ObjectQueue};
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 #[allow(dead_code)]
 pub struct SanityChecker<ES: Edge> {
@@ -87,6 +90,10 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
     }
 }
 
+static MARK_STATE: AtomicU8 = AtomicU8::new(0);
+const MARK_BITS: SideMetadataSpec =
+    crate::util::metadata::side_metadata::spec_defs::SANITY_MARK_BITS;
+
 pub struct SanityPrepare<P: Plan> {
     pub plan: &'static P,
 }
@@ -95,10 +102,21 @@ impl<P: Plan> SanityPrepare<P> {
     pub fn new(plan: &'static P) -> Self {
         Self { plan }
     }
+
+    fn update_mark_state() {
+        let mut mark_state = MARK_STATE.load(Ordering::SeqCst);
+        if mark_state == 0 || mark_state == 255 {
+            mark_state = 1;
+        } else {
+            mark_state += 1;
+        }
+        MARK_STATE.store(mark_state, Ordering::SeqCst);
+    }
 }
 
 impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
+        Self::update_mark_state();
         mmtk.plan.enter_sanity();
         {
             let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
@@ -159,6 +177,30 @@ impl<VM: VMBinding> DerefMut for SanityGCProcessEdges<VM> {
     }
 }
 
+impl<VM: VMBinding> SanityGCProcessEdges<VM> {
+    fn attempt_mark(&self, o: ObjectReference) -> bool {
+        let mark_state = MARK_STATE.load(Ordering::SeqCst);
+        loop {
+            let old_value = MARK_BITS.load_atomic::<u8>(o.to_raw_address(), Ordering::SeqCst);
+            if old_value == mark_state {
+                return false;
+            }
+            if MARK_BITS
+                .compare_exchange_atomic::<u8>(
+                    o.to_raw_address(),
+                    old_value,
+                    mark_state,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+}
+
 impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
@@ -203,10 +245,20 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
-        if !sanity_checker.refs.contains(&object) {
+        if self.attempt_mark(object) {
             // FIXME steveb consider VM-specific integrity check on reference.
-            assert!(object.is_sane(), "Invalid reference {:?}", object);
+            assert!(
+                object.to_raw_address().is_mapped(),
+                "Invalid reference {:?} -> {:?}",
+                self.edge,
+                object
+            );
+            assert!(
+                object.is_sane(),
+                "Invalid reference {:?} -> {:?}",
+                self.edge,
+                object
+            );
             if let Some(lxr) = self
                 .mmtk()
                 .get_plan()
@@ -214,20 +266,31 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             {
                 assert!(
                     unsafe { object.to_address::<VM>().load::<usize>() } != 0xdead,
-                    "{:?} is killed by decs",
+                    "{:?} -> {:?} is killed by decs",
+                    self.edge,
                     object
                 );
                 assert!(
                     lxr.rc.count(object) > 0,
-                    "{:?} => {:?} has zero rc count",
+                    "{:?} -> {:?} has zero rc count",
                     self.edge,
                     object
                 );
                 assert!(
                     !crate::util::object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
-                    "{:?} is forwarded",
+                    "{:?} -> {:?} is forwarded",
+                    self.edge,
                     object
                 );
+                if lxr.immix_space.in_space(object) {
+                    assert_ne!(
+                        Block::containing::<VM>(object).get_state(),
+                        BlockState::Unallocated,
+                        "{:?}->{:?} block is released",
+                        self.edge,
+                        object
+                    )
+                }
                 if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark
                     || lxr.current_pause().unwrap() == crate::plan::immix::Pause::FullTraceFast
                 {
@@ -240,8 +303,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                     )
                 }
             }
-            // Object is not "marked"
-            sanity_checker.refs.insert(object); // "Mark" it
             self.nodes.enqueue(object);
         }
         object
