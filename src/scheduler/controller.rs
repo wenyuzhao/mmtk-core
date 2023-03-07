@@ -15,7 +15,7 @@ use crate::MMTK;
 use atomic::Ordering;
 use crossbeam::deque::Injector;
 
-use super::{GCWork, GCWorkScheduler, GCWorker};
+use super::{CoordinatorWork, GCWork, GCWorkScheduler, GCWorker};
 
 /// The thread local struct for the GC controller, the counterpart of `GCWorker`.
 pub struct GCController<VM: VMBinding> {
@@ -70,22 +70,9 @@ impl<VM: VMBinding> GCController<VM> {
 
     /// Process a message. Return true if the GC is finished.
     fn process_message(&mut self, message: CoordinatorMessage<VM>) -> bool {
-        let worker = &mut self.coordinator_worker;
-        let mmtk = self.mmtk;
         match message {
             CoordinatorMessage::Work(mut work) => {
-                work.do_work_with_stat(worker, mmtk);
-                let old_count = self
-                    .scheduler
-                    .pending_coordinator_packets
-                    .fetch_sub(1, Ordering::SeqCst);
-                if old_count == 1 {
-                    // When the coordinator finishes executing all coordinator work packets,
-                    // it is a chance to open more work buckets.
-                    // Notify one worker so it can open buckets.
-                    let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
-                    self.scheduler.worker_monitor.1.notify_one();
-                }
+                self.execute_coordinator_work(work.as_mut(), true);
                 false
             }
             CoordinatorMessage::Finish => {
@@ -107,7 +94,7 @@ impl<VM: VMBinding> GCController<VM> {
         // }
 
         // Schedule collection.
-        ScheduleCollection.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+        self.initiate_coordinator_work(&mut ScheduleCollection, true);
 
         // Drain the message queue and execute coordinator work.
         loop {
@@ -125,7 +112,13 @@ impl<VM: VMBinding> GCController<VM> {
                 CoordinatorMessage::Finish => {}
             }
         }
-        self.scheduler.deactivate_all();
+        {
+            // Note: GC workers may spuriously wake up, examining the states of work buckets and
+            // trying to open them.  Use lock to ensure workers do not wake up when we deactivate
+            // buckets.
+            let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
+            self.scheduler.deactivate_all();
+        }
         unsafe { super::scheduler::LAST_ACTIVATE_TIME = None };
 
         let mut queue = Injector::new();
@@ -146,10 +139,56 @@ impl<VM: VMBinding> GCController<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
-        EndOfGC.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+        self.initiate_coordinator_work(&mut EndOfGC, false);
 
         self.scheduler.in_gc_pause.store(false, Ordering::SeqCst);
         self.scheduler.schedule_concurrent_packets(queue, pqueue);
         self.scheduler.debug_assert_all_buckets_deactivated();
+    }
+
+    /// The controller uses this method to start executing a coordinator work immediately.
+    ///
+    /// Note: GC workers will start executing work packets as soon as individual work packets
+    /// are added.  If the coordinator work (such as `ScheduleCollection`) adds multiple work
+    /// packets into different buckets, workers may open subsequent buckets while the coordinator
+    /// work still has packets to be added to prior buckets.  For this reason, we use the
+    /// `pending_coordinator_packets` to prevent the workers from opening any work buckets while
+    /// this coordinator work is being executed.
+    ///
+    /// # Arguments
+    ///
+    /// -   `work`: The work to execute.
+    /// -   `notify_workers`: Notify one worker after the work is finished. Useful for proceeding
+    ///     to the next work bucket stage.
+    fn initiate_coordinator_work(
+        &mut self,
+        work: &mut dyn CoordinatorWork<VM>,
+        notify_workers: bool,
+    ) {
+        self.scheduler
+            .pending_coordinator_packets
+            .fetch_add(1, Ordering::SeqCst);
+
+        self.execute_coordinator_work(work, notify_workers)
+    }
+
+    fn execute_coordinator_work(
+        &mut self,
+        work: &mut dyn CoordinatorWork<VM>,
+        notify_workers: bool,
+    ) {
+        work.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+
+        self.scheduler
+            .pending_coordinator_packets
+            .fetch_sub(1, Ordering::SeqCst);
+
+        if notify_workers {
+            // When a coordinator work finishes, there is a chance that all GC workers parked, and
+            // no work packets are added to any open buckets.  We need to wake up one GC worker so
+            // that it can open more work buckets.
+            let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
+            self.scheduler.worker_monitor.1.notify_one();
+        };
     }
 }
