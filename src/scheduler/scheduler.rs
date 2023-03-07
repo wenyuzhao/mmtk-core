@@ -694,7 +694,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         mmtk.plan.base().gc_requester.clear_request();
         let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
         first_stw_bucket.activate();
-        if first_stw_bucket.is_empty() {
+        if first_stw_bucket.is_empty()
+            && self.worker_group.parked_workers() + 1 == self.worker_group.worker_count()
+        {
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
             second_stw_bucket.activate();
             unsafe {
