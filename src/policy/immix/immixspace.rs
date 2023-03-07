@@ -96,13 +96,10 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
                 if self.is_marked(object) {
                     let block = Block::containing::<VM>(object);
                     let block_state = block.get_state();
-                    if block_state == BlockState::Unallocated {
-                        return false;
-                    }
                     if block.is_defrag_source() {
                         if ForwardingWord::is_forwarded::<VM>(object) {
                             let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
-                            return self.is_marked(forwarded);
+                            return self.is_marked(forwarded) && self.rc.count(forwarded) > 0;
                         } else {
                             return false;
                         }
@@ -110,7 +107,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
                     return self.rc.count(object) > 0;
                 } else if ForwardingWord::is_forwarded::<VM>(object) {
                     let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
-                    return self.is_marked(forwarded);
+                    return self.is_marked(forwarded) && self.rc.count(forwarded) > 0;
                 } else {
                     return false;
                 }
@@ -130,7 +127,11 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
     fn is_reachable(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
-            return self.is_marked(object) || ForwardingWord::is_forwarded::<VM>(object);
+            if ForwardingWord::is_forwarded::<VM>(object) {
+                let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
+                return self.is_marked(forwarded) && self.rc.count(forwarded) > 0;
+            }
+            return self.is_marked(object) && self.rc.count(object) > 0;
         } else {
             self.is_live(object)
         }
@@ -557,6 +558,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc = false;
+        // This cannot be done in parallel in a separate thread
+        self.schedule_mature_sweeping(pause);
     }
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
@@ -953,9 +956,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         _pause: Pause,
         mark: bool,
     ) -> ObjectReference {
-        if ForwardingWord::is_forwarded::<VM>(object) {
-            object = ForwardingWord::read_forwarding_pointer::<VM>(object);
-        }
+        debug_assert!(!ForwardingWord::is_forwarded::<VM>(object), "object {:?} is forwarded", object);
         if mark && self.attempt_mark(object) {
             queue.enqueue(object);
         }

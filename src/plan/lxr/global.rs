@@ -12,7 +12,7 @@ use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::rc_work::{MatureSweeping, UpdateWeakProcessor};
+use crate::policy::immix::rc_work::UpdateWeakProcessor;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -763,7 +763,6 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
-        scheduler.work_buckets[WorkBucketStage::Release].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         if VM::VMObjectModel::compressed_pointers_enabled() {
@@ -788,7 +787,6 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
         // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release].add(MatureSweeping);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         if VM::VMObjectModel::compressed_pointers_enabled() {
