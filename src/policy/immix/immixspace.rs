@@ -956,7 +956,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         _pause: Pause,
         mark: bool,
     ) -> ObjectReference {
-        debug_assert!(!ForwardingWord::is_forwarded::<VM>(object), "object {:?} is forwarded", object);
+        debug_assert!(
+            !ForwardingWord::is_forwarded::<VM>(object),
+            "object {:?} is forwarded",
+            object
+        );
         if mark && self.attempt_mark(object) {
             queue.enqueue(object);
         }
