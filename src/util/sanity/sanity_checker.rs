@@ -40,7 +40,7 @@ impl<ES: Edge> SanityChecker<ES> {
     }
 
     /// Reset roots cache at the end of the sanity gc.
-    fn clear_roots_cache(&mut self) {
+    pub(crate) fn clear_roots_cache(&mut self) {
         self.roots.clear();
     }
 }

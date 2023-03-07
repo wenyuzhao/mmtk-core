@@ -232,6 +232,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 crate::gc_trigger_time() as f64 / 1000000f64,
             );
         }
+        #[cfg(feature = "sanity")]
+        mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
         mmtk.plan.gc_pause_start(&mmtk.scheduler);
         if <E::VM as VMBinding>::VMScanning::SCAN_MUTATORS_IN_SAFEPOINT {
             // Prepare mutators if necessary
