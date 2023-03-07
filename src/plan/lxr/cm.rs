@@ -1,3 +1,4 @@
+use super::LXR;
 use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
 use crate::policy::space::Space;
@@ -5,8 +6,8 @@ use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::rc::RefCountHelper;
-use crate::util::ObjectReference;
-use crate::vm::edge_shape::{Edge, MemorySlice};
+use crate::util::{Address, ObjectReference};
+use crate::vm::edge_shape::Edge;
 use crate::{
     plan::ObjectQueue,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
@@ -20,17 +21,15 @@ use std::{
     ptr,
 };
 
-use super::LXR;
-
 pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
     plan: &'static LXR<VM>,
     mmtk: &'static MMTK<VM>,
     objects: Option<Vec<ObjectReference>>,
     objects_arc: Option<Arc<Vec<ObjectReference>>>,
-    slice: Option<&'static [ObjectReference]>,
     next_objects: VectorQueue<ObjectReference>,
     worker: *mut GCWorker<VM>,
     rc: RefCountHelper<VM>,
+    klass: Address,
 }
 
 unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send
@@ -47,10 +46,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             mmtk,
             objects: Some(objects),
             objects_arc: None,
-            slice: None,
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
             rc: RefCountHelper::NEW,
+            klass: Address::ZERO,
         }
     }
 
@@ -62,26 +61,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             mmtk,
             objects: None,
             objects_arc: Some(objects),
-            slice: None,
             next_objects: VectorQueue::default(),
             worker: ptr::null_mut(),
             rc: RefCountHelper::NEW,
-        }
-    }
-
-    #[allow(unused)]
-    pub fn new_slice(slice: &'static [ObjectReference], mmtk: &'static MMTK<VM>) -> Self {
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
-        Self {
-            plan,
-            mmtk,
-            objects: None,
-            objects_arc: None,
-            slice: Some(slice),
-            next_objects: VectorQueue::default(),
-            worker: ptr::null_mut(),
-            rc: RefCountHelper::NEW,
+            klass: Address::ZERO,
         }
     }
 
@@ -113,6 +96,18 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         if no_trace || self.plan.is_marked(object) {
             return object;
         }
+        // During concurrent marking, decs-processing can kill the object and mutators can reusing the memory afterwards.
+        // If the RC of the object is dec to zero after it is marked by the marker, and before it is scanned,
+        // the object scanning step can crash if another mutator is also simultaneously reusing the memory.
+        // To solve this problem:
+        // 1. We cache the klass pointer before marking the object.
+        // 2. If we're the thread to successfully mark the object (instead of the RC decrement thread),
+        //    the previously cached class pointer is guaranteed to be valid, as no reuse can happen before we mark the object.
+        // 3. Scan the object use the cached klass pointer, and cache the collected child nodes without pushing them to the mark queue.
+        //    Note that if the memory is being reused simultaneously, our cached child nodes are invalid.
+        // 4. Check the RC of the object after scanning.
+        //    Push the previously cached child nodes to the mark queue only if the object RC is not zero -- the object is not overwritten yet and the cached children must be valid.
+        self.klass = object.class_pointer::<VM>();
         debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space(object) {
@@ -125,14 +120,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         }
     }
 
-    // FIXME: Compressed pointers
-    fn process_objects(&mut self, objects: &[ObjectReference], slice: bool) {
-        if slice {
-            unreachable!()
-        } else {
-            for i in 0..objects.len() {
-                self.trace_object(objects[i]);
-            }
+    fn process_objects(&mut self, objects: &[ObjectReference]) {
+        for i in 0..objects.len() {
+            self.trace_object(objects[i]);
         }
     }
 }
@@ -141,37 +131,48 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     for LXRConcurrentTraceObjects<VM, COMPRESSED>
 {
     fn enqueue(&mut self, object: ObjectReference) {
+        if self.rc.count(object) == 0 {
+            return;
+        }
         let should_check_remset = !self.plan.in_defrag(object);
-        if crate::args::CM_LARGE_ARRAY_OPTIMIZATION
-            && VM::VMScanning::is_obj_array::<COMPRESSED>(object)
-            && VM::VMScanning::obj_array_data::<COMPRESSED>(object).bytes() > 1024
-        {
-            // Buggy. Dead array can be recycled at any time.
-            unimplemented!()
-        } else {
-            object.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Claim,
-                RefScanPolicy::Discover,
-                |e| {
-                    let t: ObjectReference = e.load::<COMPRESSED>();
-                    if t.is_null() || self.rc.count(t) == 0 {
-                        return;
-                    }
-                    if crate::args::RC_MATURE_EVACUATION
-                        && should_check_remset
-                        && self.plan.in_defrag(t)
-                    {
-                        self.plan
-                            .immix_space
-                            .remset
-                            .record(e, t, &self.plan.immix_space);
-                    }
+        let mut cached_children: Vec<(VM::VMEdge, ObjectReference, u8)> = vec![];
+        object.iterate_fields_with_klass::<VM, _, COMPRESSED>(
+            CLDScanPolicy::Claim,
+            RefScanPolicy::Discover,
+            self.klass,
+            |e| {
+                let t: ObjectReference = e.load::<COMPRESSED>();
+                if t.is_null() || self.rc.count(t) == 0 {
+                    return;
+                }
+                let validity = self
+                    .plan
+                    .immix_space
+                    .remset
+                    .get_currrent_validity_state(e, &self.plan.immix_space);
+                cached_children.push((e, t, validity));
+            },
+        );
+        if self.rc.count(object) != 0 {
+            for (e, t, validity) in cached_children {
+                if crate::args::RC_MATURE_EVACUATION
+                    && should_check_remset
+                    && self.plan.in_defrag(t)
+                {
+                    self.plan.immix_space.remset.record_with_validity_state(
+                        e,
+                        t,
+                        &self.plan.immix_space,
+                        validity,
+                    );
+                }
+                if !self.plan.is_marked(t) {
                     self.next_objects.push(t);
                     if self.next_objects.is_full() {
                         self.flush();
                     }
-                },
-            );
+                }
+            }
         }
     }
 }
@@ -185,14 +186,13 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         self.worker = worker;
         if let Some(objects) = self.objects.take() {
-            self.process_objects(&objects, false)
+            self.process_objects(&objects)
         } else if let Some(objects) = self.objects_arc.take() {
-            self.process_objects(&objects, false)
-        } else if let Some(slice) = self.slice {
-            self.process_objects(slice, true)
+            self.process_objects(&objects)
         }
         let mut objects = vec![];
         while !self.next_objects.is_empty() {
@@ -205,6 +205,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
         // CM: Decrease counter
         self.flush();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
+        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
     }
 }
 
@@ -375,7 +376,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             }
         } else {
             for i in 0..self.edges.len() {
-                ProcessEdgesWork::process_edge::<COMPRESSED2>(self, self.edges[i])
+                self.process_edge::<COMPRESSED2>(self.edges[i])
             }
         }
         self.flush();
@@ -407,6 +408,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         if object.is_null() {
             return object;
         }
+        debug_assert_ne!(self.lxr.rc.count(object), 0);
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         debug_assert!(object.class_is_valid::<VM>());
@@ -546,6 +548,14 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             )
         } else {
             self.lxr.los().trace_object(self, object)
+        }
+    }
+
+    fn process_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load::<COMPRESSED2>();
+        let new_object = self.trace_object(object);
+        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
+            slot.store::<COMPRESSED2>(new_object);
         }
     }
 

@@ -758,6 +758,28 @@ impl ObjectReference {
             cld_scan == CLDScanPolicy::Claim,
             cld_scan != CLDScanPolicy::Ignore,
             f,
+            None,
+        )
+    }
+
+    pub fn iterate_fields_with_klass<
+        VM: VMBinding,
+        F: FnMut(VM::VMEdge),
+        const COMPRESSED: bool,
+    >(
+        self,
+        cld_scan: CLDScanPolicy,
+        ref_scan: RefScanPolicy,
+        klass: Address,
+        f: F,
+    ) {
+        EdgeIterator::<VM>::iterate::<COMPRESSED, _>(
+            self,
+            ref_scan == RefScanPolicy::Discover,
+            cld_scan == CLDScanPolicy::Claim,
+            cld_scan != CLDScanPolicy::Ignore,
+            f,
+            Some(klass),
         )
     }
 }

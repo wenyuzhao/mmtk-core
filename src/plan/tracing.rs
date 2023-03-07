@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
+use crate::util::Address;
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
 use crate::vm::EdgeVisitor;
 use crate::vm::{Scanning, VMBinding};
@@ -170,6 +171,7 @@ impl<VM: VMBinding> EdgeIterator<VM> {
         should_claim_clds: bool,
         should_follow_clds: bool,
         f: F,
+        klass: Option<Address>,
     ) {
         let mut x = EdgeIteratorImpl::<VM, _> {
             f,
@@ -178,10 +180,19 @@ impl<VM: VMBinding> EdgeIterator<VM> {
             should_follow_clds,
             _p: PhantomData,
         };
-        <VM::VMScanning as Scanning<VM>>::scan_object::<_, COMPRESSED>(
-            VMWorkerThread(VMThread::UNINITIALIZED),
-            o,
-            &mut x,
-        );
+        if let Some(klass) = klass {
+            <VM::VMScanning as Scanning<VM>>::scan_object_with_klass::<_, COMPRESSED>(
+                VMWorkerThread(VMThread::UNINITIALIZED),
+                o,
+                &mut x,
+                klass,
+            );
+        } else {
+            <VM::VMScanning as Scanning<VM>>::scan_object::<_, COMPRESSED>(
+                VMWorkerThread(VMThread::UNINITIALIZED),
+                o,
+                &mut x,
+            );
+        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::plan::Mutator;
+use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
 use crate::vm::edge_shape::Edge;
@@ -127,6 +128,13 @@ pub trait Scanning<VM: VMBinding> {
         tls: VMWorkerThread,
         object: ObjectReference,
         edge_visitor: &mut EV,
+    );
+
+    fn scan_object_with_klass<EV: EdgeVisitor<VM::VMEdge>, const COMPRESSED: bool>(
+        tls: VMWorkerThread,
+        object: ObjectReference,
+        edge_visitor: &mut EV,
+        klass: Address,
     );
 
     /// Delegated scanning of a object, visiting each reference field encountered, and trace the

@@ -67,20 +67,35 @@ impl<VM: VMBinding> RemSet<VM> {
         }
     }
 
-    pub fn record(&self, e: VM::VMEdge, o: ObjectReference, space: &ImmixSpace<VM>) {
+    pub fn get_currrent_validity_state(&self, e: VM::VMEdge, space: &ImmixSpace<VM>) -> u8 {
         // FIXME: performance?
-        let v = if !e.to_address().is_mapped() {
+        if !e.to_address().is_mapped() {
             0
         } else if space.address_in_space(e.to_address()) {
             Line::of(e.to_address()).currrent_validity_state()
         } else {
             LargeObjectSpace::<VM>::currrent_validity_state(e.to_address())
-        };
+        }
+    }
+
+    pub fn record_with_validity_state(
+        &self,
+        e: VM::VMEdge,
+        o: ObjectReference,
+        space: &ImmixSpace<VM>,
+        validity_state: u8,
+    ) {
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, v, o));
+        self.gc_buffer(id)
+            .push(RemSetEntry::encode::<VM>(e, validity_state, o));
         if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush(id, space)
         }
+    }
+
+    pub fn record(&self, e: VM::VMEdge, o: ObjectReference, space: &ImmixSpace<VM>) {
+        let validity_state = self.get_currrent_validity_state(e, space);
+        self.record_with_validity_state(e, o, space, validity_state);
     }
 }
 
