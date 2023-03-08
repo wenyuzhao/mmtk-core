@@ -455,7 +455,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         let object = slot.load::<COMPRESSED2>();
         let new_object = self.trace_and_mark_object(object);
         super::record_edge_for_validation(slot, new_object);
-        if Self::OVERWRITE_REFERENCE && !new_object.is_null() {
+        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
             slot.store::<COMPRESSED2>(new_object);
         }
     }
