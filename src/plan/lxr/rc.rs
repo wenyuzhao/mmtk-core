@@ -424,7 +424,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         } else {
             self.process_inc_and_evacuate(o, cc, depth)
         };
-        if K != EDGE_KIND_ROOT {
+        if K != EDGE_KIND_ROOT || self.cld_roots {
             self.record_mature_evac_remset(e, o, false);
         }
         if new != o {

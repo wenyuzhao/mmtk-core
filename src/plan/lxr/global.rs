@@ -253,8 +253,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         #[cfg(feature = "analysis")]
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         // Resume mutators
-        #[cfg(feature = "sanity")]
-        scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
+        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+            #[cfg(feature = "sanity")]
+            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
+        }
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -442,7 +444,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     /// TODO:
     ///  - Remset for CLDs. So we don't need to scan them all during RC pauses
     fn current_gc_should_scan_weak_classloader_roots(&self) -> bool {
-        self.current_pause().unwrap() != Pause::FullTraceFast
+        let pause = self.current_pause().unwrap();
+        pause == Pause::InitialMark || pause == Pause::FullTraceFast
     }
 
     fn current_gc_should_claim_weak_classloader_roots(&self) -> bool {

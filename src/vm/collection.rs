@@ -112,5 +112,7 @@ pub trait Collection<VM: VMBinding> {
 
     fn update_weak_processor(_lxr: bool) {}
 
+    fn clear_cld_claimed_marks() {}
+
     fn set_concurrent_marking_state(_active: bool) {}
 }

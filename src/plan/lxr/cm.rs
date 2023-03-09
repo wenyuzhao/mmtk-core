@@ -156,7 +156,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
         if self.rc.count(object) != 0 {
             for (e, t, validity) in cached_children {
                 if crate::args::RC_MATURE_EVACUATION
-                    && should_check_remset
+                    && (should_check_remset || !e.to_address().is_mapped())
                     && self.plan.in_defrag(t)
                 {
                     self.plan.immix_space.remset.record_with_validity_state(
