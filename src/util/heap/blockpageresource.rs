@@ -3,6 +3,7 @@ use super::{FreeListPageResource, PageResource};
 use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::heap::layout::heap_layout::Map;
+use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
@@ -43,7 +44,13 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
+        if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
+            // TODO: Lock-free implementation
+            self.flpr
+                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+        } else {
+            self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
+        }
     }
 
     fn get_available_physical_pages(&self) -> usize {
@@ -163,10 +170,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn release_block(&self, block: B) {
-        let pages = 1 << Self::LOG_PAGES;
-        debug_assert!(pages as usize <= self.common().accounting.get_committed_pages());
-        self.common().accounting.release(pages as _);
-        self.block_queue.push(block)
+        if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
+            // TODO: Lock-free implementation
+            self.flpr.release_pages(block.start());
+        } else {
+            let pages = 1 << Self::LOG_PAGES;
+            debug_assert!(pages as usize <= self.common().accounting.get_committed_pages());
+            self.common().accounting.release(pages as _);
+            self.block_queue.push(block)
+        }
     }
 
     pub fn flush_all(&self) {

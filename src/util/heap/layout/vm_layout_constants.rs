@@ -38,7 +38,7 @@ pub struct VMLayoutConstants {
     pub log_address_space: usize,
     pub heap_start: Address,
     /// log_2 of the maximum number of chunks we need to track.  Only used in 32-bit layout.
-    pub log_max_chunks: usize,
+    pub max_chunks: usize,
     pub heap_end: Address,
     pub log_space_extent: usize,
     pub vm_space_size: usize,
@@ -71,7 +71,7 @@ impl VMLayoutConstants {
     }
     /// Maximum number of chunks we need to track.  Only used in 32-bit layout.
     pub const fn max_chunks(&self) -> usize {
-        1 << self.log_max_chunks
+        self.max_chunks
     }
 }
 
@@ -87,7 +87,7 @@ impl VMLayoutConstants {
             }),
             heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2000_0000_0000usize) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0xdc0_0000) }).as_usize(),
-            log_max_chunks: Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK,
+            max_chunks: 1 << (Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK),
             log_space_extent: 41,
             space_shift_64: 41,
             space_mask_64: ((1 << 4) - 1) << 41,
@@ -110,7 +110,7 @@ impl VMLayoutConstants {
             heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
             heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
-            log_max_chunks: Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK,
+            max_chunks: end >> LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
             space_shift_64: 0,
             space_mask_64: 0,
