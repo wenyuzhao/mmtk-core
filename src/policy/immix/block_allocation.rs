@@ -139,6 +139,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             if self.concurrent_marking_in_progress_or_final_mark() {
                 block.initialize_mark_table_as_marked::<VM>();
             } else {
+                // TODO: Performance? Is this necessary?
                 block.clear_mark_table::<VM>();
             }
         }
