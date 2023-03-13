@@ -417,6 +417,23 @@ impl Block {
         crate::util::rc::RC_STRADDLE_LINES.bzero_metadata(self.start(), Block::BYTES);
     }
 
+    #[allow(unused)]
+    pub(super) fn clear_mark_table<VM: VMBinding>(&self) {
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(self.start(), Self::BYTES);
+    }
+
+    pub(super) fn initialize_mark_table_as_marked<VM: VMBinding>(&self) {
+        let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
+        let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
+        let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
+        unsafe {
+            let bytes = limit.offset_from(start) as usize;
+            std::ptr::write_bytes(start, 0xffu8, bytes);
+        }
+    }
+
     pub fn log(&self) -> bool {
         loop {
             let old_value: u8 = Self::LOG_TABLE.load_atomic(self.start(), Ordering::Relaxed);

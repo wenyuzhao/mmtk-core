@@ -103,18 +103,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             // Add to object set
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
-            let old_value = unsafe {
-                VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load::<VM, u8>(object, None)
-            };
-            let new_value = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
-            VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.store_atomic::<VM, u8>(
-                object,
-                new_value,
-                None,
-                Ordering::SeqCst,
-            );
-            // CM: Alloc as marked
-            // TODO: Only mark during concurrent marking
             self.test_and_mark(object, self.mark_state);
             self.update_validity(
                 object.to_address::<VM>(),

@@ -1191,7 +1191,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         block.dec_dead_bytes_sloppy(
             (Line::steps_between(&start, &end).unwrap() as u32) << Line::LOG_BYTES,
         );
-        // Line::clear_mark_table::<VM>(start..end);
+        if self
+            .block_allocation
+            .concurrent_marking_in_progress_or_final_mark()
+        {
+            Line::initialize_mark_table_as_marked::<VM>(start..end);
+        } else {
+            // Line::clear_mark_table::<VM>(start..end);
+        }
         // if !_copy {
         //     println!("reuse {:?} copy={}", start..end, copy);
         // }

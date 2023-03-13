@@ -198,6 +198,15 @@ impl Line {
             mark_bit.store_atomic(start + i, 0u8, Ordering::SeqCst);
         }
     }
+
+    pub(super) fn initialize_mark_table_as_marked<VM: VMBinding>(lines: Range<Line>) {
+        let start = lines.start.start();
+        let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
+        let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
+        for i in (0..size).step_by(16) {
+            mark_bit.store_atomic(start + i, 1u8, Ordering::SeqCst);
+        }
+    }
 }
 
 // type UInt<const BITS: usize> =

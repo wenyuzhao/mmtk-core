@@ -1,4 +1,5 @@
 use super::{block::Block, ImmixSpace};
+use crate::plan::immix::Pause;
 use crate::{
     plan::lxr::LXR,
     policy::space::Space,
@@ -23,6 +24,7 @@ pub struct BlockAllocation<VM: VMBinding> {
     pub refill_lock: Mutex<()>,
     refill_count: usize,
     previously_allocated_nursery_blocks: AtomicUsize,
+    pub(crate) lxr: Option<&'static LXR<VM>>,
 }
 
 impl<VM: VMBinding> BlockAllocation<VM> {
@@ -37,6 +39,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 .collect(),
             refill_count: crate::args().lock_free_blocks, // num_cpus::get(),
             previously_allocated_nursery_blocks: AtomicUsize::new(0),
+            lxr: None,
         }
     }
 
@@ -108,6 +111,11 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.space.unwrap()
     }
 
+    pub fn concurrent_marking_in_progress_or_final_mark(&self) -> bool {
+        let lxr = self.lxr.unwrap();
+        lxr.concurrent_marking_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
+    }
+
     fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
@@ -118,11 +126,20 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 line.mark(current_state);
             }
         }
+        // Initialize unlog table
         if self.space().rc_enabled && copy {
             if VM::VMObjectModel::compressed_pointers_enabled() {
                 block.initialize_log_table_as_unlogged::<VM, true>();
             } else {
                 block.initialize_log_table_as_unlogged::<VM, false>();
+            }
+        }
+        // Initialize mark table
+        if self.space().rc_enabled {
+            if self.concurrent_marking_in_progress_or_final_mark() {
+                block.initialize_mark_table_as_marked::<VM>();
+            } else {
+                // block.clear_mark_table::<VM>();
             }
         }
         // println!("Alloc {:?} {}", block, copy);

@@ -888,6 +888,10 @@ impl<VM: VMBinding> LXR<VM> {
         self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
         self.common.los.rc_enabled = true;
         unsafe {
+            let me = &*(self as *const Self);
+            self.immix_space.block_allocation.lxr = Some(me);
+        }
+        unsafe {
             let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
             lazy_sweeping_jobs.swap();
             let me = &*(self as *const Self);

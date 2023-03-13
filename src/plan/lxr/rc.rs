@@ -759,7 +759,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                 s.dead_mature_rc_los_volume += o.get_size::<VM>();
             }
         });
-        let not_marked = self.concurrent_marking_in_progress && immix.mark(o);
+        if self.concurrent_marking_in_progress {
+            immix.mark(o);
+        }
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
@@ -781,8 +783,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                         if rc != MAX_REF_COUNT && rc != 0 {
                             self.recursive_dec(x);
                         }
-                        if not_marked && self.concurrent_marking_in_progress && !immix.is_marked(x)
-                        {
+                        if self.concurrent_marking_in_progress && !immix.is_marked(x) {
                             self.mark_objects.push(x);
                         }
                     }
