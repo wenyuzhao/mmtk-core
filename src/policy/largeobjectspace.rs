@@ -1,5 +1,6 @@
 use atomic::Ordering;
 
+use crate::plan::lxr::RemSet;
 use crate::plan::ObjectQueue;
 use crate::plan::PlanConstraints;
 use crate::plan::VectorObjectQueue;
@@ -249,6 +250,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     fn update_validity(&self, start: Address, pages: usize) {
+        if RemSet::<VM>::NO_VALIDITY_STATE {
+            return;
+        }
         if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             LOS_PAGE_VALIDITY.bzero_metadata(start, pages << LOG_BYTES_IN_PAGE);
             return;

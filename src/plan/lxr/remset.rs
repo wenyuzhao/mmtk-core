@@ -34,6 +34,8 @@ pub struct RemSet<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> RemSet<VM> {
+    pub const NO_VALIDITY_STATE: bool = true;
+
     pub fn new(workers: usize) -> Self {
         let mut rs = RemSet {
             gc_buffers: vec![],
@@ -68,6 +70,9 @@ impl<VM: VMBinding> RemSet<VM> {
     }
 
     pub fn get_currrent_validity_state(&self, e: VM::VMEdge, space: &ImmixSpace<VM>) -> u8 {
+        if Self::NO_VALIDITY_STATE {
+            return 0;
+        }
         // FIXME: performance?
         if !e.to_address().is_mapped() {
             0

@@ -386,7 +386,7 @@ impl Block {
         self.set_state(BlockState::Unallocated);
         if space.rc_enabled {
             self.set_as_defrag_source(false);
-            Line::update_validity(self.lines());
+            Line::update_validity::<VM>(self.lines());
         }
     }
 

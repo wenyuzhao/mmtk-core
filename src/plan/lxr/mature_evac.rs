@@ -17,7 +17,7 @@ use crate::{
     MMTK,
 };
 
-use super::remset::RemSetEntry;
+use super::remset::{RemSet, RemSetEntry};
 use super::LXR;
 
 pub struct EvacuateMatureObjects<VM: VMBinding> {
@@ -61,12 +61,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
-            if Line::of(e.to_address()).pointer_is_valid(epoch) {
+            if RemSet::<VM>::NO_VALIDITY_STATE || Line::of(e.to_address()).pointer_is_valid(epoch) {
                 return true;
             }
             false
         } else {
-            if lxr.los().pointer_is_valid(e.to_address(), epoch) {
+            if RemSet::<VM>::NO_VALIDITY_STATE || lxr.los().pointer_is_valid(e.to_address(), epoch)
+            {
                 return true;
             }
             false

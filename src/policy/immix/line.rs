@@ -3,6 +3,7 @@ use std::ops::Range;
 use atomic::Ordering;
 
 use super::block::Block;
+use crate::plan::lxr::RemSet;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
@@ -146,8 +147,8 @@ impl Line {
         pointer_epoch == self.currrent_validity_state()
     }
 
-    pub fn update_validity(lines: RegionIterator<Line>) {
-        if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
+    pub fn update_validity<VM: VMBinding>(lines: RegionIterator<Line>) {
+        if RemSet::<VM>::NO_VALIDITY_STATE || !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
             return;
         }
         let mut has_invalid_state = false;

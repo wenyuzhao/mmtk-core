@@ -1186,7 +1186,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Line::initialize_log_table_as_unlogged::<VM, COMPRESSED>(start..end);
             }
-            Line::update_validity(RegionIterator::<Line>::new(start, end));
+            Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
         block.dec_dead_bytes_sloppy(
             (Line::steps_between(&start, &end).unwrap() as u32) << Line::LOG_BYTES,
