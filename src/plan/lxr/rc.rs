@@ -144,7 +144,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-            self.lxr().mark2(o, los);
+            debug_assert!(self.lxr().is_marked(o));
         }
         self.scan_nursery_object(o, los, !copied, depth);
     }
@@ -742,6 +742,15 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
+    fn record_mature_evac_remset(&mut self, lxr: &LXR<VM>, e: VM::VMEdge, o: ObjectReference) {
+        if !(crate::args::RC_MATURE_EVACUATION && self.concurrent_marking_in_progress) {
+            return;
+        }
+        if !lxr.address_in_defrag(e.to_address()) && lxr.in_defrag(o) {
+            lxr.immix_space.remset.record(e, o, &lxr.immix_space);
+        }
+    }
+
     #[cold]
     fn process_dead_object(&mut self, o: ObjectReference, immix: &LXR<VM>) {
         crate::stat(|s| {
@@ -773,15 +782,19 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             unimplemented!()
         } else if !crate::args().no_recursive_dec {
             o.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Ignore,
+                CLDScanPolicy::Claim,
                 RefScanPolicy::Follow,
                 |edge| {
                     let x = edge.load::<COMPRESSED>();
                     if !x.is_null() {
                         // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                        let rc = self.rc.count(x);
-                        if rc != MAX_REF_COUNT && rc != 0 {
-                            self.recursive_dec(x);
+                        if edge.to_address().is_mapped() {
+                            let rc = self.rc.count(x);
+                            if rc != MAX_REF_COUNT && rc != 0 {
+                                self.recursive_dec(x);
+                            }
+                        } else {
+                            self.record_mature_evac_remset(immix, edge, x);
                         }
                         if self.concurrent_marking_in_progress && !immix.is_marked(x) {
                             self.mark_objects.push(x);

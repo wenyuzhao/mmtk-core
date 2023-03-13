@@ -381,6 +381,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     }
 
     fn address_in_space(&self, start: Address) -> bool {
+        if !start.is_mapped() {
+            return false;
+        }
         if !self.common().descriptor.is_contiguous() {
             self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
         } else {
