@@ -3,6 +3,7 @@ use crate::util::opaque_pointer::*;
 use crate::util::Address;
 use crate::vm::{Collection, VMBinding};
 use libc::{PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
+use std::fmt::Debug;
 use std::io::{Error, Result};
 
 pub fn result_is_mapped(result: Result<()>) -> bool {
@@ -39,6 +40,15 @@ pub unsafe fn dzmmap(start: Address, size: usize) -> Result<()> {
     if ret.is_ok() {
         zero(start, size)
     }
+    if cfg!(feature = "sanity") {
+        assert!(
+            ret.is_ok(),
+            "dzmmap failed: start={:?} size={} err={:?}",
+            start,
+            size,
+            ret
+        );
+    }
     ret
 }
 
@@ -58,6 +68,15 @@ pub fn dzmmap_noreplace(start: Address, size: usize) -> Result<()> {
     if ret.is_ok() {
         zero(start, size)
     }
+    if cfg!(feature = "sanity") {
+        assert!(
+            ret.is_ok(),
+            "dzmmap_noreplace failed: start={:?} size={} err={:?}",
+            start,
+            size,
+            ret
+        );
+    }
     ret
 }
 
@@ -72,15 +91,20 @@ pub fn mmap_noreserve(start: Address, size: usize) -> Result<()> {
     #[cfg(not(feature = "no_map_fixed_noreplace"))]
     let flags =
         libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED_NOREPLACE | libc::MAP_NORESERVE;
-    mmap_fixed(start, size, prot, flags)
+    let ret = mmap_fixed(start, size, prot, flags);
+    if cfg!(feature = "sanity") {
+        assert!(
+            ret.is_ok(),
+            "mmap_noreserve failed: start={:?} size={} err={:?}",
+            start,
+            size,
+            ret
+        );
+    }
+    ret
 }
 
-pub fn mmap_fixed(
-    start: Address,
-    size: usize,
-    prot: libc::c_int,
-    flags: libc::c_int,
-) -> Result<()> {
+fn mmap_fixed(start: Address, size: usize, prot: libc::c_int, flags: libc::c_int) -> Result<()> {
     let ptr = start.to_mut_ptr();
     wrap_libc_call(
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
@@ -161,11 +185,14 @@ pub fn mprotect(start: Address, size: usize) -> Result<()> {
     )
 }
 
-fn wrap_libc_call<T: PartialEq>(f: &dyn Fn() -> T, expect: T) -> Result<()> {
+fn wrap_libc_call<T: PartialEq + Debug>(f: &dyn Fn() -> T, expect: T) -> Result<()> {
     let ret = f();
     if ret == expect {
         Ok(())
     } else {
+        if cfg!(feature = "sanity") {
+            eprintln!("unexpected libc call result: {:?} vs {:?}", ret, expect);
+        }
         Err(std::io::Error::last_os_error())
     }
 }
