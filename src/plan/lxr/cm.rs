@@ -87,11 +87,19 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         if object.is_null() {
             return object;
         }
-        debug_assert!(
-            object.to_address::<VM>().is_mapped(),
-            "Invalid obj {:?}",
-            object
-        );
+        if cfg!(any(feature = "sanity", debug_assertions)) {
+            assert!(
+                object.to_address::<VM>().is_mapped(),
+                "Invalid object {:?}: address is not mapped",
+                object
+            );
+            assert!(
+                object.is_in_any_space(),
+                "Invalid object {:?}: address is not in any space",
+                object
+            );
+        }
+
         let no_trace = self.rc.count(object) == 0;
         if no_trace || self.plan.is_marked(object) {
             return object;
@@ -131,6 +139,18 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     for LXRConcurrentTraceObjects<VM, COMPRESSED>
 {
     fn enqueue(&mut self, object: ObjectReference) {
+        if cfg!(feature = "sanity") {
+            assert!(
+                object.to_address::<VM>().is_mapped(),
+                "Invalid obj {:?}: address is not mapped",
+                object
+            );
+            assert!(
+                object.is_in_any_space(),
+                "Invalid object {:?}: address is not in any space",
+                object
+            );
+        }
         if self.rc.count(object) == 0 {
             return;
         }
@@ -142,7 +162,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
             self.klass,
             |e| {
                 let t: ObjectReference = e.load::<COMPRESSED>();
-                if t.is_null() || self.rc.count(t) == 0 {
+                if t.is_null() {
                     return;
                 }
                 let validity = self
@@ -155,6 +175,25 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
         );
         if self.rc.count(object) != 0 {
             for (e, t, validity) in cached_children {
+                if cfg!(feature = "sanity") {
+                    assert!(
+                        object.to_address::<VM>().is_mapped(),
+                        "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
+                        object,
+                        e,
+                        t
+                    );
+                    assert!(
+                        object.is_in_any_space(),
+                        "Invalid edge {:?}.{:?} -> {:?}: target is not in any space",
+                        object,
+                        e,
+                        t
+                    );
+                }
+                if t.is_null() || self.rc.count(t) == 0 {
+                    continue;
+                }
                 if crate::args::RC_MATURE_EVACUATION
                     && (should_check_remset || !e.to_address().is_mapped())
                     && self.plan.in_defrag(t)
