@@ -226,7 +226,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 .store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
         if *mmtk.options.verbose >= 3 {
-            println!(
+            eprintln!(
                 "[{:.3}s][info][gc]  - ({:.6}ms) Mutators stopped",
                 crate::boot_time_secs(),
                 crate::gc_trigger_time() as f64 / 1000000f64,
@@ -300,7 +300,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 Pause::FinalMark => "FinalMark",
                 _ => "Full",
             };
-            println!(
+            eprintln!(
                 "[{:.3}s][info][gc] GC({}) {} finished. {}M->{}M({}M) pause-time={:.3}ms",
                 boot_time,
                 crate::GC_EPOCH.load(Ordering::SeqCst),

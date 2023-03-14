@@ -231,7 +231,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .fetch_add(1, Ordering::SeqCst);
         }
         if *self.options().verbose >= 2 {
-            println!(
+            eprintln!(
                 "[{:.3}s][info][gc] GC({}) {:?} start. incs={}",
                 crate::boot_time_secs(),
                 crate::GC_EPOCH.load(Ordering::SeqCst),
@@ -589,7 +589,7 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if *self.options().verbose >= 2 {
-            println!(
+            eprintln!(
                 "[{:.3}s][info][gc]  - next_gc_may_perform_cycle_collection = {}",
                 crate::boot_time_secs(),
                 self.next_gc_may_perform_cycle_collection
@@ -907,7 +907,7 @@ impl<VM: VMBinding> LXR<VM> {
                         .elapsed()
                         .unwrap();
                     let pause_time = pause_time.as_micros() as f64 / 1000f64;
-                    println!(
+                    eprintln!(
                         "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
                         crate::boot_time_secs(),
                         crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,

@@ -454,7 +454,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         }
         if *self.options.verbose >= 2 {
-            println!(
+            eprintln!(
                 "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks)",
                 crate::boot_time_secs(),
                 live_bytes,

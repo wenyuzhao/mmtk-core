@@ -164,7 +164,7 @@ pub static IGNORE_REUSING_BLOCKS: bool = true;
 
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {
-        println!(" * {}: {:?}", $name, $value)
+        eprintln!(" * {}: {:?}", $name, $value)
     };
     ($name: literal) => {
         dump_feature!($name, cfg!(feature = $name))
@@ -175,7 +175,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     if *options.verbose == 0 {
         return;
     }
-    println!("-------------------- Immix Args --------------------");
+    eprintln!("-------------------- Immix Args --------------------");
 
     dump_feature!("barrier", format!("{:?}", active_barrier));
     dump_feature!("barrier_measurement");
@@ -200,9 +200,9 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("workers", *options.threads);
     dump_feature!("address_space", VMLayoutConstants::get_address_space());
 
-    println!("\n{:#?}", RuntimeArgs::get());
+    eprintln!("\n{:#?}", RuntimeArgs::get());
 
-    println!("----------------------------------------------------");
+    eprintln!("----------------------------------------------------");
 }
 
 pub fn validate_features(active_barrier: BarrierSelector, options: &Options) {

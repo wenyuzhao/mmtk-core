@@ -40,7 +40,7 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
     }
 
     if *mmtk.options.verbose >= 3 {
-        println!(
+        eprintln!(
             "[{:.3}s][info][gc]  - ({:.6}ms) Safepoint start",
             crate::boot_time_secs(),
             crate::gc_trigger_time() as f64 / 1000000f64,

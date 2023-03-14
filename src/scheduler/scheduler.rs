@@ -442,7 +442,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                         .as_nanos();
                     crate::add_bucket_time(id, since_prev_stage);
                     if verbose {
-                        println!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                        eprintln!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
                             crate::boot_time_secs(),
                             crate::gc_trigger_time() as f64 / 1000000f64,
                             id, since_prev_stage,
@@ -706,7 +706,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                         .elapsed()
                         .unwrap()
                         .as_nanos();
-                    println!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
+                    eprintln!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
                         crate::boot_time_secs(),
                         crate::gc_trigger_time() as f64 / 1000000f64,
                         WorkBucketStage::from_usize(2), since_prev_stage,
