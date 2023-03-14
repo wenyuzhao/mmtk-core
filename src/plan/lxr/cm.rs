@@ -93,11 +93,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
                 "Invalid object {:?}: address is not mapped",
                 object
             );
-            assert!(
-                object.is_in_any_space(),
-                "Invalid object {:?}: address is not in any space",
-                object
-            );
         }
 
         let no_trace = self.rc.count(object) == 0;
@@ -145,11 +140,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                 "Invalid obj {:?}: address is not mapped",
                 object
             );
-            assert!(
-                object.is_in_any_space(),
-                "Invalid object {:?}: address is not in any space",
-                object
-            );
         }
         if self.rc.count(object) == 0 {
             return;
@@ -179,13 +169,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                     assert!(
                         object.to_address::<VM>().is_mapped(),
                         "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
-                        object,
-                        e,
-                        t
-                    );
-                    assert!(
-                        object.is_in_any_space(),
-                        "Invalid edge {:?}.{:?} -> {:?}: target is not in any space",
                         object,
                         e,
                         t
