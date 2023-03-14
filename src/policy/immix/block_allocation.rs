@@ -229,7 +229,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Allocate a clean block.
-    fn alloc_clean_block(&self, tls: VMThread) -> Option<Block> {
+    fn alloc_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
         if let Some(block) = self.alloc_clean_block_fast() {
             return Some(block);
         }
@@ -237,6 +237,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         match me.alloc_clean_block_slow(tls) {
             Some(block) => Some(block),
             _ => {
+                assert!(!copy, "to-space overflow!");
                 VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
                 None
             }
@@ -246,7 +247,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Allocate a clean block.
     pub fn get_clean_block(&self, tls: VMThread, copy: bool, lock_free: bool) -> Option<Block> {
         let block = if lock_free {
-            self.alloc_clean_block(tls)?
+            self.alloc_clean_block(tls, copy)?
         } else {
             let block_address = self.space().acquire_no_lock(tls, Block::PAGES);
             if block_address.is_zero() {

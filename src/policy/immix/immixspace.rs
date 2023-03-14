@@ -530,7 +530,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             b.set_state(BlockState::Marked);
         }
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            // Do nothing
+            // Release young blocks to reduce to-space overflow
+            let scheduler = self.scheduler.clone();
+            self.block_allocation.sweep_and_reset(&scheduler);
         } else {
             for b in &*blocks {
                 self.add_to_possibly_dead_mature_blocks(*b, false);
