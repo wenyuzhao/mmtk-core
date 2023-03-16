@@ -99,14 +99,20 @@ impl VMLayoutConstants {
             heap_size <= (32usize << 30),
             "Heap size is larger than 32 GB"
         );
-        let start = 0x4000_0000;
-        let end = match start + heap_size {
+        let mut start: usize = 0x4000_0000;
+        let mut end: usize = match start + heap_size {
             end if end <= (4usize << 30) => 4usize << 30,
             end if end <= (32usize << 30) => 32usize << 30,
             _ => 0x4000_0000 + (32usize << 30),
         };
+        // A workaround to avoid address conflict with the OpenJDK
+        // MetaSpace, which may start from 0x8_0000_0000
+        if end > 0x8_0000_0000 {
+            start = 0x200_0000_0000;
+            end = start + 0x8_0000_0000;
+        }
         Self {
-            log_address_space: 32,
+            log_address_space: 35,
             heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
             heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
