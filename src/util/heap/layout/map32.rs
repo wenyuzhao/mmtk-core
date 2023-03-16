@@ -224,13 +224,15 @@ impl Map for Map32 {
         for _ in first_chunk..=last_chunk {
             self_mut.region_map.alloc(1);
         }
-        let alloced_chunk = self_mut.region_map.alloc(trailing_chunks as _);
-        debug_assert!(
-            alloced_chunk == unavail_start_chunk as i32,
-            "{} != {}",
-            alloced_chunk,
-            unavail_start_chunk
-        );
+        if trailing_chunks != 0 {
+            let alloced_chunk = self_mut.region_map.alloc(trailing_chunks as _);
+            debug_assert!(
+                alloced_chunk == unavail_start_chunk as i32,
+                "{} != {}",
+                alloced_chunk,
+                unavail_start_chunk
+            );
+        }
         /* set up the global page map and place chunks on free list */
         let mut first_page = 0;
         for chunk_index in first_chunk..=last_chunk {
