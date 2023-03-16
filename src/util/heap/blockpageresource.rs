@@ -19,6 +19,76 @@ use std::sync::Mutex;
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 const LOCAL_BUFFER_SIZE: usize = 128;
 
+struct BlockBitMap {
+    base: Address,
+    cursor: usize,
+    table: Vec<u8>,
+}
+
+impl BlockBitMap {
+    fn new_compressed_pointers(base: Address) -> Self {
+        Self {
+            base,
+            cursor: 0,
+            table: vec![0; (32 << 30) >> 15],
+        }
+    }
+
+    fn alloc(&mut self) -> Option<Address> {
+        let mut cursor = 0;
+        while cursor < self.table.len() {
+            if self.table[cursor] == 1 {
+                self.table[cursor] = 0;
+                return Some(self.base + (cursor << 15));
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    fn is_chunk_free(&mut self, a: Address) -> bool {
+        assert!(a.is_aligned_to(BYTES_IN_CHUNK));
+        let blocks_in_chunk = 1 << (22 - 15);
+        let i = (a - self.base) >> 15;
+        for j in 0..blocks_in_chunk {
+            if self.table[i + j] != 1 {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn free(&mut self, a: Address) -> Option<Address> {
+        let i = (a - self.base) >> 15;
+        self.table[i] = 1;
+        let c = a.align_down(BYTES_IN_CHUNK);
+        if self.is_chunk_free(c) {
+            self.remove_chunk(c);
+            return Some(c)
+        }
+        None
+    }
+
+    fn add_chunk(&mut self, a: Address) {
+        assert!(a.is_aligned_to(BYTES_IN_CHUNK));
+        let blocks_in_chunk = 1 << (22 - 15);
+        let i = (a - self.base) >> 15;
+        for j in 0..blocks_in_chunk {
+            self.table[i + j] = 1;
+        }
+    }
+
+    fn remove_chunk(&mut self, a: Address) {
+        assert!(a.is_aligned_to(BYTES_IN_CHUNK));
+        let blocks_in_chunk = 1 << (22 - 15);
+        let i = (a - self.base) >> 15;
+        for j in 0..blocks_in_chunk {
+            self.table[i + j] = 0;
+        }
+    }
+}
+
+
 /// A fast PageResource for fixed-size block allocation only.
 pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     flpr: FreeListPageResource<VM>,
@@ -26,6 +96,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     block_queue: BlockPool<B>,
     /// Slow-path allocation synchronization
     sync: Mutex<()>,
+    bitmap: Mutex<BlockBitMap>,
 }
 
 impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
@@ -46,8 +117,30 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
     ) -> Result<PRAllocResult, PRAllocFail> {
         if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
             // TODO: Lock-free implementation
-            self.flpr
-                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+            // self.flpr
+            //     .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+            let mut bitmap = self.bitmap.lock().unwrap();
+            if let Some(a) = bitmap.alloc() {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                // println!("alloc block {:?}", a);
+                Ok(PRAllocResult {
+                    start: a,
+                    pages: required_pages,
+                    new_chunk: false,
+                })
+            } else {
+                let start: Address = self.common().grow_discontiguous_space(space_descriptor, 1);
+                // println!("alloc chunk {:?}", start);
+                bitmap.add_chunk(start);
+                let a = bitmap.alloc().unwrap();
+                assert!(a.is_aligned_to(BYTES_IN_CHUNK));
+                self.commit_pages(reserved_pages, required_pages, tls);
+                Ok(PRAllocResult {
+                    start: a,
+                    pages: required_pages,
+                    new_chunk: true,
+                })
+            }
         } else {
             self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
         }
@@ -76,6 +169,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map),
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
+            bitmap: unimplemented!(),
         }
     }
 
@@ -89,6 +183,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             flpr: FreeListPageResource::new_discontiguous(vm_map),
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
+            bitmap: Mutex::new(BlockBitMap::new_compressed_pointers(VM_LAYOUT_CONSTANTS.available_start())),
         }
     }
 
@@ -172,7 +267,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     pub fn release_block(&self, block: B) {
         if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
             // TODO: Lock-free implementation
-            self.flpr.release_pages(block.start());
+            // self.flpr.release_pages(block.start());
+            let mut bitmap = self.bitmap.lock().unwrap();
+            let pages = 1 << Self::LOG_PAGES;
+            self.common().accounting.release(pages as _);
+            // println!("release block {:?}", block.start());
+            if let Some(c) = bitmap.free(block.start()) {
+                println!("release chunk {:?}", c);
+                self.common().release_discontiguous_chunks(c);
+            }
         } else {
             let pages = 1 << Self::LOG_PAGES;
             debug_assert!(pages as usize <= self.common().accounting.get_committed_pages());
