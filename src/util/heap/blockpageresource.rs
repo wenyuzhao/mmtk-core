@@ -18,11 +18,16 @@ use std::sync::Mutex;
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 const LOCAL_BUFFER_SIZE: usize = 128;
+const LOG_BLOCKS_IN_CHUNK: usize = 22 - 15;
+const BLOCKS_IN_CHUNK: usize = 1 << (22 - 15);
 
 struct BlockBitMap {
     base: Address,
     cursor: usize,
     table: Vec<u8>,
+    chunk_map: ChunkMap,
+    alloc_chunk: Option<Box<dyn Fn() -> Option<Address>>>,
+    free_chunk: Option<Box<dyn Fn(Address)>>,
 }
 
 impl BlockBitMap {
@@ -31,59 +36,97 @@ impl BlockBitMap {
             base,
             cursor: 0,
             table: vec![0; (32 << 30) >> 15],
+            chunk_map: ChunkMap::new_compressed_pointers(base),
+            alloc_chunk: None,
+            free_chunk: None,
         }
     }
 
-    fn alloc(&mut self) -> Option<Address> {
-        let mut cursor = 0;
-        while cursor < self.table.len() {
-            if self.table[cursor] == 1 {
-                self.table[cursor] = 0;
-                return Some(self.base + (cursor << 15));
+    fn alloc(&mut self) -> Option<(Address, bool)> {
+        while self.chunk_map.cursor < self.chunk_map.chunks.len() {
+            let chunk = self.chunk_map.chunks[self.chunk_map.cursor];
+            for j in 0..BLOCKS_IN_CHUNK {
+                let b = (chunk << LOG_BLOCKS_IN_CHUNK) + j;
+                if self.table[b] == 1 {
+                    self.table[b] = 0;
+                    self.chunk_map.live_blocks[chunk] += 1;
+                    return Some((self.base + (b << 15), false));
+                }
             }
-            cursor += 1;
+            self.chunk_map.cursor += 1;
         }
-        None
-    }
-
-    fn is_chunk_free(&mut self, a: Address) -> bool {
-        assert!(a.is_aligned_to(BYTES_IN_CHUNK));
-        let blocks_in_chunk = 1 << (22 - 15);
-        let i = (a - self.base) >> 15;
-        for j in 0..blocks_in_chunk {
-            if self.table[i + j] != 1 {
-                return false;
+        // last entry in the new_chunks list
+        if let Some(c) = self.chunk_map.new_chunks.last() {
+            for j in 0..BLOCKS_IN_CHUNK {
+                let b = (*c << LOG_BLOCKS_IN_CHUNK) + j;
+                if self.table[b] == 1 {
+                    self.table[b] = 0;
+                    self.chunk_map.live_blocks[*c] += 1;
+                    return Some((self.base + (b << 15), false));
+                }
             }
         }
-        true
+        // Acquire a new chunk
+        let new_chunk_address = (self.alloc_chunk.as_ref().unwrap())()?;
+        let c = (new_chunk_address - self.base) >> 22;
+        assert_eq!(self.chunk_map.live_blocks[c], 0);
+        self.chunk_map.new_chunks.push(c);
+        self.chunk_map.live_blocks[c] = 1;
+        let i = (new_chunk_address - self.base) >> 15;
+        for j in 0..BLOCKS_IN_CHUNK {
+            self.table[i + j] = 1;
+        }self.table[i] = 0;
+        return Some((new_chunk_address, true));
     }
 
-    fn free(&mut self, a: Address) -> Option<Address> {
+    fn free(&mut self, a: Address) {
+        // update block table
         let i = (a - self.base) >> 15;
         self.table[i] = 1;
-        let c = a.align_down(BYTES_IN_CHUNK);
-        if self.is_chunk_free(c) {
-            self.remove_chunk(c);
-            return Some(c)
-        }
-        None
-    }
-
-    fn add_chunk(&mut self, a: Address) {
-        assert!(a.is_aligned_to(BYTES_IN_CHUNK));
-        let blocks_in_chunk = 1 << (22 - 15);
-        let i = (a - self.base) >> 15;
-        for j in 0..blocks_in_chunk {
-            self.table[i + j] = 1;
+        let chunk_address = a.align_down(BYTES_IN_CHUNK);
+        let c = (chunk_address - self.base) >> 22;
+        self.chunk_map.live_blocks[c] -= 1;
+        // release chunk
+        if self.chunk_map.live_blocks[c] == 0 {
+            (self.free_chunk.as_ref().unwrap())(chunk_address);
         }
     }
 
-    fn remove_chunk(&mut self, a: Address) {
-        assert!(a.is_aligned_to(BYTES_IN_CHUNK));
-        let blocks_in_chunk = 1 << (22 - 15);
-        let i = (a - self.base) >> 15;
-        for j in 0..blocks_in_chunk {
-            self.table[i + j] = 0;
+    fn sort(&mut self) {
+        for c in &self.chunk_map.new_chunks {
+            self.chunk_map.chunks.push(*c);
+        }
+        self.chunk_map.new_chunks.clear();
+        let chunks: Vec<_> = self.chunk_map.chunks.iter().filter(|c| self.chunk_map.live_blocks[**c] != 0).map(|c| *c).collect();
+        self.chunk_map.chunks = chunks;
+        for c in &self.chunk_map.chunks {
+            assert_ne!(self.chunk_map.live_blocks[*c], 0);
+        }
+        self.chunk_map.chunks.sort_by_cached_key(|c| BLOCKS_IN_CHUNK as u8 - self.chunk_map.live_blocks[*c]);
+        for c in &self.chunk_map.new_chunks {
+            self.chunk_map.chunks.push(*c);
+        }
+        self.chunk_map.cursor = 0;
+    }
+}
+
+
+struct ChunkMap {
+    base: Address,
+    cursor: usize,
+    live_blocks: Vec<u8>,
+    chunks: Vec<usize>,
+    new_chunks: Vec<usize>,
+}
+
+impl ChunkMap {
+    fn new_compressed_pointers(base: Address) -> Self {
+        Self {
+            base,
+            cursor: 0,
+            live_blocks: vec![0; (32 << 30) >> 22],
+            chunks: vec![],
+            new_chunks: vec![],
         }
     }
 }
@@ -116,30 +159,27 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
-            // TODO: Lock-free implementation
-            // self.flpr
-            //     .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
             let mut bitmap = self.bitmap.lock().unwrap();
-            if let Some(a) = bitmap.alloc() {
+            if bitmap.alloc_chunk.is_none() {
+                let me = unsafe { &*(self as *const Self) };
+                bitmap.alloc_chunk = Some(Box::new(move || {
+                    let a = me.common().grow_discontiguous_space(space_descriptor, 1);
+                    if a.is_zero() {
+                        None
+                    } else {
+                        Some(a)
+                    }
+                }));
+            }
+            if let Some((a, new_chunk)) = bitmap.alloc() {
                 self.commit_pages(reserved_pages, required_pages, tls);
-                // println!("alloc block {:?}", a);
                 Ok(PRAllocResult {
                     start: a,
                     pages: required_pages,
-                    new_chunk: false,
+                    new_chunk: new_chunk,
                 })
             } else {
-                let start: Address = self.common().grow_discontiguous_space(space_descriptor, 1);
-                // println!("alloc chunk {:?}", start);
-                bitmap.add_chunk(start);
-                let a = bitmap.alloc().unwrap();
-                assert!(a.is_aligned_to(BYTES_IN_CHUNK));
-                self.commit_pages(reserved_pages, required_pages, tls);
-                Ok(PRAllocResult {
-                    start: a,
-                    pages: required_pages,
-                    new_chunk: true,
-                })
+                Err(PRAllocFail)
             }
         } else {
             self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
@@ -269,13 +309,16 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             // TODO: Lock-free implementation
             // self.flpr.release_pages(block.start());
             let mut bitmap = self.bitmap.lock().unwrap();
+            if bitmap.free_chunk.is_none() {
+                let me = unsafe { &*(self as *const Self) };
+                bitmap.free_chunk = Some(Box::new(move |c: Address| {
+                    me.common().release_discontiguous_chunks(c);
+                }));
+            }
             let pages = 1 << Self::LOG_PAGES;
             self.common().accounting.release(pages as _);
             // println!("release block {:?}", block.start());
-            if let Some(c) = bitmap.free(block.start()) {
-                println!("release chunk {:?}", c);
-                self.common().release_discontiguous_chunks(c);
-            }
+            bitmap.free(block.start());
         } else {
             let pages = 1 << Self::LOG_PAGES;
             debug_assert!(pages as usize <= self.common().accounting.get_committed_pages());
@@ -285,6 +328,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn flush_all(&self) {
+        self.bitmap.lock().unwrap().sort();
         self.block_queue.flush_all()
         // TODO: For 32-bit space, we may want to free some contiguous chunks.
     }
