@@ -327,7 +327,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
-        self.immix_space.flush_page_resource();
+        // self.immix_space.flush_page_resource();
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
 
@@ -368,7 +368,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn gc_pause_end(&self) {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
-        self.immix_space.flush_page_resource();
+        // self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
             self.set_concurrent_marking_state(true);
