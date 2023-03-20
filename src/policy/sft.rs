@@ -116,11 +116,8 @@ impl SFT for EmptySpaceSFT {
     fn name(&self) -> &str {
         EMPTY_SFT_NAME
     }
-    fn is_live(&self, object: ObjectReference) -> bool {
-        panic!(
-            "Called is_live() on {:x}, which maps to an empty space",
-            object
-        )
+    fn is_live(&self, _object: ObjectReference) -> bool {
+        false
     }
     #[cfg(feature = "sanity")]
     fn is_sane(&self) -> bool {
