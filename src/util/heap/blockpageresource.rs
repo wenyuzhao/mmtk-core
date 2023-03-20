@@ -11,7 +11,7 @@ use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
-use atomic::Ordering;
+use atomic::{Ordering, Atomic};
 use spin::RwLock;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, AtomicUsize};
@@ -50,7 +50,7 @@ impl AllocPolicy {
     };
 }
 
-type Bin = std::sync::RwLock<Vec<Address>>;
+type Bin = std::sync::RwLock<Address>;
 
 struct ChunkPool {
     base: Address,
@@ -62,6 +62,8 @@ struct ChunkPool {
     live_blocks: Vec<AtomicU16>,
     /// current bin index  for each chunk
     chunk_bin: Vec<AtomicU8>,
+    next_chunk: Vec<Atomic<Address>>,
+    prev_chunk: Vec<Atomic<Address>>,
     sync: Mutex<()>,
     alloc_chunk: Option<Box<dyn Fn() -> Option<Address>>>,
     free_chunk: Option<Box<dyn Fn(Address)>>,
@@ -85,6 +87,8 @@ impl ChunkPool {
             ],
             live_blocks: (0..Self::MAX_CHUNKS).map(|_| AtomicU16::new(0)).collect(),
             chunk_bin: (0..Self::MAX_CHUNKS).map(|_| AtomicU8::new(0)).collect(),
+            next_chunk: (0..Self::MAX_CHUNKS).map(|_| Atomic::new(Address::ZERO)).collect(),
+            prev_chunk: (0..Self::MAX_CHUNKS).map(|_| Atomic::new(Address::ZERO)).collect(),
             sync: Mutex::default(),
             alloc_chunk: None,
             free_chunk: None,
@@ -96,17 +100,43 @@ impl ChunkPool {
     fn free_chunk(&self, c: Address) {
         (self.free_chunk.as_ref().unwrap())(c)
     }
+    fn chunk_index(&self, c: Address) -> usize {
+        (c - self.base) >> LOG_BYTES_IN_CHUNK
+    }
+    fn remove_from_bin(&self, head: &mut Address, _c: Address, c_index: usize) {
+        let prev = self.prev_chunk[c_index].load(Ordering::Relaxed);
+        let next = self.next_chunk[c_index].load(Ordering::Relaxed);
+        if !next.is_zero() {
+            self.prev_chunk[self.chunk_index(next)].store(prev, Ordering::Relaxed);
+        }
+        if !prev.is_zero() {
+            self.next_chunk[self.chunk_index(prev)].store(next, Ordering::Relaxed);
+        } else {
+            *head = next;
+        }
+        self.next_chunk[c_index].store(Address::ZERO, Ordering::Relaxed);
+        self.prev_chunk[c_index].store(Address::ZERO, Ordering::Relaxed);
+        self.chunk_bin[c_index].store(u8::MAX, Ordering::Relaxed);
+    }
+    fn add_to_bin(&self, head: &mut Address, c: Address, c_index: usize) {
+        self.prev_chunk[c_index].store(Address::ZERO, Ordering::Relaxed);
+        self.next_chunk[c_index].store(*head, Ordering::Relaxed);
+        if !head.is_zero() {
+            let h_index = self.chunk_index(*head);
+            self.prev_chunk[h_index].store(c, Ordering::Relaxed);
+        }
+        *head = c;
+    }
     fn move_chunk(&self, c: Address) {
         let _sync = self.sync.lock().unwrap();
         let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
-        let old_bin = self.chunk_bin[c_index].load(Ordering::SeqCst) as usize;
-        let live_blocks = self.live_blocks[c_index].load(Ordering::SeqCst);
+        let old_bin = self.chunk_bin[c_index].load(Ordering::Relaxed) as usize;
+        let live_blocks = self.live_blocks[c_index].load(Ordering::Relaxed);
         if live_blocks == 0 {
-            // release chunk
+            // remove from bin
             let mut bin = self.bins[old_bin].write().unwrap();
-            let i = bin.iter().position(|x| *x == c).unwrap();
-            bin.remove(i);
-            self.chunk_bin[c_index].store(u8::MAX, Ordering::SeqCst);
+            self.remove_from_bin(&mut bin, c, c_index);
+            // release chunk
             self.free_chunk(c);
             return;
         }
@@ -120,21 +150,21 @@ impl ChunkPool {
         } as usize;
         if new_bin != old_bin {
             let mut bin = self.bins[old_bin].write().unwrap();
-            let i = bin.iter().position(|x| *x == c).unwrap();
-            bin.remove(i);
+            self.remove_from_bin(&mut bin, c, c_index);
             let mut bin = self.bins[new_bin].write().unwrap();
-            bin.push(c);
-            self.chunk_bin[c_index].store(new_bin as u8, Ordering::SeqCst);
+            self.add_to_bin(&mut bin, c, c_index);
+            self.chunk_bin[c_index].store(new_bin as u8, Ordering::Relaxed);
         }
     }
 
     fn alloc_block(&self) -> Option<(Address, bool)> {
         for bin in self.bins.iter().skip(1) {
             let bin = bin.read().unwrap();
-            for c in &*bin {
-                let c_index = (*c - self.base) >> LOG_BYTES_IN_CHUNK;
+            let mut c = *bin;
+            while !c.is_zero() {
+                let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
                 for i in 0..BLOCKS_IN_CHUNK {
-                    let b = *c + (i << Block::LOG_BYTES);
+                    let b = c + (i << Block::LOG_BYTES);
                     let b_index = (b - self.base) >> Block::LOG_BYTES;
                     if self.alloc_state[b_index].fetch_or(true, Ordering::SeqCst) == false {
                         let result = self.live_blocks[c_index].fetch_update(
@@ -156,7 +186,6 @@ impl ChunkPool {
                                 || live_blocks == 64
                                 || live_blocks == 32
                             {
-                                let c = *c;
                                 std::mem::drop(bin);
                                 self.move_chunk(c);
                             }
@@ -166,6 +195,7 @@ impl ChunkPool {
                         return Some((b, false));
                     }
                 }
+                c = self.next_chunk[c_index].load(Ordering::SeqCst);
             }
         }
         // Acquire new chunk
@@ -181,7 +211,7 @@ impl ChunkPool {
             self.alloc_state[b_index].store(true, Ordering::SeqCst);
             self.live_blocks[c_index].store(1, Ordering::SeqCst);
             self.chunk_bin[c_index].store(self.bins.len() as u8 - 1, Ordering::SeqCst);
-            self.bins[self.bins.len() - 1].write().unwrap().push(c);
+            self.add_to_bin(&mut self.bins[self.bins.len() - 1].write().unwrap(), c, c_index);
             return Some((b, true));
         }
         None
@@ -204,10 +234,9 @@ impl ChunkPool {
             let old_bin = self.chunk_bin[c_index].load(Ordering::Relaxed) as usize;
             if live_blocks == 0 {
                 // release chunk
+                let me = unsafe { &*(self as *const Self) };
                 let bin = self.bins[old_bin].get_mut().unwrap();
-                let i = bin.iter().position(|x| *x == c).unwrap();
-                bin.remove(i);
-                self.chunk_bin[c_index].store(u8::MAX, Ordering::Relaxed);
+                me.remove_from_bin(bin, c, c_index);
                 self.free_chunk(c);
             } else {
                 assert_ne!(live_blocks, 0);
@@ -219,11 +248,11 @@ impl ChunkPool {
                     _ => 4,
                 } as usize;
                 if new_bin != old_bin {
+                    let me = unsafe { &*(self as *const Self) };
                     let bin = self.bins[old_bin].get_mut().unwrap();
-                    let i = bin.iter().position(|x| *x == c).unwrap();
-                    bin.remove(i);
+                    me.remove_from_bin(bin, c, c_index);
                     let bin = self.bins[new_bin].get_mut().unwrap();
-                    bin.push(c);
+                    me.add_to_bin(bin, c, c_index);
                     self.chunk_bin[c_index].store(new_bin as u8, Ordering::Relaxed);
                 }
             }
@@ -634,8 +663,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn flush_all(&self) {
-        self.bitmap.lock().unwrap().sort();
-        self.block_queue.flush_all()
+        if AllocPolicy::DEFAULT == AllocPolicy::BestFit || AllocPolicy::DEFAULT == AllocPolicy::FirstFit {
+            self.bitmap.lock().unwrap().sort();
+        }
+        if AllocPolicy::DEFAULT == AllocPolicy::LockFreeUnprioritized {
+            self.block_queue.flush_all()
+        }
         // TODO: For 32-bit space, we may want to free some contiguous chunks.
     }
 }
