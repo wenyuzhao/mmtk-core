@@ -151,7 +151,7 @@ impl ChunkPool {
                         );
                         if let Ok(old_live_blocks) = result {
                             let live_blocks = old_live_blocks + 1;
-                            assert_eq!(BYTES_IN_CHUNK, 128);
+                            assert_eq!(BLOCKS_IN_CHUNK, 128);
                             if live_blocks == 128
                                 || live_blocks == 96
                                 || live_blocks == 64
@@ -384,13 +384,15 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if AllocPolicy::DEFAULT == AllocPolicy::LockFreePrioritized {
-            match self.pool.alloc_block() {
-                Some((start, new_chunk)) => Ok(PRAllocResult {
+            if let Some((start, new_chunk)) =  self.pool.alloc_block() {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                Ok(PRAllocResult {
                     start,
                     pages: required_pages,
                     new_chunk,
-                }),
-                _ => Err(PRAllocFail),
+                })
+            } else {
+                Err(PRAllocFail)
             }
         } else if AllocPolicy::DEFAULT == AllocPolicy::BestFit
             || AllocPolicy::DEFAULT == AllocPolicy::FirstFit
@@ -574,9 +576,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let mut bitmap = self.bitmap.lock().unwrap();
             self.common().accounting.release(pages as _);
             bitmap.free(block.start());
-        } else if AllocPolicy::DEFAULT != AllocPolicy::FLPR {
-            self.flpr.release_pages(block.start());
-        } else if AllocPolicy::DEFAULT != AllocPolicy::LockFreePrioritized {
+        } else if AllocPolicy::DEFAULT == AllocPolicy::FLPR {
             self.flpr.release_pages(block.start());
         } else {
             assert_eq!(AllocPolicy::DEFAULT, AllocPolicy::LockFreeUnprioritized);
