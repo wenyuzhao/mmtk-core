@@ -1,5 +1,6 @@
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
+use crate::policy::immix::block::Block;
 use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::heap::layout::heap_layout::Map;
@@ -13,7 +14,7 @@ use crate::vm::*;
 use atomic::Ordering;
 use spin::RwLock;
 use std::cell::UnsafeCell;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, AtomicUsize};
 use std::sync::Mutex;
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
@@ -21,14 +22,188 @@ const LOCAL_BUFFER_SIZE: usize = 128;
 const LOG_BLOCKS_IN_CHUNK: usize = LOG_BYTES_IN_CHUNK - 15;
 const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - 15);
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 enum AllocPolicy {
+    /// Bitmap allocation first fit
     FirstFit,
+    /// Bitmap allocation best fit
     BestFit,
+    /// FreelistPageResource allocation
     FLPR,
+    /// Lock-free allocation (soft-priority based)
+    LockFreePrioritized,
+    /// Lock-free allocation (unprioritized)
+    LockFreeUnprioritized,
 }
 
-const ALLOC_POLICY: AllocPolicy = AllocPolicy::BestFit;
+impl AllocPolicy {
+    const DEFAULT: Self = if cfg!(feature = "bpr_first_fit") {
+        Self::FirstFit
+    } else if cfg!(feature = "bpr_best_fit") {
+        Self::BestFit
+    } else if cfg!(feature = "bpr_prioritized") {
+        Self::LockFreePrioritized
+    } else if cfg!(feature = "bpr_unprioritized") {
+        Self::LockFreeUnprioritized
+    } else {
+        Self::FLPR
+    };
+}
+
+type Bin = std::sync::RwLock<Vec<Address>>;
+
+struct ChunkPool {
+    base: Address,
+    /// block alloc state
+    alloc_state: Vec<AtomicBool>,
+    /// bins
+    bins: [Bin; 5],
+    /// live block counter for each chunk
+    live_blocks: Vec<AtomicU16>,
+    /// current bin index  for each chunk
+    chunk_bin: Vec<AtomicU8>,
+    sync: Mutex<()>,
+    alloc_chunk: Option<Box<dyn Fn() -> Option<Address>>>,
+    free_chunk: Option<Box<dyn Fn(Address)>>,
+}
+
+impl ChunkPool {
+    const MAX_CHUNKS: usize = 1 << (35 - LOG_BYTES_IN_CHUNK);
+
+    fn new_compressed_pointers(base: Address) -> Self {
+        Self {
+            base,
+            alloc_state: (0..(Self::MAX_CHUNKS << LOG_BLOCKS_IN_CHUNK))
+                .map(|_| AtomicBool::new(true))
+                .collect(),
+            bins: [
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            ],
+            live_blocks: (0..Self::MAX_CHUNKS).map(|_| AtomicU16::new(0)).collect(),
+            chunk_bin: (0..Self::MAX_CHUNKS).map(|_| AtomicU8::new(0)).collect(),
+            sync: Mutex::default(),
+            alloc_chunk: None,
+            free_chunk: None,
+        }
+    }
+    fn alloc_chunk(&self) -> Option<Address> {
+        (self.alloc_chunk.as_ref().unwrap())()
+    }
+    fn free_chunk(&self, c: Address) {
+        (self.free_chunk.as_ref().unwrap())(c)
+    }
+    fn move_chunk(&self, c: Address) {
+        let _sync = self.sync.lock().unwrap();
+        let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
+        let old_bin = self.chunk_bin[c_index].load(Ordering::SeqCst) as usize;
+        let live_blocks = self.live_blocks[c_index].load(Ordering::SeqCst);
+        if live_blocks == 0 {
+            // release chunk
+            let mut bin = self.bins[old_bin].write().unwrap();
+            let i = bin.iter().position(|x| *x == c).unwrap();
+            bin.remove(i);
+            self.chunk_bin[c_index].store(u8::MAX, Ordering::SeqCst);
+            self.free_chunk(c);
+            return;
+        }
+        assert_ne!(live_blocks, 0);
+        let new_bin = match live_blocks {
+            x if x >= 128 => 0,
+            x if x >= 96 => 1,
+            x if x >= 64 => 2,
+            x if x >= 32 => 3,
+            x if x >= 1 => 4,
+            _ => 5,
+        } as usize;
+        if new_bin != old_bin {
+            let mut bin = self.bins[old_bin].write().unwrap();
+            let i = bin.iter().position(|x| *x == c).unwrap();
+            bin.remove(i);
+            let mut bin = self.bins[new_bin].write().unwrap();
+            bin.push(c);
+            self.chunk_bin[c_index].store(new_bin as u8, Ordering::SeqCst);
+        }
+    }
+
+    fn alloc_block(&self) -> Option<(Address, bool)> {
+        for bin in self.bins.iter().skip(1) {
+            let bin = bin.read().unwrap();
+            for c in &*bin {
+                let c_index = (*c - self.base) >> LOG_BYTES_IN_CHUNK;
+                for i in 0..BLOCKS_IN_CHUNK {
+                    let b = *c + (i << Block::LOG_BYTES);
+                    let b_index = (b - self.base) >> Block::LOG_BYTES;
+                    if self.alloc_state[b_index].fetch_or(true, Ordering::SeqCst) == false {
+                        let result = self.live_blocks[c_index].fetch_update(
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                            |x| {
+                                if x == 0 {
+                                    None
+                                } else {
+                                    Some(x + 1)
+                                }
+                            },
+                        );
+                        if let Ok(old_live_blocks) = result {
+                            let live_blocks = old_live_blocks + 1;
+                            assert_eq!(BYTES_IN_CHUNK, 128);
+                            if live_blocks == 128
+                                || live_blocks == 96
+                                || live_blocks == 64
+                                || live_blocks == 32
+                            {
+                                let c = *c;
+                                std::mem::drop(bin);
+                                self.move_chunk(c);
+                            }
+                        } else {
+                            break;
+                        }
+                        return Some((b, false));
+                    }
+                }
+            }
+        }
+        // Acquire new chunk
+        if let Some(c) = self.alloc_chunk() {
+            let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
+            for i in 0..BLOCKS_IN_CHUNK {
+                let b = c + (i << Block::LOG_BYTES);
+                let b_index = (b - self.base) >> Block::LOG_BYTES;
+                self.alloc_state[b_index].store(false, Ordering::SeqCst);
+            }
+            let b = c;
+            let b_index = (b - self.base) >> Block::LOG_BYTES;
+            self.alloc_state[b_index].store(true, Ordering::SeqCst);
+            self.live_blocks[c_index].store(1, Ordering::SeqCst);
+            self.chunk_bin[c_index].store(self.bins.len() as u8 - 1, Ordering::SeqCst);
+            self.bins[self.bins.len() - 1].write().unwrap().push(c);
+            return Some((b, true));
+        }
+        None
+    }
+
+    fn free_block(&self, b: Address) {
+        let c = b.align_down(BYTES_IN_CHUNK);
+        let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
+        let b_index = (b - self.base) >> Block::LOG_BYTES;
+        let live_blocks = self.live_blocks[c_index].fetch_sub(1, Ordering::SeqCst) - 1;
+        self.alloc_state[b_index].fetch_and(false, Ordering::SeqCst);
+        if live_blocks == 127
+            || live_blocks == 95
+            || live_blocks == 63
+            || live_blocks == 31
+            || live_blocks == 0
+        {
+            self.move_chunk(c);
+        }
+    }
+}
 
 struct BlockBitMap {
     base: Address,
@@ -52,7 +227,7 @@ impl BlockBitMap {
     }
 
     fn alloc(&mut self) -> Option<(Address, bool)> {
-        if ALLOC_POLICY == AllocPolicy::BestFit {
+        if AllocPolicy::DEFAULT == AllocPolicy::BestFit {
             for i in 0..self.chunk_map.chunks.len() {
                 let chunk = self.chunk_map.chunks[i];
                 if self.chunk_map.live_blocks[chunk] == 0 {
@@ -135,7 +310,7 @@ impl BlockBitMap {
     }
 
     fn sort(&mut self) {
-        if ALLOC_POLICY == AllocPolicy::BestFit {
+        if AllocPolicy::DEFAULT == AllocPolicy::BestFit {
             for c in &self.chunk_map.new_chunks {
                 self.chunk_map.chunks.push(*c);
             }
@@ -189,6 +364,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     /// Slow-path allocation synchronization
     sync: Mutex<()>,
     bitmap: Mutex<BlockBitMap>,
+    pool: ChunkPool,
 }
 
 impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
@@ -207,35 +383,34 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
-            if ALLOC_POLICY != AllocPolicy::FLPR {
-                let mut bitmap = self.bitmap.lock().unwrap();
-                if bitmap.alloc_chunk.is_none() {
-                    let me = unsafe { &*(self as *const Self) };
-                    bitmap.alloc_chunk = Some(Box::new(move || {
-                        let a = me.common().grow_discontiguous_space(space_descriptor, 1);
-                        if a.is_zero() {
-                            None
-                        } else {
-                            Some(a)
-                        }
-                    }));
-                }
-                if let Some((a, new_chunk)) = bitmap.alloc() {
-                    self.commit_pages(reserved_pages, required_pages, tls);
-                    Ok(PRAllocResult {
-                        start: a,
-                        pages: required_pages,
-                        new_chunk: new_chunk,
-                    })
-                } else {
-                    Err(PRAllocFail)
-                }
-            } else {
-                self.flpr
-                    .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+        if AllocPolicy::DEFAULT == AllocPolicy::LockFreePrioritized {
+            match self.pool.alloc_block() {
+                Some((start, new_chunk)) => Ok(PRAllocResult {
+                    start,
+                    pages: required_pages,
+                    new_chunk,
+                }),
+                _ => Err(PRAllocFail),
             }
+        } else if AllocPolicy::DEFAULT == AllocPolicy::BestFit
+            || AllocPolicy::DEFAULT == AllocPolicy::FirstFit
+        {
+            let mut bitmap = self.bitmap.lock().unwrap();
+            if let Some((a, new_chunk)) = bitmap.alloc() {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                Ok(PRAllocResult {
+                    start: a,
+                    pages: required_pages,
+                    new_chunk: new_chunk,
+                })
+            } else {
+                Err(PRAllocFail)
+            }
+        } else if AllocPolicy::DEFAULT == AllocPolicy::FLPR {
+            self.flpr
+                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
         } else {
+            assert_eq!(AllocPolicy::DEFAULT, AllocPolicy::LockFreeUnprioritized);
             self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
         }
     }
@@ -264,6 +439,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
             bitmap: unimplemented!(),
+            pool: unimplemented!(),
         }
     }
 
@@ -280,7 +456,34 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             bitmap: Mutex::new(BlockBitMap::new_compressed_pointers(
                 VM_LAYOUT_CONSTANTS.available_start(),
             )),
+            pool: ChunkPool::new_compressed_pointers(VM_LAYOUT_CONSTANTS.available_start()),
         }
+    }
+
+    pub(crate) fn init(&mut self, space_descriptor: SpaceDescriptor) {
+        let me = unsafe { &*(self as *const Self) };
+        self.bitmap.lock().unwrap().alloc_chunk = Some(Box::new(move || {
+            let a = me.common().grow_discontiguous_space(space_descriptor, 1);
+            if a.is_zero() {
+                None
+            } else {
+                Some(a)
+            }
+        }));
+        self.bitmap.lock().unwrap().free_chunk = Some(Box::new(move |c: Address| {
+            me.common().release_discontiguous_chunks(c);
+        }));
+        self.pool.alloc_chunk = Some(Box::new(move || {
+            let a = me.common().grow_discontiguous_space(space_descriptor, 1);
+            if a.is_zero() {
+                None
+            } else {
+                Some(a)
+            }
+        }));
+        self.pool.free_chunk = Some(Box::new(move |c: Address| {
+            me.common().release_discontiguous_chunks(c);
+        }));
     }
 
     /// Grow contiguous space
@@ -361,24 +564,22 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn release_block(&self, block: B) {
-        if VM_LAYOUT_CONSTANTS.log_address_space <= 35 {
-            if ALLOC_POLICY != AllocPolicy::FLPR {
-                let mut bitmap = self.bitmap.lock().unwrap();
-                if bitmap.free_chunk.is_none() {
-                    let me = unsafe { &*(self as *const Self) };
-                    bitmap.free_chunk = Some(Box::new(move |c: Address| {
-                        me.common().release_discontiguous_chunks(c);
-                    }));
-                }
-                let pages = 1 << Self::LOG_PAGES;
-                self.common().accounting.release(pages as _);
-                // println!("release block {:?}", block.start());
-                bitmap.free(block.start());
-            } else {
-                self.flpr.release_pages(block.start());
-            }
+        let pages = 1 << Self::LOG_PAGES;
+        if AllocPolicy::DEFAULT == AllocPolicy::LockFreePrioritized {
+            self.common().accounting.release(pages as _);
+            self.pool.free_block(block.start());
+        } else if AllocPolicy::DEFAULT == AllocPolicy::BestFit
+            || AllocPolicy::DEFAULT == AllocPolicy::FirstFit
+        {
+            let mut bitmap = self.bitmap.lock().unwrap();
+            self.common().accounting.release(pages as _);
+            bitmap.free(block.start());
+        } else if AllocPolicy::DEFAULT != AllocPolicy::FLPR {
+            self.flpr.release_pages(block.start());
+        } else if AllocPolicy::DEFAULT != AllocPolicy::LockFreePrioritized {
+            self.flpr.release_pages(block.start());
         } else {
-            let pages = 1 << Self::LOG_PAGES;
+            assert_eq!(AllocPolicy::DEFAULT, AllocPolicy::LockFreeUnprioritized);
             debug_assert!(pages as usize <= self.common().accounting.get_committed_pages());
             self.common().accounting.release(pages as _);
             self.block_queue.push(block)

@@ -115,6 +115,12 @@ lxr_evacuate_nursery_in_recycled_lines = []
 lxr_delayed_nursery_evacuation = []
 lxr_enable_initial_alloc_limit = []
 
+bpr_first_fit = []
+bpr_best_fit = []
+bpr_prioritized = []
+bpr_unprioritized = []
+bpr_freelist = []
+
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
 perf_counter = ["pfm"]
