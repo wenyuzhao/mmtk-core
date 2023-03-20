@@ -533,6 +533,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // Release young blocks to reduce to-space overflow
             let scheduler = self.scheduler.clone();
             self.block_allocation.sweep_and_reset(&scheduler);
+            self.flush_page_resource();
         } else {
             for b in &*blocks {
                 self.add_to_possibly_dead_mature_blocks(*b, false);
@@ -551,6 +552,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         let scheduler = self.scheduler.clone();
         self.block_allocation.sweep_and_reset(&scheduler);
+        self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();

@@ -110,6 +110,11 @@ impl VMLayoutConstants {
         if end > 0x8_0000_0000 {
             start = 0x200_0000_0000;
             end = start + 0x8_0000_0000;
+            // Non-zero based compressed pointer space
+            // Protect the first page as we will never access it.
+            // The base address of compressed heap is set to one page before the heap start, so that NULL can be encoded nonambigous.
+            crate::util::memory::mmap_noreserve(unsafe { Address::from_usize(start - 4096) }, 4096).unwrap();
+            crate::util::memory::mprotect(unsafe { Address::from_usize(start - 4096) }, 4096).unwrap();
         }
         Self {
             log_address_space: 35,
