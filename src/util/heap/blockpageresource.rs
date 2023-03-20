@@ -11,7 +11,7 @@ use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
-use atomic::{Ordering, Atomic};
+use atomic::{Atomic, Ordering};
 use spin::RwLock;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, AtomicUsize};
@@ -87,8 +87,12 @@ impl ChunkPool {
             ],
             live_blocks: (0..Self::MAX_CHUNKS).map(|_| AtomicU16::new(0)).collect(),
             chunk_bin: (0..Self::MAX_CHUNKS).map(|_| AtomicU8::new(0)).collect(),
-            next_chunk: (0..Self::MAX_CHUNKS).map(|_| Atomic::new(Address::ZERO)).collect(),
-            prev_chunk: (0..Self::MAX_CHUNKS).map(|_| Atomic::new(Address::ZERO)).collect(),
+            next_chunk: (0..Self::MAX_CHUNKS)
+                .map(|_| Atomic::new(Address::ZERO))
+                .collect(),
+            prev_chunk: (0..Self::MAX_CHUNKS)
+                .map(|_| Atomic::new(Address::ZERO))
+                .collect(),
             sync: Mutex::default(),
             alloc_chunk: None,
             free_chunk: None,
@@ -211,7 +215,11 @@ impl ChunkPool {
             self.alloc_state[b_index].store(true, Ordering::SeqCst);
             self.live_blocks[c_index].store(1, Ordering::SeqCst);
             self.chunk_bin[c_index].store(self.bins.len() as u8 - 1, Ordering::SeqCst);
-            self.add_to_bin(&mut self.bins[self.bins.len() - 1].write().unwrap(), c, c_index);
+            self.add_to_bin(
+                &mut self.bins[self.bins.len() - 1].write().unwrap(),
+                c,
+                c_index,
+            );
             return Some((b, true));
         }
         None
@@ -663,7 +671,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn flush_all(&self) {
-        if AllocPolicy::DEFAULT == AllocPolicy::BestFit || AllocPolicy::DEFAULT == AllocPolicy::FirstFit {
+        if AllocPolicy::DEFAULT == AllocPolicy::BestFit
+            || AllocPolicy::DEFAULT == AllocPolicy::FirstFit
+        {
             self.bitmap.lock().unwrap().sort();
         }
         if AllocPolicy::DEFAULT == AllocPolicy::LockFreeUnprioritized {
