@@ -116,8 +116,7 @@ impl ChunkPool {
             x if x >= 96 => 1,
             x if x >= 64 => 2,
             x if x >= 32 => 3,
-            x if x >= 1 => 4,
-            _ => 5,
+            _ => 4,
         } as usize;
         if new_bin != old_bin {
             let mut bin = self.bins[old_bin].write().unwrap();
@@ -188,7 +187,55 @@ impl ChunkPool {
         None
     }
 
-    fn free_block(&self, b: Address) {
+    fn free_block_fast(&mut self, b: Address) {
+        let c = b.align_down(BYTES_IN_CHUNK);
+        let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
+        let b_index = (b - self.base) >> Block::LOG_BYTES;
+        let old_live_blocks = self.live_blocks[c_index].load(Ordering::Relaxed);
+        self.live_blocks[c_index].store(old_live_blocks - 1, Ordering::Relaxed);
+        let live_blocks = old_live_blocks - 1;
+        self.alloc_state[b_index].store(false, Ordering::Relaxed);
+        if live_blocks == 127
+            || live_blocks == 95
+            || live_blocks == 63
+            || live_blocks == 31
+            || live_blocks == 0
+        {
+            let old_bin = self.chunk_bin[c_index].load(Ordering::Relaxed) as usize;
+            if live_blocks == 0 {
+                // release chunk
+                let bin = self.bins[old_bin].get_mut().unwrap();
+                let i = bin.iter().position(|x| *x == c).unwrap();
+                bin.remove(i);
+                self.chunk_bin[c_index].store(u8::MAX, Ordering::Relaxed);
+                self.free_chunk(c);
+            } else {
+                assert_ne!(live_blocks, 0);
+                let new_bin = match live_blocks {
+                    x if x >= 128 => 0,
+                    x if x >= 96 => 1,
+                    x if x >= 64 => 2,
+                    x if x >= 32 => 3,
+                    _ => 4,
+                } as usize;
+                if new_bin != old_bin {
+                    let bin = self.bins[old_bin].get_mut().unwrap();
+                    let i = bin.iter().position(|x| *x == c).unwrap();
+                    bin.remove(i);
+                    let bin = self.bins[new_bin].get_mut().unwrap();
+                    bin.push(c);
+                    self.chunk_bin[c_index].store(new_bin as u8, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    fn free_block(&self, b: Address, single_thread: bool) {
+        if single_thread {
+            let me = unsafe { &mut *(self as *const Self as *mut Self) };
+            me.free_block_fast(b);
+            return;
+        }
         let c = b.align_down(BYTES_IN_CHUNK);
         let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
         let b_index = (b - self.base) >> Block::LOG_BYTES;
@@ -384,7 +431,7 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if AllocPolicy::DEFAULT == AllocPolicy::LockFreePrioritized {
-            if let Some((start, new_chunk)) =  self.pool.alloc_block() {
+            if let Some((start, new_chunk)) = self.pool.alloc_block() {
                 self.commit_pages(reserved_pages, required_pages, tls);
                 Ok(PRAllocResult {
                     start,
@@ -565,11 +612,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         self.alloc_pages_slow_sync(space_descriptor, reserved_pages, required_pages, tls)
     }
 
-    pub fn release_block(&self, block: B) {
+    pub fn release_block(&self, block: B, single_thread: bool) {
         let pages = 1 << Self::LOG_PAGES;
         if AllocPolicy::DEFAULT == AllocPolicy::LockFreePrioritized {
             self.common().accounting.release(pages as _);
-            self.pool.free_block(block.start());
+            self.pool.free_block(block.start(), single_thread);
         } else if AllocPolicy::DEFAULT == AllocPolicy::BestFit
             || AllocPolicy::DEFAULT == AllocPolicy::FirstFit
         {

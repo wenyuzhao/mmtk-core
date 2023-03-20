@@ -739,7 +739,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release a block.
-    pub fn release_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
+    pub fn release_block(
+        &self,
+        block: Block,
+        nursery: bool,
+        zero_unlog_table: bool,
+        single_thread: bool,
+    ) {
         // println!(
         //     "Release {:?} nursery={} defrag={}",
         //     block,
@@ -769,7 +775,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 s.reclaimed_blocks_mature += 1;
             }
         });
-        self.pr.release_block(block);
+        self.pr.release_block(block, single_thread);
     }
 
     /// Allocate a clean block.

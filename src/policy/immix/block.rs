@@ -528,7 +528,7 @@ impl Block {
                 BlockState::Unallocated => false,
                 BlockState::Unmarked => {
                     // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self, false, false);
+                    space.release_block(*self, false, false, false);
                     true
                 }
                 BlockState::Marked => {
@@ -558,7 +558,7 @@ impl Block {
 
             if marked_lines == 0 {
                 // Release the block if non of its lines are marked.
-                space.release_block(*self, false, false);
+                space.release_block(*self, false, false, false);
                 true
             } else {
                 // There are some marked lines. Keep the block live.
@@ -584,7 +584,7 @@ impl Block {
     pub fn rc_sweep_nursery<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
-        _concurrent: bool,
+        single_thread: bool,
     ) -> bool {
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
@@ -597,7 +597,7 @@ impl Block {
         } else {
             debug_assert!(self.rc_dead(), "{:?} has non-zero rc value", self);
             debug_assert_ne!(self.get_state(), super::block::BlockState::Unallocated);
-            space.release_block(*self, true, false);
+            space.release_block(*self, true, false, single_thread);
             true
         }
     }
@@ -619,7 +619,7 @@ impl Block {
         }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
-                space.release_block(*self, false, true);
+                space.release_block(*self, false, true, false);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {

@@ -68,7 +68,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         for block in &self.buffer[0..stw_limit] {
             let block = block.load(Ordering::Relaxed);
             debug_assert_ne!(block.get_state(), super::block::BlockState::Unallocated);
-            block.rc_sweep_nursery(space, false);
+            block.rc_sweep_nursery(space, true);
         }
         if limit > stw_limit {
             let packets = self.buffer[stw_limit..limit]
@@ -91,7 +91,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 block.load(Ordering::Relaxed).get_state(),
                 super::block::BlockState::Unallocated
             );
-            space.pr.release_block(block.load(Ordering::Relaxed))
+            space.pr.release_block(block.load(Ordering::Relaxed), true);
         }
         self.high_water.store(0, Ordering::Relaxed);
         self.cursor.store(0, Ordering::SeqCst);
@@ -314,7 +314,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks {
         let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
         let mut released_blocks = 0;
         for block in &self.blocks {
-            if block.rc_sweep_nursery(space, true) {
+            if block.rc_sweep_nursery(space, false) {
                 released_blocks += 1;
             }
         }
