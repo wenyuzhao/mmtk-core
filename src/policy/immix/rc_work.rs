@@ -187,10 +187,10 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
                 o.to_address::<VM>().store(0xdeadusize);
             }
         }
-        self.rc.set(o, 0);
         if !crate::args::BLOCK_ONLY {
             self.rc.unmark_straddle_object(o)
         }
+        self.rc.set(o, 0);
     }
 
     fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
