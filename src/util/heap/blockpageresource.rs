@@ -65,6 +65,7 @@ struct ChunkPool {
     next_chunk: Vec<Atomic<Address>>,
     prev_chunk: Vec<Atomic<Address>>,
     sync: Mutex<()>,
+    alloc_chunk_lock: Mutex<()>,
     alloc_chunk: Option<Box<dyn Fn() -> Option<Address>>>,
     free_chunk: Option<Box<dyn Fn(Address)>>,
 }
@@ -96,6 +97,7 @@ impl ChunkPool {
             sync: Mutex::default(),
             alloc_chunk: None,
             free_chunk: None,
+            alloc_chunk_lock: Mutex::default(),
         }
     }
     fn alloc_chunk(&self) -> Option<Address> {
@@ -161,7 +163,7 @@ impl ChunkPool {
         }
     }
 
-    fn alloc_block(&self) -> Option<(Address, bool)> {
+    fn alloc_block_fast(&self) -> Option<(Address, bool)> {
         for bin in self.bins.iter().skip(1) {
             let bin = bin.read().unwrap();
             let mut c = *bin;
@@ -202,7 +204,18 @@ impl ChunkPool {
                 c = self.next_chunk[c_index].load(Ordering::SeqCst);
             }
         }
+        None
+    }
+
+    fn alloc_block(&self) -> Option<(Address, bool)> {
+        if let Some(r) = self.alloc_block_fast() {
+            return Some(r);
+        }
         // Acquire new chunk
+        let _guard = self.alloc_chunk_lock.lock().unwrap();
+        if let Some(r) = self.alloc_block_fast() {
+            return Some(r);
+        }
         if let Some(c) = self.alloc_chunk() {
             let c_index = (c - self.base) >> LOG_BYTES_IN_CHUNK;
             for i in 0..BLOCKS_IN_CHUNK {
