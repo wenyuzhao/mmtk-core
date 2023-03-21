@@ -1,4 +1,4 @@
-use super::generic_freelist::*;
+use super::freelist::*;
 use std::mem;
 
 #[derive(Debug)]

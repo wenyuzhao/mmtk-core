@@ -14,8 +14,8 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::analysis::AnalysisManager;
 use crate::util::copy::{CopyConfig, GCWorkerCopyContext};
 use crate::util::heap::gc_trigger::GCTrigger;
-use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::layout::heap_layout::VMMap;
+use crate::util::heap::layout::Mmapper;
+use crate::util::heap::layout::VMMap;
 use crate::util::heap::HeapMeta;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
@@ -180,9 +180,6 @@ pub trait Plan: 'static + Sync + Downcast {
         &self,
     ) -> Option<&dyn crate::plan::generational::global::GenerationalPlan<VM = Self::VM>> {
         None
-    }
-    fn mmapper(&self) -> &'static dyn Mmapper {
-        self.base().mmapper
     }
     fn options(&self) -> &Options {
         &self.base().options
@@ -392,8 +389,6 @@ pub struct BasePlan<VM: VMBinding> {
     pub cur_collection_attempts: AtomicUsize,
     pub gc_requester: Arc<GCRequester<VM>>,
     pub stats: Stats,
-    mmapper: &'static dyn Mmapper,
-    pub vm_map: &'static dyn VMMap,
     pub options: Arc<Options>,
     pub heap: HeapMeta,
     pub gc_trigger: Arc<GCTrigger<VM>>,
@@ -551,11 +546,9 @@ impl<VM: VMBinding> BasePlan<VM> {
             cur_collection_attempts: AtomicUsize::new(0),
             gc_requester: Arc::new(GCRequester::new()),
             stats,
-            mmapper: args.global_args.mmapper,
             heap: args.global_args.heap,
             gc_trigger: args.global_args.gc_trigger,
-            vm_map: args.global_args.vm_map,
-            options: args.global_args.options.clone(),
+            options: args.global_args.options,
             #[cfg(feature = "sanity")]
             inside_sanity: AtomicBool::new(false),
             scanned_stacks: AtomicUsize::new(0),

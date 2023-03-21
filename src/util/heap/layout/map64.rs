@@ -1,7 +1,7 @@
 use super::map::VMMap;
 use crate::util::constants::*;
 use crate::util::conversions;
-use crate::util::generic_freelist::FreeList;
+use crate::util::freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout_constants::*;

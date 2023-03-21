@@ -1,4 +1,4 @@
-use crate::util::generic_freelist::FreeList;
+use crate::util::freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::Address;

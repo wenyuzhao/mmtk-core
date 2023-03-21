@@ -9,7 +9,7 @@ use crate::util::heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::opaque_pointer::*;
 
-use super::layout::map::VMMap;
+use super::layout::VMMap;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
