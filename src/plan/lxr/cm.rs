@@ -169,17 +169,17 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
         );
         if self.rc.count(object) != 0 {
             for (e, t, validity) in cached_children {
+                if t.is_null() || self.rc.count(t) == 0 {
+                    continue;
+                }
                 if cfg!(feature = "sanity") {
                     assert!(
-                        object.to_address::<VM>().is_mapped(),
+                        t.to_address::<VM>().is_mapped(),
                         "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
                         object,
                         e,
                         t
                     );
-                }
-                if t.is_null() || self.rc.count(t) == 0 {
-                    continue;
                 }
                 if crate::args::RC_MATURE_EVACUATION
                     && (should_check_remset || !e.to_address().is_mapped())
@@ -274,7 +274,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
             if cfg!(any(feature = "sanity", debug_assertions)) {
                 for o in &nodes {
                     assert!(
-                        o.to_address::<VM>().is_mapped(),
+                        o.is_null() || o.to_address::<VM>().is_mapped(),
                         "Invalid object {:?}: address is not mapped",
                         o
                     );
@@ -288,7 +288,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
             if cfg!(any(feature = "sanity", debug_assertions)) {
                 for o in &*nodes {
                     assert!(
-                        o.to_address::<VM>().is_mapped(),
+                        o.is_null() || o.to_address::<VM>().is_mapped(),
                         "Invalid object {:?}: address is not mapped",
                         o
                     );
