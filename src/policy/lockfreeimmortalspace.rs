@@ -8,10 +8,9 @@ use crate::util::ObjectReference;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::util::conversions;
 use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
-use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::opaque_pointer::*;
-use crate::util::options::Options;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -164,13 +163,14 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LockFreeIm
 
 impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
     #[allow(dead_code)] // Only used with certain features.
-    pub fn new(
-        name: &'static str,
-        slow_path_zeroing: bool,
-        options: &Options,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-    ) -> Self {
-        let total_bytes = *options.heap_size;
+    pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
+        let slow_path_zeroing = args.zeroed;
+        // FIXME: This space assumes that it can use the entire heap range, which is definitely wrong.
+        // https://github.com/mmtk/mmtk-core/issues/314
+        let total_bytes = match *args.options.gc_trigger {
+            crate::util::options::GCTriggerSelector::FixedHeapSize(bytes) => bytes,
+            _ => unimplemented!(),
+        };
         assert!(
             total_bytes <= VM_LAYOUT_CONSTANTS.available_bytes(),
             "Initial requested memory ({} bytes) overflows the heap. Max heap size is {} bytes.",
@@ -181,14 +181,14 @@ impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
         // FIXME: This space assumes that it can use the entire heap range, which is definitely wrong.
         // https://github.com/mmtk/mmtk-core/issues/314
         let space = Self {
-            name,
+            name: args.name,
             cursor: AtomicUsize::new(VM_LAYOUT_CONSTANTS.available_start().as_usize()),
             limit: VM_LAYOUT_CONSTANTS.available_start() + total_bytes,
             start: VM_LAYOUT_CONSTANTS.available_start(),
             extent: total_bytes,
             slow_path_zeroing,
             metadata: SideMetadataContext {
-                global: global_side_metadata_specs,
+                global: args.global_side_metadata_specs,
                 local: vec![],
             },
             phantom: PhantomData,

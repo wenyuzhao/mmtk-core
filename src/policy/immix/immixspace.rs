@@ -4,20 +4,15 @@ use super::rc_work::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::RemSet;
-use crate::plan::PlanConstraints;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
-use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::copy::*;
 use crate::util::heap::chunk_map::*;
-use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::BlockPageResource;
-use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
-use crate::util::heap::VMRequest;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, MetadataSpec};
@@ -284,43 +279,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         })
     }
 
-    pub fn new(
-        name: &'static str,
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        heap: &mut HeapMeta,
-        scheduler: Arc<GCWorkScheduler<VM>>,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-        constraints: &'static PlanConstraints,
-        rc_enabled: bool,
-        options: Arc<Options>,
-    ) -> Self {
+    pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
         #[cfg(feature = "immix_no_defrag")]
         info!(
             "Creating non-moving ImmixSpace: {}. Block size: 2^{}",
-            name,
+            args.name,
             Block::LOG_BYTES
         );
 
         super::validate_features();
-        let common = CommonSpace::new(
-            SpaceOptions {
-                name,
-                movable: true,
-                immortal: false,
-                zeroed: true,
-                vmrequest: VMRequest::discontiguous(),
-                side_metadata_specs: SideMetadataContext {
-                    global: global_side_metadata_specs,
-                    local: Self::side_metadata_specs(rc_enabled),
-                },
-                needs_log_bit: constraints.needs_log_bit,
-                needs_field_log_bit: constraints.needs_field_log_bit,
-            },
-            vm_map,
-            mmapper,
-            heap,
-        );
+        let vm_map = args.vm_map;
+        let scheduler = args.scheduler.clone();
+        let options = args.options.clone();
+        let rc_enabled = args.constraints.rc_enabled;
+        let common = CommonSpace::new(args.into_policy_args(
+            true,
+            false,
+            Self::side_metadata_specs(rc_enabled),
+        ));
         ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
                 BlockPageResource::new_discontiguous(

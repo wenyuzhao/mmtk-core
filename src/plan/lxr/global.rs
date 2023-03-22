@@ -2,9 +2,9 @@ use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
-use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
+use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
 use crate::plan::AllocationSemantics;
@@ -21,13 +21,11 @@ use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
 use crate::util::copy::*;
-use crate::util::heap::layout::heap_layout::Map;
-use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::HeapMeta;
+use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
-use crate::util::options::Options;
+use crate::util::options::{GCTriggerSelector, Options};
 use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
@@ -36,7 +34,7 @@ use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
@@ -83,6 +81,7 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     barrier: BarrierSelector::FieldBarrier,
     needs_log_bit: true,
     needs_field_log_bit: true,
+    rc_enabled: true,
     ..PlanConstraints::default()
 });
 
@@ -461,41 +460,25 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 }
 
 impl<VM: VMBinding> LXR<VM> {
-    pub fn new(
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        options: Arc<Options>,
-        scheduler: Arc<GCWorkScheduler<VM>>,
-    ) -> Box<Self> {
-        let mut heap = HeapMeta::new(&options);
+    pub fn new(args: CreateGeneralPlanArgs<VM>) -> Box<Self> {
         let immix_specs = metadata::extract_side_metadata(&[
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
             MetadataSpec::OnSide(crate::policy::immix::get_unlog_bit_slow::<VM>()),
         ]);
-        let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
-        let mut immix_space = ImmixSpace::new(
-            "immix",
-            vm_map,
-            mmapper,
-            &mut heap,
-            scheduler,
-            global_metadata_specs.clone(),
-            &LXR_CONSTRAINTS,
-            true,
-            options.clone(),
-        );
+        let global_side_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
+        let options = args.options.clone();
+        let mut plan_args = CreateSpecificPlanArgs {
+            global_args: args,
+            constraints: &LXR_CONSTRAINTS,
+            global_side_metadata_specs,
+        };
+        let mut immix_space =
+            ImmixSpace::new(plan_args.get_space_args("immix", true, VMRequest::discontiguous()));
         immix_space.cm_enabled = true;
         let mut lxr = Box::new(LXR {
             immix_space,
-            common: CommonPlan::new(
-                vm_map,
-                mmapper,
-                options.clone(),
-                heap,
-                &LXR_CONSTRAINTS,
-                global_metadata_specs,
-            ),
+            common: CommonPlan::new(plan_args),
             perform_cycle_collection: AtomicBool::new(false),
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
             current_pause: Atomic::new(None),
@@ -886,6 +869,7 @@ impl<VM: VMBinding> LXR<VM> {
     fn gc_init(&mut self, options: &Options) {
         crate::args::validate_features(BarrierSelector::FieldBarrier, options);
         self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
+        self.immix_space.rc_enabled = true;
         self.common.los.rc_enabled = true;
         unsafe {
             let me = &*(self as *const Self);
@@ -946,7 +930,11 @@ impl<VM: VMBinding> LXR<VM> {
             }));
         }
         if let Some(nursery_ratio) = crate::args().nursery_ratio {
-            let total_blocks = *options.heap_size >> Block::LOG_BYTES;
+            let heap_size = match *options.gc_trigger {
+                GCTriggerSelector::FixedHeapSize(x) => x,
+                _ => unimplemented!(),
+            };
+            let total_blocks = heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
             self.nursery_blocks = Some(nursery_blocks);
         }
