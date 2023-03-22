@@ -127,6 +127,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         if mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_none() {
             <C::VM as VMBinding>::VMCollection::update_weak_processor(false);
         }
+        
+        self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
 
         <C::VM as VMBinding>::VMCollection::vm_release();
         // We assume this is the only running work packet that accesses plan at the point of execution
