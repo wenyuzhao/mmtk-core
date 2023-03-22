@@ -189,6 +189,15 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                     );
                 }
                 if !self.plan.is_marked(t) {
+                    if cfg!(any(feature = "sanity", debug_assertions)) {
+                        assert!(
+                            t.to_address::<VM>().is_mapped(),
+                            "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                            object,
+                            e,
+                            t
+                        );
+                    }
                     self.next_objects.push(t);
                     if self.next_objects.is_full() {
                         self.flush();
