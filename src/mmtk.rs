@@ -6,7 +6,7 @@ use crate::scheduler::GCWorkScheduler;
 #[cfg(feature = "extreme_assertions")]
 use crate::util::edge_logger::EdgeLogger;
 use crate::util::finalizable_processor::FinalizableProcessor;
-use crate::util::heap::layout::heap_layout::{Map, Map64};
+use crate::util::heap::layout::heap_layout::{Map64, VMMap};
 use crate::util::heap::layout::heap_layout::{Mmapper, Mmapper32, Mmapper64};
 use crate::util::heap::layout::map32::Map32;
 use crate::util::heap::layout::vm_layout_constants::{AddressSpaceKind, VMLayoutConstants};
@@ -32,7 +32,7 @@ lazy_static! {
     // TODO: We should refactor this when we know more about how multiple MMTK instances work.
 
     /// A global VMMap that manages the mapping of spaces to virtual memory ranges.
-    pub static ref VM_MAP: Box<dyn Map> =  if cfg!(target_pointer_width = "32") || VMLayoutConstants::get_address_space().pointer_compression() {
+    pub static ref VM_MAP: Box<dyn VMMap> =  if cfg!(target_pointer_width = "32") || VMLayoutConstants::get_address_space().pointer_compression() {
         Box::new(Map32::new())
     } else {
         Box::new(Map64::new())

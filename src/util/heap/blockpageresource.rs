@@ -2,7 +2,7 @@ use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
 use crate::util::address::Address;
 use crate::util::constants::*;
-use crate::util::heap::layout::heap_layout::Map;
+use crate::util::heap::layout::heap_layout::VMMap;
 use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
@@ -68,7 +68,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         start: Address,
         bytes: usize,
-        vm_map: &'static dyn Map,
+        vm_map: &'static dyn VMMap,
         num_workers: usize,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
@@ -81,7 +81,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     pub fn new_discontiguous(
         log_pages: usize,
-        vm_map: &'static dyn Map,
+        vm_map: &'static dyn VMMap,
         num_workers: usize,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);

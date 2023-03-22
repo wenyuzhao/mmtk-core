@@ -1,4 +1,4 @@
-pub use super::map::Map;
+pub use super::map::VMMap;
 pub use crate::util::heap::layout::map32::Map32;
 pub use crate::util::heap::layout::map64::Map64;
 
