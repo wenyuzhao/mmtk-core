@@ -263,6 +263,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
                 #[cfg(feature = "object_pinning")]
                 *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC,
             ]
@@ -273,6 +275,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
                 #[cfg(feature = "object_pinning")]
                 *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC,
             ]
@@ -1289,9 +1293,17 @@ pub struct PrepareBlockState<VM: VMBinding> {
 impl<VM: VMBinding> PrepareBlockState<VM> {
     /// Clear object mark table
     fn reset_object_mark(chunk: Chunk) {
+        // NOTE: We reset the mark bits because cyclic mark bit is currently not supported, yet.
+        // See `ImmixSpace::prepare`.
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
             side.bzero_metadata(chunk.start(), Chunk::BYTES);
         }
+        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+            side.bzero_metadata(chunk.start(), Chunk::BYTES);
+        }
+        // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
+        // until the forwarding bits are also set, at which time we also write the forwarding
+        // pointer.
     }
 }
 
