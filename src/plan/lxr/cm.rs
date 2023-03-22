@@ -79,7 +79,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             // This packet is executed in concurrent.
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(new_nodes, self.mmtk);
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            if self.plan.current_pause() == Some(Pause::RefCount) {
+                self.worker().scheduler().postpone(w);
+            } else {
+                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            }
         }
     }
 
@@ -282,7 +286,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
                 return;
             }
             if cfg!(any(feature = "sanity", debug_assertions)) {
-                for o in &nodes {
+                for o in &*nodes {
                     assert!(
                         o.to_address::<VM>().is_mapped(),
                         "Invalid object {:?}: address is not mapped",
