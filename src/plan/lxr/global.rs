@@ -690,6 +690,7 @@ impl<VM: VMBinding> LXR<VM> {
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
         }
+        scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
