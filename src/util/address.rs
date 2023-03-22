@@ -15,7 +15,6 @@ use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::VMBinding;
 
 use super::constants::BYTES_IN_WORD;
-use crate::util::heap::layout::mmapper::Mmapper;
 
 /// size in bytes
 pub type ByteSize = usize;
