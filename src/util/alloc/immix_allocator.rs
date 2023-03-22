@@ -221,8 +221,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     end_line,
                     self.tls
                 );
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::bzero_alloc_bit(self.cursor, self.limit - self.cursor);
                 if self.immix_space().common().zeroed
                     && !self.copy
                     && cfg!(feature = "force_zeroing")
