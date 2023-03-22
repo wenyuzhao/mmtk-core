@@ -849,7 +849,10 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
                 );
             }
         } else {
-            unreachable!()
+            // We want to use E::create_scan_work.
+            let process_edges_work = E::new(vec![], true, self.mmtk);
+            let work = process_edges_work.create_scan_work(nodes, true);
+            crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
         }
     }
 }

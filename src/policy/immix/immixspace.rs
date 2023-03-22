@@ -85,6 +85,16 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     fn name(&self) -> &str {
         self.get_name()
     }
+
+    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+        debug_assert!(!object.is_null());
+        if ForwardingWord::is_forwarded::<VM>(object) {
+            Some(ForwardingWord::read_forwarding_pointer::<VM>(object))
+        } else {
+            None
+        }
+    }
+
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
             if self.is_end_of_satb_or_full_gc {
@@ -157,14 +167,6 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     #[cfg(feature = "is_mmtk_object")]
     fn is_mmtk_object(&self, addr: Address) -> bool {
         crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
-    }
-    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
-        debug_assert!(!object.is_null());
-        if ForwardingWord::is_forwarded::<VM>(object) {
-            Some(ForwardingWord::read_forwarding_pointer::<VM>(object))
-        } else {
-            None
-        }
     }
     fn sft_trace_object(
         &self,
