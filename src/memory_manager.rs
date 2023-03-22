@@ -649,7 +649,6 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 #[cfg(feature = "is_mmtk_object")]
 pub fn is_mmtk_object(addr: Address) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP.get_checked(addr).is_mmtk_object(addr)
 }
 
@@ -798,7 +797,6 @@ pub fn add_finalizer<VM: VMBinding>(
 #[cfg(feature = "object_pinning")]
 pub fn pin_object<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .pin_object(object)
@@ -813,7 +811,6 @@ pub fn pin_object<VM: VMBinding>(object: ObjectReference) -> bool {
 #[cfg(feature = "object_pinning")]
 pub fn unpin_object<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .unpin_object(object)
@@ -826,7 +823,6 @@ pub fn unpin_object<VM: VMBinding>(object: ObjectReference) -> bool {
 #[cfg(feature = "object_pinning")]
 pub fn is_pinned<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .is_object_pinned(object)
