@@ -620,7 +620,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .unwrap_or_else(|| self.poll_slow(worker))
     }
 
-    #[cold]
     fn poll_slow(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
         // Note: The lock is released during `wait` in the loop.
         let mut guard = self.worker_monitor.0.lock().unwrap();

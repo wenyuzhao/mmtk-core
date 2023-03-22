@@ -361,7 +361,6 @@ impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
     /// This function is inlined because `trace_object` is probably the hottest function in MMTk.
     /// If this function is called in small closures, please profile the program and make sure the
     /// closure is inlined, too.
-    #[inline(always)]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         let result = self.process_edges_work.trace_object(object);
         self.flush_if_full();
@@ -370,7 +369,6 @@ impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
 }
 
 impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
-    #[inline(always)]
     fn flush_if_full(&mut self) {
         if self.process_edges_work.nodes.is_full() {
             self.flush();
@@ -383,7 +381,6 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
         }
     }
 
-    #[cold]
     fn flush(&mut self) {
         let next_nodes = self.process_edges_work.pop_nodes();
         assert!(!next_nodes.is_empty());
@@ -629,6 +626,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
     pub fn plan(&self) -> &'static dyn Plan<VM = VM> {
         &*self.mmtk.plan
     }
+
     /// Pop all nodes from nodes, and clear nodes to an empty vector.
     pub fn pop_nodes(&mut self) -> Vec<ObjectReference> {
         self.nodes.take()
@@ -700,7 +698,6 @@ pub trait ProcessEdgesWork:
 
     /// Flush the nodes in ProcessEdgesBase, and create a ScanObjects work packet for it. If the node set is empty,
     /// this method will simply return with no work packet created.
-    #[cold]
     fn flush(&mut self) {
         let nodes = self.pop_nodes();
         if !nodes.is_empty() {

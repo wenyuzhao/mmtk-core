@@ -93,7 +93,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     /// Grow contiguous space
-    #[cold]
     fn alloc_pages_slow_sync(
         &self,
         space_descriptor: SpaceDescriptor,

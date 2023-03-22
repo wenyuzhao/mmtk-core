@@ -193,7 +193,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     /// Bump allocate small objects into recyclable lines (i.e. holes).
-    #[cold]
     fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_hot", self.tls);
         if self.acquire_recyclable_lines(size, align, offset) {
