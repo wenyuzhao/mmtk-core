@@ -313,6 +313,11 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::RESERVED_PAGES_AT_GC_END.store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
 
+        // We assume this is the only running work packet that accesses plan at the point of execution
+        #[allow(clippy::cast_ref_to_mut)]
+        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { &mut *(&*mmtk.plan as *const _ as *mut _) };
+        plan_mut.end_of_gc(worker.tls);
+
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
             // reset the logging info at the end of each GC
