@@ -267,10 +267,28 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
             if nodes.is_empty() {
                 return;
             }
+            if cfg!(any(feature = "sanity", debug_assertions)) {
+                for o in &nodes {
+                    assert!(
+                        o.to_address::<VM>().is_mapped(),
+                        "Invalid object {:?}: address is not mapped",
+                        o
+                    );
+                }
+            }
             LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(nodes, mmtk)
         } else if let Some(nodes) = self.nodes_arc.take() {
             if nodes.is_empty() {
                 return;
+            }
+            if cfg!(any(feature = "sanity", debug_assertions)) {
+                for o in &nodes {
+                    assert!(
+                        o.to_address::<VM>().is_mapped(),
+                        "Invalid object {:?}: address is not mapped",
+                        o
+                    );
+                }
             }
             LXRConcurrentTraceObjects::<VM, COMPRESSED>::new_arc(nodes, mmtk)
         } else {
