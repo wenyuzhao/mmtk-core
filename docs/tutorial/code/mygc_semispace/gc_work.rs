@@ -25,6 +25,9 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MyGCWorkContext2<VM> {
 }
 // ANCHOR: workcontext_plan
 
+use crate::util::ObjectReference;
+use crate::util::copy::CopySemantics;
+use crate::MMTK;
 use crate::policy::space::Space;
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
