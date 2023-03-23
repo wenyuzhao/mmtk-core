@@ -291,7 +291,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         rtn
     }
 
-    pub fn do_free_contiguous_chunk(&self, chunk: Address) {
+    pub fn release_chunk(&self, chunk: Address) {
         #[allow(clippy::cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
