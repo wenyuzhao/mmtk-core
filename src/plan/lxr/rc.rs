@@ -589,6 +589,15 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
         };
         if let Some(roots) = roots {
             if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
+                if cfg!(any(feature = "sanity", debug_assertions)) {
+                    for r in &roots {
+                        assert!(
+                            r.is_null() || r.to_address::<VM>().is_mapped(),
+                            "Invalid object {:?}: address is not mapped",
+                            r
+                        );
+                    }
+                }
                 worker
                     .scheduler()
                     .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(
@@ -635,7 +644,6 @@ pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     /// Decrements to process
     decs: Option<Vec<ObjectReference>>,
     decs_arc: Option<Arc<Vec<ObjectReference>>>,
-    slice: Option<(bool, &'static [ObjectReference])>,
     /// Recursively generated new decrements
     new_decs: VectorQueue<ObjectReference>,
     mmtk: *const MMTK<VM>,
@@ -659,7 +667,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         Self {
             decs: Some(decs),
             decs_arc: None,
-            slice: None,
             new_decs: VectorQueue::default(),
             mmtk: std::ptr::null_mut(),
             counter,
@@ -674,26 +681,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         Self {
             decs: None,
             decs_arc: Some(decs),
-            slice: None,
-            new_decs: VectorQueue::default(),
-            mmtk: std::ptr::null_mut(),
-            counter,
-            mark_objects: VectorQueue::default(),
-            concurrent_marking_in_progress: false,
-            mature_sweeping_in_progress: false,
-            rc: RefCountHelper::NEW,
-        }
-    }
-
-    pub fn new_array_slice(
-        slice: &'static [ObjectReference],
-        not_marked: bool,
-        counter: LazySweepingJobsCounter,
-    ) -> Self {
-        Self {
-            decs: None,
-            decs_arc: None,
-            slice: Some((not_marked, slice)),
             new_decs: VectorQueue::default(),
             mmtk: std::ptr::null_mut(),
             counter,
@@ -797,6 +784,15 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                             self.record_mature_evac_remset(immix, edge, x);
                         }
                         if self.concurrent_marking_in_progress && !immix.is_marked(x) {
+                            if cfg!(any(feature = "sanity", debug_assertions)) {
+                                assert!(
+                                    x.to_address::<VM>().is_mapped(),
+                                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                                    o,
+                                    edge,
+                                    x
+                                );
+                            }
                             self.mark_objects.push(x);
                         }
                     }
@@ -823,22 +819,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    fn process_decs(
-        &mut self,
-        decs: &[ObjectReference],
-        lxr: &LXR<VM>,
-        slice: bool,
-        not_marked: bool,
-    ) {
+    fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
         for o in decs {
             // println!("dec {:?}", o);
             if o.is_null() {
                 continue;
-            }
-            if slice {
-                if not_marked && self.concurrent_marking_in_progress && !lxr.is_marked(*o) {
-                    self.mark_objects.push(*o);
-                }
             }
             if self.rc.is_dead_or_stuck(*o)
                 || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
@@ -877,17 +862,15 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessDecs<VM, COMPR
             || lxr.previous_pause() == Some(Pause::FullTraceFast);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         if let Some(decs) = std::mem::take(&mut self.decs) {
-            self.process_decs(&decs, lxr, false, false);
+            self.process_decs(&decs, lxr);
         } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
-            self.process_decs(&decs, lxr, false, false);
-        } else if let Some((not_marked, slice)) = self.slice {
-            self.process_decs(slice, lxr, true, not_marked);
+            self.process_decs(&decs, lxr);
         }
         let mut decs = vec![];
         while !self.new_decs.is_empty() {
             decs.clear();
             self.new_decs.swap(&mut decs);
-            self.process_decs(&decs, lxr, false, false);
+            self.process_decs(&decs, lxr);
         }
         self.flush();
     }

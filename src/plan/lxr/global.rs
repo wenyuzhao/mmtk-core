@@ -724,7 +724,7 @@ impl<VM: VMBinding> LXR<VM> {
         if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
         {
             if self.concurrent_marking_in_progress() {
-                scheduler.pause_concurrent_work_packets_during_gc();
+                scheduler.pause_concurrent_marking_work_packets_during_gc();
             }
         }
         type E<VM> = RCImmixCollectRootEdges<VM>;

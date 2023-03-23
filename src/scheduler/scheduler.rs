@@ -140,11 +140,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         })
     }
 
-    pub fn pause_concurrent_work_packets_during_gc(&self) {
+    pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
         let mut old_queue = Injector::new();
         old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(old_queue);
         let mut queue = self.postponed_concurrent_work.write();
-        assert!(queue.is_empty());
+        if !queue.is_empty() {
+            loop {
+                match queue.steal() {
+                    Steal::Empty => break,
+                    Steal::Success(x) => old_queue.push(x),
+                    Steal::Retry => continue,
+                }
+            }
+        }
         *queue = old_queue;
         crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
