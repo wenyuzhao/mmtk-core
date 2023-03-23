@@ -18,11 +18,6 @@ use std::marker::PhantomData;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, RwLock};
 
-const UNINITIALIZED_WATER_MARK: i32 = -1;
-const LOCAL_BUFFER_SIZE: usize = 128;
-const LOG_BLOCKS_IN_CHUNK: usize = LOG_BYTES_IN_CHUNK - 15;
-const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - 15);
-
 #[derive(Default)]
 struct ChunkList {
     base: Address,
@@ -74,7 +69,6 @@ impl ChunkList {
         }
         Self::set_next(chunk, None);
         Self::set_prev(chunk, None);
-        // self.chunk_bin[c_index].store(u8::MAX, Ordering::Relaxed);
     }
 
     fn push(&mut self, chunk: Chunk) {
@@ -114,7 +108,7 @@ const CHUNK_BIN: SideMetadataSpec = crate::util::metadata::side_metadata::spec_d
 const CHUNK_LIVE_BLOCKS: SideMetadataSpec =
     crate::util::metadata::side_metadata::spec_defs::CHUNK_LIVE_BLOCKS;
 
-struct ChunkPool {
+struct ChunkPool<B: Region> {
     base: Address,
     /// block alloc state
     alloc_state: Vec<AtomicBool>,
@@ -122,15 +116,18 @@ struct ChunkPool {
     bins: [RwLock<ChunkList>; 5],
     sync: Mutex<()>,
     alloc_chunk_lock: Mutex<()>,
+    _p: PhantomData<B>,
 }
 
-impl ChunkPool {
+impl<B: Region> ChunkPool<B> {
     const MAX_CHUNKS: usize = 1 << (35 - LOG_BYTES_IN_CHUNK);
+    const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
+    const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
 
     fn new_compressed_pointers(base: Address) -> Self {
         Self {
             base,
-            alloc_state: (0..(Self::MAX_CHUNKS << LOG_BLOCKS_IN_CHUNK))
+            alloc_state: (0..(Self::MAX_CHUNKS << Self::LOG_BLOCKS_IN_CHUNK))
                 .map(|_| AtomicBool::new(true))
                 .collect(),
             bins: [
@@ -142,6 +139,7 @@ impl ChunkPool {
             ],
             sync: Mutex::default(),
             alloc_chunk_lock: Mutex::default(),
+            _p: PhantomData,
         }
     }
 
@@ -161,12 +159,8 @@ impl ChunkPool {
         CHUNK_LIVE_BLOCKS.store_atomic::<u8>(chunk.start(), live_blocks, Ordering::Relaxed)
     }
 
-    fn chunk_index(&self, c: Address) -> usize {
-        (c - self.base) >> LOG_BYTES_IN_CHUNK
-    }
-
     fn calc_bin(live_blocks: u8) -> u8 {
-        assert_eq!(BLOCKS_IN_CHUNK, 128);
+        assert_eq!(Self::BLOCKS_IN_CHUNK, 128);
         match live_blocks {
             x if x >= 128 => 0,
             x if x >= 96 => 1,
@@ -177,7 +171,7 @@ impl ChunkPool {
     }
 
     fn cross_boundary(inc: bool, current_live_blocks: u8) -> bool {
-        assert_eq!(BLOCKS_IN_CHUNK, 128);
+        assert_eq!(Self::BLOCKS_IN_CHUNK, 128);
         let mut x = current_live_blocks;
         if !inc {
             x += 1;
@@ -207,11 +201,11 @@ impl ChunkPool {
         false
     }
 
-    fn alloc_block(&self) -> Option<Address> {
+    fn alloc_block(&self) -> Option<B> {
         for bin in self.bins.iter().skip(1) {
             let bin = bin.read().unwrap();
             for c in bin.iter() {
-                for i in 0..BLOCKS_IN_CHUNK {
+                for i in 0..Self::BLOCKS_IN_CHUNK {
                     let b = c.start() + (i << Block::LOG_BYTES);
                     let b_index = (b - self.base) >> Block::LOG_BYTES;
                     if self.alloc_state[b_index].fetch_or(true, Ordering::SeqCst) == false {
@@ -236,7 +230,7 @@ impl ChunkPool {
                             // skip this entire chunk as this chunk may be freed
                             break;
                         }
-                        return Some(b);
+                        return Some(B::from_aligned_address(b));
                     }
                 }
             }
@@ -244,8 +238,8 @@ impl ChunkPool {
         None
     }
 
-    fn alloc_block_from_new_chunk(&self, chunk: Chunk) -> Address {
-        for i in 0..BLOCKS_IN_CHUNK {
+    fn alloc_block_from_new_chunk(&self, chunk: Chunk) -> B {
+        for i in 0..Self::BLOCKS_IN_CHUNK {
             let b = chunk.start() + (i << Block::LOG_BYTES);
             let b_index = (b - self.base) >> Block::LOG_BYTES;
             self.alloc_state[b_index].store(false, Ordering::SeqCst);
@@ -257,13 +251,13 @@ impl ChunkPool {
         let _sync = self.sync.lock().unwrap();
         let mut bin = self.bins.last().unwrap().write().unwrap();
         bin.push(chunk);
-        chunk.start()
+        B::from_aligned_address(chunk.start())
     }
 
     /// Must be called when no allocation happens, and only one single thread is releasing the blocks
-    fn free_block_fast(&mut self, b: Address) -> Option<Chunk> {
-        let chunk = Chunk::from_unaligned_address(b);
-        let b_index = (b - self.base) >> Block::LOG_BYTES;
+    fn free_block_fast(&mut self, block: B) -> Option<Chunk> {
+        let chunk = Chunk::from_unaligned_address(block.start());
+        let b_index = (block.start() - self.base) >> Block::LOG_BYTES;
         let old_live_blocks = Self::get_live_blocks(chunk);
         Self::set_live_blocks(chunk, old_live_blocks - 1);
         let live_blocks = old_live_blocks - 1;
@@ -290,13 +284,13 @@ impl ChunkPool {
         None
     }
 
-    fn free_block(&self, b: Address, single_thread: bool) -> Option<Chunk> {
+    fn free_block(&self, block: B, single_thread: bool) -> Option<Chunk> {
         if single_thread {
             let me = unsafe { &mut *(self as *const Self as *mut Self) };
-            return me.free_block_fast(b);
+            return me.free_block_fast(block);
         }
-        let chunk = Chunk::from_unaligned_address(b);
-        let b_index = (b - self.base) >> Block::LOG_BYTES;
+        let chunk = Chunk::from_unaligned_address(block.start());
+        let b_index = (block.start() - self.base) >> Block::LOG_BYTES;
         let live_blocks =
             CHUNK_LIVE_BLOCKS.fetch_sub_atomic::<u8>(chunk.start(), 1, Ordering::SeqCst) - 1;
         self.alloc_state[b_index].fetch_and(false, Ordering::SeqCst);
@@ -316,7 +310,7 @@ impl ChunkPool {
 /// A fast PageResource for fixed-size block allocation only.
 pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     flpr: FreeListPageResource<VM>,
-    pool: ChunkPool,
+    pool: ChunkPool<B>,
     sync: Mutex<()>,
     _p: PhantomData<B>,
 }
@@ -424,7 +418,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     ) -> Option<(B, bool)> {
         if let Some(block) = self.pool.alloc_block() {
             self.commit_pages(reserved_pages, required_pages, tls);
-            return Some((B::from_aligned_address(block), false));
+            return Some((block, false));
         }
         None
     }
@@ -446,7 +440,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Some(chunk) = self.alloc_chunk(space_descriptor, tls) {
             let block = self.pool.alloc_block_from_new_chunk(chunk);
             self.commit_pages(reserved_pages, required_pages, tls);
-            return Some((B::from_aligned_address(block), true));
+            return Some((block, true));
         }
         None
     }
@@ -454,7 +448,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     pub fn release_block(&self, block: B, single_thread: bool) {
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
-        if let Some(chunk) = self.pool.free_block(block.start(), single_thread) {
+        if let Some(chunk) = self.pool.free_block(block, single_thread) {
             self.free_chunk(chunk)
         }
     }
