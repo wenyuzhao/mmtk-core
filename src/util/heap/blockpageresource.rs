@@ -477,7 +477,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    pub fn flush_all(&self) {
-        // TODO: For 32-bit space, we may want to free some contiguous chunks.
+    pub fn flush_all(&self) {}
+
+    pub(crate) fn get_live_blocks_in_chunk(&self, chunk: Chunk) -> usize {
+        ChunkPool::<B>::get_live_blocks(chunk) as _
     }
 }
