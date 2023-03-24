@@ -357,15 +357,26 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     /// Block granularity in pages
     const LOG_PAGES: usize = B::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
 
+    fn append_local_metadata(metadata: &mut SideMetadataContext) {
+        metadata.local.append(&mut vec![
+            ChunkList::PREV,
+            ChunkList::NEXT,
+            ChunkPool::<B>::CHUNK_BIN,
+            ChunkPool::<B>::CHUNK_LIVE_BLOCKS,
+            B::BPR_ALLOC_TABLE.unwrap(),
+        ]);
+    }
+
     pub fn new_contiguous(
         log_pages: usize,
         start: Address,
         bytes: usize,
         vm_map: &'static dyn Map,
         _num_workers: usize,
-        metadata: SideMetadataContext,
+        mut metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
+        Self::append_local_metadata(&mut metadata);
         Self {
             flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map, metadata),
             pool: ChunkPool::new_compressed_pointers(),
@@ -379,9 +390,10 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn Map,
         _num_workers: usize,
-        metadata: SideMetadataContext,
+        mut metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
+        Self::append_local_metadata(&mut metadata);
         Self {
             flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
             pool: ChunkPool::new_compressed_pointers(),
@@ -401,18 +413,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if start.is_zero() {
             return None;
         }
-        // map metadata
-        let metadata = SideMetadataContext {
-            global: vec![],
-            local: vec![
-                ChunkList::PREV,
-                ChunkList::NEXT,
-                ChunkPool::<B>::CHUNK_BIN,
-                ChunkPool::<B>::CHUNK_LIVE_BLOCKS,
-                B::BPR_ALLOC_TABLE.unwrap(),
-            ],
-        };
-        if let Err(mmap_error) = metadata.try_map_metadata_space(start, BYTES_IN_CHUNK) {
+        if let Err(mmap_error) = crate::mmtk::MMAPPER
+            .ensure_mapped(start, PAGES_IN_CHUNK as _)
+            .and(
+                self.common()
+                    .metadata
+                    .try_map_metadata_space(start, BYTES_IN_CHUNK),
+            )
+        {
             crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
         }
         Some(Chunk::from_aligned_address(start))
