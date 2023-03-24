@@ -163,7 +163,8 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     }
 
     fn initialize_sft(&self) {
-        self.common().initialize_sft(self.as_sft())
+        self.common()
+            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
     }
 
     fn common(&self) -> &CommonSpace<VM> {
@@ -214,22 +215,22 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 needs_log_bit: constraints.needs_log_bit,
                 needs_field_log_bit: constraints.needs_field_log_bit,
                 vmrequest,
-                side_metadata_specs: SideMetadataContext {
-                    global: global_side_metadata_specs,
-                    local: metadata::extract_side_metadata(&[
-                        *VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
-                        MetadataSpec::OnSide(LOS_PAGE_VALIDITY),
-                    ]),
-                },
             },
             vm_map,
             mmapper,
             heap,
         );
+        let metadata = SideMetadataContext {
+            global: global_side_metadata_specs,
+            local: metadata::extract_side_metadata(&[
+                *VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
+                MetadataSpec::OnSide(LOS_PAGE_VALIDITY),
+            ]),
+        };
         let mut pr = if vmrequest.is_discontiguous() {
-            FreeListPageResource::new_discontiguous(vm_map)
+            FreeListPageResource::new_discontiguous(vm_map, metadata)
         } else {
-            FreeListPageResource::new_contiguous(common.start, common.extent, vm_map)
+            FreeListPageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
         };
         pr.protect_memory_on_release = protect_memory_on_release;
         LargeObjectSpace {

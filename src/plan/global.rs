@@ -222,34 +222,10 @@ pub trait Plan: 'static + Sync + Downcast {
     /// * `space`: The space that triggered the poll. This could `None` if the poll is not triggered by a space.
     fn poll(&self, space_full: bool, space: Option<&dyn Space<Self::VM>>) -> bool {
         if self.collection_required(space_full, space) {
-            // FIXME
-            /*if space == META_DATA_SPACE {
-                /* In general we must not trigger a GC on metadata allocation since
-                 * this is not, in general, in a GC safe point.  Instead we initiate
-                 * an asynchronous GC, which will occur at the next safe point.
-                 */
-                self.log_poll(space, "Asynchronous collection requested");
-                self.common().control_collector_context.request();
-                return false;
-            }*/
             self.log_poll(space, "Triggering collection");
             self.base().gc_requester.request(false);
             return true;
         }
-
-        // FIXME
-        if self.concurrent_collection_required() {
-            // FIXME
-            /*if space == self.common().meta_data_space {
-                self.log_poll(space, "Triggering async concurrent collection");
-                Self::trigger_internal_collection_request();
-                return false;
-            } else {*/
-            self.log_poll(space, "Triggering concurrent collection");
-            self.base().trigger_internal_collection_request();
-            return true;
-        }
-
         false
     }
 

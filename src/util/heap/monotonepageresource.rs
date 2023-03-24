@@ -2,6 +2,7 @@ use super::layout::vm_layout_constants::{BYTES_IN_CHUNK, PAGES_IN_CHUNK};
 use crate::policy::space::required_chunks;
 use crate::util::address::Address;
 use crate::util::conversions::*;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::util::alloc::embedded_meta_data::*;
@@ -108,9 +109,11 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         let mut tmp = sync.cursor + bytes;
         debug!("tmp={:?}", tmp);
 
+        let mut growed_chunks = 0;
         if !self.common().contiguous && tmp > sync.sentinel {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
             let required_chunks = required_chunks(required_pages);
+            growed_chunks = required_chunks;
             sync.current_chunk = self
                 .common
                 .grow_discontiguous_space(space_descriptor, required_chunks); // Returns zero on failure
@@ -146,17 +149,28 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                 start: rtn,
                 pages: required_pages,
                 new_chunk,
+                growed_chunks,
             })
         }
     }
 }
 
 impl<VM: VMBinding> MonotonePageResource<VM> {
-    pub fn new_contiguous(start: Address, bytes: usize, vm_map: &'static dyn Map) -> Self {
+    pub fn new_contiguous(
+        start: Address,
+        bytes: usize,
+        vm_map: &'static dyn Map,
+        metadata: SideMetadataContext,
+    ) -> Self {
         let sentinel = start + bytes;
 
         MonotonePageResource {
-            common: CommonPageResource::new(true, cfg!(target_pointer_width = "64"), vm_map),
+            common: CommonPageResource::new(
+                true,
+                cfg!(target_pointer_width = "64"),
+                vm_map,
+                metadata,
+            ),
             sync: Mutex::new(MonotonePageResourceSync {
                 cursor: start,
                 current_chunk: chunk_align_down(start),
@@ -171,9 +185,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    pub fn new_discontiguous(vm_map: &'static dyn Map) -> Self {
+    pub fn new_discontiguous(vm_map: &'static dyn Map, metadata: SideMetadataContext) -> Self {
         MonotonePageResource {
-            common: CommonPageResource::new(false, true, vm_map),
+            common: CommonPageResource::new(false, true, vm_map, metadata),
             sync: Mutex::new(MonotonePageResourceSync {
                 cursor: unsafe { Address::zero() },
                 current_chunk: unsafe { Address::zero() },

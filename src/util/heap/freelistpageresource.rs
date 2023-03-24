@@ -15,6 +15,7 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::memory;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use std::marker::PhantomData;
@@ -101,7 +102,9 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         let mut new_chunk = false;
         let mut page_offset = self_mut.free_list.alloc(required_pages as _);
+        let mut growed_chunks = 0;
         if page_offset == generic_freelist::FAILURE && self.common.growable {
+            growed_chunks = crate::policy::space::required_chunks(required_pages);
             page_offset =
                 self_mut.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
             new_chunk = true;
@@ -138,16 +141,34 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             while !crate::MMAPPER.is_mapped_address(rtn) {}
             self.munprotect(rtn, self.free_list.size(page_offset as _) as _)
         };
+        if new_chunk {
+            if let Err(mmap_error) = crate::mmtk::MMAPPER
+                .ensure_mapped(rtn, page_offset as _)
+                .and(
+                    self.common()
+                        .metadata
+                        .try_map_metadata_space(rtn, conversions::pages_to_bytes(page_offset as _)),
+                )
+            {
+                memory::handle_mmap_error::<VM>(mmap_error, tls);
+            }
+        }
         Result::Ok(PRAllocResult {
             start: rtn,
             pages: required_pages,
             new_chunk,
+            growed_chunks,
         })
     }
 }
 
 impl<VM: VMBinding> FreeListPageResource<VM> {
-    pub fn new_contiguous(start: Address, bytes: usize, vm_map: &'static dyn Map) -> Self {
+    pub fn new_contiguous(
+        start: Address,
+        bytes: usize,
+        vm_map: &'static dyn Map,
+        metadata: SideMetadataContext,
+    ) -> Self {
         let pages = conversions::bytes_to_pages(bytes);
         let common_flpr = {
             let common_flpr = Box::new(CommonFreeListPageResource {
@@ -164,7 +185,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         };
         let growable = cfg!(target_pointer_width = "64");
         FreeListPageResource {
-            common: CommonPageResource::new(true, growable, vm_map),
+            common: CommonPageResource::new(true, growable, vm_map, metadata),
             common_flpr,
             sync: Mutex::new(FreeListPageResourceSync {
                 pages_currently_on_freelist: if growable { 0 } else { pages },
@@ -175,7 +196,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         }
     }
 
-    pub fn new_discontiguous(vm_map: &'static dyn Map) -> Self {
+    pub fn new_discontiguous(vm_map: &'static dyn Map, metadata: SideMetadataContext) -> Self {
         let common_flpr = {
             let start = VM_LAYOUT_CONSTANTS.available_start();
             let common_flpr = Box::new(CommonFreeListPageResource {
@@ -191,7 +212,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             common_flpr
         };
         FreeListPageResource {
-            common: CommonPageResource::new(false, true, vm_map),
+            common: CommonPageResource::new(false, true, vm_map, metadata),
             common_flpr,
             sync: Mutex::new(FreeListPageResourceSync {
                 pages_currently_on_freelist: 0,
@@ -258,6 +279,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             start: rtn,
             pages: PAGES_IN_CHUNK,
             new_chunk: true,
+            growed_chunks: 1,
         })
     }
 

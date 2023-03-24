@@ -1,5 +1,6 @@
 use crate::util::address::Address;
 use crate::util::conversions;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::ActivePlan;
 use std::sync::Mutex;
@@ -112,6 +113,7 @@ pub struct PRAllocResult {
     pub start: Address,
     pub pages: usize,
     pub new_chunk: bool,
+    pub growed_chunks: usize,
 }
 
 pub struct PRAllocFail;
@@ -123,10 +125,17 @@ pub struct CommonPageResource {
 
     pub vm_map: &'static dyn Map,
     head_discontiguous_region: Mutex<Address>,
+
+    pub metadata: SideMetadataContext,
 }
 
 impl CommonPageResource {
-    pub fn new(contiguous: bool, growable: bool, vm_map: &'static dyn Map) -> CommonPageResource {
+    pub fn new(
+        contiguous: bool,
+        growable: bool,
+        vm_map: &'static dyn Map,
+        metadata: SideMetadataContext,
+    ) -> CommonPageResource {
         CommonPageResource {
             accounting: PageAccounting::new(),
 
@@ -135,6 +144,8 @@ impl CommonPageResource {
             vm_map,
 
             head_discontiguous_region: Mutex::new(Address::ZERO),
+
+            metadata,
         }
     }
 

@@ -7,6 +7,7 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
@@ -73,10 +74,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         bytes: usize,
         vm_map: &'static dyn Map,
         num_workers: usize,
+        metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
-            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map),
+            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map, metadata),
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
         }
@@ -86,10 +88,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn Map,
         num_workers: usize,
+        metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
-            flpr: FreeListPageResource::new_discontiguous(vm_map),
+            flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
         }
@@ -112,6 +115,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 start: block.start(),
                 pages: required_pages,
                 new_chunk: false,
+                growed_chunks: 1,
             });
         }
         // Grow space (a chunk at a time)
@@ -146,6 +150,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             start: first_block,
             pages: required_pages,
             new_chunk: true,
+            growed_chunks: 1,
         })
     }
 
@@ -166,6 +171,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 start: block.start(),
                 pages: required_pages,
                 new_chunk: false,
+                growed_chunks: 1,
             });
         }
         // Slow-path：we need to grow space

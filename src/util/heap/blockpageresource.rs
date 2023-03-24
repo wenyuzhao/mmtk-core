@@ -340,6 +340,7 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
                 start: block.start(),
                 pages: required_pages,
                 new_chunk,
+                growed_chunks: if new_chunk { 1 } else { 0 },
             })
         } else {
             Err(PRAllocFail)
@@ -362,10 +363,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         bytes: usize,
         vm_map: &'static dyn Map,
         _num_workers: usize,
+        metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
-            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map),
+            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map, metadata),
             pool: ChunkPool::new_compressed_pointers(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
@@ -377,10 +379,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn Map,
         _num_workers: usize,
+        metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
-            flpr: FreeListPageResource::new_discontiguous(vm_map),
+            flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
             pool: ChunkPool::new_compressed_pointers(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),

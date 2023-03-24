@@ -114,7 +114,8 @@ impl<VM: VMBinding> Space<VM> for MarkCompactSpace<VM> {
     }
 
     fn initialize_sft(&self) {
-        self.common().initialize_sft(self.as_sft())
+        self.common()
+            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
@@ -215,20 +216,20 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 needs_field_log_bit: false,
                 zeroed,
                 vmrequest,
-                side_metadata_specs: SideMetadataContext {
-                    global: global_side_metadata_specs,
-                    local: local_specs,
-                },
             },
             vm_map,
             mmapper,
             heap,
         );
+        let metadata = SideMetadataContext {
+            global: global_side_metadata_specs,
+            local: local_specs,
+        };
         MarkCompactSpace {
             pr: if vmrequest.is_discontiguous() {
-                MonotonePageResource::new_discontiguous(vm_map)
+                MonotonePageResource::new_discontiguous(vm_map, metadata)
             } else {
-                MonotonePageResource::new_contiguous(common.start, common.extent, vm_map)
+                MonotonePageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
             },
             common,
         }

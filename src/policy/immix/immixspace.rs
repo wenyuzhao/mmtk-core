@@ -195,7 +195,8 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         &self.common
     }
     fn initialize_sft(&self) {
-        self.common().initialize_sft(self.as_sft());
+        self.common()
+            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata);
         // Initialize the block queues in `reusable_blocks` and `pr`.
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         me.block_allocation.init(unsafe { &*(self as *const Self) })
@@ -310,10 +311,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 immortal: false,
                 zeroed: true,
                 vmrequest: VMRequest::discontiguous(),
-                side_metadata_specs: SideMetadataContext {
-                    global: global_side_metadata_specs,
-                    local: Self::side_metadata_specs(rc_enabled),
-                },
                 needs_log_bit: constraints.needs_log_bit,
                 needs_field_log_bit: constraints.needs_field_log_bit,
             },
@@ -327,6 +324,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     Block::LOG_PAGES,
                     vm_map,
                     scheduler.num_workers(),
+                    SideMetadataContext {
+                        global: global_side_metadata_specs,
+                        local: Self::side_metadata_specs(rc_enabled),
+                    },
                 )
             } else {
                 BlockPageResource::new_contiguous(
@@ -335,6 +336,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     common.extent,
                     vm_map,
                     scheduler.num_workers(),
+                    SideMetadataContext {
+                        global: global_side_metadata_specs,
+                        local: Self::side_metadata_specs(rc_enabled),
+                    },
                 )
             },
             common,
