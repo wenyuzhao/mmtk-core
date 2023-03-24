@@ -327,7 +327,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     Block::LOG_PAGES,
                     vm_map,
                     scheduler.num_workers(),
-                    crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS,
                 )
             } else {
                 BlockPageResource::new_contiguous(
@@ -336,7 +335,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     common.extent,
                     vm_map,
                     scheduler.num_workers(),
-                    crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS,
                 )
             },
             common,

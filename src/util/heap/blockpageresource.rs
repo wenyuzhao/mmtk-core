@@ -103,12 +103,7 @@ impl Iterator for ChunkListIterator {
     }
 }
 
-const CHUNK_BIN: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::CHUNK_BIN;
-const CHUNK_LIVE_BLOCKS: SideMetadataSpec =
-    crate::util::metadata::side_metadata::spec_defs::CHUNK_LIVE_BLOCKS;
-
 struct ChunkPool<B: Region> {
-    block_alloc_table: SideMetadataSpec,
     bins: [RwLock<ChunkList>; 5],
     bin_update_lock: Mutex<()>,
     _p: PhantomData<B>,
@@ -119,9 +114,12 @@ impl<B: Region> ChunkPool<B> {
     const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
     const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
 
-    fn new_compressed_pointers(block_alloc_table: SideMetadataSpec) -> Self {
+    const CHUNK_BIN: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::CHUNK_BIN;
+    const CHUNK_LIVE_BLOCKS: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::CHUNK_LIVE_BLOCKS;
+
+    fn new_compressed_pointers() -> Self {
         Self {
-            block_alloc_table,
             bins: [
                 Default::default(),
                 Default::default(),
@@ -135,19 +133,19 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn get_bin(chunk: Chunk) -> u8 {
-        CHUNK_BIN.load_atomic::<u8>(chunk.start(), Ordering::Relaxed)
+        Self::CHUNK_BIN.load_atomic::<u8>(chunk.start(), Ordering::Relaxed)
     }
 
     fn set_bin(chunk: Chunk, bin: u8) {
-        CHUNK_BIN.store_atomic::<u8>(chunk.start(), bin, Ordering::Relaxed)
+        Self::CHUNK_BIN.store_atomic::<u8>(chunk.start(), bin, Ordering::Relaxed)
     }
 
     fn get_live_blocks(chunk: Chunk) -> u8 {
-        CHUNK_LIVE_BLOCKS.load_atomic::<u8>(chunk.start(), Ordering::Relaxed)
+        Self::CHUNK_LIVE_BLOCKS.load_atomic::<u8>(chunk.start(), Ordering::Relaxed)
     }
 
     fn set_live_blocks(chunk: Chunk, live_blocks: u8) {
-        CHUNK_LIVE_BLOCKS.store_atomic::<u8>(chunk.start(), live_blocks, Ordering::Relaxed)
+        Self::CHUNK_LIVE_BLOCKS.store_atomic::<u8>(chunk.start(), live_blocks, Ordering::Relaxed)
     }
 
     fn calc_bin(live_blocks: u8) -> u8 {
@@ -170,6 +168,7 @@ impl<B: Region> ChunkPool<B> {
         x == 128 || x == 96 || x == 64 || x == 32 || x == 1
     }
 
+    #[cold]
     fn move_chunk(&self, chunk: Chunk) -> bool {
         let _sync = self.bin_update_lock.lock().unwrap();
         let old_bin_id = Self::get_bin(chunk);
@@ -198,12 +197,15 @@ impl<B: Region> ChunkPool<B> {
             for c in bin.iter() {
                 for i in 0..Self::BLOCKS_IN_CHUNK {
                     let b = c.start() + (i << Block::LOG_BYTES);
-                    if self
-                        .block_alloc_table
+                    if unsafe { B::BPR_ALLOC_TABLE.unwrap().load::<u8>(b) } != 0 {
+                        continue;
+                    }
+                    if B::BPR_ALLOC_TABLE
+                        .unwrap()
                         .fetch_or_atomic::<u8>(b, 1, Ordering::SeqCst)
                         == 0
                     {
-                        let result = CHUNK_LIVE_BLOCKS.fetch_update_atomic::<u8, _>(
+                        let result = Self::CHUNK_LIVE_BLOCKS.fetch_update_atomic::<u8, _>(
                             c.start(),
                             Ordering::SeqCst,
                             Ordering::SeqCst,
@@ -235,11 +237,13 @@ impl<B: Region> ChunkPool<B> {
     fn alloc_block_from_new_chunk(&self, chunk: Chunk) -> B {
         for i in 0..Self::BLOCKS_IN_CHUNK {
             let b = chunk.start() + (i << Block::LOG_BYTES);
-            self.block_alloc_table
+            B::BPR_ALLOC_TABLE
+                .unwrap()
                 .store_atomic::<u8>(b, 0, Ordering::SeqCst);
         }
         let first_block = B::from_aligned_address(chunk.start());
-        self.block_alloc_table
+        B::BPR_ALLOC_TABLE
+            .unwrap()
             .store_atomic::<u8>(first_block.start(), 1, Ordering::SeqCst);
         Self::set_live_blocks(chunk, 1);
         Self::set_bin(chunk, self.bins.len() as u8 - 1);
@@ -255,7 +259,8 @@ impl<B: Region> ChunkPool<B> {
         let old_live_blocks = Self::get_live_blocks(chunk);
         Self::set_live_blocks(chunk, old_live_blocks - 1);
         let live_blocks = old_live_blocks - 1;
-        self.block_alloc_table
+        B::BPR_ALLOC_TABLE
+            .unwrap()
             .store_atomic::<u8>(block.start(), 0, Ordering::SeqCst);
         if Self::cross_boundary(false, live_blocks) {
             let old_bin = Self::get_bin(chunk);
@@ -286,8 +291,9 @@ impl<B: Region> ChunkPool<B> {
         }
         let chunk = Chunk::from_unaligned_address(block.start());
         let live_blocks =
-            CHUNK_LIVE_BLOCKS.fetch_sub_atomic::<u8>(chunk.start(), 1, Ordering::SeqCst) - 1;
-        self.block_alloc_table
+            Self::CHUNK_LIVE_BLOCKS.fetch_sub_atomic::<u8>(chunk.start(), 1, Ordering::SeqCst) - 1;
+        B::BPR_ALLOC_TABLE
+            .unwrap()
             .store_atomic::<u8>(block.start(), 0, Ordering::SeqCst);
         if Self::cross_boundary(false, live_blocks) {
             let chunk_is_removed = self.move_chunk(chunk);
@@ -356,12 +362,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         bytes: usize,
         vm_map: &'static dyn Map,
         _num_workers: usize,
-        block_alloc_table: SideMetadataSpec,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
             flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map),
-            pool: ChunkPool::new_compressed_pointers(block_alloc_table),
+            pool: ChunkPool::new_compressed_pointers(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             _p: PhantomData,
@@ -372,12 +377,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn Map,
         _num_workers: usize,
-        block_alloc_table: SideMetadataSpec,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
             flpr: FreeListPageResource::new_discontiguous(vm_map),
-            pool: ChunkPool::new_compressed_pointers(block_alloc_table),
+            pool: ChunkPool::new_compressed_pointers(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             _p: PhantomData,
@@ -390,8 +394,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 return Some(chunk);
             }
         }
-        let a = self.common().grow_discontiguous_space(descriptor, 1);
-        if a.is_zero() {
+        let start = self.common().grow_discontiguous_space(descriptor, 1);
+        if start.is_zero() {
             return None;
         }
         // map metadata
@@ -400,16 +404,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             local: vec![
                 ChunkList::PREV,
                 ChunkList::NEXT,
-                CHUNK_BIN,
-                CHUNK_LIVE_BLOCKS,
-                self.pool.block_alloc_table,
+                ChunkPool::<B>::CHUNK_BIN,
+                ChunkPool::<B>::CHUNK_LIVE_BLOCKS,
+                B::BPR_ALLOC_TABLE.unwrap(),
             ],
         };
-
-        if let Err(mmap_error) = metadata.try_map_metadata_space(a, BYTES_IN_CHUNK) {
+        if let Err(mmap_error) = metadata.try_map_metadata_space(start, BYTES_IN_CHUNK) {
             crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
         }
-        Some(Chunk::from_aligned_address(a))
+        Some(Chunk::from_aligned_address(start))
     }
 
     fn free_chunk(&self, chunk: Chunk) {

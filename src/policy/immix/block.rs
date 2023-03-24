@@ -103,6 +103,9 @@ impl Region for Block {
     #[cfg(feature = "immix_smaller_block")]
     const LOG_BYTES: usize = 13;
 
+    const BPR_ALLOC_TABLE: Option<SideMetadataSpec> =
+        Some(crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS);
+
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)

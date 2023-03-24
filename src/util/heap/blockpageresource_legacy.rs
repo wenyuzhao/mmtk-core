@@ -7,7 +7,6 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
-use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
@@ -20,7 +19,7 @@ const UNINITIALIZED_WATER_MARK: i32 = -1;
 const LOCAL_BUFFER_SIZE: usize = 128;
 
 fn enable_flpr_alloc() -> bool {
-    cfg!(feature = "bpr_flpr") || VMLayoutConstants::get_address_space().pointer_compression()
+    cfg!(feature = "bpr_freelist")
 }
 
 /// A fast PageResource for fixed-size block allocation only.
@@ -74,7 +73,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         bytes: usize,
         vm_map: &'static dyn Map,
         num_workers: usize,
-        _: SideMetadataSpec,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
@@ -88,7 +86,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn Map,
         num_workers: usize,
-        _: SideMetadataSpec,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {

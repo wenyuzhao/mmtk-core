@@ -14,7 +14,7 @@ mod vmrequest;
 pub use self::accounting::PageAccounting;
 #[cfg(not(feature = "bpr_unprioritized"))]
 pub use self::blockpageresource::BlockPageResource;
-#[cfg(feature = "bpr_unprioritized")]
+#[cfg(any(feature = "bpr_unprioritized", feature = "bpr_freelist"))]
 pub use self::blockpageresource_legacy::BlockPageResource;
 pub use self::freelistpageresource::FreeListPageResource;
 pub use self::heap_meta::HeapMeta;
