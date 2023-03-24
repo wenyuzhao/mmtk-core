@@ -40,7 +40,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     mutator_recycled_blocks: Box<Vec<Block>>,
-    mutator_recycled_lines: usize,
+    mutator_allocated_clean_blocks: Box<Vec<Block>>,
     retry: bool,
 }
 
@@ -155,19 +155,29 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             mutator_recycled_blocks: Box::new(vec![]),
-            mutator_recycled_lines: 0,
+            mutator_allocated_clean_blocks: Box::new(vec![]),
             retry: false,
         }
     }
 
     pub fn flush(&mut self) {
         if !self.mutator_recycled_blocks.is_empty() {
-            let mut v = Box::new(vec![]);
+            let mut v = vec![];
             std::mem::swap(&mut v, &mut self.mutator_recycled_blocks);
             self.immix_space()
                 .mutator_recycled_blocks
                 .lock()
-                .append(&mut v);
+                .unwrap()
+                .push(v);
+        }
+        if !self.mutator_allocated_clean_blocks.is_empty() {
+            let mut v = vec![];
+            std::mem::swap(&mut v, &mut self.mutator_allocated_clean_blocks);
+            self.immix_space()
+                .mutator_allocated_clean_blocks
+                .lock()
+                .unwrap()
+                .push(v);
         }
     }
 
@@ -285,6 +295,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     self.cursor = block.start();
                     self.limit = block.end();
+                }
+                if !self.copy {
+                    self.mutator_allocated_clean_blocks.push(block);
                 }
                 self.alloc(size, align, offset)
             }
