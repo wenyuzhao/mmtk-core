@@ -7,6 +7,7 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
@@ -73,6 +74,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         bytes: usize,
         vm_map: &'static dyn Map,
         num_workers: usize,
+        _: SideMetadataSpec,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
@@ -86,6 +88,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn Map,
         num_workers: usize,
+        _: SideMetadataSpec,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
