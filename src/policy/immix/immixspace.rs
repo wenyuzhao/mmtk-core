@@ -198,7 +198,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         self.common().initialize_sft(self.as_sft());
         // Initialize the block queues in `reusable_blocks` and `pr`.
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.block_allocation.init(unsafe { &*(self as *const Self) });
+        me.block_allocation.init(unsafe { &*(self as *const Self) })
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -327,6 +327,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     Block::LOG_PAGES,
                     vm_map,
                     scheduler.num_workers(),
+                    crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS,
                 )
             } else {
                 BlockPageResource::new_contiguous(
@@ -335,6 +336,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     common.extent,
                     vm_map,
                     scheduler.num_workers(),
+                    crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS,
                 )
             },
             common,
