@@ -30,6 +30,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) trace_threshold: usize,
     pub(crate) min_reuse_lines: usize,
     pub(crate) no_recursive_dec: bool,
+    pub(crate) chunk_defarg_threshold: usize,
 }
 
 impl Default for RuntimeArgs {
@@ -71,6 +72,7 @@ impl Default for RuntimeArgs {
                 .unwrap_or(20),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
             no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
+            chunk_defarg_threshold: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
         }
     }
 }

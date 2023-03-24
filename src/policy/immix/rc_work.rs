@@ -7,7 +7,7 @@ use crate::{
     plan::{immix::Pause, lxr::LXR},
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
-        heap::chunk_map::Chunk,
+        heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK},
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,
@@ -44,21 +44,27 @@ pub(super) struct SelectDefragBlocksInChunk {
 
 impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let mut blocks = vec![];
+        let mut fragmented_blocks = vec![];
+        let mut blocks_in_fragmented_chunks = vec![];
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         // Iterate over all blocks in this chunk
-        for block in self
-            .chunk
-            .iter_region::<Block>()
-            .filter(|block| block.get_state() != BlockState::Unallocated)
-        {
-            let state = block.get_state();
+        for block in self.chunk.iter_region::<Block>() {
             // Skip unallocated blocks.
-            if state == BlockState::Unallocated
-                || state == BlockState::Nursery
-                || block.is_defrag_source()
-            {
+            if MatureEvacuationSet::skip_block(block) {
                 continue;
             }
+            // This is a block in a fragmented chunk?
+            let live_blocks_in_chunk = lxr
+                .immix_space
+                .pr
+                .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
+            if live_blocks_in_chunk < crate::args().chunk_defarg_threshold {
+                let dead_blocks =
+                    (1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES)) - live_blocks_in_chunk;
+                blocks_in_fragmented_chunks.push((block, dead_blocks));
+                continue;
+            }
+            // This is a fragmented block?
             let score = if crate::args::HOLE_COUNTING {
                 unreachable!();
                 // match state {
@@ -71,15 +77,28 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
             if score >= (Block::BYTES >> 1) {
-                blocks.push((block, score));
+                fragmented_blocks.push((block, score));
             }
         }
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        // Flush to global fragmented_blocks
         lxr.immix_space
             .evac_set
             .fragmented_blocks_size
-            .fetch_add(blocks.len(), Ordering::SeqCst);
-        lxr.immix_space.evac_set.fragmented_blocks.push(blocks);
+            .fetch_add(fragmented_blocks.len(), Ordering::SeqCst);
+        lxr.immix_space
+            .evac_set
+            .fragmented_blocks
+            .push(fragmented_blocks);
+        // Flush to global blocks_in_fragmented_chunks
+        lxr.immix_space
+            .evac_set
+            .blocks_in_fragmented_chunks_size
+            .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
+        lxr.immix_space
+            .evac_set
+            .blocks_in_fragmented_chunks
+            .push(blocks_in_fragmented_chunks);
+
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             lxr.immix_space
                 .evac_set
@@ -331,7 +350,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESS
 pub(super) struct MatureEvacuationSet {
     fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
     fragmented_blocks_size: AtomicUsize,
-    defrag_blocks: Vec<Block>,
+    blocks_in_fragmented_chunks: SegQueue<Vec<(Block, usize)>>,
+    blocks_in_fragmented_chunks_size: AtomicUsize,
+    defrag_blocks: Mutex<Vec<Block>>,
     last_defrag_blocks: Mutex<Vec<Block>>,
     num_defrag_blocks: AtomicUsize,
 }
@@ -339,8 +360,9 @@ pub(super) struct MatureEvacuationSet {
 impl MatureEvacuationSet {
     pub fn update_last_defrag_blocks(&mut self) {
         let mut last_defrag_blocks = self.last_defrag_blocks.lock().unwrap();
+        let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
         debug_assert!(last_defrag_blocks.is_empty());
-        std::mem::swap(&mut self.defrag_blocks, &mut last_defrag_blocks);
+        std::mem::swap::<Vec<Block>>(&mut defrag_blocks, &mut last_defrag_blocks);
     }
 
     pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
@@ -349,7 +371,6 @@ impl MatureEvacuationSet {
         if last_defrag_blocks.is_empty() {
             return;
         }
-
         while let Some(block) = last_defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
                 continue;
@@ -373,57 +394,95 @@ impl MatureEvacuationSet {
         space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
     }
 
+    fn skip_block(b: Block) -> bool {
+        let s = b.get_state();
+        b.is_defrag_source() || s == BlockState::Unallocated || s == BlockState::Nursery
+    }
+
+    fn select_blocks_in_fragmented_chunks(
+        &self,
+        selected_blocks: &mut Vec<Block>,
+        copy_bytes: &mut usize,
+        max_copy_bytes: usize,
+    ) {
+        let mut blocks =
+            Vec::with_capacity(self.blocks_in_fragmented_chunks_size.load(Ordering::SeqCst));
+        while let Some(mut x) = self.blocks_in_fragmented_chunks.pop() {
+            blocks.append(&mut x);
+        }
+        blocks.sort_by_key(|x| x.1);
+        while let Some((block, _)) = blocks.pop() {
+            if Self::skip_block(block) {
+                continue;
+            }
+            block.set_as_defrag_source(true);
+            selected_blocks.push(block);
+            *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
+            if *copy_bytes >= max_copy_bytes {
+                break;
+            }
+        }
+    }
+
+    fn select_fragmented_blocks(
+        &self,
+        selected_blocks: &mut Vec<Block>,
+        copy_bytes: &mut usize,
+        max_copy_bytes: usize,
+    ) {
+        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
+        while let Some(mut x) = self.fragmented_blocks.pop() {
+            blocks.append(&mut x);
+        }
+        blocks.sort_by_key(|x| x.1);
+        while let Some((block, _dead_bytes)) = blocks.pop() {
+            if Self::skip_block(block) {
+                continue;
+            }
+            block.set_as_defrag_source(true);
+            selected_blocks.push(block);
+            *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
+            if *copy_bytes >= max_copy_bytes {
+                break;
+            }
+        }
+    }
+
     pub fn select_mature_evacuation_candidates<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
         _pause: Pause,
         _total_pages: usize,
     ) {
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
         // let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
         //     + self.defrag_headroom_pages()
         //     - VM::VMActivePlan::global().get_pages_reserved();
         // let defrag_bytes = available_clean_pages_for_defrag << 12;
-        let defrag_bytes = space.defrag_headroom_pages() << 12;
-        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
-        while let Some(mut x) = self.fragmented_blocks.pop() {
-            blocks.append(&mut x);
-        }
-        let mut live_bytes = 0usize;
-        let mut num_blocks = 0usize;
-        blocks.sort_by_key(|x| x.1);
-        while let Some((block, dead_bytes)) = blocks.pop() {
-            if block.is_defrag_source()
-                || block.get_state() == BlockState::Unallocated
-                || block.get_state() == BlockState::Nursery
-            {
-                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
-                continue;
-            }
-            block.set_as_defrag_source(true);
-            // println!(
-            //     " - defrag {:?} {:?} {}",
-            //     block,
-            //     block.get_state(),
-            //     block.dead_bytes()
-            // );
-            me.defrag_blocks.push(block);
-            live_bytes += (Block::BYTES - dead_bytes) >> 1;
-            num_blocks += 1;
-            if live_bytes >= defrag_bytes {
-                break;
-            }
-        }
+        let max_copy_bytes = space.defrag_headroom_pages() << 12;
+        let mut copy_bytes = 0usize;
+        let mut selected_blocks = vec![];
+        self.select_blocks_in_fragmented_chunks(
+            &mut selected_blocks,
+            &mut copy_bytes,
+            max_copy_bytes,
+        );
+        let count1 = selected_blocks.len();
+        self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
+        // let count2 = selected_blocks.len() - count1;
         if *space.options.verbose >= 2 {
             eprintln!(
-                "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks)",
+                "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
                 crate::boot_time_secs(),
-                live_bytes,
-                num_blocks
+                copy_bytes,
+                selected_blocks.len(),
+                count1,
             );
         }
-        self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
+        self.num_defrag_blocks
+            .store(selected_blocks.len(), Ordering::SeqCst);
+        let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
+        *defrag_blocks = selected_blocks;
     }
 }
