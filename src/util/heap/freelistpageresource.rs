@@ -291,13 +291,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         rtn
     }
 
-    pub fn release_chunk(&self, chunk: Address) {
-        #[allow(clippy::cast_ref_to_mut)]
-        let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
-        let mut sync = self.sync.lock().unwrap();
-        self_mut.free_contiguous_chunk(chunk, &mut sync);
-    }
-
     fn free_contiguous_chunk(&mut self, chunk: Address, sync: &mut FreeListPageResourceSync) {
         let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
         /* nail down all pages associated with the chunk, so it is no longer on our free list */
