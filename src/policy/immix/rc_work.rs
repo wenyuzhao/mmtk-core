@@ -58,9 +58,15 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 .immix_space
                 .pr
                 .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
-            if live_blocks_in_chunk < crate::args().chunk_defarg_threshold {
-                let dead_blocks =
-                    (1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES)) - live_blocks_in_chunk;
+            let threshold = if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+                crate::args().chunk_defarg_threshold << 1
+            } else {
+                crate::args().chunk_defarg_threshold
+            };
+            const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
+            let threshold = usize::min(threshold, BLOCKS_IN_CHUNK - 1);
+            if live_blocks_in_chunk < threshold {
+                let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
                 blocks_in_fragmented_chunks.push((block, dead_blocks));
                 continue;
             }
@@ -76,7 +82,8 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 // block.calc_dead_bytes::<VM>()
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
-            if score >= (Block::BYTES >> 1) {
+            if lxr.current_pause().unwrap() == Pause::FullTraceFast || score >= (Block::BYTES >> 1)
+            {
                 fragmented_blocks.push((block, score));
             }
         }
