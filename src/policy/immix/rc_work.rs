@@ -1,10 +1,11 @@
-use std::sync::atomic::AtomicUsize;
+use std::sync::{atomic::AtomicUsize, Mutex};
 
 use atomic::Ordering;
+use crossbeam::queue::SegQueue;
 
 use crate::{
-    plan::lxr::LXR,
-    scheduler::{GCWork, GCWorker},
+    plan::{immix::Pause, lxr::LXR},
+    scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
         heap::chunk_map::Chunk,
         linear_scan::Region,
@@ -75,14 +76,18 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         }
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         lxr.immix_space
+            .evac_set
             .fragmented_blocks_size
             .fetch_add(blocks.len(), Ordering::SeqCst);
-        lxr.immix_space.fragmented_blocks.push(blocks);
+        lxr.immix_space.evac_set.fragmented_blocks.push(blocks);
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            lxr.immix_space.select_mature_evacuation_candidates(
-                lxr.current_pause().unwrap(),
-                mmtk.plan.get_total_pages(),
-            )
+            lxr.immix_space
+                .evac_set
+                .select_mature_evacuation_candidates(
+                    &lxr.immix_space,
+                    lxr.current_pause().unwrap(),
+                    mmtk.plan.get_total_pages(),
+                )
         }
     }
 }
@@ -319,5 +324,106 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESS
             debug_assert_ne!(block.get_state(), BlockState::Marked);
             // debug_assert_ne!(block.get_state(), BlockState::Nursery);
         }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct MatureEvacuationSet {
+    fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
+    fragmented_blocks_size: AtomicUsize,
+    defrag_blocks: Vec<Block>,
+    last_defrag_blocks: Mutex<Vec<Block>>,
+    num_defrag_blocks: AtomicUsize,
+}
+
+impl MatureEvacuationSet {
+    pub fn update_last_defrag_blocks(&mut self) {
+        let mut last_defrag_blocks = self.last_defrag_blocks.lock().unwrap();
+        debug_assert!(last_defrag_blocks.is_empty());
+        std::mem::swap(&mut self.defrag_blocks, &mut last_defrag_blocks);
+    }
+
+    pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        let mut last_defrag_blocks: Vec<Block> =
+            std::mem::take(&mut *self.last_defrag_blocks.lock().unwrap());
+        if last_defrag_blocks.is_empty() {
+            return;
+        }
+
+        while let Some(block) = last_defrag_blocks.pop() {
+            if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
+                continue;
+            }
+            block.clear_rc_table::<VM>();
+            block.clear_striddle_table::<VM>();
+            block.rc_sweep_mature::<VM>(space, true);
+            assert!(!block.is_defrag_source());
+        }
+    }
+
+    pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        let tasks = space.chunk_map.generate_tasks(|chunk| {
+            Box::new(SelectDefragBlocksInChunk {
+                chunk,
+                defrag_threshold: 1,
+            })
+        });
+        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
+        SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
+        space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+    }
+
+    pub fn select_mature_evacuation_candidates<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        _pause: Pause,
+        _total_pages: usize,
+    ) {
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        debug_assert!(crate::args::RC_MATURE_EVACUATION);
+        // Select mature defrag blocks
+        // let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
+        //     + self.defrag_headroom_pages()
+        //     - VM::VMActivePlan::global().get_pages_reserved();
+        // let defrag_bytes = available_clean_pages_for_defrag << 12;
+        let defrag_bytes = space.defrag_headroom_pages() << 12;
+        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
+        while let Some(mut x) = self.fragmented_blocks.pop() {
+            blocks.append(&mut x);
+        }
+        let mut live_bytes = 0usize;
+        let mut num_blocks = 0usize;
+        blocks.sort_by_key(|x| x.1);
+        while let Some((block, dead_bytes)) = blocks.pop() {
+            if block.is_defrag_source()
+                || block.get_state() == BlockState::Unallocated
+                || block.get_state() == BlockState::Nursery
+            {
+                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
+                continue;
+            }
+            block.set_as_defrag_source(true);
+            // println!(
+            //     " - defrag {:?} {:?} {}",
+            //     block,
+            //     block.get_state(),
+            //     block.dead_bytes()
+            // );
+            me.defrag_blocks.push(block);
+            live_bytes += (Block::BYTES - dead_bytes) >> 1;
+            num_blocks += 1;
+            if live_bytes >= defrag_bytes {
+                break;
+            }
+        }
+        if *space.options.verbose >= 2 {
+            eprintln!(
+                "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks)",
+                crate::boot_time_secs(),
+                live_bytes,
+                num_blocks
+            );
+        }
+        self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
     }
 }
