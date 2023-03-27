@@ -143,11 +143,14 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         };
         if new_chunk {
             if let Err(mmap_error) = crate::mmtk::MMAPPER
-                .ensure_mapped(rtn, page_offset as _)
+                .ensure_mapped(
+                    rtn,
+                    growed_chunks << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize),
+                )
                 .and(
                     self.common()
                         .metadata
-                        .try_map_metadata_space(rtn, conversions::pages_to_bytes(page_offset as _)),
+                        .try_map_metadata_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK),
                 )
             {
                 memory::handle_mmap_error::<VM>(mmap_error, tls);
