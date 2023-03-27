@@ -27,9 +27,7 @@ pub struct MatureSweeping;
 impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        let lxr_mut = unsafe { &mut *(lxr as *const LXR<VM> as *mut LXR<VM>) };
-        lxr_mut
-            .immix_space
+        lxr.immix_space
             .schedule_mature_sweeping(lxr.current_pause().unwrap())
     }
 }
@@ -173,24 +171,16 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
 pub(super) struct SweepDeadCyclesChunk<VM: VMBinding, const COMPRESSED: bool> {
     chunk: Chunk,
     _counter: LazySweepingJobsCounter,
-    lxr: *const LXR<VM>,
     rc: RefCountHelper<VM>,
 }
-
-unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for SweepDeadCyclesChunk<VM, COMPRESSED> {}
 
 #[allow(unused)]
 impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED> {
     const CAPACITY: usize = 1024;
 
-    fn lxr(&self) -> &LXR<VM> {
-        unsafe { &*self.lxr }
-    }
-
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
         Self {
             chunk,
-            lxr: std::ptr::null_mut(),
             _counter: counter,
             rc: RefCountHelper::NEW,
         }
@@ -261,7 +251,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for SweepDeadCyclesChunk<VM, COMPRESSED> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        self.lxr = lxr;
         let immix_space = &lxr.immix_space;
         for block in self
             .chunk

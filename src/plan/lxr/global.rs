@@ -34,10 +34,11 @@ use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, RwLock};
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
+use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
 
@@ -68,6 +69,8 @@ pub struct LXR<VM: VMBinding> {
     zeroing_packets_scheduled: AtomicBool,
     next_gc_selected: (Mutex<bool>, Condvar),
     in_concurrent_marking: AtomicBool,
+    pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
+    pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub rc: RefCountHelper<VM>,
 }
 
@@ -298,10 +301,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             pause == Pause::FullTraceFast || pause == Pause::FinalMark,
         );
         self.immix_space.release_rc(pause);
-        unsafe {
-            std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
-            debug_assert!(super::CURR_ROOTS.is_empty());
-        }
+        // swap roots
+        let mut prev_roots = self.prev_roots.write().unwrap();
+        let mut curr_roots = self.curr_roots.write().unwrap();
+        std::mem::swap::<SegQueue<_>>(&mut prev_roots, &mut curr_roots);
+        debug_assert!(curr_roots.is_empty());
         // release the collected region
         self.last_gc_was_defrag.store(
             self.current_pause().unwrap() == Pause::FullTraceDefrag,
@@ -335,8 +339,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         super::SURVIVAL_RATIO_PREDICTOR
             .pause_start
             .store(SystemTime::now(), Ordering::SeqCst);
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.immix_space.rc_eager_prepare(pause);
+        self.immix_space.rc_eager_prepare(pause);
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
             mutator.flush();
@@ -489,6 +492,8 @@ impl<VM: VMBinding> LXR<VM> {
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
+            prev_roots: Default::default(),
+            curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
         });
 
@@ -714,7 +719,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
@@ -726,7 +731,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
@@ -740,7 +745,7 @@ impl<VM: VMBinding> LXR<VM> {
         if self.concurrent_marking_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
 
@@ -763,7 +768,7 @@ impl<VM: VMBinding> LXR<VM> {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -780,8 +785,8 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
-        let prev_roots = unsafe { &super::PREV_ROOTS };
+    fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {
+        let prev_roots = self.prev_roots.write().unwrap();
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
             work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
@@ -877,60 +882,67 @@ impl<VM: VMBinding> LXR<VM> {
             let me = &*(self as *const Self);
             self.immix_space.block_allocation.lxr = Some(me);
         }
-        unsafe {
-            let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
-            lazy_sweeping_jobs.swap();
-            let me = &*(self as *const Self);
-            lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
-                me.immix_space.schedule_rc_block_sweeping_tasks(c);
-            }));
-            lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
-                // me.immix_space.reusable_blocks.flush_all();
-                me.immix_space.flush_page_resource();
-                if *me.options().verbose >= 2 {
-                    let pause_time = crate::GC_START_TIME
-                        .load(Ordering::SeqCst)
-                        .elapsed()
-                        .unwrap();
-                    let pause_time = pause_time.as_micros() as f64 / 1000f64;
-                    eprintln!(
-                        "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
-                        crate::boot_time_secs(),
-                        crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
-                        me.get_reserved_pages() / 256,
-                        me.get_total_pages() / 256,
-                        pause_time
-                    );
-                }
-                // Update counters
-                if !crate::args::LAZY_DECREMENTS {
-                    HEAP_AFTER_GC.store(me.get_used_pages(), Ordering::SeqCst);
-                }
-                {
-                    let o = Ordering::Relaxed;
-                    let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
-                    let lazy_released_pages = me
-                        .immix_space
-                        .num_clean_blocks_released_lazy
-                        .load(Ordering::SeqCst)
-                        << Block::LOG_PAGES;
-                    let x = if used_pages_after_gc >= lazy_released_pages {
-                        used_pages_after_gc - lazy_released_pages
-                    } else {
-                        0
-                    };
-                    crate::COUNTERS.total_used_pages.store(
-                        crate::COUNTERS.total_used_pages.load(o) + x,
-                        Ordering::Relaxed,
-                    );
-                    let min = crate::COUNTERS.min_used_pages.load(o);
-                    crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
-                    let max = crate::COUNTERS.max_used_pages.load(o);
-                    crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
-                }
-                me.decide_next_gc_may_perform_cycle_collection();
-            }));
-        }
+        let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
+        lazy_sweeping_jobs.swap();
+        lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
+            let lxr = GCWorker::<VM>::current()
+                .mmtk
+                .get_plan()
+                .downcast_ref::<Self>()
+                .unwrap();
+            lxr.immix_space.schedule_rc_block_sweeping_tasks(c);
+        }));
+        lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
+            let lxr = GCWorker::<VM>::current()
+                .mmtk
+                .get_plan()
+                .downcast_ref::<Self>()
+                .unwrap();
+            lxr.immix_space.flush_page_resource();
+            if *lxr.options().verbose >= 2 {
+                let pause_time = crate::GC_START_TIME
+                    .load(Ordering::SeqCst)
+                    .elapsed()
+                    .unwrap();
+                let pause_time = pause_time.as_micros() as f64 / 1000f64;
+                eprintln!(
+                    "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
+                    crate::boot_time_secs(),
+                    crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
+                    lxr.get_reserved_pages() / 256,
+                    lxr.get_total_pages() / 256,
+                    pause_time
+                );
+            }
+            // Update counters
+            if !crate::args::LAZY_DECREMENTS {
+                HEAP_AFTER_GC.store(lxr.get_used_pages(), Ordering::SeqCst);
+            }
+            {
+                let o = Ordering::Relaxed;
+                let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
+                let lazy_released_pages = lxr
+                    .immix_space
+                    .num_clean_blocks_released_lazy
+                    .load(Ordering::SeqCst)
+                    << Block::LOG_PAGES;
+                let x = if used_pages_after_gc >= lazy_released_pages {
+                    used_pages_after_gc - lazy_released_pages
+                } else {
+                    0
+                };
+                crate::COUNTERS.total_used_pages.store(
+                    crate::COUNTERS.total_used_pages.load(o) + x,
+                    Ordering::Relaxed,
+                );
+                let min = crate::COUNTERS.min_used_pages.load(o);
+                crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
+                let max = crate::COUNTERS.max_used_pages.load(o);
+                crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
+            }
+            lxr.decide_next_gc_may_perform_cycle_collection();
+        }));
+
         if let Some(nursery_ratio) = crate::args().nursery_ratio {
             let heap_size = match *options.gc_trigger {
                 GCTriggerSelector::FixedHeapSize(x) => x,
