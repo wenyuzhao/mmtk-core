@@ -74,7 +74,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Notify a GC pahse has started
-    pub fn notify_mutator_phase_end(&mut self) {}
+    pub fn notify_mutator_phase_end(&self) {}
 
     pub fn concurrent_marking_in_progress_or_final_mark(&self) -> bool {
         let lxr = self.lxr.unwrap();

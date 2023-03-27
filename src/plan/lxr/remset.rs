@@ -51,7 +51,7 @@ impl<VM: VMBinding> RemSet<VM> {
     }
 
     fn flush_all(&self, space: &ImmixSpace<VM>) {
-    let mut mature_evac_remsets = space.mature_evac_remsets.lock().unwrap();
+        let mut mature_evac_remsets = space.mature_evac_remsets.lock().unwrap();
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
                 let remset = std::mem::take(self.gc_buffer(id));

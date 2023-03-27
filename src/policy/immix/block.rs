@@ -147,19 +147,19 @@ impl Block {
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
         let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
         let words = bytes >> LOG_BYTES_IN_WORD;
-        let old: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
+        let old: u32 = Self::DEAD_WORDS.load_atomic(self.start(), Ordering::Relaxed);
         let mut new = old + words;
         if new >= max_words {
             new = max_words - 1;
         }
-        unsafe { Self::DEAD_WORDS.store(self.start(), new) };
+        Self::DEAD_WORDS.store_atomic(self.start(), new, Ordering::Relaxed);
     }
 
     pub fn dec_dead_bytes_sloppy(&self, bytes: u32) {
         let words = bytes >> LOG_BYTES_IN_WORD;
-        let old: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
+        let old: u32 = Self::DEAD_WORDS.load_atomic(self.start(), Ordering::Relaxed);
         let new = if old <= words { 0 } else { old - words };
-        unsafe { Self::DEAD_WORDS.store(self.start(), new) };
+        Self::DEAD_WORDS.store_atomic(self.start(), new, Ordering::Relaxed);
     }
 
     pub fn inc_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
@@ -189,12 +189,12 @@ impl Block {
     }
 
     pub fn dead_bytes(&self) -> u32 {
-        let v: u32 = unsafe { Self::DEAD_WORDS.load(self.start()) };
+        let v: u32 = Self::DEAD_WORDS.load_atomic(self.start(), Ordering::Relaxed);
         v << LOG_BYTES_IN_WORD
     }
 
     fn reset_dead_bytes(&self) {
-        unsafe { Self::DEAD_WORDS.store(self.start(), 0u32) };
+        Self::DEAD_WORDS.store_atomic(self.start(), 0u32, Ordering::Relaxed);
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -466,10 +466,6 @@ impl Block {
 
     pub fn unlog(&self) {
         Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
-    }
-
-    pub fn unlog_non_atomic(&self) {
-        unsafe { Self::LOG_TABLE.store(self.start(), 0u8) };
     }
 
     pub fn clear_log_table<VM: VMBinding, const COMPRESSED: bool>(&self) {
