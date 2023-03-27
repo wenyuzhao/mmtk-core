@@ -96,7 +96,13 @@ impl<VM: VMBinding> WorkBucket<VM> {
         &self,
         mut new_queue: Injector<Box<dyn GCWork<VM>>>,
     ) -> Injector<Box<dyn GCWork<VM>>> {
-        let mut queue = self.prioritized_queue.as_ref().unwrap().queue.write().unwrap();
+        let mut queue = self
+            .prioritized_queue
+            .as_ref()
+            .unwrap()
+            .queue
+            .write()
+            .unwrap();
         std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
         new_queue
     }

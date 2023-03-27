@@ -142,7 +142,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
         let mut unconstrained_queue = Injector::new();
-        unconstrained_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
+        unconstrained_queue =
+            self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
         let postponed_queue = self.postponed_concurrent_work.read();
         if !unconstrained_queue.is_empty() {
             loop {
