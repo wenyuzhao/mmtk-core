@@ -5,6 +5,8 @@ use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
 
+use super::metadata::side_metadata::SideMetadataSpec;
+
 /// Iterate over an address range, and find each object by alloc bit.
 /// ATOMIC_LOAD_ALLOC_BIT can be set to false if it is known that loading alloc bit
 /// non-atomically is correct (e.g. a single thread is scanning this address range, and
@@ -77,6 +79,7 @@ impl<VM: VMBinding> LinearScanObjectSize for DefaultObjectSize<VM> {
 pub trait Region: Copy + PartialEq + PartialOrd {
     const LOG_BYTES: usize;
     const BYTES: usize = 1 << Self::LOG_BYTES;
+    const BPR_ALLOC_TABLE: Option<SideMetadataSpec> = None;
 
     /// Create a region from an address that is aligned to the region boundary. The method should panic if the address
     /// is not properly aligned to the region. For performance, this method should always be inlined.

@@ -109,7 +109,7 @@ impl VMLayoutConstants {
         // MetaSpace, which may start from 0x8_0000_0000
         if end > 0x8_0000_0000 {
             start = 0x200_0000_0000;
-            end = start + 0x8_0000_0000;
+            end = start + 0x8_0000_0000 - BYTES_IN_CHUNK;
             // Non-zero based compressed pointer space
             // Protect the first page as we will never access it.
             // The base address of compressed heap is set to one page before the heap start, so that NULL can be encoded nonambigous.

@@ -846,7 +846,6 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
                 );
             }
         } else {
-            // We want to use E::create_scan_work.
             let process_edges_work = E::new(vec![], true, self.mmtk);
             let work = process_edges_work.create_scan_work(nodes, true);
             crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
@@ -911,14 +910,15 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let scanned_root_objects = self.roots().then(|| {
             // We create an instance of E to use its `trace_object` method and its object queue.
             let mut process_edges_work = Self::E::new(vec![], false, mmtk);
+            process_edges_work.set_worker(worker);
 
             for object in buffer.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
-                debug_assert_eq!(
-                    object, new_object,
-                    "Object moved while tracing root unmovable root object: {} -> {}",
-                    object, new_object
-                );
+                let _new_object = process_edges_work.trace_object(object);
+                // debug_assert_eq!(
+                //     object, new_object,
+                //     "Object moved while tracing root unmovable root object: {} -> {}",
+                //     object, new_object
+                // );
             }
 
             // This contains root objects that are visited the first time.

@@ -62,13 +62,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     initial_mark_pause: bool,
     pub mutator_recycled_blocks: Mutex<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    pub last_defrag_blocks: Vec<Block>,
-    defrag_blocks: Vec<Block>,
-    num_defrag_blocks: AtomicUsize,
-    #[allow(dead_code)]
-    defrag_chunk_cursor: AtomicUsize,
-    pub(super) fragmented_blocks: SegQueue<Vec<(Block, usize)>>,
-    pub(super) fragmented_blocks_size: AtomicUsize,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub remset: RemSet<VM>,
@@ -76,7 +69,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub rc_enabled: bool,
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
-    options: Arc<Options>,
+    pub(super) options: Arc<Options>,
+    pub(super) evac_set: MatureEvacuationSet,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -333,12 +327,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             initial_mark_pause: false,
             mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
-            num_defrag_blocks: AtomicUsize::new(0),
-            defrag_chunk_cursor: AtomicUsize::new(0),
-            defrag_blocks: Default::default(),
-            last_defrag_blocks: Default::default(),
-            fragmented_blocks: Default::default(),
-            fragmented_blocks_size: Default::default(),
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
             cm_enabled: false,
@@ -346,6 +334,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
             options,
+            evac_set: MatureEvacuationSet::default(),
         }
     }
 
@@ -359,10 +348,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Get the number of defrag headroom pages.
     pub fn defrag_headroom_pages(&self) -> usize {
         self.defrag.defrag_headroom_pages(self)
-    }
-
-    pub fn num_defrag_blocks(&self) -> usize {
-        self.num_defrag_blocks.load(Ordering::SeqCst)
     }
 
     /// Check if current GC is a defrag GC.
@@ -397,65 +382,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub(super) fn select_mature_evacuation_candidates(&self, _pause: Pause, _total_pages: usize) {
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        debug_assert!(crate::args::RC_MATURE_EVACUATION);
-        // Select mature defrag blocks
-        // let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
-        //     + self.defrag_headroom_pages()
-        //     - VM::VMActivePlan::global().get_pages_reserved();
-        // let defrag_bytes = available_clean_pages_for_defrag << 12;
-        let defrag_bytes = self.defrag_headroom_pages() << 12;
-        let mut blocks = Vec::with_capacity(self.fragmented_blocks_size.load(Ordering::SeqCst));
-        while let Some(mut x) = self.fragmented_blocks.pop() {
-            blocks.append(&mut x);
-        }
-        let mut live_bytes = 0usize;
-        let mut num_blocks = 0usize;
-        blocks.sort_by_key(|x| x.1);
-        while let Some((block, dead_bytes)) = blocks.pop() {
-            if block.is_defrag_source()
-                || block.get_state() == BlockState::Unallocated
-                || block.get_state() == BlockState::Nursery
-            {
-                // println!(" - skip defrag {:?} {:?}", block, block.get_state());
-                continue;
-            }
-            block.set_as_defrag_source(true);
-            // println!(
-            //     " - defrag {:?} {:?} {}",
-            //     block,
-            //     block.get_state(),
-            //     block.dead_bytes()
-            // );
-            me.defrag_blocks.push(block);
-            live_bytes += (Block::BYTES - dead_bytes) >> 1;
-            num_blocks += 1;
-            if live_bytes >= defrag_bytes {
-                break;
-            }
-        }
-        if *self.options.verbose >= 2 {
-            eprintln!(
-                "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks)",
-                crate::boot_time_secs(),
-                live_bytes,
-                num_blocks
-            );
-        }
-        self.num_defrag_blocks.store(num_blocks, Ordering::SeqCst);
-    }
-
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SelectDefragBlocksInChunk {
-                chunk,
-                defrag_threshold: 1,
-            })
-        });
-        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
-        SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        self.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+        self.evac_set.schedule_defrag_selection_packets(self)
     }
 
     pub fn rc_eager_prepare(&mut self, pause: Pause) {
@@ -487,8 +415,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            debug_assert!(self.last_defrag_blocks.is_empty());
-            std::mem::swap(&mut self.defrag_blocks, &mut self.last_defrag_blocks);
+            self.evac_set.update_last_defrag_blocks();
         }
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Tracing GC preparation work
@@ -549,17 +476,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            if self.last_defrag_blocks.len() > 0 {
-                while let Some(block) = self.last_defrag_blocks.pop() {
-                    if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
-                        continue;
-                    }
-                    block.clear_rc_table::<VM>();
-                    block.clear_striddle_table::<VM>();
-                    block.rc_sweep_mature::<VM>(self, true);
-                    assert!(!block.is_defrag_source());
-                }
-            }
+            self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
@@ -720,7 +637,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release a block.
-    pub fn release_block(&self, block: Block, nursery: bool, zero_unlog_table: bool) {
+    pub fn release_block(
+        &self,
+        block: Block,
+        nursery: bool,
+        zero_unlog_table: bool,
+        single_thread: bool,
+    ) {
         // println!(
         //     "Release {:?} nursery={} defrag={}",
         //     block,
@@ -750,7 +673,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 s.reclaimed_blocks_mature += 1;
             }
         });
-        self.pr.release_block(block);
+        self.pr.release_block(block, single_thread);
     }
 
     /// Allocate a clean block.

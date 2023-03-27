@@ -79,7 +79,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             // This packet is executed in concurrent.
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(new_nodes, self.mmtk);
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            if self.plan.current_pause() == Some(Pause::RefCount) {
+                self.worker().scheduler().postpone(w);
+            } else {
+                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            }
         }
     }
 
@@ -165,17 +169,17 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
         );
         if self.rc.count(object) != 0 {
             for (e, t, validity) in cached_children {
+                if t.is_null() || self.rc.count(t) == 0 {
+                    continue;
+                }
                 if cfg!(feature = "sanity") {
                     assert!(
-                        object.to_address::<VM>().is_mapped(),
+                        t.to_address::<VM>().is_mapped(),
                         "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
                         object,
                         e,
                         t
                     );
-                }
-                if t.is_null() || self.rc.count(t) == 0 {
-                    continue;
                 }
                 if crate::args::RC_MATURE_EVACUATION
                     && (should_check_remset || !e.to_address().is_mapped())
@@ -189,6 +193,15 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
                     );
                 }
                 if !self.plan.is_marked(t) {
+                    if cfg!(any(feature = "sanity", debug_assertions)) {
+                        assert!(
+                            t.to_address::<VM>().is_mapped(),
+                            "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                            object,
+                            e,
+                            t
+                        );
+                    }
                     self.next_objects.push(t);
                     if self.next_objects.is_full() {
                         self.flush();
@@ -258,10 +271,28 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
             if nodes.is_empty() {
                 return;
             }
+            if cfg!(any(feature = "sanity", debug_assertions)) {
+                for o in &nodes {
+                    assert!(
+                        o.is_null() || o.to_address::<VM>().is_mapped(),
+                        "Invalid object {:?}: address is not mapped",
+                        o
+                    );
+                }
+            }
             LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(nodes, mmtk)
         } else if let Some(nodes) = self.nodes_arc.take() {
             if nodes.is_empty() {
                 return;
+            }
+            if cfg!(any(feature = "sanity", debug_assertions)) {
+                for o in &*nodes {
+                    assert!(
+                        o.is_null() || o.to_address::<VM>().is_mapped(),
+                        "Invalid object {:?}: address is not mapped",
+                        o
+                    );
+                }
             }
             LXRConcurrentTraceObjects::<VM, COMPRESSED>::new_arc(nodes, mmtk)
         } else {
