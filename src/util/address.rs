@@ -411,13 +411,6 @@ impl Address {
         )
     }
 
-    pub fn unlog_non_atomic<VM: VMBinding, const COMPRESSED: bool>(self) {
-        debug_assert!(!self.is_zero());
-        unsafe {
-            crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store(self, UNLOGGED_VALUE)
-        }
-    }
-
     pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
         use crate::vm::ObjectModel;
         debug_assert!(!self.is_zero());

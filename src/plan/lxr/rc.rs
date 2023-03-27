@@ -184,13 +184,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 .to_mut_ptr::<u8>();
                 unsafe {
                     let bytes = limit.offset_from(start) as usize;
-
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
-            } else {
-                o.to_address::<VM>().unlog_non_atomic::<VM, COMPRESSED>();
-                (o.to_address::<VM>() + 8usize).unlog_non_atomic::<VM, COMPRESSED>();
             }
+            o.to_address::<VM>().unlog::<VM, COMPRESSED>();
         } else if in_place_promotion {
             let header_size = if COMPRESSED { 12usize } else { 16 };
             let size = o.get_size::<VM>();
