@@ -100,7 +100,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Notify a GC pahse has started
-    pub fn notify_mutator_phase_end(&mut self) {
+    pub fn notify_mutator_phase_end(&self) {
         let _guard = self.refill_lock.lock().unwrap();
         let cursor = self.cursor.load(Ordering::SeqCst);
         self.previously_allocated_nursery_blocks

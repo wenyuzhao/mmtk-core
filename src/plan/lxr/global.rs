@@ -340,8 +340,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         super::SURVIVAL_RATIO_PREDICTOR
             .pause_start
             .store(SystemTime::now(), Ordering::SeqCst);
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.immix_space.rc_eager_prepare(pause);
+        self.immix_space.rc_eager_prepare(pause);
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
             mutator.flush();
@@ -897,60 +896,67 @@ impl<VM: VMBinding> LXR<VM> {
             let me = &*(self as *const Self);
             self.immix_space.block_allocation.lxr = Some(me);
         }
-        unsafe {
-            let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
-            lazy_sweeping_jobs.swap();
-            let me = &*(self as *const Self);
-            lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
-                me.immix_space.schedule_rc_block_sweeping_tasks(c);
-            }));
-            lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
-                // me.immix_space.reusable_blocks.flush_all();
-                me.immix_space.flush_page_resource();
-                if *me.options().verbose >= 2 {
-                    let pause_time = crate::GC_START_TIME
-                        .load(Ordering::SeqCst)
-                        .elapsed()
-                        .unwrap();
-                    let pause_time = pause_time.as_micros() as f64 / 1000f64;
-                    eprintln!(
-                        "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
-                        crate::boot_time_secs(),
-                        crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
-                        me.get_reserved_pages() / 256,
-                        me.get_total_pages() / 256,
-                        pause_time
-                    );
-                }
-                // Update counters
-                if !crate::args::LAZY_DECREMENTS {
-                    HEAP_AFTER_GC.store(me.get_used_pages(), Ordering::SeqCst);
-                }
-                {
-                    let o = Ordering::Relaxed;
-                    let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
-                    let lazy_released_pages = me
-                        .immix_space
-                        .num_clean_blocks_released_lazy
-                        .load(Ordering::SeqCst)
-                        << Block::LOG_PAGES;
-                    let x = if used_pages_after_gc >= lazy_released_pages {
-                        used_pages_after_gc - lazy_released_pages
-                    } else {
-                        0
-                    };
-                    crate::COUNTERS.total_used_pages.store(
-                        crate::COUNTERS.total_used_pages.load(o) + x,
-                        Ordering::Relaxed,
-                    );
-                    let min = crate::COUNTERS.min_used_pages.load(o);
-                    crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
-                    let max = crate::COUNTERS.max_used_pages.load(o);
-                    crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
-                }
-                me.decide_next_gc_may_perform_cycle_collection();
-            }));
-        }
+        let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
+        lazy_sweeping_jobs.swap();
+        lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
+            let lxr = GCWorker::<VM>::current()
+                .mmtk
+                .get_plan()
+                .downcast_ref::<Self>()
+                .unwrap();
+            lxr.immix_space.schedule_rc_block_sweeping_tasks(c);
+        }));
+        lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
+            let lxr = GCWorker::<VM>::current()
+                .mmtk
+                .get_plan()
+                .downcast_ref::<Self>()
+                .unwrap();
+            lxr.immix_space.flush_page_resource();
+            if *lxr.options().verbose >= 2 {
+                let pause_time = crate::GC_START_TIME
+                    .load(Ordering::SeqCst)
+                    .elapsed()
+                    .unwrap();
+                let pause_time = pause_time.as_micros() as f64 / 1000f64;
+                eprintln!(
+                    "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
+                    crate::boot_time_secs(),
+                    crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
+                    lxr.get_reserved_pages() / 256,
+                    lxr.get_total_pages() / 256,
+                    pause_time
+                );
+            }
+            // Update counters
+            if !crate::args::LAZY_DECREMENTS {
+                HEAP_AFTER_GC.store(lxr.get_used_pages(), Ordering::SeqCst);
+            }
+            {
+                let o = Ordering::Relaxed;
+                let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
+                let lazy_released_pages = lxr
+                    .immix_space
+                    .num_clean_blocks_released_lazy
+                    .load(Ordering::SeqCst)
+                    << Block::LOG_PAGES;
+                let x = if used_pages_after_gc >= lazy_released_pages {
+                    used_pages_after_gc - lazy_released_pages
+                } else {
+                    0
+                };
+                crate::COUNTERS.total_used_pages.store(
+                    crate::COUNTERS.total_used_pages.load(o) + x,
+                    Ordering::Relaxed,
+                );
+                let min = crate::COUNTERS.min_used_pages.load(o);
+                crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
+                let max = crate::COUNTERS.max_used_pages.load(o);
+                crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
+            }
+            lxr.decide_next_gc_may_perform_cycle_collection();
+        }));
+
         if let Some(nursery_ratio) = crate::args().nursery_ratio {
             let total_blocks = *options.heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);

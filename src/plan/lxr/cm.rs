@@ -27,11 +27,6 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
     rc: RefCountHelper<VM>,
 }
 
-unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send
-    for LXRConcurrentTraceObjects<VM, COMPRESSED>
-{
-}
-
 impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRESSED> {
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();

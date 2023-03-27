@@ -404,7 +404,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.evac_set.schedule_defrag_selection_packets(self)
     }
 
-    pub fn rc_eager_prepare(&mut self, pause: Pause) {
+    pub fn rc_eager_prepare(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
@@ -624,17 +624,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     pub fn generate_prepare_tasks(
-        &mut self,
+        &self,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        let space = unsafe { &mut *(self as *mut Self) };
+        let rc_enabled = self.rc_enabled;
+        let cm_enabled = self.cm_enabled;
         if VM::VMObjectModel::compressed_pointers_enabled() {
             self.chunk_map.generate_tasks(|chunk| {
                 Box::new(PrepareChunk::<true> {
                     chunk,
                     defrag_threshold,
-                    rc_enabled: space.rc_enabled,
-                    cm_enabled: space.cm_enabled,
+                    rc_enabled,
+                    cm_enabled,
                 })
             })
         } else {
@@ -642,8 +643,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Box::new(PrepareChunk::<false> {
                     chunk,
                     defrag_threshold,
-                    rc_enabled: space.rc_enabled,
-                    cm_enabled: space.cm_enabled,
+                    rc_enabled,
+                    cm_enabled,
                 })
             })
         }

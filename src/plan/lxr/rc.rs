@@ -32,7 +32,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     incs: Vec<VM::VMEdge>,
     /// Recursively generated new increments
     new_incs: VectorQueue<VM::VMEdge>,
-    lxr: *const LXR<VM>,
+    lxr: &'static LXR<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     no_evac: bool,
@@ -43,11 +43,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     pub cld_roots: bool,
     pub weak_cld_roots: bool,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
-}
-
-unsafe impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> Send
-    for ProcessIncs<VM, KIND, COMPRESSED>
-{
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
@@ -61,14 +56,14 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     }
 
     fn lxr(&self) -> &'static LXR<VM> {
-        unsafe { &*self.lxr }
+        self.lxr
     }
 
-    pub fn new_array_slice(slice: VM::VMMemorySlice) -> Self {
+    pub fn new_array_slice(slice: VM::VMMemorySlice, lxr: &'static LXR<VM>) -> Self {
         Self {
             incs: vec![],
             new_incs: VectorQueue::default(),
-            lxr: std::ptr::null(),
+            lxr,
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
@@ -83,10 +78,15 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     }
 
     pub fn new_objects(objects: Vec<ObjectReference>) -> Self {
+        let lxr = GCWorker::<VM>::current()
+            .mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap();
         Self {
             incs: vec![],
             new_incs: VectorQueue::default(),
-            lxr: std::ptr::null(),
+            lxr,
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
@@ -100,11 +100,11 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         }
     }
 
-    pub fn new(incs: Vec<VM::VMEdge>) -> Self {
+    pub fn new(incs: Vec<VM::VMEdge>, lxr: &'static LXR<VM>) -> Self {
         Self {
             incs,
             new_incs: VectorQueue::default(),
-            lxr: std::ptr::null(),
+            lxr,
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
@@ -227,7 +227,9 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
                 let mut w = Box::new(
-                    ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new_array_slice(chunk),
+                    ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new_array_slice(
+                        chunk, self.lxr,
+                    ),
                 );
                 w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
@@ -285,7 +287,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     fn flush(&mut self) {
         if !self.new_incs.is_empty() {
             let new_incs = self.new_incs.take();
-            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new(new_incs);
+            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new(new_incs, self.lxr);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -665,8 +667,6 @@ pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     rc: RefCountHelper<VM>,
 }
 
-unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send for ProcessDecs<VM, COMPRESSED> {}
-
 impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
@@ -906,8 +906,9 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
 
     fn process_edges<const COMPRESSED: bool>(&mut self) {
         if !self.edges.is_empty() {
+            let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
-            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, COMPRESSED>::new(roots);
+            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, COMPRESSED>::new(roots, lxr);
             if self.cld_roots {
                 w.cld_roots = true;
                 w.weak_cld_roots = self.weak_cld_roots;
