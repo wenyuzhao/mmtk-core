@@ -182,8 +182,9 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     (o.to_address::<VM>() + o.get_size::<VM>()).align_up(heap_bytes_per_unlog_byte),
                 )
                 .to_mut_ptr::<u8>();
-                let bytes = unsafe { limit.offset_from(start) as usize };
                 unsafe {
+                    let bytes = limit.offset_from(start) as usize;
+
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             } else {
@@ -358,7 +359,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     copy_context,
                 );
                 if crate::should_record_copy_bytes() {
-                    unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
+                    crate::SLOPPY_COPY_BYTES.store(
+                        crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
+                        Ordering::Relaxed,
+                    );
                 }
                 let _ = self.rc.inc(new);
                 self.promote(new, true, false, depth);
@@ -618,9 +622,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                     )
                 }
             } else if !self.cld_roots {
-                unsafe {
-                    crate::plan::lxr::CURR_ROOTS.push(roots);
-                }
+                self.lxr().curr_roots.read().unwrap().push(roots);
             }
         }
         // Process recursively generated buffer
@@ -646,7 +648,6 @@ pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     decs_arc: Option<Arc<Vec<ObjectReference>>>,
     /// Recursively generated new decrements
     new_decs: VectorQueue<ObjectReference>,
-    mmtk: *const MMTK<VM>,
     counter: LazySweepingJobsCounter,
     mark_objects: VectorQueue<ObjectReference>,
     concurrent_marking_in_progress: bool,
@@ -668,7 +669,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             decs: Some(decs),
             decs_arc: None,
             new_decs: VectorQueue::default(),
-            mmtk: std::ptr::null_mut(),
             counter,
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
@@ -682,7 +682,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             decs: None,
             decs_arc: Some(decs),
             new_decs: VectorQueue::default(),
-            mmtk: std::ptr::null_mut(),
             counter,
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
@@ -708,9 +707,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
     }
 
     pub fn flush(&mut self) {
+        let mmtk = GCWorker::<VM>::current().mmtk;
         if !self.new_decs.is_empty() {
             let new_decs = self.new_decs.take();
-            let mmtk = unsafe { &*self.mmtk };
             let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
                 lxr,
@@ -719,8 +718,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
-            let w =
-                LXRConcurrentTraceObjects::<_, COMPRESSED>::new(objects, unsafe { &*self.mmtk });
+            let w = LXRConcurrentTraceObjects::<_, COMPRESSED>::new(objects, mmtk);
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {
@@ -855,7 +853,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
 
 impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessDecs<VM, COMPRESSED> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        self.mmtk = mmtk;
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)

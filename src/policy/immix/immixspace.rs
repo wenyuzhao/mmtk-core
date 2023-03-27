@@ -920,7 +920,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 s.mature_copy_volume += new.get_size::<VM>();
             });
             if crate::should_record_copy_bytes() {
-                unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
+                crate::SLOPPY_COPY_BYTES.store(
+                    crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
+                    Ordering::Relaxed,
+                );
             }
             // Transfer RC count
             new.log_start_address::<VM, COMPRESSED>();

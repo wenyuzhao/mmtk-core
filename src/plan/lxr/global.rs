@@ -36,10 +36,11 @@ use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::SystemTime;
 
 use atomic::{Atomic, Ordering};
+use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
 
@@ -70,6 +71,8 @@ pub struct LXR<VM: VMBinding> {
     zeroing_packets_scheduled: AtomicBool,
     next_gc_selected: (Mutex<bool>, Condvar),
     in_concurrent_marking: AtomicBool,
+    pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
+    pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub rc: RefCountHelper<VM>,
 }
 
@@ -299,10 +302,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             pause == Pause::FullTraceFast || pause == Pause::FinalMark,
         );
         self.immix_space.release_rc(pause);
-        unsafe {
-            std::mem::swap(&mut super::CURR_ROOTS, &mut super::PREV_ROOTS);
-            debug_assert!(super::CURR_ROOTS.is_empty());
-        }
+        // swap roots
+        let mut prev_roots = self.prev_roots.write().unwrap();
+        let mut curr_roots = self.curr_roots.write().unwrap();
+        std::mem::swap::<SegQueue<_>>(&mut prev_roots, &mut curr_roots);
+        debug_assert!(curr_roots.is_empty());
         // release the collected region
         self.last_gc_was_defrag.store(
             self.current_pause().unwrap() == Pause::FullTraceDefrag,
@@ -506,6 +510,8 @@ impl<VM: VMBinding> LXR<VM> {
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
+            prev_roots: Default::default(),
+            curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
         });
 
@@ -729,7 +735,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
         // Prepare global/collectors/mutators
@@ -741,7 +747,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
@@ -755,7 +761,7 @@ impl<VM: VMBinding> LXR<VM> {
         if self.concurrent_marking_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
 
@@ -778,7 +784,7 @@ impl<VM: VMBinding> LXR<VM> {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        Self::process_prev_roots(scheduler);
+        self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
@@ -795,8 +801,8 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    fn process_prev_roots(scheduler: &GCWorkScheduler<VM>) {
-        let prev_roots = unsafe { &super::PREV_ROOTS };
+    fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {
+        let prev_roots = self.prev_roots.write().unwrap();
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
             work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {

@@ -277,7 +277,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .load(Ordering::SeqCst)
             .elapsed()
             .unwrap();
-        crate::add_copy_bytes(unsafe { crate::SLOPPY_COPY_BYTES });
+        crate::add_copy_bytes(crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed));
         let pause = mmtk
             .plan
             .downcast_ref::<LXR<VM>>()
