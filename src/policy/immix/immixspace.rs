@@ -445,10 +445,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // For header metadata, we use cyclic mark bits.
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
-            // Reset block mark and object mark table.
-            // let space = unsafe { &mut *(self as *mut Self) };
-            // let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
-            // self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
@@ -492,7 +488,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.schedule_mature_sweeping(pause);
     }
 
-    pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
+    pub fn schedule_mature_sweeping(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
