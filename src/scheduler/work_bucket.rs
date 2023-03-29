@@ -4,38 +4,37 @@ use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex};
 
 struct BucketQueue<VM: VMBinding> {
-    // FIXME: Performance!
-    queue: RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    queue: Injector<Box<dyn GCWork<VM>>>,
 }
 
 impl<VM: VMBinding> BucketQueue<VM> {
     fn new() -> Self {
         Self {
-            queue: RwLock::new(Injector::new()),
+            queue: Injector::new(),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.queue.read().unwrap().is_empty()
+        self.queue.is_empty()
     }
 
     fn steal_batch_and_pop(
         &self,
         dest: &Worker<Box<dyn GCWork<VM>>>,
     ) -> Steal<Box<dyn GCWork<VM>>> {
-        self.queue.read().unwrap().steal_batch_and_pop(dest)
+        self.queue.steal_batch_and_pop(dest)
     }
 
     fn push(&self, w: Box<dyn GCWork<VM>>) {
-        self.queue.read().unwrap().push(w);
+        self.queue.push(w);
     }
 
     fn push_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
         for w in ws {
-            self.queue.read().unwrap().push(w);
+            self.queue.push(w);
         }
     }
 }
@@ -85,26 +84,23 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     pub fn swap_queue(
         &self,
-        mut new_queue: Injector<Box<dyn GCWork<VM>>>,
+        mut queue: Injector<Box<dyn GCWork<VM>>>,
     ) -> Injector<Box<dyn GCWork<VM>>> {
-        let mut queue = self.queue.queue.write().unwrap();
-        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
-        new_queue
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut me.queue.queue, &mut queue);
+        queue
     }
 
     pub fn swap_queue_prioritized(
         &self,
-        mut new_queue: Injector<Box<dyn GCWork<VM>>>,
+        mut queue: Injector<Box<dyn GCWork<VM>>>,
     ) -> Injector<Box<dyn GCWork<VM>>> {
-        let mut queue = self
-            .prioritized_queue
-            .as_ref()
-            .unwrap()
-            .queue
-            .write()
-            .unwrap();
-        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
-        new_queue
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(
+            &mut me.prioritized_queue.as_mut().unwrap().queue,
+            &mut queue,
+        );
+        queue
     }
 
     fn notify_one_worker(&self) {
