@@ -459,7 +459,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
-        const REUSE_BUFFER_INPLACE: bool = false;
+        const REUSE_BUFFER_INPLACE: bool = true;
         if K == EDGE_KIND_ROOT && REUSE_BUFFER_INPLACE {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
