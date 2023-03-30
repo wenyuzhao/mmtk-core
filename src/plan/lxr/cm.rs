@@ -15,16 +15,26 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::{
+    ops::{Deref, DerefMut},
+    ptr,
+};
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
     plan: &'static LXR<VM>,
+    mmtk: &'static MMTK<VM>,
     objects: Option<Vec<ObjectReference>>,
     objects_arc: Option<Arc<Vec<ObjectReference>>>,
     next_objects: VectorQueue<ObjectReference>,
-    klass: Address,
+    worker: *mut GCWorker<VM>,
     rc: RefCountHelper<VM>,
+    klass: Address,
+}
+
+unsafe impl<VM: VMBinding, const COMPRESSED: bool> Send
+    for LXRConcurrentTraceObjects<VM, COMPRESSED>
+{
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRESSED> {
@@ -33,9 +43,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
+            mmtk,
             objects: Some(objects),
             objects_arc: None,
             next_objects: VectorQueue::default(),
+            worker: ptr::null_mut(),
             rc: RefCountHelper::NEW,
             klass: Address::ZERO,
         }
@@ -46,12 +58,18 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
+            mmtk,
             objects: None,
             objects_arc: Some(objects),
             next_objects: VectorQueue::default(),
+            worker: ptr::null_mut(),
             rc: RefCountHelper::NEW,
             klass: Address::ZERO,
         }
+    }
+
+    fn worker(&self) -> &mut GCWorker<VM> {
+        unsafe { &mut *self.worker }
     }
 
     #[cold]
@@ -59,13 +77,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         if !self.next_objects.is_empty() {
             let new_nodes = self.next_objects.take();
             // This packet is executed in concurrent.
-            let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
-            let w = LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(new_nodes, worker.mmtk);
+            let w = LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(new_nodes, self.mmtk);
             if self.plan.current_pause() == Some(Pause::RefCount) {
-                worker.scheduler().postpone(w);
+                self.worker().scheduler().postpone(w);
             } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
+                self.worker().add_work(WorkBucketStage::Unconstrained, w);
             }
         }
     }
@@ -102,15 +119,17 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
         debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space(object) {
             self.plan.immix_space.fast_trace_object(self, object);
-        } else if self.plan.los().in_space(object) {
-            self.plan.los().trace_object(self, object);
+            object
+        } else {
+            let worker = self.worker();
+            let queue = unsafe { &mut *(self as *const Self as *mut Self) };
+            self.plan.common.trace_object(queue, object, worker)
         }
-        object
     }
 
     fn process_objects(&mut self, objects: &[ObjectReference]) {
-        for o in objects {
-            self.trace_object(*o);
+        for i in 0..objects.len() {
+            self.trace_object(objects[i]);
         }
     }
 }
@@ -202,12 +221,21 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        self.worker = worker;
         if let Some(objects) = self.objects.take() {
             self.process_objects(&objects)
         } else if let Some(objects) = self.objects_arc.take() {
             self.process_objects(&objects)
+        }
+        let mut objects = vec![];
+        while !self.next_objects.is_empty() {
+            objects.clear();
+            self.next_objects.swap(&mut objects);
+            for i in 0..objects.len() {
+                self.trace_object(objects[i]);
+            }
         }
         // CM: Decrease counter
         self.flush();
@@ -407,7 +435,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         self.flush();
         if self.roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
-            self.lxr.curr_roots.read().unwrap().push(roots);
+            unsafe {
+                crate::plan::lxr::CURR_ROOTS.push(roots);
+            }
         }
     }
 

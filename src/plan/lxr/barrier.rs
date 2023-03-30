@@ -205,7 +205,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
                 EDGE_KIND_MATURE,
                 COMPRESSED,
             >::new(
-                incs, self.lxr
+                incs
             ));
         }
     }

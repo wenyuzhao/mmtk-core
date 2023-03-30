@@ -100,7 +100,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Notify a GC pahse has started
-    pub fn notify_mutator_phase_end(&self) {
+    pub fn notify_mutator_phase_end(&mut self) {
         let _guard = self.refill_lock.lock().unwrap();
         let cursor = self.cursor.load(Ordering::SeqCst);
         self.previously_allocated_nursery_blocks
@@ -166,7 +166,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     #[cold]
-    fn alloc_clean_block_slow(&self, tls: VMThread) -> Option<Block> {
+    fn alloc_clean_block_slow(&mut self, tls: VMThread) -> Option<Block> {
         let _guard = self.refill_lock.lock().unwrap();
         // Retry allocation
         if let Some(block) = self.alloc_clean_block_fast() {
@@ -233,7 +233,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         if let Some(block) = self.alloc_clean_block_fast() {
             return Some(block);
         }
-        match self.alloc_clean_block_slow(tls) {
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        match me.alloc_clean_block_slow(tls) {
             Some(block) => Some(block),
             _ => {
                 assert!(!copy, "to-space overflow!");

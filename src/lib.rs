@@ -451,12 +451,14 @@ fn should_record_copy_bytes() -> bool {
     false
 }
 
-static SLOPPY_COPY_BYTES: AtomicUsize = AtomicUsize::new(0);
+static mut SLOPPY_COPY_BYTES: usize = 0;
 
 fn add_copy_bytes(bytes: usize) {
     if should_record_copy_bytes() {
         COPY_BYTES.push(bytes);
-        SLOPPY_COPY_BYTES.store(0, Ordering::Relaxed);
+        unsafe {
+            SLOPPY_COPY_BYTES = 0;
+        }
     }
 }
 
