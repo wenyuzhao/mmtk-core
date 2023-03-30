@@ -79,5 +79,6 @@ pub fn create_lxr_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: &*mmtk.plan,
+        _original_pointer: 0,
     }
 }

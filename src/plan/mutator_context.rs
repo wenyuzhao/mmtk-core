@@ -73,6 +73,7 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub _original_pointer: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
