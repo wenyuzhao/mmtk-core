@@ -209,14 +209,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
         } else if let Some(objects) = self.objects_arc.take() {
             self.process_objects(&objects)
         }
-        let mut objects = vec![];
-        while !self.next_objects.is_empty() {
-            objects.clear();
-            self.next_objects.swap(&mut objects);
-            for i in 0..objects.len() {
-                self.trace_object(objects[i]);
-            }
-        }
         // CM: Decrease counter
         self.flush();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
