@@ -70,5 +70,6 @@ pub fn create_ss_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        _original_pointer: 0,
     }
 }

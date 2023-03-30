@@ -48,6 +48,7 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        _original_pointer: 0,
     }
 }
 
