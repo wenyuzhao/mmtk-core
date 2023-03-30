@@ -144,15 +144,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut old_queue = Injector::new();
         old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(old_queue);
         let mut queue = self.postponed_concurrent_work.write();
-        if !queue.is_empty() {
-            loop {
-                match queue.steal() {
-                    Steal::Empty => break,
-                    Steal::Success(x) => old_queue.push(x),
-                    Steal::Retry => continue,
-                }
-            }
-        }
+        assert!(queue.is_empty());
         *queue = old_queue;
         crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
