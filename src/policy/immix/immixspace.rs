@@ -404,7 +404,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.evac_set.schedule_defrag_selection_packets(self)
     }
 
-    pub fn rc_eager_prepare(&mut self, pause: Pause) {
+    pub fn rc_eager_prepare(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             self.schedule_defrag_selection_packets(pause);
         }
@@ -445,10 +445,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // For header metadata, we use cyclic mark bits.
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
-            // Reset block mark and object mark table.
-            // let space = unsafe { &mut *(self as *mut Self) };
-            // let work_packets = self.chunk_map.generate_prepare_tasks::<VM>(space, None);
-            // self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
         }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
@@ -492,7 +488,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.schedule_mature_sweeping(pause);
     }
 
-    pub fn schedule_mature_sweeping(&mut self, pause: Pause) {
+    pub fn schedule_mature_sweeping(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
@@ -624,17 +620,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     pub fn generate_prepare_tasks(
-        &mut self,
+        &self,
         defrag_threshold: Option<usize>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
-        let space = unsafe { &mut *(self as *mut Self) };
+        let rc_enabled = self.rc_enabled;
+        let cm_enabled = self.cm_enabled;
         if VM::VMObjectModel::compressed_pointers_enabled() {
             self.chunk_map.generate_tasks(|chunk| {
                 Box::new(PrepareChunk::<true> {
                     chunk,
                     defrag_threshold,
-                    rc_enabled: space.rc_enabled,
-                    cm_enabled: space.cm_enabled,
+                    rc_enabled,
+                    cm_enabled,
                 })
             })
         } else {
@@ -642,8 +639,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Box::new(PrepareChunk::<false> {
                     chunk,
                     defrag_threshold,
-                    rc_enabled: space.rc_enabled,
-                    cm_enabled: space.cm_enabled,
+                    rc_enabled,
+                    cm_enabled,
                 })
             })
         }
@@ -920,7 +917,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 s.mature_copy_volume += new.get_size::<VM>();
             });
             if crate::should_record_copy_bytes() {
-                unsafe { crate::SLOPPY_COPY_BYTES += new.get_size::<VM>() }
+                crate::SLOPPY_COPY_BYTES.store(
+                    crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
+                    Ordering::Relaxed,
+                );
             }
             // Transfer RC count
             new.log_start_address::<VM, COMPRESSED>();

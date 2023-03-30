@@ -25,9 +25,6 @@ pub struct EvacuateMatureObjects<VM: VMBinding> {
     _p: PhantomData<VM>,
 }
 
-unsafe impl<VM: VMBinding> Send for EvacuateMatureObjects<VM> {}
-unsafe impl<VM: VMBinding> Sync for EvacuateMatureObjects<VM> {}
-
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     pub const CAPACITY: usize = 512;
 

@@ -140,7 +140,7 @@ impl Line {
     }
 
     pub fn currrent_validity_state(&self) -> u8 {
-        unsafe { Self::VALIDITY_STATE.load(self.start()) }
+        Self::VALIDITY_STATE.load_atomic(self.start(), Ordering::Relaxed)
     }
 
     pub fn pointer_is_valid(&self, pointer_epoch: u8) -> bool {
@@ -155,7 +155,7 @@ impl Line {
         for line in lines {
             let old = line.currrent_validity_state();
             has_invalid_state = has_invalid_state || (old >= u8::MAX);
-            unsafe { Self::VALIDITY_STATE.store(line.start(), old + 1) };
+            Self::VALIDITY_STATE.store_atomic(line.start(), old + 1, Ordering::Relaxed);
         }
         assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }

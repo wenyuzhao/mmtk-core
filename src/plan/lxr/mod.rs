@@ -18,16 +18,12 @@ pub use self::remset::RemSet;
 
 use atomic::Atomic;
 use atomic::Ordering;
-use crossbeam::queue::SegQueue;
 
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 
 const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
-
-pub static mut PREV_ROOTS: SegQueue<Vec<ObjectReference>> = SegQueue::new();
-pub static mut CURR_ROOTS: SegQueue<Vec<ObjectReference>> = SegQueue::new();
 
 pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredictor {
     prev_ratio: Atomic::new(0.2),
