@@ -86,5 +86,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: &*mmtk.plan,
+        _original_pointer: 0,
     }
 }
