@@ -554,7 +554,10 @@ impl<VM: VMBinding> LXR<VM> {
         if self.previous_pause() == Some(Pause::FinalMark)
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {
-            super::MATURE_LIVE_PREDICTOR.update(pages_after_gc)
+            let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
+            if *self.options().verbose >= 3 {
+                gc_log!(" - predicted live mature pages: {}", live_mature_pages)
+            }
         }
         let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
         let garbage = if pages_after_gc > live_mature_pages {

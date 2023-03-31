@@ -113,7 +113,7 @@ impl MatureLivePredictor {
         self.live_pages.load(Ordering::Relaxed)
     }
 
-    pub fn update(&self, live_pages: usize) {
+    pub fn update(&self, live_pages: usize) -> f64 {
         // println!("live_pages {}", live_pages);
         let prev = self.live_pages.load(Ordering::Relaxed);
         let curr = live_pages as f64;
@@ -126,6 +126,7 @@ impl MatureLivePredictor {
         // println!("predict {}", next);
         // crate::add_mature_reclaim(live_pages, prev);
         self.live_pages.store(next, Ordering::Relaxed);
+        next
     }
 }
 
