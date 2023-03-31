@@ -26,7 +26,7 @@ use crate::vm::edge_shape::Edge;
 const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
 pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredictor {
-    prev_ratio: Atomic::new(0.2),
+    prev_ratio: Atomic::new(0.01),
     alloc_vol: AtomicUsize::new(0),
     promote_vol: AtomicUsize::new(0),
     pause_start: Atomic::new(SystemTime::UNIX_EPOCH),
