@@ -112,7 +112,11 @@ impl Map for Map32 {
         debug_assert!(chunk != 0);
         if chunk == -1 {
             // if cfg!(feature = "sanity") {
-                gc_log!("WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}", chunks, self.total_available_discontiguous_chunks);
+            gc_log!(
+                "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
+                chunks,
+                self.total_available_discontiguous_chunks
+            );
             // }
             return unsafe { Address::zero() };
         }
