@@ -15,8 +15,8 @@ use crate::mmtk::MMTKBuilder;
 use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
+use crate::scheduler::WorkBucketStage;
 use crate::scheduler::{GCController, GCWork, GCWorker};
-use crate::scheduler::{WorkBucketStage, LAST_ACTIVATE_TIME};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
@@ -40,12 +40,11 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
     }
 
     if *mmtk.options.verbose >= 3 {
-        eprintln!(
-            "[{:.3}s][info][gc]  - ({:.6}ms) Safepoint start",
-            crate::boot_time_secs(),
-            crate::gc_trigger_time() as f64 / 1000000f64,
+        gc_log!(
+            " - ({:.3}ms) Safepoint start. {:.6}ms since gc was triggered",
+            0f64,
+            crate::gc_trigger_time_ms(),
         );
-        unsafe { LAST_ACTIVATE_TIME = Some(SystemTime::now()) }
     }
     crate::GC_START_TIME.store(t, Ordering::SeqCst);
 }

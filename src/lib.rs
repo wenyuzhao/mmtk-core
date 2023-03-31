@@ -44,6 +44,8 @@ extern crate num_cpus;
 #[macro_use]
 extern crate downcast_rs;
 
+#[macro_use]
+mod gc_log;
 mod mmtk;
 pub use mmtk::MMTKBuilder;
 use std::{
@@ -61,7 +63,6 @@ use crossbeam::queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 use plan::immix::Pause;
-use scheduler::WorkBucketStage;
 use spin::{Lazy, Mutex};
 type RwLock<T> = spin::rwlock::RwLock<T>;
 
@@ -216,12 +217,22 @@ fn boot_time_secs() -> f64 {
     crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64
 }
 
-fn gc_trigger_time() -> u128 {
+fn gc_trigger_time_ms() -> f64 {
     crate::GC_TRIGGER_TIME
-        .load(Ordering::SeqCst)
+        .load(Ordering::Relaxed)
         .elapsed()
         .unwrap()
-        .as_nanos()
+        .as_micros() as f64
+        / 1000f64
+}
+
+fn gc_start_time_ms() -> f64 {
+    crate::GC_START_TIME
+        .load(Ordering::Relaxed)
+        .elapsed()
+        .unwrap()
+        .as_micros() as f64
+        / 1000f64
 }
 
 #[allow(unused)]
@@ -472,8 +483,6 @@ static INCS: SegQueue<usize> = SegQueue::new();
 fn should_record_pause_time() -> bool {
     cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
 }
-
-fn add_bucket_time(_stage: WorkBucketStage, _nanos: u128) {}
 
 static SRV: SegQueue<(f64, f64)> = SegQueue::new();
 

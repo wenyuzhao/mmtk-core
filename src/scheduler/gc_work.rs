@@ -226,11 +226,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 .store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
         if *mmtk.options.verbose >= 3 {
-            eprintln!(
-                "[{:.3}s][info][gc]  - ({:.6}ms) Mutators stopped",
-                crate::boot_time_secs(),
-                crate::gc_trigger_time() as f64 / 1000000f64,
-            );
+            gc_log!(" - ({:.3}ms) Mutators stopped", crate::gc_start_time_ms());
         }
         #[cfg(feature = "sanity")]
         mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
@@ -293,16 +289,14 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
 
             let pause_time = pause_time.as_micros() as f64 / 1000f64;
-            let boot_time = crate::BOOT_TIME.elapsed().unwrap().as_millis() as f64 / 1000f64;
             let pause = match pause {
                 Pause::RefCount => "RefCount",
                 Pause::InitialMark => "InitialMark",
                 Pause::FinalMark => "FinalMark",
                 _ => "Full",
             };
-            eprintln!(
-                "[{:.3}s][info][gc] GC({}) {} finished. {}M->{}M({}M) pause-time={:.3}ms",
-                boot_time,
+            gc_log!(
+                "GC({}) {} finished. {}M->{}M({}M) pause-time={:.3}ms",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 crate::RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,

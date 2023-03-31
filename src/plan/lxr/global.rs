@@ -234,12 +234,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .fetch_add(1, Ordering::SeqCst);
         }
         if *self.options().verbose >= 2 {
-            eprintln!(
-                "[{:.3}s][info][gc] GC({}) {:?} start. incs={}",
-                crate::boot_time_secs(),
+            gc_log!(
+                "GC({}) {:?} start. incs={} young-blocks={}",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
-                self.rc.inc_buffer_size()
+                self.rc.inc_buffer_size(),
+                self.immix_space.block_allocation.nursery_blocks()
             );
         }
         match pause {
@@ -273,7 +273,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 s.rc_pauses += 1
             }
         });
-        super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
             self.common.los.is_end_of_satb_or_full_gc = true;
         }
@@ -292,6 +291,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        let new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
+        if *self.options().verbose >= 3 {
+            gc_log!(" - updated survival ratio: {}", new_ratio);
+        }
         let pause = self.current_pause().unwrap();
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
@@ -594,9 +597,8 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if *self.options().verbose >= 2 {
-            eprintln!(
-                "[{:.3}s][info][gc]  - next_gc_may_perform_cycle_collection = {}",
-                crate::boot_time_secs(),
+            gc_log!(
+                " - next_gc_may_perform_cycle_collection = {}",
                 self.next_gc_may_perform_cycle_collection
                     .load(Ordering::Relaxed)
             );
@@ -914,18 +916,12 @@ impl<VM: VMBinding> LXR<VM> {
                 .unwrap();
             lxr.immix_space.flush_page_resource();
             if *lxr.options().verbose >= 2 {
-                let pause_time = crate::GC_START_TIME
-                    .load(Ordering::SeqCst)
-                    .elapsed()
-                    .unwrap();
-                let pause_time = pause_time.as_micros() as f64 / 1000f64;
-                eprintln!(
-                    "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
-                    crate::boot_time_secs(),
+                gc_log!(
+                    " - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
                     crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
                     lxr.get_reserved_pages() / 256,
                     lxr.get_total_pages() / 256,
-                    pause_time
+                    crate::gc_start_time_ms()
                 );
             }
             // Update counters

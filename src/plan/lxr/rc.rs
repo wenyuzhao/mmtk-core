@@ -568,9 +568,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
                 if *self.lxr().options().verbose >= 2 {
-                    eprintln!(
-                        "[{:.3}s][info][gc]  - Stop evacuation. over_space={} over_time={}",
-                        crate::boot_time_secs(),
+                    gc_log!(
+                        " - Stop evacuation. over_space={} over_time={}",
                         over_space,
                         over_time
                     );

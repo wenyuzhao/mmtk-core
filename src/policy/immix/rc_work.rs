@@ -468,9 +468,8 @@ impl MatureEvacuationSet {
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         // let count2 = selected_blocks.len() - count1;
         if *space.options.verbose >= 2 {
-            eprintln!(
-                "[{:.3}s][info][gc]  - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
-                crate::boot_time_secs(),
+            gc_log!(
+                " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
                 copy_bytes,
                 selected_blocks.len(),
                 count1,
