@@ -443,7 +443,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
                 if verbose {
                     gc_log!(
-                        " - ({:.3}ms) {:?}",
+                        " - ({:.3}ms) Start GC Stage: {:?}",
                         crate::GC_START_TIME
                             .load(Ordering::SeqCst)
                             .elapsed()
@@ -702,13 +702,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             second_stw_bucket.activate();
             if *mmtk.options.verbose >= 3 {
                 gc_log!(
-                    " - ({:.3}ms) {:?}",
-                    crate::GC_START_TIME
-                        .load(Ordering::SeqCst)
-                        .elapsed()
-                        .unwrap()
-                        .as_nanos() as f64
-                        / 1000000f64,
+                    " - ({:.3}ms) Start GC Stage: {:?}",
+                    crate::gc_start_time_ms(),
                     WorkBucketStage::from_usize(2)
                 );
             }
