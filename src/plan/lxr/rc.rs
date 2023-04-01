@@ -459,33 +459,23 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
-        const REUSE_BUFFER_INPLACE: bool = false;
-        if K == EDGE_KIND_ROOT && REUSE_BUFFER_INPLACE {
+        if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
-            for e in &*incs {
+            for e in &mut *incs {
                 if let Some(new) = self.process_edge::<K>(*e, copy_context, depth) {
-                    unsafe { roots.add(num_roots).write(new) };
+                    unsafe {
+                        roots.add(num_roots).write(new);
+                    }
                     num_roots += 1;
                 }
             }
             if num_roots != 0 {
                 let cap = incs.capacity();
                 std::mem::forget(incs);
-                let roots = unsafe { Vec::from_raw_parts(roots, num_roots, cap) };
+                let roots =
+                    unsafe { Vec::<ObjectReference>::from_raw_parts(roots, num_roots, cap) };
                 Some(roots)
-            } else {
-                None
-            }
-        } else if K == EDGE_KIND_ROOT {
-            let mut root_objects = vec![];
-            for e in &*incs {
-                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth) {
-                    root_objects.push(new);
-                }
-            }
-            if !root_objects.is_empty() {
-                Some(root_objects)
             } else {
                 None
             }
