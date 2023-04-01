@@ -469,10 +469,10 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         None
     }
 
-    pub fn release_block(&self, block: B, _single_thread: bool) {
+    pub fn release_block(&self, block: B, single_thread: bool) {
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
-        if let Some(chunk) = self.pool.free_block(block, false) {
+        if let Some(chunk) = self.pool.free_block(block, single_thread) {
             self.free_chunk(chunk)
         }
     }

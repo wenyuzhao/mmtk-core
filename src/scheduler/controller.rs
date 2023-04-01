@@ -119,7 +119,6 @@ impl<VM: VMBinding> GCController<VM> {
             let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
             self.scheduler.deactivate_all();
         }
-        unsafe { super::scheduler::LAST_ACTIVATE_TIME = None };
 
         let mut queue = Injector::new();
         type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
