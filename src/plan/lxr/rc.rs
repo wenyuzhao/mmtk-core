@@ -234,49 +234,45 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            o.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Ignore,
-                RefScanPolicy::Follow,
-                |edge| {
-                    let target = edge.load();
-                    // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
-                    if !target.is_null() {
-                        debug_assert!(
-                            target.to_address::<VM>().is_mapped(),
-                            "Unmapped obj {:?}.{:?} -> {:?}",
-                            o,
-                            edge,
-                            target
-                        );
-                        debug_assert!(
-                            target.is_in_any_space(),
-                            "Unmapped obj {:?}.{:?} -> {:?}",
-                            o,
-                            edge,
-                            target
-                        );
-                        debug_assert!(
-                            target.class_is_valid::<VM>(),
-                            "Invalid object {:?}.{:?} -> {:?}",
-                            o,
-                            edge,
-                            target
-                        );
-                        if !self.rc.is_stuck(target) {
-                            // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                            self.new_incs.push(edge);
-                            if self.new_incs.is_full() {
-                                self.flush()
-                            }
-                        } else {
-                            super::record_edge_for_validation(edge, target);
-                            self.record_mature_evac_remset(edge, target, false);
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
+                let target = edge.load();
+                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                if !target.is_null() {
+                    debug_assert!(
+                        target.to_address::<VM>().is_mapped(),
+                        "Unmapped obj {:?}.{:?} -> {:?}",
+                        o,
+                        edge,
+                        target
+                    );
+                    debug_assert!(
+                        target.is_in_any_space(),
+                        "Unmapped obj {:?}.{:?} -> {:?}",
+                        o,
+                        edge,
+                        target
+                    );
+                    debug_assert!(
+                        target.class_is_valid::<VM>(),
+                        "Invalid object {:?}.{:?} -> {:?}",
+                        o,
+                        edge,
+                        target
+                    );
+                    if !self.rc.is_stuck(target) {
+                        // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
+                        self.new_incs.push(edge);
+                        if self.new_incs.is_full() {
+                            self.flush()
                         }
                     } else {
                         super::record_edge_for_validation(edge, target);
+                        self.record_mature_evac_remset(edge, target, false);
                     }
-                },
-            );
+                } else {
+                    super::record_edge_for_validation(edge, target);
+                }
+            });
         }
     }
 
@@ -762,36 +758,32 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()
         } else if !crate::args().no_recursive_dec {
-            o.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Claim,
-                RefScanPolicy::Follow,
-                |edge| {
-                    let x = edge.load();
-                    if !x.is_null() {
-                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                        if edge.to_address().is_mapped() {
-                            let rc = self.rc.count(x);
-                            if rc != MAX_REF_COUNT && rc != 0 {
-                                self.recursive_dec(x);
-                            }
-                        } else {
-                            self.record_mature_evac_remset(immix, edge, x);
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge| {
+                let x = edge.load();
+                if !x.is_null() {
+                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                    if edge.to_address().is_mapped() {
+                        let rc = self.rc.count(x);
+                        if rc != MAX_REF_COUNT && rc != 0 {
+                            self.recursive_dec(x);
                         }
-                        if self.concurrent_marking_in_progress && !immix.is_marked(x) {
-                            if cfg!(any(feature = "sanity", debug_assertions)) {
-                                assert!(
-                                    x.to_address::<VM>().is_mapped(),
-                                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                                    o,
-                                    edge,
-                                    x
-                                );
-                            }
-                            self.mark_objects.push(x);
-                        }
+                    } else {
+                        self.record_mature_evac_remset(immix, edge, x);
                     }
-                },
-            );
+                    if self.concurrent_marking_in_progress && !immix.is_marked(x) {
+                        if cfg!(any(feature = "sanity", debug_assertions)) {
+                            assert!(
+                                x.to_address::<VM>().is_mapped(),
+                                "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                                o,
+                                edge,
+                                x
+                            );
+                        }
+                        self.mark_objects.push(x);
+                    }
+                }
+            });
         }
         let in_ix_space = immix.immix_space.in_space(o);
         if !crate::args::HOLE_COUNTING && in_ix_space {

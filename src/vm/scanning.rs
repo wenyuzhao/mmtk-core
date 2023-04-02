@@ -124,16 +124,16 @@ pub trait Scanning<VM: VMBinding> {
     /// * `tls`: The VM-specific thread-local storage for the current worker.
     /// * `object`: The object to be scanned.
     /// * `edge_visitor`: Called back for each edge.
-    fn scan_object<EV: EdgeVisitor<VM::VMEdge>, const COMPRESSED: bool>(
+    fn scan_object(
         tls: VMWorkerThread,
         object: ObjectReference,
-        edge_visitor: &mut EV,
+        edge_visitor: &mut impl EdgeVisitor<VM::VMEdge>,
     );
 
-    fn scan_object_with_klass<EV: EdgeVisitor<VM::VMEdge>, const COMPRESSED: bool>(
+    fn scan_object_with_klass(
         tls: VMWorkerThread,
         object: ObjectReference,
-        edge_visitor: &mut EV,
+        edge_visitor: &mut impl EdgeVisitor<VM::VMEdge>,
         klass: Address,
     );
 

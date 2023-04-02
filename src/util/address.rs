@@ -739,13 +739,13 @@ impl ObjectReference {
         }
     }
 
-    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge), const COMPRESSED: bool>(
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate::<COMPRESSED, _>(
+        EdgeIterator::<VM>::iterate(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,
@@ -755,18 +755,14 @@ impl ObjectReference {
         )
     }
 
-    pub fn iterate_fields_with_klass<
-        VM: VMBinding,
-        F: FnMut(VM::VMEdge),
-        const COMPRESSED: bool,
-    >(
+    pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMEdge)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         klass: Address,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate::<COMPRESSED, _>(
+        EdgeIterator::<VM>::iterate(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,

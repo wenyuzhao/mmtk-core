@@ -279,7 +279,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _, COMPRESSED>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
             if !e.to_address().is_mapped() {
                 return;
             }

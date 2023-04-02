@@ -131,7 +131,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
         }
         let should_check_remset = !self.plan.in_defrag(object);
         let mut cached_children: Vec<(VM::VMEdge, ObjectReference, u8)> = vec![];
-        object.iterate_fields_with_klass::<VM, _, COMPRESSED>(
+        object.iterate_fields_with_klass::<VM, _>(
             CLDScanPolicy::Claim,
             RefScanPolicy::Discover,
             self.klass,
@@ -483,16 +483,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
 {
     fn enqueue(&mut self, object: ObjectReference) {
-        object.iterate_fields::<VM, _, COMPRESSED>(
-            CLDScanPolicy::Claim,
-            RefScanPolicy::Discover,
-            |e| {
-                self.next_edges.push(e);
-                if self.next_edges.is_full() {
-                    self.flush();
-                }
-            },
-        )
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
+            self.next_edges.push(e);
+            if self.next_edges.is_full() {
+                self.flush();
+            }
+        })
     }
 }
 
@@ -592,16 +588,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
 
 impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue for LXRWeakRefProcessEdges<VM, COMPRESSED> {
     fn enqueue(&mut self, object: ObjectReference) {
-        object.iterate_fields::<VM, _, COMPRESSED>(
-            CLDScanPolicy::Claim,
-            RefScanPolicy::Follow,
-            |e| {
-                self.next_edges.push(e);
-                if self.next_edges.is_full() {
-                    self.flush();
-                }
-            },
-        )
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
+            self.next_edges.push(e);
+            if self.next_edges.is_full() {
+                self.flush();
+            }
+        })
     }
 }
 
