@@ -27,7 +27,7 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> {
+pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
     /// Recursively generated new increments
@@ -45,9 +45,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
 }
 
-impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
-    ProcessIncs<VM, KIND, COMPRESSED>
-{
+impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
         .as_spec()
@@ -172,8 +170,16 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         in_place_promotion: bool,
         depth: usize,
     ) {
-        let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
-        let heap_bytes_per_unlog_bit = if COMPRESSED { 4usize } else { 8 };
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
+        } else {
+            64
+        };
+        let heap_bytes_per_unlog_bit = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            4usize
+        } else {
+            8
+        };
         if los {
             if !VM::VMScanning::is_val_array(o) {
                 let start =
@@ -191,7 +197,11 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             }
             o.to_address::<VM>().unlog::<VM>();
         } else if in_place_promotion {
-            let header_size = if COMPRESSED { 12usize } else { 16 };
+            let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                12usize
+            } else {
+                16
+            };
             let size = o.get_size::<VM>();
             let end = o.to_address::<VM>() + size;
             let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
@@ -223,11 +233,9 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = Box::new(
-                    ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new_array_slice(
-                        chunk, self.lxr,
-                    ),
-                );
+                let mut w = Box::new(ProcessIncs::<VM, EDGE_KIND_NURSERY>::new_array_slice(
+                    chunk, self.lxr,
+                ));
                 w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
@@ -280,7 +288,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     fn flush(&mut self) {
         if !self.new_incs.is_empty() {
             let new_incs = self.new_incs.take();
-            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new(new_incs, self.lxr);
+            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -525,9 +533,7 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
     }
 }
 
-impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
-    for ProcessIncs<VM, KIND, COMPRESSED>
-{
+impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
@@ -879,21 +885,12 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         if !self.edges.is_empty() {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, true>::new(roots, lxr);
-                if self.cld_roots {
-                    w.cld_roots = true;
-                    w.weak_cld_roots = self.weak_cld_roots;
-                }
-                GCWork::do_work(&mut w, self.worker(), self.mmtk());
-            } else {
-                let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, false>::new(roots, lxr);
-                if self.cld_roots {
-                    w.cld_roots = true;
-                    w.weak_cld_roots = self.weak_cld_roots;
-                }
-                GCWork::do_work(&mut w, self.worker(), self.mmtk());
+            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
+            if self.cld_roots {
+                w.cld_roots = true;
+                w.weak_cld_roots = self.weak_cld_roots;
             }
+            GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }
 

@@ -356,24 +356,17 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // We just moved the object out of the logical nursery, mark it as unlogged.
                 if !self.rc_enabled && self.common.needs_log_bit {
                     if self.common.needs_field_log_bit {
-                        if VM::VMObjectModel::compressed_pointers_enabled() {
-                            let step = 4;
-                            for i in (0..object.get_size::<VM>()).step_by(step) {
-                                let a = object.to_address::<VM>() + i;
-                                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
-                                    a.to_object_reference::<VM>(),
-                                    Ordering::SeqCst,
-                                );
-                            }
+                        let step = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                            4
                         } else {
-                            let step = 8;
-                            for i in (0..object.get_size::<VM>()).step_by(step) {
-                                let a = object.to_address::<VM>() + i;
-                                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
-                                    a.to_object_reference::<VM>(),
-                                    Ordering::SeqCst,
-                                );
-                            }
+                            8
+                        };
+                        for i in (0..object.get_size::<VM>()).step_by(step) {
+                            let a = object.to_address::<VM>() + i;
+                            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
+                                a.to_object_reference::<VM>(),
+                                Ordering::SeqCst,
+                            );
                         }
                     } else {
                         VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC

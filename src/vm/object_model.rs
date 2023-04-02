@@ -87,6 +87,8 @@ pub trait ObjectModel<VM: VMBinding> {
     /// The metadata specification for the mark-and-nursery bits, used by most plans that has large object allocation. 2 bits.
     const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec;
 
+    const COMPRESSED_PTR_ENABLED: bool = false;
+
     /// A function to non-atomically load the specified per-object metadata's content.
     /// The default implementation assumes the bits defined by the spec are always avilable for MMTk to use. If that is not the case, a binding should override this method, and provide their implementation.
     /// Returns the metadata value.
@@ -438,8 +440,6 @@ pub trait ObjectModel<VM: VMBinding> {
     fn dump_object(object: ObjectReference);
     fn dump_object_s(object: ObjectReference) -> String;
 
-    fn compressed_pointers_enabled() -> bool;
-
     fn get_class_pointer(object: ObjectReference) -> Address;
 }
 
@@ -536,12 +536,6 @@ pub mod specs {
 
     // Log bit: 1 bit per object, global
     define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE);
-    define_vm_metadata_spec!(
-        VMGlobalLogBitSpecCompressed,
-        true,
-        0,
-        LOG_MIN_OBJECT_SIZE - 1
-    );
     // Forwarding pointer: word size per object, local
     define_vm_metadata_spec!(
         VMLocalForwardingPointerSpec,

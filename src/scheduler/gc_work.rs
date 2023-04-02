@@ -664,25 +664,10 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         if let Some(_lxr) = self.mmtk.plan.downcast_ref::<LXR<E::VM>>() {
-            if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-                let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT, true>::new_objects(nodes);
-                w.cld_roots = true;
-                w.weak_cld_roots = false;
-                crate::memory_manager::add_work_packet(
-                    self.mmtk,
-                    WorkBucketStage::RCProcessIncs,
-                    w,
-                );
-            } else {
-                let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT, false>::new_objects(nodes);
-                w.cld_roots = true;
-                w.weak_cld_roots = false;
-                crate::memory_manager::add_work_packet(
-                    self.mmtk,
-                    WorkBucketStage::RCProcessIncs,
-                    w,
-                );
-            }
+            let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT>::new_objects(nodes);
+            w.cld_roots = true;
+            w.weak_cld_roots = false;
+            crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::RCProcessIncs, w);
         } else {
             let process_edges_work = E::new(vec![], true, self.mmtk);
             let work = process_edges_work.create_scan_work(nodes, true);

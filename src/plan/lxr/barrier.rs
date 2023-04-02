@@ -33,7 +33,7 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub const UNLOCKED_VALUE: u8 = 0b0;
 pub const LOCKED_VALUE: u8 = 0b1;
 
-pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
+pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
@@ -41,7 +41,7 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
     lxr: &'static LXR<VM>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRESSED> {
+impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -95,7 +95,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
     }
 
     fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
-        let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
+        } else {
+            64
+        };
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
             unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
         } else {
@@ -205,7 +209,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
             self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
                 _,
                 EDGE_KIND_MATURE,
-                COMPRESSED,
             >::new(
                 incs, self.lxr
             ));
@@ -243,9 +246,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
-    for LXRFieldBarrierSemantics<VM, COMPRESSED>
-{
+impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     type VM = VM;
 
     #[cold]

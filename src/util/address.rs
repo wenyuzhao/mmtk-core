@@ -684,7 +684,7 @@ impl ObjectReference {
             println!("Unmapped klass {:?} object {:?}", klass, self);
             return false;
         }
-        let valid = if VM::VMObjectModel::compressed_pointers_enabled() {
+        let valid = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
             klass.is_aligned_to(8)
         } else {
             ((klass.as_usize() & 0xff000_00000000) == 0x7000_00000000) && klass.is_aligned_to(8)
