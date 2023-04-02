@@ -173,7 +173,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
         let heap_bytes_per_unlog_bit = if COMPRESSED { 4usize } else { 8 };
         if los {
-            if !VM::VMScanning::is_val_array::<COMPRESSED>(o) {
+            if !VM::VMScanning::is_val_array(o) {
                 let start =
                     side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address::<VM>())
                         .to_mut_ptr::<u8>();
@@ -217,10 +217,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 cursor += heap_bytes_per_unlog_bit;
             }
         };
-        if VM::VMScanning::is_obj_array::<COMPRESSED>(o)
-            && VM::VMScanning::obj_array_data::<COMPRESSED>(o).len() >= 1024
-        {
-            let data = VM::VMScanning::obj_array_data::<COMPRESSED>(o);
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 1024 {
+            let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
                 let mut w = Box::new(
@@ -752,8 +750,8 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         if false
-            && VM::VMScanning::is_obj_array::<COMPRESSED>(o)
-            && VM::VMScanning::obj_array_data::<COMPRESSED>(o).bytes() > 1024
+            && VM::VMScanning::is_obj_array(o)
+            && VM::VMScanning::obj_array_data(o).bytes() > 1024
         {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()

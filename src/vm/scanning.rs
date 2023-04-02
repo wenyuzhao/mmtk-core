@@ -160,15 +160,15 @@ pub trait Scanning<VM: VMBinding> {
         unreachable!("scan_object_and_trace_edges() will not be called when support_edge_enqueue() is always true.")
     }
 
-    fn obj_array_data<const COMPRESSED: bool>(_o: ObjectReference) -> VM::VMMemorySlice {
+    fn obj_array_data(_o: ObjectReference) -> VM::VMMemorySlice {
         unreachable!()
     }
 
-    fn is_obj_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
+    fn is_obj_array(_o: ObjectReference) -> bool {
         unreachable!()
     }
 
-    fn is_val_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
+    fn is_val_array(_o: ObjectReference) -> bool {
         unreachable!()
     }
 

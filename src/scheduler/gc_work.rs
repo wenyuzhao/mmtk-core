@@ -727,7 +727,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self;
 
     /// The common code for ScanObjects and PlanScanObjects.
-    fn do_work_common<const COMPRESSED: bool>(
+    fn do_work_common(
         &self,
         buffer: &[ObjectReference],
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
@@ -874,11 +874,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_common::<true>(&self.buffer, worker, mmtk, self.discovery);
-        } else {
-            self.do_work_common::<false>(&self.buffer, worker, mmtk, self.discovery);
-        }
+        self.do_work_common(&self.buffer, worker, mmtk, self.discovery);
         trace!("ScanObjects End");
     }
 }
@@ -1033,11 +1029,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_common::<true>(&self.buffer, worker, mmtk, true);
-        } else {
-            self.do_work_common::<false>(&self.buffer, worker, mmtk, true);
-        }
+        self.do_work_common(&self.buffer, worker, mmtk, true);
         trace!("PlanScanObjects End");
     }
 }
