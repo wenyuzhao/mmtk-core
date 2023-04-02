@@ -48,24 +48,10 @@ fn validate_features() {
     // }
 }
 
-pub struct UnlogBit<VM: VMBinding, const COMPRESSED: bool>(PhantomData<VM>);
+pub struct UnlogBit<VM: VMBinding>(PhantomData<VM>);
 
-impl<VM: VMBinding, const COMPRESSED: bool> UnlogBit<VM, COMPRESSED> {
-    pub const SPEC: SideMetadataSpec = if COMPRESSED {
-        *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
-            .as_spec()
-            .extract_side_spec()
-    } else {
-        *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-            .as_spec()
-            .extract_side_spec()
-    };
-}
-
-pub fn get_unlog_bit_slow<VM: VMBinding>() -> SideMetadataSpec {
-    if VM::VMObjectModel::compressed_pointers_enabled() {
-        *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED.extract_side_spec()
-    } else {
-        *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec()
-    }
+impl<VM: VMBinding> UnlogBit<VM> {
+    pub const SPEC: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
 }

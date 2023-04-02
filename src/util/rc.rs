@@ -192,8 +192,8 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         }
     }
 
-    pub fn promote<const COMPRESSED: bool>(&self, o: ObjectReference) {
-        o.log_start_address::<VM, COMPRESSED>();
+    pub fn promote(&self, o: ObjectReference) {
+        o.log_start_address::<VM>();
         let size = o.get_size::<VM>();
         if size > Line::BYTES {
             self.mark_straddle_object_with_size(o, size);

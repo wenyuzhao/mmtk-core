@@ -167,7 +167,7 @@ impl Line {
         let log_meta_bytes_per_line = log_meta_bits_per_line - LOG_BITS_IN_BYTE as usize;
         // FIXME: Performance
         let start = lines.start.start();
-        let meta_start = address_to_meta_address(&super::UnlogBit::<VM, COMPRESSED>::SPEC, start);
+        let meta_start = address_to_meta_address(&super::UnlogBit::<VM>::SPEC, start);
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << log_meta_bytes_per_line;
         crate::util::memory::zero(meta_start, meta_bytes)
@@ -182,7 +182,7 @@ impl Line {
         let log_meta_bytes_per_line = log_meta_bits_per_line - LOG_BITS_IN_BYTE as usize;
         // FIXME: Performance
         let start = lines.start.start();
-        let meta_start = address_to_meta_address(&super::UnlogBit::<VM, COMPRESSED>::SPEC, start);
+        let meta_start = address_to_meta_address(&super::UnlogBit::<VM>::SPEC, start);
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << log_meta_bytes_per_line;
         unsafe {

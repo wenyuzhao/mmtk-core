@@ -18,7 +18,7 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
+pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
     objects: Option<Vec<ObjectReference>>,
     objects_arc: Option<Arc<Vec<ObjectReference>>>,
@@ -27,7 +27,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding, const COMPRESSED: bool> {
     rc: RefCountHelper<VM>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRESSED> {
+impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
@@ -61,7 +61,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
             // This packet is executed in concurrent.
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
-            let w = LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(new_nodes, worker.mmtk);
+            let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, worker.mmtk);
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
@@ -115,9 +115,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRConcurrentTraceObjects<VM, COMPRE
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
-    for LXRConcurrentTraceObjects<VM, COMPRESSED>
-{
+impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "sanity") {
             assert!(
@@ -193,9 +191,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
-    for LXRConcurrentTraceObjects<VM, COMPRESSED>
-{
+impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
@@ -216,12 +212,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM>
     }
 }
 
-pub struct ProcessModBufSATB<const COMPRESSED: bool> {
+pub struct ProcessModBufSATB {
     nodes: Option<Vec<ObjectReference>>,
     nodes_arc: Option<Arc<Vec<ObjectReference>>>,
 }
 
-impl<const COMPRESSED: bool> ProcessModBufSATB<COMPRESSED> {
+impl ProcessModBufSATB {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
         Self {
             nodes: Some(nodes),
@@ -236,7 +232,7 @@ impl<const COMPRESSED: bool> ProcessModBufSATB<COMPRESSED> {
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COMPRESSED> {
+impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         let mut w = if let Some(nodes) = self.nodes.take() {
@@ -252,7 +248,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
                     );
                 }
             }
-            LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(nodes, mmtk)
+            LXRConcurrentTraceObjects::new(nodes, mmtk)
         } else if let Some(nodes) = self.nodes_arc.take() {
             if nodes.is_empty() {
                 return;
@@ -266,7 +262,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
                     );
                 }
             }
-            LXRConcurrentTraceObjects::<VM, COMPRESSED>::new_arc(nodes, mmtk)
+            LXRConcurrentTraceObjects::new_arc(nodes, mmtk)
         } else {
             return;
         };
@@ -280,7 +276,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessModBufSATB<COM
     }
 }
 
-pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
+pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
@@ -290,7 +286,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
     refs: Vec<ObjectReference>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
+impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     pub(super) fn new_remset(
         edges: Vec<EdgeOf<Self>>,
         refs: Vec<ObjectReference>,
@@ -303,9 +299,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
-    for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
-{
+impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
@@ -369,7 +363,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
             }
             let pause = self.pause;
             let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
+            self.lxr.immix_space.rc_trace_object(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -426,7 +420,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
+impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
@@ -438,7 +432,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
+            self.lxr.immix_space.rc_trace_object(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -479,9 +473,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
-    for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
-{
+impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
             self.next_edges.push(e);
@@ -492,31 +484,27 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRStopTheWorldProcessEdges<VM, COMPRESSED> {
+impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
     type Target = ProcessEdgesBase<VM>;
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> DerefMut
-    for LXRStopTheWorldProcessEdges<VM, COMPRESSED>
-{
+impl<VM: VMBinding> DerefMut for LXRStopTheWorldProcessEdges<VM> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
 }
 
-pub struct LXRWeakRefProcessEdges<VM: VMBinding, const COMPRESSED: bool> {
+pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
     next_edges: VectorQueue<EdgeOf<Self>>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
-    for LXRWeakRefProcessEdges<VM, COMPRESSED>
-{
+impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
@@ -552,7 +540,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object::<_, COMPRESSED>(
+            self.lxr.immix_space.rc_trace_object(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
@@ -586,7 +574,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue for LXRWeakRefProcessEdges<VM, COMPRESSED> {
+impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
             self.next_edges.push(e);
@@ -597,14 +585,14 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue for LXRWeakRefProcessEdg
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> Deref for LXRWeakRefProcessEdges<VM, COMPRESSED> {
+impl<VM: VMBinding> Deref for LXRWeakRefProcessEdges<VM> {
     type Target = ProcessEdgesBase<VM>;
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> DerefMut for LXRWeakRefProcessEdges<VM, COMPRESSED> {
+impl<VM: VMBinding> DerefMut for LXRWeakRefProcessEdges<VM> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }

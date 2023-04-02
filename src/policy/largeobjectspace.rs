@@ -360,11 +360,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                             let step = 4;
                             for i in (0..object.get_size::<VM>()).step_by(step) {
                                 let a = object.to_address::<VM>() + i;
-                                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
-                                    .mark_as_unlogged::<VM>(
-                                        a.to_object_reference::<VM>(),
-                                        Ordering::SeqCst,
-                                    );
+                                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
+                                    a.to_object_reference::<VM>(),
+                                    Ordering::SeqCst,
+                                );
                             }
                         } else {
                             let step = 8;
@@ -413,8 +412,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.test_and_mark(object, self.mark_state)
     }
 
-    pub fn rc_free<const COMPRESSED: bool>(&self, o: ObjectReference) {
-        if o.to_address::<VM>().attempt_log::<VM, COMPRESSED>() {
+    pub fn rc_free(&self, o: ObjectReference) {
+        if o.to_address::<VM>().attempt_log::<VM>() {
             // println!(" - add to rc_dead_objects {:?}", o);
             self.rc_dead_objects.push(o);
         }
@@ -516,10 +515,7 @@ impl RCSweepMatureLOS {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
         Self { _counter: counter }
     }
-    fn do_work_impl<VM: VMBinding, const COMPRESSED: bool>(
-        &mut self,
-        mmtk: &'static crate::MMTK<VM>,
-    ) {
+    fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {
@@ -543,7 +539,7 @@ impl RCSweepMatureLOS {
                     }
                 });
                 los.rc.set(*o, 0);
-                los.rc_free::<COMPRESSED>(*o);
+                los.rc_free(*o);
             }
         }
     }
@@ -555,11 +551,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_impl::<VM, true>(mmtk)
-        } else {
-            self.do_work_impl::<VM, false>(mmtk)
-        }
+        self.do_work_impl(mmtk)
     }
 }
 
@@ -572,12 +564,12 @@ impl RCReleaseMatureLOS {
         Self { _counter: counter }
     }
 
-    fn do_work_impl<VM: VMBinding, const COMPRESSED: bool>(&self, mmtk: &'static crate::MMTK<VM>) {
+    fn do_work_impl<VM: VMBinding>(&self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
         let mut mature_objects = los.rc_mature_objects.lock();
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
-            o.to_address::<VM>().unlog::<VM, COMPRESSED>();
+            o.to_address::<VM>().unlog::<VM>();
             if removed {
                 let pages = los.release_object(o.to_address::<VM>());
                 los.num_pages_released_lazy
@@ -593,10 +585,6 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_impl::<VM, true>(mmtk)
-        } else {
-            self.do_work_impl::<VM, false>(mmtk)
-        }
+        self.do_work_impl::<VM>(mmtk)
     }
 }

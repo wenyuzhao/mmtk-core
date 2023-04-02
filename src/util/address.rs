@@ -363,16 +363,14 @@ impl Address {
         unsafe { RC_LOCK_BITS.load::<u8>(self) == LOCKED_VALUE }
     }
 
-    pub fn is_logged<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
+    pub fn is_logged<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        unsafe {
-            crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.load::<u8>(self) == LOGGED_VALUE
-        }
+        unsafe { crate::policy::immix::UnlogBit::<VM>::SPEC.load::<u8>(self) == LOGGED_VALUE }
     }
 
-    pub fn attempt_log<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
+    pub fn attempt_log<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        let log_bit = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
+        let log_bit = crate::policy::immix::UnlogBit::<VM>::SPEC;
         loop {
             let old_value: u8 = log_bit.load_atomic(self, Ordering::SeqCst);
             if old_value == LOGGED_VALUE {
@@ -393,18 +391,18 @@ impl Address {
         }
     }
 
-    pub fn log<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn log<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
+        crate::policy::immix::UnlogBit::<VM>::SPEC.store_atomic(
             self,
             LOGGED_VALUE,
             Ordering::Relaxed,
         )
     }
 
-    pub fn unlog<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn unlog<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
+        crate::policy::immix::UnlogBit::<VM>::SPEC.store_atomic(
             self,
             UNLOGGED_VALUE,
             Ordering::Relaxed,
@@ -664,16 +662,16 @@ impl ObjectReference {
         a..a + self.get_size::<VM>()
     }
 
-    pub fn log_start_address<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn log_start_address<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        self.to_address::<VM>().unlog::<VM, COMPRESSED>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
+        self.to_address::<VM>().unlog::<VM>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM>();
     }
 
-    pub fn clear_start_address_log<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn clear_start_address_log<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        self.to_address::<VM>().log::<VM, COMPRESSED>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
+        self.to_address::<VM>().log::<VM>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM>();
     }
 
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
@@ -709,9 +707,9 @@ impl ObjectReference {
         // );
     }
 
-    pub fn fix_start_address<VM: VMBinding, const COMPRESSED: bool>(self) -> Self {
+    pub fn fix_start_address<VM: VMBinding>(self) -> Self {
         let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
-        if !(a + BYTES_IN_WORD).is_logged::<VM, COMPRESSED>() {
+        if !(a + BYTES_IN_WORD).is_logged::<VM>() {
             (a + BYTES_IN_WORD).to_object_reference::<VM>()
         } else {
             a.to_object_reference::<VM>()

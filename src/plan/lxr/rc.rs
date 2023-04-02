@@ -49,7 +49,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     ProcessIncs<VM, KIND, COMPRESSED>
 {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
-    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
+    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM>::SPEC;
 
     fn worker(&self) -> &'static mut GCWorker<VM> {
         GCWorker::<VM>::current()
@@ -136,7 +136,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             if !copied && Block::containing::<VM>(o).get_state() == BlockState::Nursery {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
-            self.rc.promote::<COMPRESSED>(o);
+            self.rc.promote(o);
             self.survival_ratio_predictor_local
                 .record_promotion(o.get_size::<VM>());
         } else {
@@ -187,7 +187,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             }
-            o.to_address::<VM>().unlog::<VM, COMPRESSED>();
+            o.to_address::<VM>().unlog::<VM>();
         } else if in_place_promotion {
             let header_size = if COMPRESSED { 12usize } else { 16 };
             let size = o.get_size::<VM>();
@@ -199,7 +199,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 cursor.align_up(heap_bytes_per_unlog_byte),
             );
             while cursor < end && !cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
-                cursor.unlog::<VM, COMPRESSED>();
+                cursor.unlog::<VM>();
                 cursor += heap_bytes_per_unlog_bit;
             }
             while cursor < aligned_end {
@@ -208,12 +208,12 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     meta += 1usize;
                     cursor += heap_bytes_per_unlog_byte;
                 } else {
-                    cursor.unlog::<VM, COMPRESSED>();
+                    cursor.unlog::<VM>();
                     cursor += heap_bytes_per_unlog_bit;
                 }
             }
             while cursor < end {
-                cursor.unlog::<VM, COMPRESSED>();
+                cursor.unlog::<VM>();
                 cursor += heap_bytes_per_unlog_bit;
             }
         };
@@ -381,7 +381,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE {
-            e.to_address().unlog::<VM, COMPRESSED>();
+            e.to_address().unlog::<VM>();
         }
         if o.is_null() {
             return None;
@@ -596,21 +596,14 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 }
                 worker
                     .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(
-                        roots.clone(),
-                        mmtk,
-                    ));
+                    .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
                 if !root_edges.is_empty() {
                     worker.add_work(
                         WorkBucketStage::Closure,
-                        LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(
-                            root_edges,
-                            !self.cld_roots,
-                            mmtk,
-                        ),
+                        LXRStopTheWorldProcessEdges::new(root_edges, !self.cld_roots, mmtk),
                     )
                 }
             } else if !self.cld_roots {
@@ -634,7 +627,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
     }
 }
 
-pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
+pub struct ProcessDecs<VM: VMBinding> {
     /// Decrements to process
     decs: Option<Vec<ObjectReference>>,
     decs_arc: Option<Arc<Vec<ObjectReference>>>,
@@ -647,7 +640,7 @@ pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     rc: RefCountHelper<VM>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
+impl<VM: VMBinding> ProcessDecs<VM> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     fn worker(&self) -> &mut GCWorker<VM> {
@@ -687,7 +680,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM, COMPRESSED>) {
+    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
         if lxr.current_pause().is_none() {
             self.worker()
                 .add_work_prioritized(WorkBucketStage::Unconstrained, w);
@@ -708,7 +701,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
-            let w = LXRConcurrentTraceObjects::<_, COMPRESSED>::new(objects, mmtk);
+            let w = LXRConcurrentTraceObjects::new(objects, mmtk);
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {
@@ -799,7 +792,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                 .immix_space
                 .add_to_possibly_dead_mature_blocks(block, false);
         } else {
-            immix.los().rc_free::<COMPRESSED>(o);
+            immix.los().rc_free(o);
         }
     }
 
@@ -837,7 +830,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessDecs<VM, COMPRESSED> {
+impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();

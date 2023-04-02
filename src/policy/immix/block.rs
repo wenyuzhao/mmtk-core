@@ -468,8 +468,8 @@ impl Block {
         Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
-    pub fn clear_log_table<VM: VMBinding, const COMPRESSED: bool>(&self) {
-        super::UnlogBit::<VM, COMPRESSED>::SPEC.bzero_metadata(self.start(), Block::BYTES);
+    pub fn clear_log_table<VM: VMBinding>(&self) {
+        super::UnlogBit::<VM>::SPEC.bzero_metadata(self.start(), Block::BYTES);
     }
 
     pub fn assert_log_table_cleared<VM: VMBinding>(&self, meta: &SideMetadataSpec) {
@@ -482,8 +482,8 @@ impl Block {
         }
     }
 
-    pub fn initialize_log_table_as_unlogged<VM: VMBinding, const COMPRESSED: bool>(&self) {
-        let meta = super::UnlogBit::<VM, COMPRESSED>::SPEC;
+    pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
+        let meta = super::UnlogBit::<VM>::SPEC;
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {

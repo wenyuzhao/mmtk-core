@@ -89,7 +89,7 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
                 let step = 4;
                 for i in (0..bytes).step_by(step) {
                     let a = object.to_address::<VM>() + i;
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         .mark_as_unlogged::<VM>(a.to_object_reference::<VM>(), Ordering::SeqCst);
                 }
             } else {

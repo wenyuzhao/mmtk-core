@@ -74,7 +74,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Note that for this bit, 0 represents logged (default), and 1 represents unlogged.
     /// This bit is also referred to as unlogged bit in Java MMTk for this reason.
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec;
-    const GLOBAL_LOG_BIT_SPEC_COMPRESSED: VMGlobalLogBitSpecCompressed;
 
     /// The metadata specification for the forwarding pointer, used by copying plans. Word size.
     const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec;
@@ -485,6 +484,25 @@ pub mod specs {
                             offset: LOCAL_SIDE_METADATA_VM_BASE_OFFSET,
                             log_num_of_bits: Self::LOG_NUM_BITS,
                             log_bytes_in_region: $side_min_obj_size as usize,
+                        }))
+                    }
+                }
+                pub const fn side_first_compressed() -> Self {
+                    if Self::IS_GLOBAL {
+                        Self(MetadataSpec::OnSide(SideMetadataSpec {
+                            name: stringify!($spec_name),
+                            is_global: Self::IS_GLOBAL,
+                            offset: GLOBAL_SIDE_METADATA_VM_BASE_OFFSET,
+                            log_num_of_bits: Self::LOG_NUM_BITS,
+                            log_bytes_in_region: $side_min_obj_size as usize - 1,
+                        }))
+                    } else {
+                        Self(MetadataSpec::OnSide(SideMetadataSpec {
+                            name: stringify!($spec_name),
+                            is_global: Self::IS_GLOBAL,
+                            offset: LOCAL_SIDE_METADATA_VM_BASE_OFFSET,
+                            log_num_of_bits: Self::LOG_NUM_BITS,
+                            log_bytes_in_region: $side_min_obj_size as usize - 1,
                         }))
                     }
                 }

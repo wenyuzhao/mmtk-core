@@ -42,7 +42,7 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
 }
 
 impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRESSED> {
-    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
+    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM>::SPEC;
     const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]
@@ -114,9 +114,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
 
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
-        if !edge.to_address().is_logged::<VM, COMPRESSED>() {
+        if !edge.to_address().is_logged::<VM>() {
             let old = edge.load();
-            edge.to_address().log::<VM, COMPRESSED>();
+            edge.to_address().log::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -216,11 +216,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork]
-                    .add(ProcessModBufSATB::<COMPRESSED>::new_arc(decs.clone()));
-                ProcessDecs::<_, COMPRESSED>::new_arc(decs, LazySweepingJobsCounter::new_decs())
+                    .add(ProcessModBufSATB::new_arc(decs.clone()));
+                ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
-                ProcessDecs::<_, COMPRESSED>::new(decs, LazySweepingJobsCounter::new_decs())
+                ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs())
             };
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);
@@ -236,7 +236,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
             self.mmtk.scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork]
-                .add(ProcessModBufSATB::<COMPRESSED>::new(nodes));
+                .add(ProcessModBufSATB::new(nodes));
         }
     }
 }

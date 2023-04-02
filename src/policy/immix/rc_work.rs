@@ -168,14 +168,14 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
 }
 
 /// Chunk sweeping work packet.
-pub(super) struct SweepDeadCyclesChunk<VM: VMBinding, const COMPRESSED: bool> {
+pub(super) struct SweepDeadCyclesChunk<VM: VMBinding> {
     chunk: Chunk,
     _counter: LazySweepingJobsCounter,
     rc: RefCountHelper<VM>,
 }
 
 #[allow(unused)]
-impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED> {
+impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     const CAPACITY: usize = 1024;
 
     pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
@@ -187,7 +187,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
     }
 
     fn process_dead_object(&mut self, mut o: ObjectReference) {
-        o = o.fix_start_address::<VM, COMPRESSED>();
+        o = o.fix_start_address::<VM>();
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -248,7 +248,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> SweepDeadCyclesChunk<VM, COMPRESSED>
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for SweepDeadCyclesChunk<VM, COMPRESSED> {
+impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
@@ -288,14 +288,14 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
 
 /// A work packet to prepare each block for GC.
 /// Performs the action on a range of chunks.
-pub(super) struct PrepareChunk<const COMPRESSED: bool> {
+pub(super) struct PrepareChunk {
     pub chunk: Chunk,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
     pub defrag_threshold: Option<usize>,
 }
 
-impl<const COMPRESSED: bool> PrepareChunk<COMPRESSED> {
+impl PrepareChunk {
     /// Clear object mark table
     #[allow(unused)]
     fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
@@ -305,7 +305,7 @@ impl<const COMPRESSED: bool> PrepareChunk<COMPRESSED> {
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESSED> {
+impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         if !self.rc_enabled {
@@ -323,7 +323,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for PrepareChunk<COMPRESS
             }
             // Clear unlog table on CM
             if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
-                block.initialize_log_table_as_unlogged::<VM, COMPRESSED>();
+                block.initialize_log_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
