@@ -71,7 +71,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    fn process_edge<const COMPRESSED: bool>(
+    fn process_edge(
         &mut self,
         e: VM::VMEdge,
         epoch: u8,
@@ -83,7 +83,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
-        let o = e.load::<COMPRESSED>();
+        let o = e.load();
         if old_ref != o {
             return false;
         }
@@ -115,7 +115,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         let mut refs = vec![];
         for entry in remset {
             let (e, epoch, o) = entry.decode::<VM>();
-            if self.process_edge::<COMPRESSED>(e, epoch, o, lxr) {
+            if self.process_edge(e, epoch, o, lxr) {
                 edges.push(e);
                 refs.push(o);
             }

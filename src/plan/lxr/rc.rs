@@ -238,7 +238,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 CLDScanPolicy::Ignore,
                 RefScanPolicy::Follow,
                 |edge| {
-                    let target = edge.load::<COMPRESSED>();
+                    let target = edge.load();
                     // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                     if !target.is_null() {
                         debug_assert!(
@@ -384,7 +384,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         e: VM::VMEdge,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
-        let o = e.load::<COMPRESSED>();
+        let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE {
             e.to_address().unlog::<VM, COMPRESSED>();
@@ -439,7 +439,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             //     self.rc.count(new),
             //     K
             // );
-            e.store::<COMPRESSED>(new)
+            e.store(new)
         } else {
             // println!(
             //     " -- inc {:?}: {:?} rc={} {:?}",
@@ -766,7 +766,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                 CLDScanPolicy::Claim,
                 RefScanPolicy::Follow,
                 |edge| {
-                    let x = edge.load::<COMPRESSED>();
+                    let x = edge.load();
                     if !x.is_null() {
                         // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
                         if edge.to_address().is_mapped() {
@@ -890,16 +890,25 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         unreachable!()
     }
 
-    fn process_edges<const COMPRESSED: bool>(&mut self) {
+    fn process_edges(&mut self) {
         if !self.edges.is_empty() {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
-            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, COMPRESSED>::new(roots, lxr);
-            if self.cld_roots {
-                w.cld_roots = true;
-                w.weak_cld_roots = self.weak_cld_roots;
+            if VM::VMObjectModel::compressed_pointers_enabled() {
+                let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, true>::new(roots, lxr);
+                if self.cld_roots {
+                    w.cld_roots = true;
+                    w.weak_cld_roots = self.weak_cld_roots;
+                }
+                GCWork::do_work(&mut w, self.worker(), self.mmtk());
+            } else {
+                let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, false>::new(roots, lxr);
+                if self.cld_roots {
+                    w.cld_roots = true;
+                    w.weak_cld_roots = self.weak_cld_roots;
+                }
+                GCWork::do_work(&mut w, self.worker(), self.mmtk());
             }
-            GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }
 

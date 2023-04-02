@@ -547,17 +547,17 @@ pub trait ProcessEdgesWork:
         }
     }
 
-    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store::<COMPRESSED>(new_object);
+            slot.store(new_object);
         }
     }
 
-    fn process_edges<const COMPRESSED: bool>(&mut self) {
+    fn process_edges(&mut self) {
         for i in 0..self.edges.len() {
-            self.process_edge::<COMPRESSED>(self.edges[i])
+            self.process_edge(self.edges[i])
         }
     }
 }
@@ -572,11 +572,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
         } else {
             None
         };
-        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            self.process_edges::<true>();
-        } else {
-            self.process_edges::<false>();
-        }
+        self.process_edges();
         if !self.nodes.is_empty() {
             self.flush();
         }
@@ -963,11 +959,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
-    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
-            slot.store::<COMPRESSED>(new_object);
+            slot.store(new_object);
         }
     }
 }

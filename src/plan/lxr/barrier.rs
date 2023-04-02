@@ -104,7 +104,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
 
     fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old = edge.load::<COMPRESSED>();
+            let old = edge.load();
             self.log_and_unlock_edge(edge);
             Ok(old)
         } else {
@@ -115,7 +115,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if !edge.to_address().is_logged::<VM, COMPRESSED>() {
-            let old = edge.load::<COMPRESSED>();
+            let old = edge.load();
             edge.to_address().log::<VM, COMPRESSED>();
             Ok(old)
         } else {

@@ -61,11 +61,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
         target: ObjectReference,
     ) {
         self.object_reference_write_pre(src, slot, target);
-        if <VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            slot.store::<true>(target);
-        } else {
-            slot.store::<false>(target);
-        }
+        slot.store(target);
         self.object_reference_write_post(src, slot, target);
     }
 

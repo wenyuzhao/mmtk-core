@@ -136,7 +136,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ObjectQueue
             RefScanPolicy::Discover,
             self.klass,
             |e| {
-                let t: ObjectReference = e.load::<COMPRESSED>();
+                let t: ObjectReference = e.load();
                 if t.is_null() {
                     return;
                 }
@@ -386,22 +386,22 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         new_object
     }
 
-    fn process_edges<const COMPRESSED2: bool>(&mut self) {
+    fn process_edges(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         if self.roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
         if self.pause == Pause::FullTraceFast {
             for i in 0..self.edges.len() {
-                self.process_mark_edge::<COMPRESSED2>(self.edges[i])
+                self.process_mark_edge(self.edges[i])
             }
         } else if self.remset_recorded_edges {
             for i in 0..self.edges.len() {
-                self.process_remset_edge::<COMPRESSED2>(self.edges[i], i)
+                self.process_remset_edge(self.edges[i], i)
             }
         } else {
             for i in 0..self.edges.len() {
-                self.process_edge::<COMPRESSED2>(self.edges[i])
+                self.process_edge(self.edges[i])
             }
         }
         self.flush();
@@ -411,12 +411,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         }
     }
 
-    fn process_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED2>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
             debug_assert!(!self.remset_recorded_edges);
-            slot.store::<COMPRESSED2>(new_object);
+            slot.store(new_object);
         }
         super::record_edge_for_validation(slot, new_object);
     }
@@ -455,8 +455,8 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         x
     }
 
-    fn process_remset_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>, i: usize) {
-        let object = slot.load::<COMPRESSED2>();
+    fn process_remset_edge(&mut self, slot: EdgeOf<Self>, i: usize) {
+        let object = slot.load();
         if object != self.refs[i] {
             return;
         }
@@ -464,22 +464,17 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRStopTheWorldProcessEdges<VM, COMP
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
             debug_assert!(self.remset_recorded_edges);
             // Don't do the store if the original is already overwritten
-            let _ = slot.compare_exchange::<COMPRESSED2>(
-                object,
-                new_object,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
+            let _ = slot.compare_exchange(object, new_object, Ordering::SeqCst, Ordering::SeqCst);
         }
         super::record_edge_for_validation(slot, new_object);
     }
 
-    fn process_mark_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED2>();
+    fn process_mark_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_and_mark_object(object);
         super::record_edge_for_validation(slot, new_object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            slot.store::<COMPRESSED2>(new_object);
+            slot.store(new_object);
         }
     }
 }
@@ -574,18 +569,18 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessEdgesWork
         }
     }
 
-    fn process_edge<const COMPRESSED2: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED2>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            slot.store::<COMPRESSED2>(new_object);
+            slot.store(new_object);
         }
     }
 
-    fn process_edges<const COMPRESSED2: bool>(&mut self) {
+    fn process_edges(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge::<COMPRESSED2>(self, self.edges[i])
+            ProcessEdgesWork::process_edge(self, self.edges[i])
         }
         self.flush();
     }

@@ -41,12 +41,12 @@ use crate::util::{Address, ObjectReference};
 /// in a word as a pointer, it can also use `SimpleEdge` for weak reference fields.
 pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash + Sized {
     /// Load object reference from the edge.
-    fn load<const COMPRESSED: bool>(&self) -> ObjectReference;
+    fn load(&self) -> ObjectReference;
 
     /// Store the object reference `object` into the edge.
-    fn store<const COMPRESSED: bool>(&self, object: ObjectReference);
+    fn store(&self, object: ObjectReference);
 
-    fn compare_exchange<const COMPRESSED: bool>(
+    fn compare_exchange(
         &self,
         _old_object: ObjectReference,
         _new_object: ObjectReference,
@@ -109,11 +109,11 @@ impl SimpleEdge {
 unsafe impl Send for SimpleEdge {}
 
 impl Edge for SimpleEdge {
-    fn load<const COMPRESSED: bool>(&self) -> ObjectReference {
+    fn load(&self) -> ObjectReference {
         unsafe { (*self.slot_addr).load(atomic::Ordering::Relaxed) }
     }
 
-    fn store<const COMPRESSED: bool>(&self, object: ObjectReference) {
+    fn store(&self, object: ObjectReference) {
         unsafe { (*self.slot_addr).store(object, atomic::Ordering::Relaxed) }
     }
 }
@@ -129,11 +129,11 @@ impl Edge for SimpleEdge {
 /// simply as an `ObjectReference`.  The intention and the semantics are clearer with
 /// `SimpleEdge`.
 impl Edge for Address {
-    fn load<const COMPRESSED: bool>(&self) -> ObjectReference {
+    fn load(&self) -> ObjectReference {
         unsafe { Address::load(*self) }
     }
 
-    fn store<const COMPRESSED: bool>(&self, object: ObjectReference) {
+    fn store(&self, object: ObjectReference) {
         unsafe { Address::store(*self, object) }
     }
 
