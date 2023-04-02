@@ -32,7 +32,7 @@ use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
-use crate::vm::{ActivePlan, Collection, VMBinding};
+use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -477,7 +477,11 @@ impl<VM: VMBinding> LXR<VM> {
         let immix_specs = metadata::extract_side_metadata(&[
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
-            MetadataSpec::OnSide(crate::policy::immix::UnlogBit::<VM>::SPEC),
+            MetadataSpec::OnSide(
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .as_spec()
+                    .extract_side_spec(),
+            ),
         ]);
         let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let mut immix_space = ImmixSpace::new(

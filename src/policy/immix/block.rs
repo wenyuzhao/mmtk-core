@@ -469,7 +469,10 @@ impl Block {
     }
 
     pub fn clear_log_table<VM: VMBinding>(&self) {
-        super::UnlogBit::<VM>::SPEC.bzero_metadata(self.start(), Block::BYTES);
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec()
+            .bzero_metadata(self.start(), Block::BYTES);
     }
 
     pub fn assert_log_table_cleared<VM: VMBinding>(&self, meta: &SideMetadataSpec) {
@@ -483,7 +486,9 @@ impl Block {
     }
 
     pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
-        let meta = super::UnlogBit::<VM>::SPEC;
+        let meta = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec();
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
         unsafe {

@@ -35,7 +35,9 @@ pub struct ImmixFakeFieldBarrierSemantics<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
-    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM>::SPEC;
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
     const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]

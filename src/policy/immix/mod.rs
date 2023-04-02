@@ -5,15 +5,9 @@ pub mod immixspace;
 pub mod line;
 pub mod rc_work;
 
-use std::marker::PhantomData;
-
 pub use immixspace::*;
 
-use crate::{
-    policy::immix::block::Block,
-    util::metadata::side_metadata::SideMetadataSpec,
-    vm::{ObjectModel, VMBinding},
-};
+use crate::policy::immix::block::Block;
 
 /// The max object size for immix: half of a block
 pub const MAX_IMMIX_OBJECT_SIZE: usize = {
@@ -46,12 +40,4 @@ fn validate_features() {
     // if !crate::args::REF_COUNT && !crate::args::BLOCK_ONLY {
     //     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
     // }
-}
-
-pub struct UnlogBit<VM: VMBinding>(PhantomData<VM>);
-
-impl<VM: VMBinding> UnlogBit<VM> {
-    pub const SPEC: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-        .as_spec()
-        .extract_side_spec();
 }

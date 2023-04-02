@@ -49,7 +49,9 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     ProcessIncs<VM, KIND, COMPRESSED>
 {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
-    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM>::SPEC;
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
 
     fn worker(&self) -> &'static mut GCWorker<VM> {
         GCWorker::<VM>::current()
