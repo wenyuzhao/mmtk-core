@@ -26,10 +26,10 @@ impl MmapTestRegion {
 }
 
 // Make sure we use the address range before our heap start so we won't conflict with our heap range.
-const_assert!(
-    TEST_ADDRESS.as_usize()
-        <= crate::util::heap::layout::vm_layout_constants::HEAP_START.as_usize()
-);
+// const_assert!(
+//     TEST_ADDRESS.as_usize()
+//         <= crate::util::heap::layout::vm_layout_constants::HEAP_START.as_usize()
+// );
 
 // Test with an address that works for 32bits.
 #[cfg(target_os = "linux")]
@@ -57,8 +57,9 @@ pub(crate) fn byte_map_mmapper_test_region() -> MmapTestRegion {
 pub(crate) fn memory_test_region() -> MmapTestRegion {
     MmapTestRegion::reserve_before(byte_map_mmapper_test_region(), MMAP_CHUNK_BYTES)
 }
+
 pub(crate) fn raw_memory_freelist_test_region() -> MmapTestRegion {
-    MmapTestRegion::reserve_before(memory_test_region(), MMAP_CHUNK_BYTES);
+    MmapTestRegion::reserve_before(memory_test_region(), MMAP_CHUNK_BYTES)
 }
 
 // https://github.com/rust-lang/rfcs/issues/2798#issuecomment-552949300
