@@ -133,12 +133,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         });
         if !los {
-            if !copied && Block::containing::<VM>(o).get_state() == BlockState::Nursery {
+            let in_nursery_block = Block::containing::<VM>(o).get_state() == BlockState::Nursery;
+            if !copied && in_nursery_block {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self.rc.promote(o);
-            self.survival_ratio_predictor_local
-                .record_promotion(o.get_size::<VM>());
+            if in_nursery_block {
+                self.survival_ratio_predictor_local
+                    .record_promotion(o.get_size::<VM>());
+            }
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }
