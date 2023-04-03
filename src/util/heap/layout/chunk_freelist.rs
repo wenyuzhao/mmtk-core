@@ -7,6 +7,11 @@ use super::vm_layout_constants::LOG_BYTES_IN_CHUNK;
 struct CellMeta(u64);
 
 impl CellMeta {
+    const SENTINEL: usize = 0xfffffff;
+    const UNIT_MASK: u64 = 0xfffffffu64;
+    const NEXT_SHIFT: usize = 28;
+    const PREV_SHIFT: usize = 0;
+
     const fn new() -> Self {
         Self(0)
     }
@@ -28,14 +33,14 @@ impl CellMeta {
     }
 
     fn set_size_class(&mut self, sc: usize) {
-        debug_assert!(sc <= 0b1111111);
+        debug_assert!(sc < 0b1111111);
         let mask = 0b1111111u64 << 56;
         self.0 = (self.0 & !mask) | ((sc as u64) << 56);
     }
 
     fn next(&self) -> Option<usize> {
-        let v = ((self.0 >> 28) & 0xfffffffu64) as usize;
-        if v == 0 {
+        let v = ((self.0 >> Self::NEXT_SHIFT) & Self::UNIT_MASK) as usize;
+        if v == Self::SENTINEL {
             None
         } else {
             Some(v)
@@ -44,17 +49,17 @@ impl CellMeta {
 
     fn set_next(&mut self, index: Option<usize>) {
         if let Some(x) = index {
-            debug_assert!(x != 0)
+            debug_assert!(x < Self::SENTINEL)
         }
-        let index = index.unwrap_or(0);
-        debug_assert!(index <= 0xfffffff);
-        let mask = 0xfffffffu64 << 28;
-        self.0 = (self.0 & !mask) | ((index as u64) << 28);
+        let index = index.unwrap_or(Self::SENTINEL);
+        debug_assert!(index < Self::SENTINEL);
+        let mask = Self::UNIT_MASK << Self::NEXT_SHIFT;
+        self.0 = (self.0 & !mask) | ((index as u64) << Self::NEXT_SHIFT);
     }
 
     fn prev(&self) -> Option<usize> {
-        let v = ((self.0 >> 0) & 0xfffffffu64) as usize;
-        if v == 0 {
+        let v = ((self.0 >> Self::PREV_SHIFT) & Self::UNIT_MASK) as usize;
+        if v == Self::SENTINEL {
             None
         } else {
             Some(v)
@@ -63,12 +68,12 @@ impl CellMeta {
 
     fn set_prev(&mut self, index: Option<usize>) {
         if let Some(x) = index {
-            debug_assert!(x != 0)
+            debug_assert!(x < Self::SENTINEL)
         }
-        let index = index.unwrap_or(0);
-        debug_assert!(index <= 0xfffffff);
-        let mask = 0xfffffffu64 << 0;
-        self.0 = (self.0 & !mask) | ((index as u64) << 0);
+        let index = index.unwrap_or(Self::SENTINEL);
+        debug_assert!(index < Self::SENTINEL);
+        let mask = Self::UNIT_MASK << Self::PREV_SHIFT;
+        self.0 = (self.0 & !mask) | ((index as u64) << Self::PREV_SHIFT);
     }
 }
 
@@ -172,7 +177,6 @@ impl ChunkFreelist {
         let sc = self.meta[unit].size_class();
         let sibling = unit ^ (1 << sc);
         if sc + 1 <= self.heads.len()
-            && sibling > 0
             && sibling < self.meta.len()
             && self.meta[sibling].size_class() == sc
             && self.meta[sibling].is_free()
@@ -194,15 +198,15 @@ impl ChunkFreelist {
     }
 
     pub fn unit_to_address(&self, unit: usize) -> Address {
-        debug_assert!(unit != 0);
-        Address::ZERO + (unit << LOG_BYTES_IN_CHUNK)
-        // self.base + ((unit - 1) << LOG_BYTES_IN_CHUNK)
+        debug_assert!(unit < CellMeta::SENTINEL);
+        self.base + (unit << LOG_BYTES_IN_CHUNK)
     }
 
     pub fn address_to_unit(&self, a: Address) -> usize {
-        debug_assert!(!a.is_zero());
-        a.as_usize() >> LOG_BYTES_IN_CHUNK
-        // ((a - self.base) >> LOG_BYTES_IN_CHUNK) + 1
+        debug_assert!(a >= self.base);
+        let unit = (a - self.base) >> LOG_BYTES_IN_CHUNK;
+        debug_assert!(unit < CellMeta::SENTINEL);
+        unit
     }
 
     pub fn size(&self, unit: usize) -> usize {
@@ -216,6 +220,8 @@ impl ChunkFreelist {
         for u in unit..unit + units {
             self.meta[u].set_free(false);
             self.meta[u].set_size_class(sc);
+            self.meta[u].set_next(None);
+            self.meta[u].set_prev(None);
         }
         for u in unit..unit + units {
             self.free(u);
