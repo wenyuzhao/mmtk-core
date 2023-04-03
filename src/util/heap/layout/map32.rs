@@ -1,3 +1,4 @@
+use super::chunk_freelist::ChunkFreelist;
 use super::map::VMMap;
 use crate::mmtk::SFT_MAP;
 use crate::util::conversions;
@@ -14,7 +15,7 @@ use std::sync::{Mutex, MutexGuard};
 pub struct Map32 {
     prev_link: Vec<i32>,
     next_link: Vec<i32>,
-    region_map: IntArrayFreeList,
+    region_map: ChunkFreelist,
     global_page_map: IntArrayFreeList,
     shared_discontig_fl_count: usize,
     shared_fl_map: Vec<Option<&'static CommonFreeListPageResource>>,
@@ -35,11 +36,7 @@ impl Map32 {
         Map32 {
             prev_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
             next_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
-            region_map: IntArrayFreeList::new(
-                VM_LAYOUT_CONSTANTS.max_chunks(),
-                VM_LAYOUT_CONSTANTS.max_chunks() as _,
-                1,
-            ),
+            region_map: ChunkFreelist::new(VM_LAYOUT_CONSTANTS.available_start()),
             global_page_map: IntArrayFreeList::new(1, 1, MAX_SPACES),
             shared_discontig_fl_count: 0,
             shared_fl_map: vec![None; MAX_SPACES],
@@ -59,7 +56,7 @@ impl VMMap for Map32 {
         let self_mut: &mut Self = unsafe { self.mut_self() };
         let mut e = 0;
         while e < extent {
-            let index = (start + e).chunk_index();
+            let index = self.region_map.address_to_unit(start + e);
             assert!(
                 self.descriptor_map[index].is_empty(),
                 "Conflicting virtual address request"
@@ -109,8 +106,10 @@ impl VMMap for Map32 {
     ) -> Address {
         let (_sync, self_mut) = self.mut_self_with_sync();
         let chunk = self_mut.region_map.alloc(chunks as _);
-        debug_assert!(chunk != 0);
-        if chunk == -1 {
+
+        println!("alloc {:?}", chunk);
+        // debug_assert!(chunk != 0);
+        if chunk.is_none() {
             // if cfg!(feature = "sanity") {
             gc_log!(
                 "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
@@ -120,14 +119,15 @@ impl VMMap for Map32 {
             // }
             return unsafe { Address::zero() };
         }
+        let chunk = chunk.unwrap();
         self_mut.total_available_discontiguous_chunks -= chunks;
-        let rtn = conversions::chunk_index_to_address(chunk as _);
+        let rtn = self.region_map.unit_to_address(chunk);
         self.insert(rtn, chunks << LOG_BYTES_IN_CHUNK, descriptor);
         if head.is_zero() {
             debug_assert!(self.next_link[chunk as usize] == 0);
         } else {
-            self_mut.next_link[chunk as usize] = head.chunk_index() as _;
-            self_mut.prev_link[head.chunk_index()] = chunk;
+            self_mut.next_link[chunk as usize] = self.region_map.address_to_unit(head) as _;
+            self_mut.prev_link[self.region_map.address_to_unit(head)] = chunk as _;
         }
         debug_assert!(self.prev_link[chunk as usize] == 0);
         rtn
@@ -135,19 +135,21 @@ impl VMMap for Map32 {
 
     fn get_next_contiguous_region(&self, start: Address) -> Address {
         debug_assert!(start == conversions::chunk_align_down(start));
-        let chunk = start.chunk_index();
+        let chunk = self.region_map.address_to_unit(start);
         if chunk == 0 || self.next_link[chunk] == 0 {
             unsafe { Address::zero() }
         } else {
             let a = self.next_link[chunk];
-            conversions::chunk_index_to_address(a as _)
+            let x = self.region_map.unit_to_address(a as _);
+            println!("next chunk {:?} -> {:?}", start, x);
+            x
         }
     }
 
     fn get_contiguous_region_chunks(&self, start: Address) -> usize {
         debug_assert!(start == conversions::chunk_align_down(start));
-        let chunk = start.chunk_index();
-        self.region_map.size(chunk as i32) as _
+        let chunk = self.region_map.address_to_unit(start);
+        self.region_map.size(chunk) as _
     }
 
     fn get_contiguous_region_size(&self, start: Address) -> usize {
@@ -167,14 +169,14 @@ impl VMMap for Map32 {
         let (_sync, self_mut) = self.mut_self_with_sync();
         debug_assert!(any_chunk == conversions::chunk_align_down(any_chunk));
         if !any_chunk.is_zero() {
-            let chunk = any_chunk.chunk_index();
+            let chunk = self.region_map.address_to_unit(any_chunk);
             while self_mut.next_link[chunk] != 0 {
                 let x = self_mut.next_link[chunk];
-                self_mut.free_contiguous_chunks_no_lock(x);
+                self_mut.free_contiguous_chunks_no_lock(x as _);
             }
             while self_mut.prev_link[chunk] != 0 {
                 let x = self_mut.prev_link[chunk];
-                self_mut.free_contiguous_chunks_no_lock(x);
+                self_mut.free_contiguous_chunks_no_lock(x as _);
             }
             self_mut.free_contiguous_chunks_no_lock(chunk as _);
         }
@@ -184,7 +186,7 @@ impl VMMap for Map32 {
         debug!("free_contiguous_chunks: {}", start);
         let (_sync, self_mut) = self.mut_self_with_sync();
         debug_assert!(start == conversions::chunk_align_down(start));
-        let chunk = start.chunk_index();
+        let chunk = self.region_map.address_to_unit(start);
         self_mut.free_contiguous_chunks_no_lock(chunk as _)
     }
 
@@ -194,10 +196,8 @@ impl VMMap for Map32 {
         let self_mut: &mut Self = unsafe { self.mut_self() };
         /* establish bounds of discontiguous space */
         let start_address = from;
-        let first_chunk = start_address.chunk_index();
-        let last_chunk = to.chunk_index();
-        let unavail_start_chunk = last_chunk + 1;
-        let trailing_chunks = VM_LAYOUT_CONSTANTS.max_chunks() - unavail_start_chunk;
+        let first_chunk = self.region_map.address_to_unit(start_address);
+        let last_chunk = self.region_map.address_to_unit(to);
         let pages = (1 + last_chunk - first_chunk) * PAGES_IN_CHUNK;
         // start_address=0xb0000000, first_chunk=704, last_chunk=703, unavail_start_chunk=704, trailing_chunks=320, pages=0
         // startAddress=0x68000000 firstChunk=416 lastChunk=703 unavailStartChunk=704 trailingChunks=320 pages=294912
@@ -227,24 +227,25 @@ impl VMMap for Map32 {
         //  2051: 1024
         // ]
         /* set up the region map free list */
-        self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
-        for _ in first_chunk..=last_chunk {
-            self_mut.region_map.alloc_first_fit(1);
-        }
-        if trailing_chunks != 0 {
-            let alloced_chunk = self_mut.region_map.alloc_first_fit(trailing_chunks as _);
-            debug_assert!(
-                alloced_chunk == unavail_start_chunk as i32,
-                "{} != {}",
-                alloced_chunk,
-                unavail_start_chunk
-            );
-        }
+        // self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        // for _ in first_chunk..=last_chunk {
+        //     self_mut.region_map.alloc_first_fit(1);
+        // }
+        // if trailing_chunks != 0 {
+        //     let alloced_chunk = self_mut.region_map.alloc_first_fit(trailing_chunks as _);
+        //     debug_assert!(
+        //         alloced_chunk == unavail_start_chunk as i32,
+        //         "{} != {}",
+        //         alloced_chunk,
+        //         unavail_start_chunk
+        //     );
+        // }
+        self_mut.region_map.insert(first_chunk, self.region_map.address_to_unit(to + 1usize) - first_chunk);
         /* set up the global page map and place chunks on free list */
         let mut first_page = 0;
-        for chunk_index in first_chunk..=last_chunk {
+        for _chunk_index in first_chunk..=last_chunk {
             self_mut.total_available_discontiguous_chunks += 1;
-            self_mut.region_map.free(chunk_index as _, false); // put this chunk on the free list
+            // self_mut.region_map.free(chunk_index as _, false); // put this chunk on the free list
             self_mut.global_page_map.set_uncoalescable(first_page);
             let alloced_pages = self_mut
                 .global_page_map
@@ -260,7 +261,7 @@ impl VMMap for Map32 {
     }
 
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor {
-        let index = address.chunk_index();
+        let index = self.region_map.address_to_unit(address);
         self.descriptor_map[index]
     }
 
@@ -287,8 +288,8 @@ impl Map32 {
         (guard, unsafe { self.mut_self() })
     }
 
-    fn free_contiguous_chunks_no_lock(&mut self, chunk: i32) -> usize {
-        let chunks = self.region_map.free(chunk, false);
+    fn free_contiguous_chunks_no_lock(&mut self, chunk: usize) -> usize {
+        let (chunks, _) = self.region_map.free(chunk);
         self.total_available_discontiguous_chunks += chunks as usize;
         let next = self.next_link[chunk as usize];
         let prev = self.prev_link[chunk as usize];
@@ -302,7 +303,7 @@ impl Map32 {
         self.next_link[chunk as usize] = 0;
         for offset in 0..chunks {
             let index = (chunk + offset) as usize;
-            let chunk_start = conversions::chunk_index_to_address(index);
+            let chunk_start = self.region_map.unit_to_address(index);
             debug!("Clear descriptor for Chunk {}", chunk_start);
             self.descriptor_map[index] = SpaceDescriptor::UNINITIALIZED;
             unsafe { SFT_MAP.clear(chunk_start) };

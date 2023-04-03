@@ -13,6 +13,8 @@ mod map32;
 #[cfg(target_pointer_width = "64")]
 mod map64;
 
+mod chunk_freelist;
+
 #[cfg(target_pointer_width = "32")]
 pub fn create_vm_map() -> Box<dyn VMMap> {
     Box::new(map32::Map32::new())

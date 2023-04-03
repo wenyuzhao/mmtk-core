@@ -104,6 +104,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         if page_offset == freelist::FAILURE && self.common.growable {
             page_offset =
                 self_mut.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
+            println!("los new chunk");
             new_chunk = true;
         }
 
@@ -296,7 +297,9 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         /* nail down all pages associated with the chunk, so it is no longer on our free list */
         let mut chunk_start = conversions::bytes_to_pages(chunk - self.start);
         let chunk_end = chunk_start + (num_chunks * PAGES_IN_CHUNK);
+        println!("num_chunks {:?}", num_chunks);
         while chunk_start < chunk_end {
+            println!("x {:?}", chunk_start);
             self.free_list.set_uncoalescable(chunk_start as _);
             let tmp = self
                 .free_list
@@ -394,6 +397,9 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             debug_assert!(next_region_start < freelist::MAX_UNITS as usize);
             if pages_freed == next_region_start - region_start {
                 let start = self.start;
+                println!("los free chunk {:?} pages_freed={} next_region_start={} region_start={} ", start + conversions::pages_to_bytes(region_start),
+                pages_freed,next_region_start, region_start
+                );
                 self.free_contiguous_chunk(start + conversions::pages_to_bytes(region_start), sync);
             }
         }
