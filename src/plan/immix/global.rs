@@ -156,7 +156,9 @@ impl<VM: VMBinding> Immix<VM> {
                 crate::util::rc::RC_LOCK_BIT_SPEC,
                 crate::util::metadata::MetadataSpec::OnSide(crate::util::rc::RC_TABLE),
                 crate::util::metadata::MetadataSpec::OnSide(
-                    crate::policy::immix::get_unlog_bit_slow::<VM>(),
+                    *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .as_spec()
+                        .extract_side_spec(),
                 ),
             ])
         } else {

@@ -128,11 +128,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         // Initialize unlog table
         if self.space().rc_enabled && copy {
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                block.initialize_log_table_as_unlogged::<VM, true>();
-            } else {
-                block.initialize_log_table_as_unlogged::<VM, false>();
-            }
+            block.initialize_log_table_as_unlogged::<VM>();
         }
         // Initialize mark table
         if self.space().rc_enabled {

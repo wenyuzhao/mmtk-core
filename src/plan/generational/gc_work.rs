@@ -36,11 +36,11 @@ impl<VM: VMBinding> ProcessEdgesWork for GenNurseryProcessEdges<VM> {
         self.gen
             .trace_object_nursery(&mut self.base.nodes, object, worker)
     }
-    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         debug_assert!(!self.gen.nursery.in_space(new_object));
-        slot.store::<COMPRESSED>(new_object);
+        slot.store(new_object);
     }
 
     fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {

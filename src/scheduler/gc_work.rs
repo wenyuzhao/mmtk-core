@@ -547,17 +547,17 @@ pub trait ProcessEdgesWork:
         }
     }
 
-    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store::<COMPRESSED>(new_object);
+            slot.store(new_object);
         }
     }
 
-    fn process_edges<const COMPRESSED: bool>(&mut self) {
+    fn process_edges(&mut self) {
         for i in 0..self.edges.len() {
-            self.process_edge::<COMPRESSED>(self.edges[i])
+            self.process_edge(self.edges[i])
         }
     }
 }
@@ -572,11 +572,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
         } else {
             None
         };
-        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            self.process_edges::<true>();
-        } else {
-            self.process_edges::<false>();
-        }
+        self.process_edges();
         if !self.nodes.is_empty() {
             self.flush();
         }
@@ -668,25 +664,10 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         if let Some(_lxr) = self.mmtk.plan.downcast_ref::<LXR<E::VM>>() {
-            if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-                let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT, true>::new_objects(nodes);
-                w.cld_roots = true;
-                w.weak_cld_roots = false;
-                crate::memory_manager::add_work_packet(
-                    self.mmtk,
-                    WorkBucketStage::RCProcessIncs,
-                    w,
-                );
-            } else {
-                let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT, false>::new_objects(nodes);
-                w.cld_roots = true;
-                w.weak_cld_roots = false;
-                crate::memory_manager::add_work_packet(
-                    self.mmtk,
-                    WorkBucketStage::RCProcessIncs,
-                    w,
-                );
-            }
+            let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT>::new_objects(nodes);
+            w.cld_roots = true;
+            w.weak_cld_roots = false;
+            crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::RCProcessIncs, w);
         } else {
             let process_edges_work = E::new(vec![], true, self.mmtk);
             let work = process_edges_work.create_scan_work(nodes, true);
@@ -731,7 +712,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self;
 
     /// The common code for ScanObjects and PlanScanObjects.
-    fn do_work_common<const COMPRESSED: bool>(
+    fn do_work_common(
         &self,
         buffer: &[ObjectReference],
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
@@ -779,11 +760,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
             for object in objects_to_scan.iter().copied() {
                 if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     // If an object supports edge-enqueuing, we enqueue its edges.
-                    <VM as VMBinding>::VMScanning::scan_object::<_, COMPRESSED>(
-                        tls,
-                        object,
-                        &mut closure,
-                    );
+                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
                     self.post_scan_object(object);
                 } else {
                     // If an object does not support edge-enqueuing, we have to use
@@ -882,11 +859,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_common::<true>(&self.buffer, worker, mmtk, self.discovery);
-        } else {
-            self.do_work_common::<false>(&self.buffer, worker, mmtk, self.discovery);
-        }
+        self.do_work_common(&self.buffer, worker, mmtk, self.discovery);
         trace!("ScanObjects End");
     }
 }
@@ -907,7 +880,11 @@ impl<VM: VMBinding> UnlogEdges<VM> {
 }
 impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.unlog_edges(&crate::policy::immix::get_unlog_bit_slow::<VM>());
+        self.unlog_edges(
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec(),
+        );
     }
 }
 
@@ -963,11 +940,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
-    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() {
-            slot.store::<COMPRESSED>(new_object);
+            slot.store(new_object);
         }
     }
 }
@@ -1041,11 +1018,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        if <E::VM as VMBinding>::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_common::<true>(&self.buffer, worker, mmtk, true);
-        } else {
-            self.do_work_common::<false>(&self.buffer, worker, mmtk, true);
-        }
+        self.do_work_common(&self.buffer, worker, mmtk, true);
         trace!("PlanScanObjects End");
     }
 }
