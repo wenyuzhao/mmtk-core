@@ -160,29 +160,41 @@ impl Line {
         assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
-    pub fn clear_log_table<VM: VMBinding, const COMPRESSED: bool>(lines: Range<Line>) {
-        let log_meta_bits_per_line =
-            Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize + if COMPRESSED { 1 } else { 0 };
+    pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
+        let unlog_bit = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec();
+        let log_meta_bits_per_line = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize
+            + if !VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                0
+            } else {
+                1
+            };
         debug_assert!((1 << log_meta_bits_per_line) >= 8);
         let log_meta_bytes_per_line = log_meta_bits_per_line - LOG_BITS_IN_BYTE as usize;
         // FIXME: Performance
         let start = lines.start.start();
-        let meta_start = address_to_meta_address(&super::UnlogBit::<VM, COMPRESSED>::SPEC, start);
+        let meta_start = address_to_meta_address(&unlog_bit, start);
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << log_meta_bytes_per_line;
         crate::util::memory::zero(meta_start, meta_bytes)
     }
 
-    pub fn initialize_log_table_as_unlogged<VM: VMBinding, const COMPRESSED: bool>(
-        lines: Range<Line>,
-    ) {
-        let log_meta_bits_per_line =
-            Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize + if COMPRESSED { 1 } else { 0 };
+    pub fn initialize_log_table_as_unlogged<VM: VMBinding>(lines: Range<Line>) {
+        let unlog_bit = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec();
+        let log_meta_bits_per_line = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize
+            + if !VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                0
+            } else {
+                1
+            };
         debug_assert!((1 << log_meta_bits_per_line) >= 8);
         let log_meta_bytes_per_line = log_meta_bits_per_line - LOG_BITS_IN_BYTE as usize;
         // FIXME: Performance
         let start = lines.start.start();
-        let meta_start = address_to_meta_address(&super::UnlogBit::<VM, COMPRESSED>::SPEC, start);
+        let meta_start = address_to_meta_address(&unlog_bit, start);
         let meta_bytes =
             Line::steps_between(&lines.start, &lines.end).unwrap() << log_meta_bytes_per_line;
         unsafe {

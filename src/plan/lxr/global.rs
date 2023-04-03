@@ -233,12 +233,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .fetch_add(1, Ordering::SeqCst);
         }
         if *self.options().verbose >= 2 {
-            eprintln!(
-                "[{:.3}s][info][gc] GC({}) {:?} start. incs={}",
-                crate::boot_time_secs(),
+            gc_log!(
+                "GC({}) {:?} start. incs={} young-blocks={}",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
-                self.rc.inc_buffer_size()
+                self.rc.inc_buffer_size(),
+                self.immix_space.block_allocation.nursery_blocks()
             );
         }
         match pause {
@@ -272,7 +272,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 s.rc_pauses += 1
             }
         });
-        super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
             self.common.los.is_end_of_satb_or_full_gc = true;
         }
@@ -291,6 +290,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        let new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
+        if *self.options().verbose >= 3 {
+            gc_log!(" - updated survival ratio: {}", new_ratio);
+        }
         let pause = self.current_pause().unwrap();
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
@@ -467,7 +470,11 @@ impl<VM: VMBinding> LXR<VM> {
         let immix_specs = metadata::extract_side_metadata(&[
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
-            MetadataSpec::OnSide(crate::policy::immix::get_unlog_bit_slow::<VM>()),
+            MetadataSpec::OnSide(
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .as_spec()
+                    .extract_side_spec(),
+            ),
         ]);
         let global_side_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let options = args.options.clone();
@@ -534,7 +541,10 @@ impl<VM: VMBinding> LXR<VM> {
         if self.previous_pause() == Some(Pause::FinalMark)
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {
-            super::MATURE_LIVE_PREDICTOR.update(pages_after_gc)
+            let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
+            if *self.options().verbose >= 3 {
+                gc_log!(" - predicted live mature pages: {}", live_mature_pages)
+            }
         }
         let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
         let garbage = if pages_after_gc > live_mature_pages {
@@ -577,9 +587,8 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         if *self.options().verbose >= 2 {
-            eprintln!(
-                "[{:.3}s][info][gc]  - next_gc_may_perform_cycle_collection = {}",
-                crate::boot_time_secs(),
+            gc_log!(
+                " - next_gc_may_perform_cycle_collection = {}",
                 self.next_gc_may_perform_cycle_collection
                     .load(Ordering::Relaxed)
             );
@@ -754,11 +763,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, true>>(self);
-        } else {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, false>>(self);
-        }
+        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
     fn schedule_emergency_full_heap_collection<E: ProcessEdgesWork<VM = VM>>(
@@ -778,41 +783,23 @@ impl<VM: VMBinding> LXR<VM> {
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, true>>(self);
-        } else {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, false>>(self);
-        }
+        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
     fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {
         let prev_roots = self.prev_roots.write().unwrap();
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
-                Box::new(ProcessDecs::<_, true>::new(
-                    decs,
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            } else {
-                Box::new(ProcessDecs::<_, false>::new(
-                    decs,
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            })
+            work_packets.push(Box::new(ProcessDecs::new(
+                decs,
+                LazySweepingJobsCounter::new_decs(),
+            )))
         }
         if work_packets.is_empty() {
-            work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
-                Box::new(ProcessDecs::<_, true>::new(
-                    vec![],
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            } else {
-                Box::new(ProcessDecs::<_, false>::new(
-                    vec![],
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            });
+            work_packets.push(Box::new(ProcessDecs::new(
+                vec![],
+                LazySweepingJobsCounter::new_decs(),
+            )));
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
@@ -900,18 +887,12 @@ impl<VM: VMBinding> LXR<VM> {
                 .unwrap();
             lxr.immix_space.flush_page_resource();
             if *lxr.options().verbose >= 2 {
-                let pause_time = crate::GC_START_TIME
-                    .load(Ordering::SeqCst)
-                    .elapsed()
-                    .unwrap();
-                let pause_time = pause_time.as_micros() as f64 / 1000f64;
-                eprintln!(
-                    "[{:.3}s][info][gc]  - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
-                    crate::boot_time_secs(),
+                gc_log!(
+                    " - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
                     crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
                     lxr.get_reserved_pages() / 256,
                     lxr.get_total_pages() / 256,
-                    pause_time
+                    crate::gc_start_time_ms()
                 );
             }
             // Update counters

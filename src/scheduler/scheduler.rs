@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::SystemTime;
 
 pub enum CoordinatorMessage<VM: VMBinding> {
     /// Send a work-packet to the coordinator thread/
@@ -120,19 +119,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
-        let mut old_queue = Injector::new();
-        old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(old_queue);
-        let mut queue = self.postponed_concurrent_work.write();
-        if !queue.is_empty() {
+        let mut unconstrained_queue = Injector::new();
+        unconstrained_queue =
+            self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
+        let postponed_queue = self.postponed_concurrent_work.read();
+        if !unconstrained_queue.is_empty() {
             loop {
-                match queue.steal() {
+                match unconstrained_queue.steal() {
                     Steal::Empty => break,
-                    Steal::Success(x) => old_queue.push(x),
+                    Steal::Success(x) => postponed_queue.push(x),
                     Steal::Retry => continue,
                 }
             }
         }
-        *queue = old_queue;
         crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
     }
 
@@ -461,23 +460,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let bucket_opened = bucket.update(self);
             let verbose = *GCWorker::<VM>::current().mmtk.options.verbose >= 3;
             if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
-                unsafe {
-                    let since_prev_stage = LAST_ACTIVATE_TIME
-                        .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
-                        .elapsed()
-                        .unwrap()
-                        .as_nanos();
-                    crate::add_bucket_time(id, since_prev_stage);
-                    if verbose {
-                        eprintln!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
-                            crate::boot_time_secs(),
-                            crate::gc_trigger_time() as f64 / 1000000f64,
-                            id, since_prev_stage,
-                            crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                            crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                        );
-                    }
-                    LAST_ACTIVATE_TIME = Some(SystemTime::now());
+                if verbose {
+                    gc_log!(
+                        " - ({:.3}ms) Start GC Stage: {:?}",
+                        crate::GC_START_TIME
+                            .load(Ordering::SeqCst)
+                            .elapsed()
+                            .unwrap()
+                            .as_nanos() as f64
+                            / 1000000f64,
+                        id
+                    );
                 }
             }
             if cfg!(feature = "yield_and_roots_timer")
@@ -733,21 +726,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         {
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
             second_stw_bucket.activate();
-            unsafe {
-                if *mmtk.options.verbose >= 3 {
-                    let since_prev_stage = LAST_ACTIVATE_TIME
-                        .unwrap_or_else(|| crate::GC_START_TIME.load(Ordering::SeqCst))
-                        .elapsed()
-                        .unwrap()
-                        .as_nanos();
-                    eprintln!("[{:.3}s][info][gc]  - ({:.6}ms) Activate {:?} (since prev stage: {} ns,    since gc trigger = {} ns,    since gc = {} ns)",
-                        crate::boot_time_secs(),
-                        crate::gc_trigger_time() as f64 / 1000000f64,
-                        WorkBucketStage::from_usize(2), since_prev_stage,
-                        crate::GC_TRIGGER_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                        crate::GC_START_TIME.load(Ordering::SeqCst).elapsed().unwrap().as_nanos(),
-                    );
-                }
+            if *mmtk.options.verbose >= 3 {
+                gc_log!(
+                    " - ({:.3}ms) Start GC Stage: {:?}",
+                    crate::gc_start_time_ms(),
+                    WorkBucketStage::from_usize(2)
+                );
             }
         }
         let _guard = self.worker_monitor.0.lock().unwrap();
@@ -755,5 +739,3 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.worker_monitor.1.notify_all();
     }
 }
-
-pub static mut LAST_ACTIVATE_TIME: Option<SystemTime> = None;

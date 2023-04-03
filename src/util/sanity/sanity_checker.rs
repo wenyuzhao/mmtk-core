@@ -215,12 +215,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
     }
 
-    fn process_edge<const COMPRESSED: bool>(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load::<COMPRESSED>();
+    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+        let object = slot.load();
         self.edge = Some(slot);
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
-            slot.store::<COMPRESSED>(new_object);
+            slot.store(new_object);
         }
     }
 
@@ -232,11 +232,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         {
             if self.edge.unwrap().to_address().is_mapped() {
                 assert!(
-                    !if VM::VMObjectModel::compressed_pointers_enabled() {
-                        self.edge.unwrap().to_address().is_logged::<VM, true>()
-                    } else {
-                        self.edge.unwrap().to_address().is_logged::<VM, false>()
-                    },
+                    !self.edge.unwrap().to_address().is_logged::<VM>(),
                     "{:?} -> {:?} is logged",
                     self.edge,
                     object

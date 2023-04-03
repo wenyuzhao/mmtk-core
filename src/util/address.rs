@@ -12,7 +12,7 @@ use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::EdgeIterator;
 use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::rc::RC_LOCK_BITS;
-use crate::vm::VMBinding;
+use crate::vm::{ObjectModel, VMBinding};
 
 use super::constants::BYTES_IN_WORD;
 
@@ -365,16 +365,22 @@ impl Address {
         unsafe { RC_LOCK_BITS.load::<u8>(self) == LOCKED_VALUE }
     }
 
-    pub fn is_logged<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
+    pub fn is_logged<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
         unsafe {
-            crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.load::<u8>(self) == LOGGED_VALUE
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec()
+                .load::<u8>(self)
+                == LOGGED_VALUE
         }
     }
 
-    pub fn attempt_log<VM: VMBinding, const COMPRESSED: bool>(self) -> bool {
+    pub fn attempt_log<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        let log_bit = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
+        let log_bit = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec();
         loop {
             let old_value: u8 = log_bit.load_atomic(self, Ordering::SeqCst);
             if old_value == LOGGED_VALUE {
@@ -395,26 +401,23 @@ impl Address {
         }
     }
 
-    pub fn log<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn log<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
-            self,
-            LOGGED_VALUE,
-            Ordering::Relaxed,
-        )
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec()
+            .store_atomic(self, LOGGED_VALUE, Ordering::Relaxed)
     }
 
-    pub fn unlog<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn unlog<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC.store_atomic(
-            self,
-            UNLOGGED_VALUE,
-            Ordering::Relaxed,
-        )
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec()
+            .store_atomic(self, UNLOGGED_VALUE, Ordering::Relaxed)
     }
 
     pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
-        use crate::vm::ObjectModel;
         debug_assert!(!self.is_zero());
         VM::VMObjectModel::address_to_ref(self)
     }
@@ -573,7 +576,6 @@ impl ObjectReference {
     /// for an object reference. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_address`]. See the
     /// comments on [`crate::vm::ObjectModel::ref_to_address`].
     pub fn to_address<VM: VMBinding>(self) -> Address {
-        use crate::vm::ObjectModel;
         let to_address = VM::VMObjectModel::ref_to_address(self);
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || to_address == self.to_raw_address(), "The binding claims unified object reference address, but for object reference {}, ref_to_address() returns {}", self, to_address);
         to_address
@@ -583,12 +585,10 @@ impl ObjectReference {
     /// object header, and access the object header. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_header`].
     /// See the comments on [`crate::vm::ObjectModel::ref_to_header`].
     pub fn to_header<VM: VMBinding>(self) -> Address {
-        use crate::vm::ObjectModel;
         VM::VMObjectModel::ref_to_header(self)
     }
 
     pub fn to_object_start<VM: VMBinding>(self) -> Address {
-        use crate::vm::ObjectModel;
         let object_start = VM::VMObjectModel::ref_to_object_start(self);
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || object_start == self.to_raw_address(), "The binding claims unified object reference address, but for object reference {}, ref_to_address() returns {}", self, object_start);
         object_start
@@ -598,7 +598,6 @@ impl ObjectReference {
     /// or [`crate::vm::ObjectModel::ref_to_address`]. This method is syntactic sugar for [`crate::vm::ObjectModel::address_to_ref`].
     /// See the comments on [`crate::vm::ObjectModel::address_to_ref`].
     pub fn from_address<VM: VMBinding>(addr: Address) -> ObjectReference {
-        use crate::vm::ObjectModel;
         let obj = VM::VMObjectModel::address_to_ref(addr);
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || addr == obj.to_raw_address(), "The binding claims unified object reference address, but for address {}, address_to_ref() returns {}", addr, obj);
         obj
@@ -653,12 +652,10 @@ impl ObjectReference {
 
     pub fn get_size<VM: VMBinding>(self) -> usize {
         debug_assert!(!self.is_null());
-        use crate::vm::ObjectModel;
         VM::VMObjectModel::get_current_size(self)
     }
 
     pub fn range<VM: VMBinding>(self) -> Range<Address> {
-        use crate::vm::ObjectModel;
         if self.is_null() {
             return self.to_address::<VM>()..self.to_address::<VM>();
         }
@@ -666,32 +663,30 @@ impl ObjectReference {
         a..a + self.get_size::<VM>()
     }
 
-    pub fn log_start_address<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn log_start_address<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        self.to_address::<VM>().unlog::<VM, COMPRESSED>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
+        self.to_address::<VM>().unlog::<VM>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM>();
     }
 
-    pub fn clear_start_address_log<VM: VMBinding, const COMPRESSED: bool>(self) {
+    pub fn clear_start_address_log<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        self.to_address::<VM>().log::<VM, COMPRESSED>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM, COMPRESSED>();
+        self.to_address::<VM>().log::<VM>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM>();
     }
 
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
-        use crate::vm::ObjectModel;
         VM::VMObjectModel::get_class_pointer(self)
     }
 
     pub fn class_is_valid<VM: VMBinding>(self) -> bool {
-        use crate::vm::ObjectModel;
         let klass = self.class_pointer::<VM>();
         let v = klass.as_usize();
         if -1 == unsafe { libc::msync((v >> 12 << 12) as *mut libc::c_void, 4096, 0) } {
             println!("Unmapped klass {:?} object {:?}", klass, self);
             return false;
         }
-        let valid = if VM::VMObjectModel::compressed_pointers_enabled() {
+        let valid = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
             klass.is_aligned_to(8)
         } else {
             ((klass.as_usize() & 0xff000_00000000) == 0x7000_00000000) && klass.is_aligned_to(8)
@@ -711,9 +706,9 @@ impl ObjectReference {
         // );
     }
 
-    pub fn fix_start_address<VM: VMBinding, const COMPRESSED: bool>(self) -> Self {
+    pub fn fix_start_address<VM: VMBinding>(self) -> Self {
         let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
-        if !(a + BYTES_IN_WORD).is_logged::<VM, COMPRESSED>() {
+        if !(a + BYTES_IN_WORD).is_logged::<VM>() {
             (a + BYTES_IN_WORD).to_object_reference::<VM>()
         } else {
             a.to_object_reference::<VM>()
@@ -741,13 +736,13 @@ impl ObjectReference {
         }
     }
 
-    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge), const COMPRESSED: bool>(
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate::<COMPRESSED, _>(
+        EdgeIterator::<VM>::iterate(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,
@@ -757,18 +752,14 @@ impl ObjectReference {
         )
     }
 
-    pub fn iterate_fields_with_klass<
-        VM: VMBinding,
-        F: FnMut(VM::VMEdge),
-        const COMPRESSED: bool,
-    >(
+    pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMEdge)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         klass: Address,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate::<COMPRESSED, _>(
+        EdgeIterator::<VM>::iterate(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,

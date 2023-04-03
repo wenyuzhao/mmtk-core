@@ -10,7 +10,7 @@ use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
-use crate::vm::{ObjectModel, VMBinding};
+use crate::vm::VMBinding;
 use crate::MMTK;
 use enum_map::EnumMap;
 
@@ -67,17 +67,10 @@ pub fn create_lxr_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
-        barrier: if VM::VMObjectModel::compressed_pointers_enabled() {
-            Box::new(FieldBarrier::new(LXRFieldBarrierSemantics::<_, true>::new(
-                mmtk,
-            )))
-        } else {
-            Box::new(FieldBarrier::new(
-                LXRFieldBarrierSemantics::<_, false>::new(mmtk),
-            ))
-        },
+        barrier: Box::new(FieldBarrier::new(LXRFieldBarrierSemantics::new(mmtk))),
         mutator_tls,
         config,
         plan: &*mmtk.plan,
+        _original_pointer: 0,
     }
 }

@@ -119,6 +119,7 @@ lxr_report_fragmentation = []
 
 bpr_unprioritized = []
 bpr_freelist = []
+freelist_best_fit_alloc = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

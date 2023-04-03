@@ -27,7 +27,7 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> {
+pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
     /// Recursively generated new increments
@@ -45,11 +45,11 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bo
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
 }
 
-impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
-    ProcessIncs<VM, KIND, COMPRESSED>
-{
+impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
-    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
 
     fn worker(&self) -> &'static mut GCWorker<VM> {
         GCWorker::<VM>::current()
@@ -136,7 +136,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             if !copied && Block::containing::<VM>(o).get_state() == BlockState::Nursery {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
-            self.rc.promote::<COMPRESSED>(o);
+            self.rc.promote(o);
             self.survival_ratio_predictor_local
                 .record_promotion(o.get_size::<VM>());
         } else {
@@ -170,10 +170,18 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         in_place_promotion: bool,
         depth: usize,
     ) {
-        let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
-        let heap_bytes_per_unlog_bit = if COMPRESSED { 4usize } else { 8 };
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
+        } else {
+            64
+        };
+        let heap_bytes_per_unlog_bit = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            4usize
+        } else {
+            8
+        };
         if los {
-            if !VM::VMScanning::is_val_array::<COMPRESSED>(o) {
+            if !VM::VMScanning::is_val_array(o) {
                 let start =
                     side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address::<VM>())
                         .to_mut_ptr::<u8>();
@@ -187,9 +195,13 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             }
-            o.to_address::<VM>().unlog::<VM, COMPRESSED>();
+            o.to_address::<VM>().unlog::<VM>();
         } else if in_place_promotion {
-            let header_size = if COMPRESSED { 12usize } else { 16 };
+            let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                12usize
+            } else {
+                16
+            };
             let size = o.get_size::<VM>();
             let end = o.to_address::<VM>() + size;
             let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
@@ -199,7 +211,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                 cursor.align_up(heap_bytes_per_unlog_byte),
             );
             while cursor < end && !cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
-                cursor.unlog::<VM, COMPRESSED>();
+                cursor.unlog::<VM>();
                 cursor += heap_bytes_per_unlog_bit;
             }
             while cursor < aligned_end {
@@ -208,75 +220,67 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
                     meta += 1usize;
                     cursor += heap_bytes_per_unlog_byte;
                 } else {
-                    cursor.unlog::<VM, COMPRESSED>();
+                    cursor.unlog::<VM>();
                     cursor += heap_bytes_per_unlog_bit;
                 }
             }
             while cursor < end {
-                cursor.unlog::<VM, COMPRESSED>();
+                cursor.unlog::<VM>();
                 cursor += heap_bytes_per_unlog_bit;
             }
         };
-        if VM::VMScanning::is_obj_array::<COMPRESSED>(o)
-            && VM::VMScanning::obj_array_data::<COMPRESSED>(o).len() >= 1024
-        {
-            let data = VM::VMScanning::obj_array_data::<COMPRESSED>(o);
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 1024 {
+            let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = Box::new(
-                    ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new_array_slice(
-                        chunk, self.lxr,
-                    ),
-                );
+                let mut w = Box::new(ProcessIncs::<VM, EDGE_KIND_NURSERY>::new_array_slice(
+                    chunk, self.lxr,
+                ));
                 w.depth = depth + 1;
                 packets.push(w as Box<dyn GCWork<VM>>);
             }
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
         } else {
-            o.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Ignore,
-                RefScanPolicy::Follow,
-                |edge| {
-                    let target = edge.load::<COMPRESSED>();
-                    // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
-                    if !target.is_null() {
-                        debug_assert!(
-                            target.to_address::<VM>().is_mapped(),
-                            "Unmapped obj {:?}.{:?} -> {:?}",
-                            o,
-                            edge,
-                            target
-                        );
-                        debug_assert!(
-                            target.is_in_any_space(),
-                            "Unmapped obj {:?}.{:?} -> {:?}",
-                            o,
-                            edge,
-                            target
-                        );
-                        debug_assert!(
-                            target.class_is_valid::<VM>(),
-                            "Invalid object {:?}.{:?} -> {:?}",
-                            o,
-                            edge,
-                            target
-                        );
-                        if !self.rc.is_stuck(target) {
-                            // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                            self.new_incs.push(edge);
-                            if self.new_incs.is_full() {
-                                self.flush()
-                            }
-                        } else {
-                            super::record_edge_for_validation(edge, target);
-                            self.record_mature_evac_remset(edge, target, false);
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
+                let target = edge.load();
+                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                if !target.is_null() {
+                    debug_assert!(
+                        target.to_address::<VM>().is_mapped(),
+                        "Unmapped obj {:?}.{:?} -> {:?}",
+                        o,
+                        edge,
+                        target
+                    );
+                    debug_assert!(
+                        target.is_in_any_space(),
+                        "Unmapped obj {:?}.{:?} -> {:?}",
+                        o,
+                        edge,
+                        target
+                    );
+                    debug_assert!(
+                        target.class_is_valid::<VM>(),
+                        "Invalid object {:?}.{:?} -> {:?}",
+                        o,
+                        edge,
+                        target
+                    );
+                    if !self.rc.is_stuck(target) {
+                        // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
+                        self.new_incs.push(edge);
+                        if self.new_incs.is_full() {
+                            self.flush()
                         }
                     } else {
                         super::record_edge_for_validation(edge, target);
+                        self.record_mature_evac_remset(edge, target, false);
                     }
-                },
-            );
+                } else {
+                    super::record_edge_for_validation(edge, target);
+                }
+            });
         }
     }
 
@@ -284,7 +288,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
     fn flush(&mut self) {
         if !self.new_incs.is_empty() {
             let new_incs = self.new_incs.take();
-            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY, COMPRESSED>::new(new_incs, self.lxr);
+            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
@@ -384,10 +388,10 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         e: VM::VMEdge,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
-        let o = e.load::<COMPRESSED>();
+        let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE {
-            e.to_address().unlog::<VM, COMPRESSED>();
+            e.to_address().unlog::<VM>();
         }
         if o.is_null() {
             return None;
@@ -439,7 +443,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
             //     self.rc.count(new),
             //     K
             // );
-            e.store::<COMPRESSED>(new)
+            e.store(new)
         } else {
             // println!(
             //     " -- inc {:?}: {:?} rc={} {:?}",
@@ -459,33 +463,23 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool>
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
     ) -> Option<Vec<ObjectReference>> {
-        const REUSE_BUFFER_INPLACE: bool = false;
-        if K == EDGE_KIND_ROOT && REUSE_BUFFER_INPLACE {
+        if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
-            for e in &*incs {
+            for e in &mut *incs {
                 if let Some(new) = self.process_edge::<K>(*e, copy_context, depth) {
-                    unsafe { roots.add(num_roots).write(new) };
+                    unsafe {
+                        roots.add(num_roots).write(new);
+                    }
                     num_roots += 1;
                 }
             }
             if num_roots != 0 {
                 let cap = incs.capacity();
                 std::mem::forget(incs);
-                let roots = unsafe { Vec::from_raw_parts(roots, num_roots, cap) };
+                let roots =
+                    unsafe { Vec::<ObjectReference>::from_raw_parts(roots, num_roots, cap) };
                 Some(roots)
-            } else {
-                None
-            }
-        } else if K == EDGE_KIND_ROOT {
-            let mut root_objects = vec![];
-            for e in &*incs {
-                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth) {
-                    root_objects.push(new);
-                }
-            }
-            if !root_objects.is_empty() {
-                Some(root_objects)
             } else {
                 None
             }
@@ -539,9 +533,7 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
     }
 }
 
-impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
-    for ProcessIncs<VM, KIND, COMPRESSED>
-{
+impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
@@ -568,9 +560,8 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
                 if *self.lxr().options().verbose >= 2 {
-                    eprintln!(
-                        "[{:.3}s][info][gc]  - Stop evacuation. over_space={} over_time={}",
-                        crate::boot_time_secs(),
+                    gc_log!(
+                        " - Stop evacuation. over_space={} over_time={}",
                         over_space,
                         over_time
                     );
@@ -613,21 +604,14 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
                 }
                 worker
                     .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::<VM, COMPRESSED>::new(
-                        roots.clone(),
-                        mmtk,
-                    ));
+                    .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
                 if !root_edges.is_empty() {
                     worker.add_work(
                         WorkBucketStage::Closure,
-                        LXRStopTheWorldProcessEdges::<VM, COMPRESSED>::new(
-                            root_edges,
-                            !self.cld_roots,
-                            mmtk,
-                        ),
+                        LXRStopTheWorldProcessEdges::new(root_edges, !self.cld_roots, mmtk),
                     )
                 }
             } else if !self.cld_roots {
@@ -651,7 +635,7 @@ impl<VM: VMBinding, const KIND: EdgeKind, const COMPRESSED: bool> GCWork<VM>
     }
 }
 
-pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
+pub struct ProcessDecs<VM: VMBinding> {
     /// Decrements to process
     decs: Option<Vec<ObjectReference>>,
     decs_arc: Option<Arc<Vec<ObjectReference>>>,
@@ -664,7 +648,7 @@ pub struct ProcessDecs<VM: VMBinding, const COMPRESSED: bool> {
     rc: RefCountHelper<VM>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
+impl<VM: VMBinding> ProcessDecs<VM> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     fn worker(&self) -> &mut GCWorker<VM> {
@@ -704,7 +688,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
     }
 
-    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM, COMPRESSED>) {
+    fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
         if lxr.current_pause().is_none() {
             self.worker()
                 .add_work_prioritized(WorkBucketStage::Unconstrained, w);
@@ -725,7 +709,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
-            let w = LXRConcurrentTraceObjects::<_, COMPRESSED>::new(objects, mmtk);
+            let w = LXRConcurrentTraceObjects::new(objects, mmtk);
             if crate::args::LAZY_DECREMENTS {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
             } else {
@@ -767,42 +751,38 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         if false
-            && VM::VMScanning::is_obj_array::<COMPRESSED>(o)
-            && VM::VMScanning::obj_array_data::<COMPRESSED>(o).bytes() > 1024
+            && VM::VMScanning::is_obj_array(o)
+            && VM::VMScanning::obj_array_data(o).bytes() > 1024
         {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()
         } else if !crate::args().no_recursive_dec {
-            o.iterate_fields::<VM, _, COMPRESSED>(
-                CLDScanPolicy::Claim,
-                RefScanPolicy::Follow,
-                |edge| {
-                    let x = edge.load::<COMPRESSED>();
-                    if !x.is_null() {
-                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                        if edge.to_address().is_mapped() {
-                            let rc = self.rc.count(x);
-                            if rc != MAX_REF_COUNT && rc != 0 {
-                                self.recursive_dec(x);
-                            }
-                        } else {
-                            self.record_mature_evac_remset(immix, edge, x);
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge| {
+                let x = edge.load();
+                if !x.is_null() {
+                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                    if edge.to_address().is_mapped() {
+                        let rc = self.rc.count(x);
+                        if rc != MAX_REF_COUNT && rc != 0 {
+                            self.recursive_dec(x);
                         }
-                        if self.concurrent_marking_in_progress && !immix.is_marked(x) {
-                            if cfg!(any(feature = "sanity", debug_assertions)) {
-                                assert!(
-                                    x.to_address::<VM>().is_mapped(),
-                                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                                    o,
-                                    edge,
-                                    x
-                                );
-                            }
-                            self.mark_objects.push(x);
-                        }
+                    } else {
+                        self.record_mature_evac_remset(immix, edge, x);
                     }
-                },
-            );
+                    if self.concurrent_marking_in_progress && !immix.is_marked(x) {
+                        if cfg!(any(feature = "sanity", debug_assertions)) {
+                            assert!(
+                                x.to_address::<VM>().is_mapped(),
+                                "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                                o,
+                                edge,
+                                x
+                            );
+                        }
+                        self.mark_objects.push(x);
+                    }
+                }
+            });
         }
         let in_ix_space = immix.immix_space.in_space(o);
         if !crate::args::HOLE_COUNTING && in_ix_space {
@@ -820,7 +800,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
                 .immix_space
                 .add_to_possibly_dead_mature_blocks(block, false);
         } else {
-            immix.los().rc_free::<COMPRESSED>(o);
+            immix.los().rc_free(o);
         }
     }
 
@@ -858,7 +838,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> ProcessDecs<VM, COMPRESSED> {
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> GCWork<VM> for ProcessDecs<VM, COMPRESSED> {
+impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
@@ -901,11 +881,11 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         unreachable!()
     }
 
-    fn process_edges<const COMPRESSED: bool>(&mut self) {
+    fn process_edges(&mut self) {
         if !self.edges.is_empty() {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
-            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT, COMPRESSED>::new(roots, lxr);
+            let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
             if self.cld_roots {
                 w.cld_roots = true;
                 w.weak_cld_roots = self.weak_cld_roots;

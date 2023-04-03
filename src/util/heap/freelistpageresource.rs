@@ -314,7 +314,9 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages(first - self.start);
         let pages = self.free_list.size(page_offset as _);
-        crate::policy::immix::get_unlog_bit_slow::<VM>()
+        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            .as_spec()
+            .extract_side_spec()
             .bzero_metadata(first, (pages as usize) << LOG_BYTES_IN_PAGE);
 
         // if (VM.config.ZERO_PAGES_ON_RELEASE)
