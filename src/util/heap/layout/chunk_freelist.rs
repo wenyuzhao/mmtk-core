@@ -28,7 +28,7 @@ impl CellMeta {
     }
 
     fn set_size_class(&mut self, sc: usize) {
-        assert!(sc <= 0b1111111);
+        debug_assert!(sc <= 0b1111111);
         let mask = 0b1111111u64 << 56;
         self.0 = (self.0 & !mask) | ((sc as u64) << 56);
     }
@@ -44,10 +44,10 @@ impl CellMeta {
 
     fn set_next(&mut self, index: Option<usize>) {
         if let Some(x) = index {
-            assert!(x != 0)
+            debug_assert!(x != 0)
         }
         let index = index.unwrap_or(0);
-        assert!(index <= 0xfffffff);
+        debug_assert!(index <= 0xfffffff);
         let mask = 0xfffffffu64 << 28;
         self.0 = (self.0 & !mask) | ((index as u64) << 28);
     }
@@ -63,10 +63,10 @@ impl CellMeta {
 
     fn set_prev(&mut self, index: Option<usize>) {
         if let Some(x) = index {
-            assert!(x != 0)
+            debug_assert!(x != 0)
         }
         let index = index.unwrap_or(0);
-        assert!(index <= 0xfffffff);
+        debug_assert!(index <= 0xfffffff);
         let mask = 0xfffffffu64 << 0;
         self.0 = (self.0 & !mask) | ((index as u64) << 0);
     }
@@ -97,7 +97,7 @@ impl ChunkFreelist {
 
     fn pop_cell(&mut self, sc: usize) -> Option<usize> {
         let curr = self.heads[sc]?;
-        assert_ne!(self.meta[curr].next(), Some(curr));
+        debug_assert_ne!(self.meta[curr].next(), Some(curr));
         let next = self.meta[curr].next();
         self.meta[curr].set_next(None);
         if let Some(next) = next {
@@ -106,21 +106,14 @@ impl ChunkFreelist {
         self.meta[curr].set_free(false);
         self.meta[curr].set_size_class(sc);
         self.heads[sc] = next;
-        println!(
-            "pop cell {} {:?} {:?} next={:?}",
-            sc,
-            curr,
-            self.unit_to_address(curr),
-            next
-        );
-        assert!(self.meta[curr].next().is_none());
-        assert!(self.meta[curr].prev().is_none());
+        debug_assert!(self.meta[curr].next().is_none());
+        debug_assert!(self.meta[curr].prev().is_none());
         Some(curr)
     }
 
     fn push_cell(&mut self, unit: usize, sc: usize) {
-        assert!(self.meta[unit].next().is_none());
-        assert!(self.meta[unit].prev().is_none());
+        debug_assert!(self.meta[unit].next().is_none());
+        debug_assert!(self.meta[unit].prev().is_none());
         let curr = self.heads[sc];
         if let Some(curr) = curr {
             self.meta[curr].set_prev(Some(unit));
@@ -128,19 +121,11 @@ impl ChunkFreelist {
         self.meta[unit].set_prev(None);
         self.meta[unit].set_next(curr);
         self.heads[sc] = Some(unit);
-        println!(
-            "push cell {} {:?} {:?} next={:?}",
-            sc,
-            unit,
-            self.unit_to_address(unit),
-            curr
-        );
-        // println!("push cell {} {:?}", sc, self.heads[sc]);
         self.meta[unit].set_free(true);
-        assert!(self.meta[unit].is_free());
+        debug_assert!(self.meta[unit].is_free());
         self.meta[unit].set_size_class(sc);
-        assert!(self.meta[unit].is_free());
-        assert_ne!(self.meta[unit].next(), Some(unit));
+        debug_assert!(self.meta[unit].is_free());
+        debug_assert_ne!(self.meta[unit].next(), Some(unit));
     }
 
     fn remove_cell(&mut self, unit: usize, sc: usize) {
@@ -159,32 +144,24 @@ impl ChunkFreelist {
         self.meta[unit].set_prev(None);
         self.meta[unit].set_free(false);
         self.meta[unit].set_size_class(sc);
-        assert!(self.meta[unit].next().is_none());
-        assert!(self.meta[unit].prev().is_none());
+        debug_assert!(self.meta[unit].next().is_none());
+        debug_assert!(self.meta[unit].prev().is_none());
     }
 
     pub fn alloc(&mut self, units: usize) -> Option<usize> {
         let aligned_units = units.next_power_of_two();
         let sc = self.size_class(aligned_units);
-        println!("alloc units={} aligned={} sc={}", units, aligned_units, sc);
         if let Some(cell) = self.pop_cell(sc) {
-            println!(" - alloc direct {}", cell);
             Some(cell)
         } else {
             let next_sc = sc + 1;
             if next_sc >= self.heads.len() {
-                println!(" - alloc failed");
                 return None;
             }
             // alloc and split a larger cell
-            println!(" - alloc parent sc={}", next_sc);
             let parent = self.alloc(self.size_class_to_units(next_sc))?;
             let a = parent;
             let b = parent + self.size_class_to_units(sc);
-            println!(
-                " - alloc parent sc={} parent={} ({} {})",
-                next_sc, parent, a, b
-            );
             self.meta[a].set_size_class(sc);
             self.push_cell(b, sc);
             Some(a)
@@ -194,14 +171,6 @@ impl ChunkFreelist {
     pub fn free(&mut self, unit: usize) -> (usize, usize) {
         let sc = self.meta[unit].size_class();
         let sibling = unit ^ (1 << sc);
-        println!(
-            "free sc={} u={} s={} {} {} ",
-            sc,
-            unit,
-            sibling,
-            self.meta[sibling].size_class(),
-            self.meta[sibling].is_free()
-        );
         if sc + 1 <= self.heads.len()
             && sibling > 0
             && sibling < self.meta.len()
@@ -209,47 +178,29 @@ impl ChunkFreelist {
             && self.meta[sibling].is_free()
         {
             // coalesce
-            println!(" - remove sibling {}", sibling);
             self.remove_cell(sibling, sc);
-            assert!(!self.meta[sibling].is_free());
-            assert!(!self.meta[unit].is_free());
+            debug_assert!(!self.meta[sibling].is_free());
+            debug_assert!(!self.meta[unit].is_free());
             let parent = usize::min(unit, sibling);
             self.meta[parent].set_size_class(sc + 1);
-            println!(" - free parent {}", parent);
             let (_, coalesced_units) = self.free(parent);
-            // assert!(self.meta[parent].size_class() == sc + 1);
-            // assert!(self.meta[parent].is_free(), "parent {} is not free", parent);
-            // assert!(!self.meta[if parent == sibling { unit } else { parent }].is_free());
-
-            println!(
-                " - free coalesced: {:?} {} {}",
-                unit,
-                1 << sc,
-                coalesced_units
-            );
             return (1 << sc, coalesced_units);
         } else {
             self.push_cell(unit, sc);
-            assert!(self.meta[unit].is_free());
-            assert!(self.meta[unit].size_class() == sc);
-            println!(
-                "free direct: {:?} {} {}",
-                unit,
-                1 << sc,
-                self.meta[unit].is_free()
-            );
+            debug_assert!(self.meta[unit].is_free());
+            debug_assert!(self.meta[unit].size_class() == sc);
             return (1 << sc, 1 << sc);
         }
     }
 
     pub fn unit_to_address(&self, unit: usize) -> Address {
-        assert!(unit != 0);
+        debug_assert!(unit != 0);
         Address::ZERO + (unit << LOG_BYTES_IN_CHUNK)
         // self.base + ((unit - 1) << LOG_BYTES_IN_CHUNK)
     }
 
     pub fn address_to_unit(&self, a: Address) -> usize {
-        assert!(!a.is_zero());
+        debug_assert!(!a.is_zero());
         a.as_usize() >> LOG_BYTES_IN_CHUNK
         // ((a - self.base) >> LOG_BYTES_IN_CHUNK) + 1
     }
@@ -266,12 +217,8 @@ impl ChunkFreelist {
             self.meta[u].set_free(false);
             self.meta[u].set_size_class(sc);
         }
-        let mut y = 0;
         for u in unit..unit + units {
-            let x = self.free(u);
-            println!("{}: {:?}", u, x);
-            y = usize::max(x.1, y);
+            self.free(u);
         }
-        assert!(y > 1);
     }
 }

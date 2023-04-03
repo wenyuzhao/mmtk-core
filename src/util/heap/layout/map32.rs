@@ -51,27 +51,7 @@ impl Map32 {
 }
 
 impl VMMap for Map32 {
-    fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
-        // as each space will update different indices.
-        // let mut region_map = self.region_map.read().unwrap();
-        // let self_mut: &mut Self = unsafe { self.mut_self() };
-        // let mut e = 0;
-        // while e < extent {
-        //     let index = region_map.address_to_unit(start + e);
-        //     assert!(
-        //         self.descriptor_map[index].is_empty(),
-        //         "Conflicting virtual address request"
-        //     );
-        //     // println!(
-        //     //     "Set descriptor {:?} for Chunk {}",
-        //     //     descriptor,
-        //     //     conversions::chunk_index_to_address(index)
-        //     // );
-        //     self_mut.descriptor_map[index] = descriptor;
-        //     //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
-        //     e += BYTES_IN_CHUNK;
-        // }
+    fn insert(&self, _start: Address, _extent: usize, _descriptor: SpaceDescriptor) {
         unimplemented!()
     }
 
@@ -110,9 +90,6 @@ impl VMMap for Map32 {
         let mut region_map = self.region_map.write().unwrap();
         let (_sync, self_mut) = self.mut_self_with_sync();
         let chunk = region_map.alloc(chunks as _);
-
-        println!("alloc {:?}", chunk);
-        // debug_assert!(chunk != 0);
         if chunk.is_none() {
             // if cfg!(feature = "sanity") {
             gc_log!(
@@ -126,31 +103,7 @@ impl VMMap for Map32 {
         let chunk = chunk.unwrap();
         self_mut.total_available_discontiguous_chunks -= chunks;
         let rtn = region_map.unit_to_address(chunk);
-        // self.insert(rtn, chunks << LOG_BYTES_IN_CHUNK, descriptor);
-        {
-            let start = rtn;
-            let extent = chunks << LOG_BYTES_IN_CHUNK;
-            // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
-            // as each space will update different indices.
-            // let mut region_map = self.region_map.read().unwrap();
-            let self_mut: &mut Self = unsafe { self.mut_self() };
-            let mut e = 0;
-            while e < extent {
-                let index = region_map.address_to_unit(start + e);
-                assert!(
-                    self.descriptor_map[index].is_empty(),
-                    "Conflicting virtual address request"
-                );
-                // println!(
-                //     "Set descriptor {:?} for Chunk {}",
-                //     descriptor,
-                //     conversions::chunk_index_to_address(index)
-                // );
-                self_mut.descriptor_map[index] = descriptor;
-                //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
-                e += BYTES_IN_CHUNK;
-            }
-        }
+        self.update_descriptor_map(rtn, chunks << LOG_BYTES_IN_CHUNK, descriptor, &region_map);
         if head.is_zero() {
             debug_assert!(self.next_link[chunk as usize] == 0);
         } else {
@@ -162,21 +115,19 @@ impl VMMap for Map32 {
     }
 
     fn get_next_contiguous_region(&self, start: Address) -> Address {
-        let mut region_map = self.region_map.read().unwrap();
+        let region_map = self.region_map.read().unwrap();
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = region_map.address_to_unit(start);
         if chunk == 0 || self.next_link[chunk] == 0 {
             unsafe { Address::zero() }
         } else {
             let a = self.next_link[chunk];
-            let x = region_map.unit_to_address(a as _);
-            println!("next chunk {:?} -> {:?}", start, x);
-            x
+            region_map.unit_to_address(a as _)
         }
     }
 
     fn get_contiguous_region_chunks(&self, start: Address) -> usize {
-        let mut region_map = self.region_map.read().unwrap();
+        let region_map = self.region_map.read().unwrap();
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = region_map.address_to_unit(start);
         region_map.size(chunk) as _
@@ -250,36 +201,13 @@ impl VMMap for Map32 {
                 fl_mut.resize_freelist(start_address);
             }
         }
-        // [
-        //  2: -1073741825
-        //  3: -1073741825
-        //  5: -2147482624
-        //  2048: -2147483648
-        //  2049: -2147482624
-        //  2050: 1024
-        //  2051: 1024
-        // ]
         /* set up the region map free list */
-        // self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
-        // for _ in first_chunk..=last_chunk {
-        //     self_mut.region_map.alloc_first_fit(1);
-        // }
-        // if trailing_chunks != 0 {
-        //     let alloced_chunk = self_mut.region_map.alloc_first_fit(trailing_chunks as _);
-        //     debug_assert!(
-        //         alloced_chunk == unavail_start_chunk as i32,
-        //         "{} != {}",
-        //         alloced_chunk,
-        //         unavail_start_chunk
-        //     );
-        // }
         let units = region_map.address_to_unit(to + 1usize) - first_chunk;
         region_map.insert(first_chunk, units);
         /* set up the global page map and place chunks on free list */
         let mut first_page = 0;
         for _chunk_index in first_chunk..=last_chunk {
             self_mut.total_available_discontiguous_chunks += 1;
-            // self_mut.region_map.free(chunk_index as _, false); // put this chunk on the free list
             self_mut.global_page_map.set_uncoalescable(first_page);
             let alloced_pages = self_mut
                 .global_page_map
@@ -295,7 +223,7 @@ impl VMMap for Map32 {
     }
 
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor {
-        let mut region_map = self.region_map.read().unwrap();
+        let region_map = self.region_map.read().unwrap();
         let index = region_map.address_to_unit(address);
         self.descriptor_map[index]
     }
@@ -355,6 +283,29 @@ impl Map32 {
         let self_mut: &mut Self = unsafe { self.mut_self() };
         self_mut.shared_discontig_fl_count += 1;
         self.shared_discontig_fl_count
+    }
+
+    fn update_descriptor_map(
+        &self,
+        start: Address,
+        extent: usize,
+        descriptor: SpaceDescriptor,
+        region_map: &ChunkFreelist,
+    ) {
+        // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
+        // as each space will update different indices.
+        // let mut region_map = self.region_map.read().unwrap();
+        let self_mut: &mut Self = unsafe { self.mut_self() };
+        let mut e = 0;
+        while e < extent {
+            let index = region_map.address_to_unit(start + e);
+            assert!(
+                self.descriptor_map[index].is_empty(),
+                "Conflicting virtual address request"
+            );
+            self_mut.descriptor_map[index] = descriptor;
+            e += BYTES_IN_CHUNK;
+        }
     }
 }
 
