@@ -795,7 +795,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
                 object
             } else {
-                ForwardingWord::forward_object::<VM>(object, semantics, copy_context)
+                ForwardingWord::try_forward_object::<VM>(object, semantics, copy_context)
+                    .expect("to-space overflow")
             };
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
@@ -861,11 +862,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             new
         } else {
             // Evacuate the mature object
-            let new = ForwardingWord::forward_object::<VM>(
+            let new = ForwardingWord::try_forward_object::<VM>(
                 object,
                 CopySemantics::DefaultCopy,
                 copy_context,
-            );
+            )
+            .expect("to-space overflow");
             crate::stat(|s| {
                 s.mature_copy_objects += 1usize;
                 s.mature_copy_volume += new.get_size::<VM>();

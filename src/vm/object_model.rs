@@ -309,6 +309,14 @@ pub trait ObjectModel<VM: VMBinding> {
         copy_context: &mut GCWorkerCopyContext<VM>,
     ) -> ObjectReference;
 
+    fn try_copy(
+        _from: ObjectReference,
+        _semantics: CopySemantics,
+        _copy_context: &mut GCWorkerCopyContext<VM>,
+    ) -> Option<ObjectReference> {
+        unimplemented!()
+    }
+
     /// Copy an object. This is required
     /// for delayed-copy collectors such as compacting collectors. During the
     /// collection, MMTk reserves a region in the heap for an object as per

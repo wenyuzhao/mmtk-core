@@ -232,6 +232,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         match self.alloc_clean_block_slow(tls) {
             Some(block) => Some(block),
             _ => {
+                if copy {
+                    return None;
+                }
                 assert!(!copy, "to-space overflow!");
                 VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
                 None

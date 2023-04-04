@@ -359,20 +359,33 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let copy_depth_reached = crate::args::INC_MAX_COPY_DEPTH && depth > 16;
             if is_nursery && !self.no_evac && !copy_depth_reached {
                 // Evacuate the object
-                let new = object_forwarding::forward_object::<VM>(
+                let new = object_forwarding::try_forward_object::<VM>(
                     o,
                     CopySemantics::DefaultCopy,
                     copy_context,
                 );
-                if crate::should_record_copy_bytes() {
-                    crate::SLOPPY_COPY_BYTES.store(
-                        crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
-                        Ordering::Relaxed,
-                    );
+                if let Some(new) = new {
+                    if crate::should_record_copy_bytes() {
+                        crate::SLOPPY_COPY_BYTES.store(
+                            crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
+                            Ordering::Relaxed,
+                        );
+                    }
+                    let _ = self.rc.inc(new);
+                    self.promote(new, true, false, depth);
+                    new
+                } else {
+                    gc_log!("to-space overflow");
+                    // Object is not moved.
+                    let r = self.rc.inc(o);
+                    object_forwarding::clear_forwarding_bits::<VM>(o);
+                    if let Ok(0) = r {
+                        self.promote(o, false, los, depth);
+                    }
+                    crate::NO_EVAC.store(true, Ordering::Relaxed);
+                    self.no_evac = true;
+                    o
                 }
-                let _ = self.rc.inc(new);
-                self.promote(new, true, false, depth);
-                new
             } else {
                 // Object is not moved.
                 let r = self.rc.inc(o);
