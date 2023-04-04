@@ -113,13 +113,13 @@ impl VMMap for Map32 {
         let chunk = self_mut.region_map.alloc(chunks as _);
         debug_assert!(chunk != 0);
         if chunk == -1 {
+            self.out_of_virtual_space.store(true, Ordering::SeqCst);
             // if cfg!(feature = "sanity") {
             gc_log!(
                 "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
                 chunks,
                 self.total_available_discontiguous_chunks
             );
-            self.out_of_virtual_space.store(true, Ordering::SeqCst);
             // }
             return unsafe { Address::zero() };
         }
@@ -271,6 +271,14 @@ impl VMMap for Map32 {
         self.cumulative_committed_pages
             .fetch_add(pages, Ordering::Relaxed);
     }
+
+    fn out_of_virtual_space(&self) -> bool {
+        self.out_of_virtual_space.load(Ordering::SeqCst)
+    }
+
+    fn reset_out_of_virtual_space(&self) {
+        self.out_of_virtual_space.store(false, Ordering::SeqCst);
+    }
 }
 
 impl Map32 {
@@ -318,14 +326,6 @@ impl Map32 {
         let self_mut: &mut Self = unsafe { self.mut_self() };
         self_mut.shared_discontig_fl_count += 1;
         self.shared_discontig_fl_count
-    }
-
-    fn out_of_virtual_space(&self) -> bool {
-        self.out_of_virtual_space.load(Ordering::SeqCst)
-    }
-
-    fn reset_out_of_virtual_space(&self) {
-        self.out_of_virtual_space.store(false, Ordering::SeqCst);
     }
 }
 

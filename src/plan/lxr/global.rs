@@ -42,6 +42,8 @@ use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
 
+const LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER: usize = 1;
+
 static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
@@ -103,14 +105,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        if crate::args()
-            .max_survival_mb
-            .map(|x| {
-                self.immix_space.block_allocation.nursery_mb() as f64
-                    * super::SURVIVAL_RATIO_PREDICTOR.ratio()
-                    >= x as f64
-            })
-            .unwrap_or(false)
+        if (self.immix_space.block_allocation.nursery_mb() as f64
+            * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize
+            >= crate::args().max_survival_mb
         {
             // println!(
             //     "Survival limits {} * {} > {} blocks={}",
@@ -234,11 +231,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         if *self.options().verbose >= 2 {
             gc_log!(
-                "GC({}) {:?} start. incs={} young-blocks={}",
+                "GC({}) {:?} start. incs={} young-blocks={}({}M) reserved={}M collection_reserve={}M defrag_headroom={}M",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 self.rc.inc_buffer_size(),
-                self.immix_space.block_allocation.nursery_blocks()
+                self.immix_space.block_allocation.nursery_blocks(),
+                self.immix_space.block_allocation.nursery_blocks() / 32,
+                self.get_reserved_pages() / 256,
+                self.get_collection_reserved_pages() / 256,
+                self.immix_space.defrag_headroom_pages() / 256,
             );
         }
         match pause {
@@ -317,6 +318,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
+        let max_survival_mb = crate::args().max_survival_mb;
+        if max_survival_mb != 0 && max_survival_mb != usize::MAX {
+            let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
+                * super::SURVIVAL_RATIO_PREDICTOR.ratio())
+                as usize;
+            let survival = usize::max(max_survival_mb, predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER);
+            return survival + self.immix_space.defrag_headroom_pages();
+        }
         self.immix_space.defrag_headroom_pages()
     }
 
