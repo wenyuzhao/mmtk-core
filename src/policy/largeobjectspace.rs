@@ -10,7 +10,7 @@ use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
-use crate::util::heap::{FreeListPageResource, PageResource};
+use crate::util::heap::{segregated_freelist_pageresource::SegregatedFreelistPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::metadata::side_metadata::spec_defs::LOS_PAGE_VALIDITY;
 use crate::util::opaque_pointer::*;
@@ -35,7 +35,7 @@ const LOS_BIT_MASK: u8 = 0b11;
 /// to one Treadmill space.
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pr: FreeListPageResource<VM>,
+    pr: SegregatedFreelistPageResource,
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill,
@@ -198,9 +198,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC]),
         ));
         let mut pr = if is_discontiguous {
-            FreeListPageResource::new_discontiguous(vm_map)
+            SegregatedFreelistPageResource::new_discontiguous(vm_map)
         } else {
-            FreeListPageResource::new_contiguous(common.start, common.extent, vm_map)
+            SegregatedFreelistPageResource::new_contiguous(common.start, common.extent, vm_map)
         };
         pr.protect_memory_on_release = protect_memory_on_release;
         LargeObjectSpace {
@@ -258,7 +258,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if self.rc_enabled {
                 self.rc.set(start.to_object_reference::<VM>(), 0);
             }
-            self.pr.release_pages_and_reset_unlog_bits(start)
+            self.pr.release_pages_and_reset_unlog_bits::<VM>(start)
         } else {
             self.pr.release_pages(start)
         }

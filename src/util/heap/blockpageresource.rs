@@ -339,6 +339,7 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
             Ok(PRAllocResult {
                 start: block.start(),
                 pages: required_pages,
+                chunks: if new_chunk { 1 } else { 0 },
                 new_chunk,
             })
         } else {

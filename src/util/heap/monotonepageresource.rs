@@ -108,9 +108,9 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         let mut tmp = sync.cursor + bytes;
         debug!("tmp={:?}", tmp);
 
+        let required_chunks = required_chunks(required_pages);
         if !self.common().contiguous && tmp > sync.sentinel {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
-            let required_chunks = required_chunks(required_pages);
             sync.current_chunk = self
                 .common
                 .grow_discontiguous_space(space_descriptor, required_chunks); // Returns zero on failure
@@ -145,6 +145,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             Result::Ok(PRAllocResult {
                 start: rtn,
                 pages: required_pages,
+                chunks: required_chunks,
                 new_chunk,
             })
         }

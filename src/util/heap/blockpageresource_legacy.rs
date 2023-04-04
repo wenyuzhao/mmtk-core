@@ -112,6 +112,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return Result::Ok(PRAllocResult {
                 start: block.start(),
                 pages: required_pages,
+                chunks: 0,
                 new_chunk: false,
             });
         }
@@ -146,6 +147,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         Result::Ok(PRAllocResult {
             start: first_block,
             pages: required_pages,
+            chunks: 1,
             new_chunk: true,
         })
     }
@@ -166,6 +168,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return Result::Ok(PRAllocResult {
                 start: block.start(),
                 pages: required_pages,
+                chunks: 0,
                 new_chunk: false,
             });
         }

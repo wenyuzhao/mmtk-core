@@ -111,6 +111,7 @@ pub trait PageResource<VM: VMBinding>: 'static {
 pub struct PRAllocResult {
     pub start: Address,
     pub pages: usize,
+    pub chunks: usize,
     pub new_chunk: bool,
 }
 

@@ -12,7 +12,7 @@ use crate::util::heap::{PageResource, VMRequest};
 use crate::util::options::Options;
 use crate::vm::{ActivePlan, Collection};
 
-use crate::util::constants::LOG_BYTES_IN_MBYTE;
+use crate::util::constants::{LOG_BYTES_IN_MBYTE, LOG_BYTES_IN_PAGE};
 use crate::util::conversions;
 use crate::util::opaque_pointer::*;
 
@@ -121,7 +121,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     // The scope of the lock is important in terms of performance when we have many allocator threads.
                     if SFT_MAP.get_side_metadata().is_some() {
                         // If the SFT map uses side metadata, so we have to initialize side metadata first.
-                        map_sidemetadata();
+                        if res.new_chunk {
+                            map_sidemetadata();
+                        }
                         // then grow space, which will use the side metadata we mapped above
                         grow_space();
                         // then we can drop the lock after grow_space()
@@ -131,7 +133,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         grow_space();
                         drop(lock);
                         // and map side metadata without holding the lock
-                        map_sidemetadata();
+                        if res.new_chunk {
+                            map_sidemetadata();
+                        }
                     }
 
                     // TODO: Concurrent zeroing
@@ -367,15 +371,17 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 // Mmap the pages and the side metadata, and handle error. In case of any error,
                 // we will either call back to the VM for OOM, or simply panic.
                 if res.new_chunk {
-                    if let Err(mmap_error) = self
-                        .common()
-                        .mmapper
-                        .ensure_mapped(res.start, res.pages)
-                        .and(
-                            self.common()
-                                .metadata
-                                .try_map_metadata_space(res.start, bytes),
-                        )
+                    if let Err(mmap_error) =
+                        self.common()
+                            .mmapper
+                            .ensure_mapped(
+                                res.start,
+                                res.chunks << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize),
+                            )
+                            .and(self.common().metadata.try_map_metadata_space(
+                                res.start,
+                                res.chunks << LOG_BYTES_IN_CHUNK,
+                            ))
                     {
                         crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
                     }

@@ -82,3 +82,5 @@ pub use self::address::Address;
 pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
+
+mod segregated_freelist;

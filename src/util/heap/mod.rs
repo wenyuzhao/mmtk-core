@@ -11,6 +11,7 @@ pub mod monotonepageresource;
 pub mod pageresource;
 pub mod space_descriptor;
 mod vmrequest;
+pub mod segregated_freelist_pageresource;
 
 pub use self::accounting::PageAccounting;
 #[cfg(not(feature = "bpr_unprioritized"))]

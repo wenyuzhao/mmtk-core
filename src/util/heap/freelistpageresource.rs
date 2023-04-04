@@ -141,6 +141,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         Result::Ok(PRAllocResult {
             start: rtn,
             pages: required_pages,
+            chunks: 0,
             new_chunk,
         })
     }
@@ -257,6 +258,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         Result::Ok(PRAllocResult {
             start: rtn,
             pages: PAGES_IN_CHUNK,
+            chunks: 1,
             new_chunk: true,
         })
     }
