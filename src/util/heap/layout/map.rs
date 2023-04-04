@@ -53,4 +53,10 @@ pub trait VMMap: Sync {
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor;
 
     fn add_to_cumulative_committed_pages(&self, pages: usize);
+
+    fn out_of_virtual_space(&self) -> bool {
+        false
+    }
+
+    fn reset_out_of_virtual_space(&self) {}
 }

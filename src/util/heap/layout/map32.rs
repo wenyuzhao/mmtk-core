@@ -8,7 +8,7 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::int_array_freelist::IntArrayFreeList;
 use crate::util::Address;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 pub struct Map32 {
@@ -28,6 +28,7 @@ pub struct Map32 {
     // Currently I am putting it here, as for where this variable is used, we already have
     // references to vm_map - so it is convenient to put it here.
     cumulative_committed_pages: AtomicUsize,
+    out_of_virtual_space: AtomicBool,
 }
 
 impl Map32 {
@@ -48,6 +49,7 @@ impl Map32 {
             sync: Mutex::new(()),
             descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; VM_LAYOUT_CONSTANTS.max_chunks()],
             cumulative_committed_pages: AtomicUsize::new(0),
+            out_of_virtual_space: AtomicBool::new(false),
         }
     }
 }
@@ -117,6 +119,7 @@ impl VMMap for Map32 {
                 chunks,
                 self.total_available_discontiguous_chunks
             );
+            self.out_of_virtual_space.store(true, Ordering::SeqCst);
             // }
             return unsafe { Address::zero() };
         }
@@ -315,6 +318,14 @@ impl Map32 {
         let self_mut: &mut Self = unsafe { self.mut_self() };
         self_mut.shared_discontig_fl_count += 1;
         self.shared_discontig_fl_count
+    }
+
+    fn out_of_virtual_space(&self) -> bool {
+        self.out_of_virtual_space.load(Ordering::SeqCst)
+    }
+
+    fn reset_out_of_virtual_space(&self) {
+        self.out_of_virtual_space.store(false, Ordering::SeqCst);
     }
 }
 

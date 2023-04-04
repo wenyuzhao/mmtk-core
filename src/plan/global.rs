@@ -2,7 +2,7 @@
 
 use super::gc_requester::GCRequester;
 use super::PlanConstraints;
-use crate::mmtk::MMTK;
+use crate::mmtk::{MMTK, VM_MAP};
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
@@ -301,7 +301,7 @@ pub trait Plan: 'static + Sync + Downcast {
     }
 
     fn is_emergency_collection(&self) -> bool {
-        self.base().emergency_collection.load(Ordering::Relaxed)
+        self.base().emergency_collection.load(Ordering::Relaxed) || VM_MAP.out_of_virtual_space()
     }
 
     /// The application code has requested a collection.
@@ -853,7 +853,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         // than the heap's total pages. In that case, we will have to do a GC.
         let heap_full = plan.base().gc_trigger.is_heap_full();
 
-        space_full || stress_force_gc || heap_full
+        space_full || stress_force_gc || heap_full || VM_MAP.out_of_virtual_space()
     }
 
     #[allow(unused_variables)] // depending on the enabled features, base may not be used.
@@ -967,6 +967,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 
     pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
+        VM_MAP.reset_out_of_virtual_space();
         self.immortal.release();
         self.los.release(full_heap);
         self.nonmoving.release();
