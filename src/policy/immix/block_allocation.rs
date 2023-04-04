@@ -113,9 +113,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     /// Allocate a clean block.
     pub fn get_clean_block(&self, tls: VMThread, copy: bool, _lock_free: bool) -> Option<Block> {
-        let block = if false {
-            unreachable!()
-        } else {
+        let block = {
             let block_address = self.space().acquire(tls, Block::PAGES);
             if block_address.is_zero() {
                 return None;
@@ -123,7 +121,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             Block::from_aligned_address(block_address)
         };
         if !copy {
-            self.nursery_blocks.fetch_add(1, Ordering::SeqCst);
+            self.nursery_blocks.fetch_add(1, Ordering::Relaxed);
         }
         self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
         if self.space().common().zeroed && !copy && cfg!(feature = "force_zeroing") {
