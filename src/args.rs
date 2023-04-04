@@ -60,9 +60,7 @@ impl Default for RuntimeArgs {
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_copy_size: env_arg("MAX_COPY_SIZE").unwrap_or(512),
             concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
-            max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB")
-                .map(|x| x)
-                .unwrap_or(128),
+            max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128),
             survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
                 .unwrap_or(false),
             survival_predictor_weighted: env_bool_arg("SURVIVAL_PREDICTOR_WEIGHTED")

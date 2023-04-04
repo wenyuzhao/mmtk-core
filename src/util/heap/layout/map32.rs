@@ -279,6 +279,10 @@ impl VMMap for Map32 {
     fn reset_out_of_virtual_space(&self) {
         self.out_of_virtual_space.store(false, Ordering::SeqCst);
     }
+
+    fn available_chunks(&self) -> usize {
+        self.total_available_discontiguous_chunks
+    }
 }
 
 impl Map32 {

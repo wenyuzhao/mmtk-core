@@ -2,6 +2,7 @@ use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
+use crate::mmtk::VM_MAP;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
@@ -20,7 +21,9 @@ use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
+use crate::util::constants::*;
 use crate::util::copy::*;
+use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
@@ -33,14 +36,13 @@ use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Condvar, Mutex, RwLock};
-use std::time::SystemTime;
-
 use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::{Condvar, Mutex, RwLock};
+use std::time::SystemTime;
 
 const LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER: usize = 1;
 
@@ -105,10 +107,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        if (self.immix_space.block_allocation.nursery_mb() as f64
-            * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize
-            >= crate::args().max_survival_mb
-        {
+        let predicted_survival = ((self.immix_space.block_allocation.nursery_mb() as f64
+            * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
+            << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
+        if predicted_survival >= crate::args().max_survival_mb {
             // println!(
             //     "Survival limits {} * {} > {} blocks={}",
             //     self.immix_space.block_allocation.nursery_mb(),
@@ -118,6 +120,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             // );
             SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
+        }
+        if !self.immix_space.common().contiguous {
+            let available_to_space = (self.immix_space.pr.available_pages()
+                + (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)))
+                / 256;
+            if predicted_survival >= available_to_space {
+                SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
+                return true;
+            }
         }
         if crate::args::LXR_RC_ONLY {
             let inc_overflow = crate::args()
@@ -231,7 +242,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         if *self.options().verbose >= 2 {
             gc_log!(
-                "GC({}) {:?} start. incs={} young-blocks={}({}M) reserved={}M collection_reserve={}M defrag_headroom={}M",
+                "GC({}) {:?} start. incs={} young-blocks={}({}M) reserved={}M collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={:?}M",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 self.rc.inc_buffer_size(),
@@ -240,6 +251,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 self.get_reserved_pages() / 256,
                 self.get_collection_reserved_pages() / 256,
                 self.immix_space.defrag_headroom_pages() / 256,
+                self.immix_space.pr.available_pages() / 256,
+                if self.immix_space.common().contiguous {
+                    None
+                } else {
+                    Some((VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256)
+                },
             );
         }
         match pause {
@@ -323,7 +340,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
                 * super::SURVIVAL_RATIO_PREDICTOR.ratio())
                 as usize;
-            let survival = usize::max(max_survival_mb, predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER);
+            let survival = usize::max(
+                max_survival_mb,
+                predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER,
+            );
             return survival + self.immix_space.defrag_headroom_pages();
         }
         self.immix_space.defrag_headroom_pages()

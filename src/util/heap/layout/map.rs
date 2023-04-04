@@ -59,4 +59,8 @@ pub trait VMMap: Sync {
     }
 
     fn reset_out_of_virtual_space(&self) {}
+
+    fn available_chunks(&self) -> usize {
+        unimplemented!("map32 only")
+    }
 }

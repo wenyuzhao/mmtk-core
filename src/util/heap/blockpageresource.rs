@@ -15,6 +15,7 @@ use crate::vm::*;
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 use std::marker::PhantomData;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, RwLock};
 
 #[derive(Default)]
@@ -314,6 +315,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     pool: ChunkPool<B>,
     chunk_queue: SegQueue<Chunk>,
     sync: Mutex<()>,
+    total_chunks: AtomicUsize,
     _p: PhantomData<B>,
 }
 
@@ -369,6 +371,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             pool: ChunkPool::new_compressed_pointers(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
+            total_chunks: AtomicUsize::new(0),
             _p: PhantomData,
         }
     }
@@ -384,6 +387,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             pool: ChunkPool::new_compressed_pointers(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
+            total_chunks: AtomicUsize::new(0),
             _p: PhantomData,
         }
     }
@@ -391,6 +395,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn alloc_chunk(&self, descriptor: SpaceDescriptor, tls: VMThread) -> Option<Chunk> {
         if self.common().contiguous {
             if let Some(chunk) = self.chunk_queue.pop() {
+                self.total_chunks.fetch_add(1, Ordering::SeqCst);
                 return Some(chunk);
             }
         }
@@ -412,10 +417,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Err(mmap_error) = metadata.try_map_metadata_space(start, BYTES_IN_CHUNK) {
             crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
         }
+        self.total_chunks.fetch_add(1, Ordering::SeqCst);
         Some(Chunk::from_aligned_address(start))
     }
 
     fn free_chunk(&self, chunk: Chunk) {
+        self.total_chunks.fetch_sub(1, Ordering::SeqCst);
         if self.common().contiguous {
             self.chunk_queue.push(chunk);
         } else {
@@ -470,5 +477,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     pub(crate) fn get_live_blocks_in_chunk(&self, chunk: Chunk) -> usize {
         ChunkPool::<B>::get_live_blocks(chunk) as _
+    }
+
+    pub fn available_pages(&self) -> usize {
+        let total = self.total_chunks.load(Ordering::SeqCst)
+            << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize);
+        total.saturating_sub(self.reserved_pages())
     }
 }
