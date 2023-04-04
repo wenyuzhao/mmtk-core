@@ -1,14 +1,14 @@
-use super::map::Map;
+use super::map::VMMap;
 use crate::mmtk::SFT_MAP;
 use crate::util::conversions;
-use crate::util::generic_freelist::FreeList;
+use crate::util::freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::int_array_freelist::IntArrayFreeList;
 use crate::util::Address;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 pub struct Map32 {
@@ -28,6 +28,7 @@ pub struct Map32 {
     // Currently I am putting it here, as for where this variable is used, we already have
     // references to vm_map - so it is convenient to put it here.
     cumulative_committed_pages: AtomicUsize,
+    out_of_virtual_space: AtomicBool,
 }
 
 impl Map32 {
@@ -48,11 +49,12 @@ impl Map32 {
             sync: Mutex::new(()),
             descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; VM_LAYOUT_CONSTANTS.max_chunks()],
             cumulative_committed_pages: AtomicUsize::new(0),
+            out_of_virtual_space: AtomicBool::new(false),
         }
     }
 }
 
-impl Map for Map32 {
+impl VMMap for Map32 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
@@ -111,6 +113,7 @@ impl Map for Map32 {
         let chunk = self_mut.region_map.alloc(chunks as _);
         debug_assert!(chunk != 0);
         if chunk == -1 {
+            self.out_of_virtual_space.store(true, Ordering::SeqCst);
             // if cfg!(feature = "sanity") {
             gc_log!(
                 "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
@@ -267,6 +270,18 @@ impl Map for Map32 {
     fn add_to_cumulative_committed_pages(&self, pages: usize) {
         self.cumulative_committed_pages
             .fetch_add(pages, Ordering::Relaxed);
+    }
+
+    fn out_of_virtual_space(&self) -> bool {
+        self.out_of_virtual_space.load(Ordering::SeqCst)
+    }
+
+    fn reset_out_of_virtual_space(&self) {
+        self.out_of_virtual_space.store(false, Ordering::SeqCst);
+    }
+
+    fn available_chunks(&self) -> usize {
+        self.total_available_discontiguous_chunks
     }
 }
 

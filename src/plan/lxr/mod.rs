@@ -42,8 +42,8 @@ pub struct SurvivalRatioPredictor {
 impl SurvivalRatioPredictor {
     pub fn set_alloc_size(&self, size: usize) {
         // println!("set_alloc_size {}", size);
-        assert_eq!(self.alloc_vol.load(Ordering::Relaxed), 0);
-        self.alloc_vol.store(size, Ordering::Relaxed);
+        assert_eq!(self.alloc_vol.load(Ordering::SeqCst), 0);
+        self.alloc_vol.store(size, Ordering::SeqCst);
     }
 
     pub fn ratio(&self) -> f64 {
@@ -51,12 +51,13 @@ impl SurvivalRatioPredictor {
     }
 
     pub fn update_ratio(&self) -> f64 {
-        if self.alloc_vol.load(Ordering::Relaxed) == 0 {
+        if self.alloc_vol.load(Ordering::SeqCst) == 0 {
             return self.ratio();
         }
-        let prev = self.prev_ratio.load(Ordering::Relaxed);
-        let curr = self.promote_vol.load(Ordering::Relaxed) as f64
-            / self.alloc_vol.load(Ordering::Relaxed) as f64;
+        let prev = self.prev_ratio.load(Ordering::SeqCst);
+        let curr = self.promote_vol.load(Ordering::SeqCst) as f64
+            / self.alloc_vol.load(Ordering::SeqCst) as f64;
+        let curr = f64::min(curr, 1.0);
         let ratio = if crate::args().survival_predictor_weighted {
             if curr > prev {
                 (curr * 3f64 + prev) / 4f64
@@ -72,10 +73,11 @@ impl SurvivalRatioPredictor {
         } else {
             (curr + prev) / 2f64
         };
+        let ratio = f64::min(ratio, 1.0);
         crate::add_survival_ratio(curr, prev);
-        self.prev_ratio.store(ratio, Ordering::Relaxed);
-        self.alloc_vol.store(0, Ordering::Relaxed);
-        self.promote_vol.store(0, Ordering::Relaxed);
+        self.prev_ratio.store(ratio, Ordering::SeqCst);
+        self.alloc_vol.store(0, Ordering::SeqCst);
+        self.promote_vol.store(0, Ordering::SeqCst);
         ratio
     }
 }

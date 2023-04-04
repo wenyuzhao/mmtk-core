@@ -35,6 +35,7 @@ pub struct PlanConstraints {
     /// Some policies do object forwarding after the first liveness transitive closure, such as mark compact.
     /// For plans that use those policies, they should set this as true.
     pub needs_forward_after_liveness: bool,
+    pub rc_enabled: bool,
 }
 
 impl PlanConstraints {
@@ -54,6 +55,7 @@ impl PlanConstraints {
             needs_log_bit: false,
             needs_field_log_bit: false,
             barrier: BarrierSelector::NoBarrier,
+            rc_enabled: false,
         }
     }
 }

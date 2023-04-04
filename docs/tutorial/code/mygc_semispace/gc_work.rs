@@ -25,6 +25,9 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MyGCWorkContext2<VM> {
 }
 // ANCHOR: workcontext_plan
 
+use crate::util::ObjectReference;
+use crate::util::copy::CopySemantics;
+use crate::MMTK;
 use crate::policy::space::Space;
 use crate::util::copy::CopySemantics;
 use crate::util::{Address, ObjectReference};
@@ -48,7 +51,6 @@ impl<VM: VMBinding> ProcessEdgesWork for MyGCProcessEdges<VM> {
         Self { base, plan }
     }
 
-    #[inline(always)] // Ensure this function is always inlined because it is very hot.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;

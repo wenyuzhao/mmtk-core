@@ -4,20 +4,15 @@ use super::rc_work::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::RemSet;
-use crate::plan::PlanConstraints;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
-use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::copy::*;
 use crate::util::heap::chunk_map::*;
-use crate::util::heap::layout::heap_layout::{Map, Mmapper};
 use crate::util::heap::BlockPageResource;
-use crate::util::heap::HeapMeta;
 use crate::util::heap::PageResource;
-use crate::util::heap::VMRequest;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, MetadataSpec};
@@ -85,6 +80,16 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     fn name(&self) -> &str {
         self.get_name()
     }
+
+    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
+        debug_assert!(!object.is_null());
+        if ForwardingWord::is_forwarded::<VM>(object) {
+            Some(ForwardingWord::read_forwarding_pointer::<VM>(object))
+        } else {
+            None
+        }
+    }
+
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.rc_enabled {
             if self.is_end_of_satb_or_full_gc {
@@ -157,14 +162,6 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     #[cfg(feature = "is_mmtk_object")]
     fn is_mmtk_object(&self, addr: Address) -> bool {
         crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
-    }
-    fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
-        debug_assert!(!object.is_null());
-        if ForwardingWord::is_forwarded::<VM>(object) {
-            Some(ForwardingWord::read_forwarding_pointer::<VM>(object))
-        } else {
-            None
-        }
     }
     fn sft_trace_object(
         &self,
@@ -264,6 +261,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
                 #[cfg(feature = "object_pinning")]
                 *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC,
             ]
@@ -274,55 +273,37 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
+                *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
                 #[cfg(feature = "object_pinning")]
                 *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC,
             ]
         })
     }
 
-    pub fn new(
-        name: &'static str,
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        heap: &mut HeapMeta,
-        scheduler: Arc<GCWorkScheduler<VM>>,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-        constraints: &'static PlanConstraints,
-        rc_enabled: bool,
-        options: Arc<Options>,
-    ) -> Self {
+    pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
         #[cfg(feature = "immix_no_defrag")]
         info!(
             "Creating non-moving ImmixSpace: {}. Block size: 2^{}",
-            name,
+            args.name,
             Block::LOG_BYTES
         );
 
         super::validate_features();
-        let common = CommonSpace::new(
-            SpaceOptions {
-                name,
-                movable: true,
-                immortal: false,
-                zeroed: true,
-                vmrequest: VMRequest::discontiguous(),
-                needs_log_bit: constraints.needs_log_bit,
-                needs_field_log_bit: constraints.needs_field_log_bit,
-            },
-            vm_map,
-            mmapper,
-            heap,
-        );
+        let vm_map = args.vm_map;
+        let scheduler = args.scheduler.clone();
+        let options = args.options.clone();
+        let rc_enabled = args.constraints.rc_enabled;
+        let policy_args = args.into_policy_args(true, false, Self::side_metadata_specs(rc_enabled));
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
         ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
                 BlockPageResource::new_discontiguous(
                     Block::LOG_PAGES,
                     vm_map,
                     scheduler.num_workers(),
-                    SideMetadataContext {
-                        global: global_side_metadata_specs,
-                        local: Self::side_metadata_specs(rc_enabled),
-                    },
+                    metadata,
                 )
             } else {
                 BlockPageResource::new_contiguous(
@@ -331,10 +312,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     common.extent,
                     vm_map,
                     scheduler.num_workers(),
-                    SideMetadataContext {
-                        global: global_side_metadata_specs,
-                        local: Self::side_metadata_specs(rc_enabled),
-                    },
+                    metadata,
                 )
             },
             common,
@@ -612,21 +590,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.chunk_map.generate_tasks(|chunk| {
-                Box::new(SweepDeadCyclesChunk::<_, true>::new(
-                    chunk,
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            })
-        } else {
-            self.chunk_map.generate_tasks(|chunk| {
-                Box::new(SweepDeadCyclesChunk::<_, false>::new(
-                    chunk,
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            })
-        }
+        self.chunk_map.generate_tasks(|chunk| {
+            Box::new(SweepDeadCyclesChunk::new(
+                chunk,
+                LazySweepingJobsCounter::new_decs(),
+            ))
+        })
     }
 
     /// Generate chunk sweep work packets.
@@ -636,25 +605,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> Vec<Box<dyn GCWork<VM>>> {
         let rc_enabled = self.rc_enabled;
         let cm_enabled = self.cm_enabled;
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.chunk_map.generate_tasks(|chunk| {
-                Box::new(PrepareChunk::<true> {
-                    chunk,
-                    defrag_threshold,
-                    rc_enabled,
-                    cm_enabled,
-                })
+        self.chunk_map.generate_tasks(|chunk| {
+            Box::new(PrepareChunk {
+                chunk,
+                defrag_threshold,
+                rc_enabled,
+                cm_enabled,
             })
-        } else {
-            self.chunk_map.generate_tasks(|chunk| {
-                Box::new(PrepareChunk::<false> {
-                    chunk,
-                    defrag_threshold,
-                    rc_enabled,
-                    cm_enabled,
-                })
-            })
-        }
+        })
     }
 
     pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
@@ -683,11 +641,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
         if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                block.clear_log_table::<VM, true>();
-            } else {
-                block.clear_log_table::<VM, false>();
-            }
+            block.clear_log_table::<VM>();
         }
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
@@ -848,9 +802,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
                 object
             } else {
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::unset_alloc_bit::<VM>(object);
-                ForwardingWord::forward_object::<VM>(object, semantics, copy_context)
+                ForwardingWord::try_forward_object::<VM>(object, semantics, copy_context)
+                    .expect("to-space overflow")
             };
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
@@ -862,7 +815,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn rc_trace_object<Q: ObjectQueue, const COMPRESSED: bool>(
+    pub fn rc_trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -873,9 +826,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ObjectReference {
         debug_assert!(self.rc_enabled);
         if crate::args::RC_MATURE_EVACUATION && Block::containing::<VM>(object).is_defrag_source() {
-            self.trace_forward_rc_mature_object::<_, COMPRESSED>(
-                queue, object, semantics, pause, worker,
-            )
+            self.trace_forward_rc_mature_object(queue, object, semantics, pause, worker)
         } else if crate::args::RC_MATURE_EVACUATION {
             self.trace_mark_rc_mature_object(queue, object, pause, mark)
         } else {
@@ -902,7 +853,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[allow(clippy::assertions_on_constants)]
-    pub fn trace_forward_rc_mature_object<Q: ObjectQueue, const COMPRESSED: bool>(
+    pub fn trace_forward_rc_mature_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -918,11 +869,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             new
         } else {
             // Evacuate the mature object
-            let new = ForwardingWord::forward_object::<VM>(
+            let new = ForwardingWord::try_forward_object::<VM>(
                 object,
                 CopySemantics::DefaultCopy,
                 copy_context,
-            );
+            )
+            .expect("to-space overflow");
             crate::stat(|s| {
                 s.mature_copy_objects += 1usize;
                 s.mature_copy_volume += new.get_size::<VM>();
@@ -934,7 +886,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 );
             }
             // Transfer RC count
-            new.log_start_address::<VM, COMPRESSED>();
+            new.log_start_address::<VM>();
             if !crate::args::BLOCK_ONLY && new.get_size::<VM>() > Line::BYTES {
                 self.rc.mark_straddle_object(new);
             }
@@ -1040,29 +992,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn get_next_available_lines(&self, copy: bool, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.get_next_available_lines_impl::<true>(copy, search_start)
-        } else {
-            self.get_next_available_lines_impl::<false>(copy, search_start)
-        }
-    }
-
-    fn get_next_available_lines_impl<const COMPRESSED: bool>(
-        &self,
-        copy: bool,
-        search_start: Line,
-    ) -> Option<(Line, Line)> {
-        debug_assert!(!super::BLOCK_ONLY);
         if self.rc_enabled {
-            self.rc_get_next_available_lines::<COMPRESSED>(copy, search_start)
+            self.rc_get_next_available_lines(copy, search_start)
         } else {
-            self.normal_get_next_available_lines::<COMPRESSED>(search_start)
+            self.normal_get_next_available_lines(search_start)
         }
     }
 
     /// Search holes by ref-counts instead of line marks
     #[allow(clippy::assertions_on_constants)]
-    pub fn rc_get_next_available_lines<const COMPRESSED: bool>(
+    pub fn rc_get_next_available_lines(
         &self,
         copy: bool,
         search_start: Line,
@@ -1115,14 +1054,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if end == block.end_line() {
                 return None;
             } else {
-                return self.rc_get_next_available_lines::<COMPRESSED>(copy, end);
+                return self.rc_get_next_available_lines(copy, end);
             };
         }
         if self.common.needs_log_bit {
             if !copy {
-                Line::clear_log_table::<VM, COMPRESSED>(start..end);
+                Line::clear_log_table::<VM>(start..end);
             } else {
-                Line::initialize_log_table_as_unlogged::<VM, COMPRESSED>(start..end);
+                Line::initialize_log_table_as_unlogged::<VM>(start..end);
             }
             Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
@@ -1144,10 +1083,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[allow(clippy::assertions_on_constants)]
-    pub fn normal_get_next_available_lines<const COMPRESSED: bool>(
-        &self,
-        search_start: Line,
-    ) -> Option<(Line, Line)> {
+    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
@@ -1184,11 +1120,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if end == block.end_line() {
                 return None;
             } else {
-                return self.normal_get_next_available_lines::<COMPRESSED>(end);
+                return self.normal_get_next_available_lines(end);
             };
         }
         if self.common.needs_log_bit {
-            Line::clear_log_table::<VM, COMPRESSED>(start..end);
+            Line::clear_log_table::<VM>(start..end);
         }
         Some((start, end))
     }
@@ -1249,6 +1185,8 @@ pub struct PrepareBlockState<VM: VMBinding> {
 impl<VM: VMBinding> PrepareBlockState<VM> {
     /// Clear object mark table
     fn reset_object_mark(chunk: Chunk) {
+        // NOTE: We reset the mark bits because cyclic mark bit is currently not supported, yet.
+        // See `ImmixSpace::prepare`.
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
             side.bzero_metadata(chunk.start(), Chunk::BYTES);
         }
@@ -1277,6 +1215,18 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             block.set_state(BlockState::Unmarked);
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
+            // Clear forwarding bits if necessary.
+            // if is_defrag_source {
+            //     if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+            //         // Clear on-the-side forwarding bits.
+            //         // NOTE: In theory, we only need to clear the forwarding bits of occupied lines of
+            //         // blocks that are defrag sources.
+            //         side.bzero_metadata(block.start(), Block::BYTES);
+            //     }
+            // }
+            // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
+            // until the forwarding bits are also set, at which time we also write the forwarding
+            // pointer.
         }
     }
 }

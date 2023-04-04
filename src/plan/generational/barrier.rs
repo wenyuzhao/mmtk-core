@@ -13,13 +13,13 @@ use crate::MMTK;
 use super::gc_work::GenNurseryProcessEdges;
 use super::gc_work::ProcessModBuf;
 use super::gc_work::ProcessRegionModBuf;
-use super::global::Gen;
+use super::global::CommonGenPlan;
 
 pub struct GenObjectBarrierSemantics<VM: VMBinding> {
     /// MMTk instance
     mmtk: &'static MMTK<VM>,
     /// Generational plan
-    gen: &'static Gen<VM>,
+    gen: &'static CommonGenPlan<VM>,
     /// Object modbuf. Contains a list of objects that may contain pointers to the nursery space.
     modbuf: VectorQueue<ObjectReference>,
     /// Array-copy modbuf. Contains a list of sub-arrays or array slices that may contain pointers to the nursery space.
@@ -27,7 +27,7 @@ pub struct GenObjectBarrierSemantics<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> GenObjectBarrierSemantics<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>, gen: &'static Gen<VM>) -> Self {
+    pub fn new(mmtk: &'static MMTK<VM>, gen: &'static CommonGenPlan<VM>) -> Self {
         Self {
             mmtk,
             gen,
@@ -36,7 +36,6 @@ impl<VM: VMBinding> GenObjectBarrierSemantics<VM> {
         }
     }
 
-    #[cold]
     fn flush_modbuf(&mut self) {
         let buf = self.modbuf.take();
         if !buf.is_empty() {
@@ -45,7 +44,6 @@ impl<VM: VMBinding> GenObjectBarrierSemantics<VM> {
         }
     }
 
-    #[cold]
     fn flush_region_modbuf(&mut self) {
         let buf = self.region_modbuf.take();
         if !buf.is_empty() {
@@ -59,7 +57,6 @@ impl<VM: VMBinding> GenObjectBarrierSemantics<VM> {
 impl<VM: VMBinding> BarrierSemantics for GenObjectBarrierSemantics<VM> {
     type VM = VM;
 
-    #[cold]
     fn flush(&mut self) {
         self.flush_modbuf();
         self.flush_region_modbuf();

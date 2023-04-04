@@ -2,24 +2,17 @@ use atomic::Ordering;
 
 use crate::plan::lxr::RemSet;
 use crate::plan::ObjectQueue;
-use crate::plan::PlanConstraints;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
-use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
-use crate::util::heap::layout::heap_layout::{Map, Mmapper};
-use crate::util::heap::HeapMeta;
-use crate::util::heap::{FreeListPageResource, PageResource, VMRequest};
+use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::metadata::side_metadata::spec_defs::LOS_PAGE_VALIDITY;
-use crate::util::metadata::side_metadata::SideMetadataContext;
-use crate::util::metadata::side_metadata::SideMetadataSpec;
-use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::util::rc::RefCountHelper;
 use crate::util::treadmill::TreadMill;
@@ -194,40 +187,20 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
 }
 
 impl<VM: VMBinding> LargeObjectSpace<VM> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        name: &'static str,
-        zeroed: bool,
-        vmrequest: VMRequest,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        heap: &mut HeapMeta,
-        constraints: &'static PlanConstraints,
+        args: crate::policy::space::PlanCreateSpaceArgs<VM>,
         protect_memory_on_release: bool,
     ) -> Self {
-        let common = CommonSpace::new(
-            SpaceOptions {
-                name,
-                movable: false,
-                immortal: false,
-                zeroed,
-                needs_log_bit: constraints.needs_log_bit,
-                needs_field_log_bit: constraints.needs_field_log_bit,
-                vmrequest,
-            },
-            vm_map,
-            mmapper,
-            heap,
+        let is_discontiguous = args.vmrequest.is_discontiguous();
+        let vm_map = args.vm_map;
+        let policy_args = args.into_policy_args(
+            false,
+            false,
+            metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC]),
         );
-        let metadata = SideMetadataContext {
-            global: global_side_metadata_specs,
-            local: metadata::extract_side_metadata(&[
-                *VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
-                MetadataSpec::OnSide(LOS_PAGE_VALIDITY),
-            ]),
-        };
-        let mut pr = if vmrequest.is_discontiguous() {
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
+        let mut pr = if is_discontiguous {
             FreeListPageResource::new_discontiguous(vm_map, metadata)
         } else {
             FreeListPageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
@@ -357,25 +330,17 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // We just moved the object out of the logical nursery, mark it as unlogged.
                 if !self.rc_enabled && self.common.needs_log_bit {
                     if self.common.needs_field_log_bit {
-                        if VM::VMObjectModel::compressed_pointers_enabled() {
-                            let step = 4;
-                            for i in (0..object.get_size::<VM>()).step_by(step) {
-                                let a = object.to_address::<VM>() + i;
-                                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
-                                    .mark_as_unlogged::<VM>(
-                                        a.to_object_reference::<VM>(),
-                                        Ordering::SeqCst,
-                                    );
-                            }
+                        let step = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                            4
                         } else {
-                            let step = 8;
-                            for i in (0..object.get_size::<VM>()).step_by(step) {
-                                let a = object.to_address::<VM>() + i;
-                                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
-                                    a.to_object_reference::<VM>(),
-                                    Ordering::SeqCst,
-                                );
-                            }
+                            8
+                        };
+                        for i in (0..object.get_size::<VM>()).step_by(step) {
+                            let a = object.to_address::<VM>() + i;
+                            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
+                                a.to_object_reference::<VM>(),
+                                Ordering::SeqCst,
+                            );
                         }
                     } else {
                         VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
@@ -414,8 +379,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.test_and_mark(object, self.mark_state)
     }
 
-    pub fn rc_free<const COMPRESSED: bool>(&self, o: ObjectReference) {
-        if o.to_address::<VM>().attempt_log::<VM, COMPRESSED>() {
+    pub fn rc_free(&self, o: ObjectReference) {
+        if o.to_address::<VM>().attempt_log::<VM>() {
             // println!(" - add to rc_dead_objects {:?}", o);
             self.rc_dead_objects.push(o);
         }
@@ -517,10 +482,7 @@ impl RCSweepMatureLOS {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
         Self { _counter: counter }
     }
-    fn do_work_impl<VM: VMBinding, const COMPRESSED: bool>(
-        &mut self,
-        mmtk: &'static crate::MMTK<VM>,
-    ) {
+    fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
         for o in mature_objects.iter() {
@@ -544,7 +506,7 @@ impl RCSweepMatureLOS {
                     }
                 });
                 los.rc.set(*o, 0);
-                los.rc_free::<COMPRESSED>(*o);
+                los.rc_free(*o);
             }
         }
     }
@@ -556,11 +518,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_impl::<VM, true>(mmtk)
-        } else {
-            self.do_work_impl::<VM, false>(mmtk)
-        }
+        self.do_work_impl(mmtk)
     }
 }
 
@@ -573,12 +531,12 @@ impl RCReleaseMatureLOS {
         Self { _counter: counter }
     }
 
-    fn do_work_impl<VM: VMBinding, const COMPRESSED: bool>(&self, mmtk: &'static crate::MMTK<VM>) {
+    fn do_work_impl<VM: VMBinding>(&self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
         let mut mature_objects = los.rc_mature_objects.lock();
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
-            o.to_address::<VM>().unlog::<VM, COMPRESSED>();
+            o.to_address::<VM>().unlog::<VM>();
             if removed {
                 let pages = los.release_object(o.to_address::<VM>());
                 los.num_pages_released_lazy
@@ -594,10 +552,6 @@ impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.do_work_impl::<VM, true>(mmtk)
-        } else {
-            self.do_work_impl::<VM, false>(mmtk)
-        }
+        self.do_work_impl::<VM>(mmtk)
     }
 }

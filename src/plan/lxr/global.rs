@@ -2,9 +2,10 @@ use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
-use crate::plan::global::BasePlan;
+use crate::mmtk::VM_MAP;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
+use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
 use crate::plan::AllocationSemantics;
@@ -20,14 +21,14 @@ use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::GcHookWork;
+use crate::util::constants::*;
 use crate::util::copy::*;
-use crate::util::heap::layout::heap_layout::Map;
-use crate::util::heap::layout::heap_layout::Mmapper;
-use crate::util::heap::HeapMeta;
+use crate::util::heap::layout::vm_layout_constants::*;
+use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
-use crate::util::options::Options;
+use crate::util::options::{GCTriggerSelector, Options};
 use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
@@ -35,14 +36,15 @@ use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::time::SystemTime;
-
 use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::{Condvar, Mutex, RwLock};
+use std::time::SystemTime;
+
+const LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER: usize = 1;
 
 static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
@@ -86,6 +88,7 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     barrier: BarrierSelector::FieldBarrier,
     needs_log_bit: true,
     needs_field_log_bit: true,
+    rc_enabled: true,
     ..PlanConstraints::default()
 });
 
@@ -104,15 +107,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        if crate::args()
-            .max_survival_mb
-            .map(|x| {
-                self.immix_space.block_allocation.nursery_mb() as f64
-                    * super::SURVIVAL_RATIO_PREDICTOR.ratio()
-                    >= x as f64
-            })
-            .unwrap_or(false)
-        {
+        let predicted_survival = ((self.immix_space.block_allocation.nursery_mb() as f64
+            * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
+            << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
+        if predicted_survival >= crate::args().max_survival_mb {
             // println!(
             //     "Survival limits {} * {} > {} blocks={}",
             //     self.immix_space.block_allocation.nursery_mb(),
@@ -122,6 +120,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             // );
             SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
             return true;
+        }
+        if !self.immix_space.common().contiguous {
+            let available_to_space = (self.immix_space.pr.available_pages()
+                + (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)))
+                / 256;
+            if predicted_survival >= available_to_space {
+                SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
+                return true;
+            }
         }
         if crate::args::LXR_RC_ONLY {
             let inc_overflow = crate::args()
@@ -235,11 +242,21 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         if *self.options().verbose >= 2 {
             gc_log!(
-                "GC({}) {:?} start. incs={} young-blocks={}",
+                "GC({}) {:?} start. incs={} young-blocks={}({}M) reserved={}M collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 self.rc.inc_buffer_size(),
-                self.immix_space.block_allocation.nursery_blocks()
+                self.immix_space.block_allocation.nursery_blocks(),
+                self.immix_space.block_allocation.nursery_blocks() / 32,
+                self.get_reserved_pages() / 256,
+                self.get_collection_reserved_pages() / 256,
+                self.immix_space.defrag_headroom_pages() / 256,
+                self.immix_space.pr.available_pages() / 256,
+                if self.immix_space.common().contiguous {
+                    0
+                } else {
+                    (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
+                },
             );
         }
         match pause {
@@ -318,6 +335,17 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
+        let max_survival_mb = crate::args().max_survival_mb;
+        if max_survival_mb != 0 && max_survival_mb != usize::MAX {
+            let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
+                * super::SURVIVAL_RATIO_PREDICTOR.ratio())
+                as usize;
+            let survival = usize::max(
+                max_survival_mb,
+                predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER,
+            );
+            return survival + self.immix_space.defrag_headroom_pages();
+        }
         self.immix_space.defrag_headroom_pages()
     }
 
@@ -404,6 +432,23 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.avail_pages_at_end_of_last_gc
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
+        if *self.options().verbose >= 3 {
+            gc_log!(
+                "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
+                crate::GC_EPOCH.load(Ordering::SeqCst),
+                self.get_reserved_pages() / 256,
+                self.immix_space.reserved_pages() / 256,
+                self.los().reserved_pages() / 256,
+                self.get_collection_reserved_pages() / 256,
+                self.immix_space.defrag_headroom_pages() / 256,
+                self.immix_space.pr.available_pages() / 256,
+                if self.immix_space.common().contiguous {
+                    0
+                } else {
+                    (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
+                },
+            );
+        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -467,41 +512,29 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 }
 
 impl<VM: VMBinding> LXR<VM> {
-    pub fn new(
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        options: Arc<Options>,
-        scheduler: Arc<GCWorkScheduler<VM>>,
-    ) -> Box<Self> {
-        let mut heap = HeapMeta::new(&options);
+    pub fn new(args: CreateGeneralPlanArgs<VM>) -> Box<Self> {
         let immix_specs = metadata::extract_side_metadata(&[
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
-            MetadataSpec::OnSide(crate::policy::immix::get_unlog_bit_slow::<VM>()),
+            MetadataSpec::OnSide(
+                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .as_spec()
+                    .extract_side_spec(),
+            ),
         ]);
-        let global_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
-        let mut immix_space = ImmixSpace::new(
-            "immix",
-            vm_map,
-            mmapper,
-            &mut heap,
-            scheduler,
-            global_metadata_specs.clone(),
-            &LXR_CONSTRAINTS,
-            true,
-            options.clone(),
-        );
+        let global_side_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
+        let options = args.options.clone();
+        let mut plan_args = CreateSpecificPlanArgs {
+            global_args: args,
+            constraints: &LXR_CONSTRAINTS,
+            global_side_metadata_specs,
+        };
+        let mut immix_space =
+            ImmixSpace::new(plan_args.get_space_args("immix", true, VMRequest::discontiguous()));
         immix_space.cm_enabled = true;
         let mut lxr = Box::new(LXR {
             immix_space,
-            common: CommonPlan::new(
-                vm_map,
-                mmapper,
-                options.clone(),
-                heap,
-                &LXR_CONSTRAINTS,
-                global_metadata_specs,
-            ),
+            common: CommonPlan::new(plan_args),
             perform_cycle_collection: AtomicBool::new(false),
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
             current_pause: Atomic::new(None),
@@ -717,6 +750,8 @@ impl<VM: VMBinding> LXR<VM> {
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
         }
+        scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
@@ -774,11 +809,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, true>>(self);
-        } else {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, false>>(self);
-        }
+        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
     fn schedule_emergency_full_heap_collection<E: ProcessEdgesWork<VM = VM>>(
@@ -798,41 +829,23 @@ impl<VM: VMBinding> LXR<VM> {
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        if VM::VMObjectModel::compressed_pointers_enabled() {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, true>>(self);
-        } else {
-            scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM, false>>(self);
-        }
+        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
     fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {
         let prev_roots = self.prev_roots.write().unwrap();
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
-            work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
-                Box::new(ProcessDecs::<_, true>::new(
-                    decs,
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            } else {
-                Box::new(ProcessDecs::<_, false>::new(
-                    decs,
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            })
+            work_packets.push(Box::new(ProcessDecs::new(
+                decs,
+                LazySweepingJobsCounter::new_decs(),
+            )))
         }
         if work_packets.is_empty() {
-            work_packets.push(if VM::VMObjectModel::compressed_pointers_enabled() {
-                Box::new(ProcessDecs::<_, true>::new(
-                    vec![],
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            } else {
-                Box::new(ProcessDecs::<_, false>::new(
-                    vec![],
-                    LazySweepingJobsCounter::new_decs(),
-                ))
-            });
+            work_packets.push(Box::new(ProcessDecs::new(
+                vec![],
+                LazySweepingJobsCounter::new_decs(),
+            )));
         }
         if crate::args::LAZY_DECREMENTS {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
@@ -896,6 +909,7 @@ impl<VM: VMBinding> LXR<VM> {
     fn gc_init(&mut self, options: &Options) {
         crate::args::validate_features(BarrierSelector::FieldBarrier, options);
         self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
+        self.immix_space.rc_enabled = true;
         self.common.los.rc_enabled = true;
         unsafe {
             let me = &*(self as *const Self);
@@ -957,7 +971,11 @@ impl<VM: VMBinding> LXR<VM> {
         }));
 
         if let Some(nursery_ratio) = crate::args().nursery_ratio {
-            let total_blocks = *options.heap_size >> Block::LOG_BYTES;
+            let heap_size = match *options.gc_trigger {
+                GCTriggerSelector::FixedHeapSize(x) => x,
+                _ => unimplemented!(),
+            };
+            let total_blocks = heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
             self.nursery_blocks = Some(nursery_blocks);
         }

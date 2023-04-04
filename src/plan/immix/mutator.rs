@@ -9,7 +9,7 @@ use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
-use crate::vm::{ObjectModel, VMBinding};
+use crate::vm::VMBinding;
 use crate::MMTK;
 use crate::{
     plan::barriers::NoBarrier,
@@ -58,7 +58,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
 ) -> Mutator<VM> {
     let immix = mmtk.get_plan().downcast_ref::<Immix<VM>>().unwrap();
     let config = MutatorConfig {
-        allocator_mapping: &*ALLOCATOR_MAPPING,
+        allocator_mapping: &ALLOCATOR_MAPPING,
         space_mapping: Box::new({
             let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, mmtk.get_plan());
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
@@ -71,15 +71,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
         barrier: if crate::args::BARRIER_MEASUREMENT {
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                Box::new(FieldBarrier::new(
-                    ImmixFakeFieldBarrierSemantics::<_, true>::new(mmtk),
-                ))
-            } else {
-                Box::new(FieldBarrier::new(
-                    ImmixFakeFieldBarrierSemantics::<_, false>::new(mmtk),
-                ))
-            }
+            Box::new(FieldBarrier::new(ImmixFakeFieldBarrierSemantics::new(mmtk)))
         } else {
             Box::new(NoBarrier)
         },

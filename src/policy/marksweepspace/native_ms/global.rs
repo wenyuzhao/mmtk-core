@@ -3,19 +3,12 @@ use std::sync::Arc;
 use atomic::Ordering;
 
 use crate::{
-    policy::{marksweepspace::native_ms::*, sft::GCWorkerMutRef, space::SpaceOptions},
+    policy::{marksweepspace::native_ms::*, sft::GCWorkerMutRef},
     scheduler::{GCWorkScheduler, GCWorker},
     util::{
         copy::CopySemantics,
-        heap::{
-            layout::heap_layout::{Map, Mmapper},
-            FreeListPageResource, HeapMeta, VMRequest,
-        },
-        metadata::{
-            self,
-            side_metadata::{SideMetadataContext, SideMetadataSpec},
-            MetadataSpec,
-        },
+        heap::FreeListPageResource,
+        metadata::{self, side_metadata::SideMetadataSpec, MetadataSpec},
         ObjectReference,
     },
     vm::VMBinding,
@@ -186,22 +179,17 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MarkSweepS
 pub const MAX_OBJECT_SIZE: usize = crate::policy::marksweepspace::native_ms::MI_LARGE_OBJ_SIZE_MAX;
 
 impl<VM: VMBinding> MarkSweepSpace<VM> {
+    // Allow ptr_arg as we want to keep the function signature the same as for malloc marksweep
+    #[allow(clippy::ptr_arg)]
     pub fn extend_global_side_metadata_specs(_specs: &mut Vec<SideMetadataSpec>) {
         // MarkSweepSpace does not need any special global specs. This method exists, as
         // we need this method for MallocSpace, and we want those two spaces to be used interchangably.
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        name: &'static str,
-        zeroed: bool,
-        vmrequest: VMRequest,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        heap: &mut HeapMeta,
-        scheduler: Arc<GCWorkScheduler<VM>>,
-    ) -> MarkSweepSpace<VM> {
+    pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> MarkSweepSpace<VM> {
+        let scheduler = args.scheduler.clone();
+        let vm_map = args.vm_map;
+        let is_discontiguous = args.vmrequest.is_discontiguous();
         let local_specs = {
             metadata::extract_side_metadata(&vec![
                 MetadataSpec::OnSide(Block::NEXT_BLOCK_TABLE),
@@ -219,27 +207,11 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             ])
         };
-
-        let metadata = SideMetadataContext {
-            global: global_side_metadata_specs,
-            local: local_specs,
-        };
-        let common = CommonSpace::new(
-            SpaceOptions {
-                name,
-                movable: false,
-                immortal: false,
-                needs_log_bit: false,
-                needs_field_log_bit: false,
-                zeroed,
-                vmrequest,
-            },
-            vm_map,
-            mmapper,
-            heap,
-        );
+        let policy_args = args.into_policy_args(false, false, local_specs);
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
         MarkSweepSpace {
-            pr: if vmrequest.is_discontiguous() {
+            pr: if is_discontiguous {
                 FreeListPageResource::new_discontiguous(vm_map, metadata)
             } else {
                 FreeListPageResource::new_contiguous(common.start, common.extent, vm_map, metadata)

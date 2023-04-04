@@ -165,12 +165,12 @@ pub struct EdgeIterator<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> EdgeIterator<VM> {
-    pub fn iterate<const COMPRESSED: bool, F: FnMut(VM::VMEdge)>(
+    pub fn iterate(
         o: ObjectReference,
         should_discover_references: bool,
         should_claim_clds: bool,
         should_follow_clds: bool,
-        f: F,
+        f: impl FnMut(VM::VMEdge),
         klass: Option<Address>,
     ) {
         let mut x = EdgeIteratorImpl::<VM, _> {
@@ -181,14 +181,14 @@ impl<VM: VMBinding> EdgeIterator<VM> {
             _p: PhantomData,
         };
         if let Some(klass) = klass {
-            <VM::VMScanning as Scanning<VM>>::scan_object_with_klass::<_, COMPRESSED>(
+            <VM::VMScanning as Scanning<VM>>::scan_object_with_klass(
                 VMWorkerThread(VMThread::UNINITIALIZED),
                 o,
                 &mut x,
                 klass,
             );
         } else {
-            <VM::VMScanning as Scanning<VM>>::scan_object::<_, COMPRESSED>(
+            <VM::VMScanning as Scanning<VM>>::scan_object(
                 VMWorkerThread(VMThread::UNINITIALIZED),
                 o,
                 &mut x,

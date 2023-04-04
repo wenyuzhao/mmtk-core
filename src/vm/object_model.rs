@@ -57,12 +57,6 @@ use crate::vm::VMBinding;
 /// and for a third SideMetadataSpec (`LS3`), the `offset` will be `BASE(LS2) + required_metadata_space_per_chunk(LS2)`.
 ///
 /// For all other policies, the `offset` starts from zero. This is safe because no two policies ever manage one chunk, so there will be no overlap.
-///
-/// [`HeaderMetadataSpec`]: ../util/metadata/header_metadata/struct.HeaderMetadataSpec.html
-/// [`SideMetadataSpec`]:   ../util/metadata/side_metadata/strutc.SideMetadataSpec.html
-/// [`header_metadata`]:    ../util/metadata/header_metadata/index.html
-/// [`GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS`]: ../util/metadata/side_metadata/constant.GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS.html
-/// [`LOCAL_SIDE_METADATA_VM_BASE_ADDRESS`]:  ../util/metadata/side_metadata/constant.LOCAL_SIDE_METADATA_VM_BASE_ADDRESS.html
 pub trait ObjectModel<VM: VMBinding> {
     // Per-object Metadata Spec definitions go here
     //
@@ -74,7 +68,6 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Note that for this bit, 0 represents logged (default), and 1 represents unlogged.
     /// This bit is also referred to as unlogged bit in Java MMTk for this reason.
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec;
-    const GLOBAL_LOG_BIT_SPEC_COMPRESSED: VMGlobalLogBitSpecCompressed;
 
     /// The metadata specification for the forwarding pointer, used by copying plans. Word size.
     const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec;
@@ -87,6 +80,8 @@ pub trait ObjectModel<VM: VMBinding> {
     const LOCAL_PINNING_BIT_SPEC: VMLocalPinningBitSpec;
     /// The metadata specification for the mark-and-nursery bits, used by most plans that has large object allocation. 2 bits.
     const LOCAL_LOS_MARK_NURSERY_SPEC: VMLocalLOSMarkNurserySpec;
+
+    const COMPRESSED_PTR_ENABLED: bool = false;
 
     /// A function to non-atomically load the specified per-object metadata's content.
     /// The default implementation assumes the bits defined by the spec are always avilable for MMTk to use. If that is not the case, a binding should override this method, and provide their implementation.
@@ -314,6 +309,14 @@ pub trait ObjectModel<VM: VMBinding> {
         copy_context: &mut GCWorkerCopyContext<VM>,
     ) -> ObjectReference;
 
+    fn try_copy(
+        _from: ObjectReference,
+        _semantics: CopySemantics,
+        _copy_context: &mut GCWorkerCopyContext<VM>,
+    ) -> Option<ObjectReference> {
+        unimplemented!()
+    }
+
     /// Copy an object. This is required
     /// for delayed-copy collectors such as compacting collectors. During the
     /// collection, MMTk reserves a region in the heap for an object as per
@@ -439,8 +442,6 @@ pub trait ObjectModel<VM: VMBinding> {
     fn dump_object(object: ObjectReference);
     fn dump_object_s(object: ObjectReference) -> String;
 
-    fn compressed_pointers_enabled() -> bool;
-
     fn get_class_pointer(object: ObjectReference) -> Address;
 }
 
@@ -488,6 +489,25 @@ pub mod specs {
                         }))
                     }
                 }
+                pub const fn side_first_compressed() -> Self {
+                    if Self::IS_GLOBAL {
+                        Self(MetadataSpec::OnSide(SideMetadataSpec {
+                            name: stringify!($spec_name),
+                            is_global: Self::IS_GLOBAL,
+                            offset: GLOBAL_SIDE_METADATA_VM_BASE_OFFSET,
+                            log_num_of_bits: Self::LOG_NUM_BITS,
+                            log_bytes_in_region: $side_min_obj_size as usize - 1,
+                        }))
+                    } else {
+                        Self(MetadataSpec::OnSide(SideMetadataSpec {
+                            name: stringify!($spec_name),
+                            is_global: Self::IS_GLOBAL,
+                            offset: LOCAL_SIDE_METADATA_VM_BASE_OFFSET,
+                            log_num_of_bits: Self::LOG_NUM_BITS,
+                            log_bytes_in_region: $side_min_obj_size as usize - 1,
+                        }))
+                    }
+                }
                 pub const fn side_after(spec: &MetadataSpec) -> Self {
                     debug_assert!(spec.is_on_side());
                     let side_spec = spec.extract_side_spec();
@@ -518,12 +538,6 @@ pub mod specs {
 
     // Log bit: 1 bit per object, global
     define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE);
-    define_vm_metadata_spec!(
-        VMGlobalLogBitSpecCompressed,
-        true,
-        0,
-        LOG_MIN_OBJECT_SIZE - 1
-    );
     // Forwarding pointer: word size per object, local
     define_vm_metadata_spec!(
         VMLocalForwardingPointerSpec,

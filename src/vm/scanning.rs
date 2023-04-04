@@ -1,4 +1,5 @@
 use crate::plan::Mutator;
+use crate::scheduler::GCWorker;
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
@@ -31,6 +32,9 @@ impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
 pub trait ObjectTracer {
     /// Call this function for the content of each edge,
     /// and assign the returned value back to the edge.
+    ///
+    /// Note: This function is performance-critical.
+    /// Implementations should consider inlining if necessary.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 }
 
@@ -39,6 +43,44 @@ impl<F: FnMut(ObjectReference) -> ObjectReference> ObjectTracer for F {
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         self(object)
     }
+}
+
+/// An `ObjectTracerContext` gives a GC worker temporary access to an `ObjectTracer`, allowing
+/// the GC worker to trace objects.  This trait is intended to abstract out the implementation
+/// details of tracing objects, enqueuing objects, and creating work packets that expand the
+/// transitive closure, allowing the VM binding to focus on VM-specific parts.
+///
+/// This trait is used during root scanning and binding-side weak reference processing.
+pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
+    /// The concrete `ObjectTracer` type.
+    ///
+    /// FIXME: The current code works because of the unsafe method `ProcessEdgesWork::set_worker`.
+    /// The tracer should borrow the worker passed to `with_queuing_tracer` during its lifetime.
+    /// For this reason, `TracerType` should have a `<'w>` lifetime parameter.
+    /// Generic Associated Types (GAT) is already stablized in Rust 1.65.
+    /// We should update our toolchain version, too.
+    type TracerType: ObjectTracer;
+
+    /// Create a temporary `ObjectTracer` and provide access in the scope of `func`.
+    ///
+    /// When the `ObjectTracer::trace_object` is called, if the traced object is first visited
+    /// in this transitive closure, it will be enqueued.  After `func` returns, the implememtation
+    /// will create work packets to continue computing the transitive closure from the newly
+    /// enqueued objects.
+    ///
+    /// API functions that provide `QueuingTracerFactory` should document
+    /// 1.  on which fields the user is supposed to call `ObjectTracer::trace_object`, and
+    /// 2.  which work bucket the generated work packet will be added to.  Sometimes the user needs
+    ///     to know when the computing of transitive closure finishes.
+    ///
+    /// Arguments:
+    /// -   `worker`: The current GC worker.
+    /// -   `func`: A caller-supplied closure in which the created `ObjectTracer` can be used.
+    ///
+    /// Returns: The return value of `func`.
+    fn with_tracer<R, F>(&self, worker: &mut GCWorker<VM>, func: F) -> R
+    where
+        F: FnOnce(&mut Self::TracerType) -> R;
 }
 
 /// Root-scanning methods use this trait to create work packets for processing roots.
@@ -104,7 +146,7 @@ pub trait Scanning<VM: VMBinding> {
     /// For maximum performance, the VM should support edge-enqueuing for as many objects as
     /// practical.  Also note that this method is called for every object to be scanned, so it
     /// must be fast.  The VM binding should avoid expensive checks and keep it as efficient as
-    /// possible.  Add `#[inline(always)]` to ensure it is inlined.
+    /// possible.
     ///
     /// Arguments:
     /// * `tls`: The VM-specific thread-local storage for the current worker.
@@ -124,16 +166,16 @@ pub trait Scanning<VM: VMBinding> {
     /// * `tls`: The VM-specific thread-local storage for the current worker.
     /// * `object`: The object to be scanned.
     /// * `edge_visitor`: Called back for each edge.
-    fn scan_object<EV: EdgeVisitor<VM::VMEdge>, const COMPRESSED: bool>(
+    fn scan_object(
         tls: VMWorkerThread,
         object: ObjectReference,
-        edge_visitor: &mut EV,
+        edge_visitor: &mut impl EdgeVisitor<VM::VMEdge>,
     );
 
-    fn scan_object_with_klass<EV: EdgeVisitor<VM::VMEdge>, const COMPRESSED: bool>(
+    fn scan_object_with_klass(
         tls: VMWorkerThread,
         object: ObjectReference,
-        edge_visitor: &mut EV,
+        edge_visitor: &mut impl EdgeVisitor<VM::VMEdge>,
         klass: Address,
     );
 
@@ -160,15 +202,15 @@ pub trait Scanning<VM: VMBinding> {
         unreachable!("scan_object_and_trace_edges() will not be called when support_edge_enqueue() is always true.")
     }
 
-    fn obj_array_data<const COMPRESSED: bool>(_o: ObjectReference) -> VM::VMMemorySlice {
+    fn obj_array_data(_o: ObjectReference) -> VM::VMMemorySlice {
         unreachable!()
     }
 
-    fn is_obj_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
+    fn is_obj_array(_o: ObjectReference) -> bool {
         unreachable!()
     }
 
-    fn is_val_array<const COMPRESSED: bool>(_o: ObjectReference) -> bool {
+    fn is_val_array(_o: ObjectReference) -> bool {
         unreachable!()
     }
 
@@ -212,4 +254,70 @@ pub trait Scanning<VM: VMBinding> {
     fn supports_return_barrier() -> bool;
 
     fn prepare_for_roots_re_scanning();
+
+    /// Process weak references.
+    ///
+    /// This function is called after a transitive closure is completed.
+    ///
+    /// MMTk core enables the VM binding to do the following in this function:
+    ///
+    /// 1.  Query if an object is already reached in this transitive closure.
+    /// 2.  Keep certain objects and their descendents alive.
+    /// 3.  Get the new address of objects that are either
+    ///     -   already alive before this function is called, or
+    ///     -   explicitly kept alive in this function.
+    /// 4.  Request this function to be called again after transitive closure is finished again.
+    ///
+    /// The VM binding can call `ObjectReference::is_reachable()` to query if an object is
+    /// currently reached.
+    ///
+    /// The VM binding can use `tracer_factory` to get access to an `ObjectTracer`, and call
+    /// its `trace_object(object)` method to keep `object` and its decendents alive.
+    ///
+    /// The return value of `ObjectTracer::trace_object(object)` is the new address of the given
+    /// `object` if it is moved by the GC.
+    ///
+    /// The VM binding can return `true` from `process_weak_refs` to request `process_weak_refs`
+    /// to be called again after the MMTk core finishes transitive closure again from the objects
+    /// newly visited by `ObjectTracer::trace_object`.  This is useful if a VM supports multiple
+    /// levels of reachabilities (such as Java) or ephemerons.
+    ///
+    /// Implementation-wise, this function is called as the "sentinel" of the `VMRefClosure` work
+    /// bucket, which means it is called when all work packets in that bucket have finished.  The
+    /// `tracer_factory` expands the transitive closure by adding more work packets in the same
+    /// bucket.  This means if `process_weak_refs` returns true, those work packets will have
+    /// finished (completing the transitive closure) by the time `process_weak_refs` is called
+    /// again.  The VM binding can make use of this by adding custom work packets into the
+    /// `VMRefClosure` bucket.  The bucket will be `VMRefForwarding`, instead, when forwarding.
+    /// See below.
+    ///
+    /// Arguments:
+    /// * `worker`: The current GC worker.
+    /// * `tracer_context`: Use this to get access an `ObjectTracer` and use it to retain and
+    ///   update weak references.
+    ///
+    /// This function shall return true if this function needs to be called again after the GC
+    /// finishes expanding the transitive closure from the objects kept alive.
+    fn process_weak_refs(
+        _worker: &mut GCWorker<VM>,
+        _tracer_context: impl ObjectTracerContext<VM>,
+    ) -> bool {
+        false
+    }
+
+    /// Forward weak references.
+    ///
+    /// This function will only be called in the forwarding stage when using the mark-compact GC
+    /// algorithm.  Mark-compact computes transive closure twice during each GC.  It marks objects
+    /// in the first transitive closure, and forward references in the second transitive closure.
+    ///
+    /// Arguments:
+    /// * `worker`: The current GC worker.
+    /// * `tracer_context`: Use this to get access an `ObjectTracer` and use it to update weak
+    ///   references.
+    fn forward_weak_refs(
+        _worker: &mut GCWorker<VM>,
+        _tracer_context: impl ObjectTracerContext<VM>,
+    ) {
+    }
 }

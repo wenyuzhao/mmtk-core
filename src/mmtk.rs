@@ -6,12 +6,10 @@ use crate::scheduler::GCWorkScheduler;
 #[cfg(feature = "extreme_assertions")]
 use crate::util::edge_logger::EdgeLogger;
 use crate::util::finalizable_processor::FinalizableProcessor;
-use crate::util::heap::layout::heap_layout::{Map, Map64};
-use crate::util::heap::layout::heap_layout::{Mmapper, Mmapper32, Mmapper64};
-use crate::util::heap::layout::map32::Map32;
 use crate::util::heap::layout::vm_layout_constants::{AddressSpaceKind, VMLayoutConstants};
+use crate::util::heap::layout::{self, Mmapper, VMMap};
 use crate::util::opaque_pointer::*;
-use crate::util::options::Options;
+use crate::util::options::{GCTriggerSelector, Options};
 use crate::util::reference_processor::ReferenceProcessors;
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::SanityChecker;
@@ -32,18 +30,10 @@ lazy_static! {
     // TODO: We should refactor this when we know more about how multiple MMTK instances work.
 
     /// A global VMMap that manages the mapping of spaces to virtual memory ranges.
-    pub static ref VM_MAP: Box<dyn Map> =  if cfg!(target_pointer_width = "32") || VMLayoutConstants::get_address_space().pointer_compression() {
-        Box::new(Map32::new())
-    } else {
-        Box::new(Map64::new())
-    };
+    pub static ref VM_MAP: Box<dyn VMMap> = layout::create_vm_map();
 
     /// A global Mmapper for mmaping and protection of virtual memory.
-    pub static ref MMAPPER: Box<dyn Mmapper> = if cfg!(target_pointer_width = "32") {
-        Box::new(Mmapper32::new())
-    } else {
-        Box::new(Mmapper64::new())
-    };
+    pub static ref MMAPPER: Box<dyn Mmapper> = layout::create_mmapper();
 }
 
 use crate::util::rust_util::InitializeOnce;
@@ -110,8 +100,12 @@ impl<VM: VMBinding> MMTK<VM> {
         if cfg!(target_pointer_width = "32") {
             VMLayoutConstants::set_address_space(AddressSpaceKind::_32Bits);
         } else if *options.use_35bit_address_space {
+            let heap_size = match *options.gc_trigger {
+                GCTriggerSelector::FixedHeapSize(x) => x,
+                _ => unimplemented!(),
+            };
             VMLayoutConstants::set_address_space(AddressSpaceKind::_64BitsWithPointerCompression {
-                heap_size: *options.heap_size,
+                heap_size: heap_size,
             });
         } else {
             VMLayoutConstants::set_address_space(AddressSpaceKind::_64Bits);

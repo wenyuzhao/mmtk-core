@@ -33,7 +33,7 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub const UNLOCKED_VALUE: u8 = 0b0;
 pub const LOCKED_VALUE: u8 = 0b1;
 
-pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
+pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     incs: VectorQueue<VM::VMEdge>,
     decs: VectorQueue<ObjectReference>,
@@ -41,8 +41,10 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding, const COMPRESSED: bool> {
     lxr: &'static LXR<VM>,
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRESSED> {
-    const UNLOG_BITS: SideMetadataSpec = crate::policy::immix::UnlogBit::<VM, COMPRESSED>::SPEC;
+impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
     const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]
@@ -93,7 +95,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
     }
 
     fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
-        let heap_bytes_per_unlog_byte = if COMPRESSED { 32usize } else { 64 };
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
+        } else {
+            64
+        };
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
             unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
         } else {
@@ -104,7 +110,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
 
     fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old = edge.load::<COMPRESSED>();
+            let old = edge.load();
             self.log_and_unlock_edge(edge);
             Ok(old)
         } else {
@@ -114,9 +120,9 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
 
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
-        if !edge.to_address().is_logged::<VM, COMPRESSED>() {
-            let old = edge.load::<COMPRESSED>();
-            edge.to_address().log::<VM, COMPRESSED>();
+        if !edge.to_address().is_logged::<VM>() {
+            let old = edge.load();
+            edge.to_address().log::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -203,7 +209,6 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
             self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
                 _,
                 EDGE_KIND_MATURE,
-                COMPRESSED,
             >::new(
                 incs, self.lxr
             ));
@@ -216,11 +221,11 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork]
-                    .add(ProcessModBufSATB::<COMPRESSED>::new_arc(decs.clone()));
-                ProcessDecs::<_, COMPRESSED>::new_arc(decs, LazySweepingJobsCounter::new_decs())
+                    .add(ProcessModBufSATB::new_arc(decs.clone()));
+                ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
-                ProcessDecs::<_, COMPRESSED>::new(decs, LazySweepingJobsCounter::new_decs())
+                ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs())
             };
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);
@@ -236,14 +241,12 @@ impl<VM: VMBinding, const COMPRESSED: bool> LXRFieldBarrierSemantics<VM, COMPRES
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
             self.mmtk.scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork]
-                .add(ProcessModBufSATB::<COMPRESSED>::new(nodes));
+                .add(ProcessModBufSATB::new(nodes));
         }
     }
 }
 
-impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
-    for LXRFieldBarrierSemantics<VM, COMPRESSED>
-{
+impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     type VM = VM;
 
     #[cold]
@@ -279,7 +282,7 @@ impl<VM: VMBinding, const COMPRESSED: bool> BarrierSemantics
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _, COMPRESSED>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
             if !e.to_address().is_mapped() {
                 return;
             }

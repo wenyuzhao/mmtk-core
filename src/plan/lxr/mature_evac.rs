@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
-use crate::vm::ObjectModel;
 use crate::{
     plan::{immix::Pause, lxr::cm::LXRStopTheWorldProcessEdges},
     policy::{
@@ -71,7 +70,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    fn process_edge<const COMPRESSED: bool>(
+    fn process_edge(
         &mut self,
         e: VM::VMEdge,
         epoch: u8,
@@ -83,7 +82,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
-        let o = e.load::<COMPRESSED>();
+        let o = e.load();
         if old_ref != o {
             return false;
         }
@@ -101,10 +100,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 
-    fn process_edges<const COMPRESSED: bool>(
-        &mut self,
-        mmtk: &'static MMTK<VM>,
-    ) -> Box<dyn GCWork<VM>> {
+    fn process_edges(&mut self, mmtk: &'static MMTK<VM>) -> Box<dyn GCWork<VM>> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
@@ -115,24 +111,18 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         let mut refs = vec![];
         for entry in remset {
             let (e, epoch, o) = entry.decode::<VM>();
-            if self.process_edge::<COMPRESSED>(e, epoch, o, lxr) {
+            if self.process_edge(e, epoch, o, lxr) {
                 edges.push(e);
                 refs.push(o);
             }
         }
-        Box::new(LXRStopTheWorldProcessEdges::<_, COMPRESSED>::new_remset(
-            edges, refs, mmtk,
-        ))
+        Box::new(LXRStopTheWorldProcessEdges::new_remset(edges, refs, mmtk))
     }
 }
 
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let work = if VM::VMObjectModel::compressed_pointers_enabled() {
-            self.process_edges::<true>(mmtk)
-        } else {
-            self.process_edges::<false>(mmtk)
-        };
+        let work = self.process_edges(mmtk);
         // transitive closure
         worker.add_boxed_work(WorkBucketStage::Closure, work)
     }

@@ -3,18 +3,13 @@ use atomic::Ordering;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::address::Address;
-use crate::util::heap::{MonotonePageResource, PageResource, VMRequest};
+use crate::util::heap::{MonotonePageResource, PageResource};
 
 use crate::util::{metadata, ObjectReference};
 
 use crate::plan::{ObjectQueue, VectorObjectQueue};
 
-use crate::plan::PlanConstraints;
 use crate::policy::sft::GCWorkerMutRef;
-use crate::policy::space::SpaceOptions;
-use crate::util::heap::layout::heap_layout::{Map, Mmapper};
-use crate::util::heap::HeapMeta;
-use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::vm::{ObjectModel, VMBinding};
 
 /// This type implements a simple immortal collection
@@ -85,20 +80,15 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         if crate::args::BARRIER_MEASUREMENT
             || (self.common.needs_log_bit && self.common.needs_field_log_bit)
         {
-            if VM::VMObjectModel::compressed_pointers_enabled() {
-                let step = 4;
-                for i in (0..bytes).step_by(step) {
-                    let a = object.to_address::<VM>() + i;
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC_COMPRESSED
-                        .mark_as_unlogged::<VM>(a.to_object_reference::<VM>(), Ordering::SeqCst);
-                }
+            let step = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+                4
             } else {
-                let step = 8;
-                for i in (0..bytes).step_by(step) {
-                    let a = object.to_address::<VM>() + i;
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .mark_as_unlogged::<VM>(a.to_object_reference::<VM>(), Ordering::SeqCst);
-                }
+                8
+            };
+            for i in (0..bytes).step_by(step) {
+                let a = object.to_address::<VM>() + i;
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .mark_as_unlogged::<VM>(a.to_object_reference::<VM>(), Ordering::SeqCst);
             }
         }
         #[cfg(feature = "global_alloc_bit")]
@@ -161,38 +151,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
 }
 
 impl<VM: VMBinding> ImmortalSpace<VM> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        name: &'static str,
-        zeroed: bool,
-        vmrequest: VMRequest,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static dyn Map,
-        mmapper: &'static dyn Mmapper,
-        heap: &mut HeapMeta,
-        constraints: &'static PlanConstraints,
-    ) -> Self {
-        let common = CommonSpace::new(
-            SpaceOptions {
-                name,
-                movable: false,
-                immortal: true,
-                needs_log_bit: constraints.needs_log_bit,
-                needs_field_log_bit: constraints.needs_field_log_bit,
-                zeroed,
-                vmrequest,
-            },
-            vm_map,
-            mmapper,
-            heap,
+    pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
+        let vm_map = args.vm_map;
+        let is_discontiguous = args.vmrequest.is_discontiguous();
+        let policy_args = args.into_policy_args(
+            false,
+            true,
+            metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_MARK_BIT_SPEC]),
         );
-        let metadata = SideMetadataContext {
-            global: global_side_metadata_specs,
-            local: metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_MARK_BIT_SPEC]),
-        };
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
         ImmortalSpace {
             mark_state: 0,
-            pr: if vmrequest.is_discontiguous() {
+            pr: if is_discontiguous {
                 MonotonePageResource::new_discontiguous(vm_map, metadata)
             } else {
                 MonotonePageResource::new_contiguous(common.start, common.extent, vm_map, metadata)

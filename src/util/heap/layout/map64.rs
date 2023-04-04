@@ -1,12 +1,13 @@
-use super::map::Map;
+use super::map::VMMap;
 use crate::util::constants::*;
 use crate::util::conversions;
-use crate::util::generic_freelist::FreeList;
+use crate::util::freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::raw_memory_freelist::RawMemoryFreeList;
+use crate::util::rust_util::zeroed_alloc::new_zeroed_vec;
 use crate::util::Address;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -39,7 +40,14 @@ impl Map64 {
         }
 
         Self {
-            descriptor_map: vec![SpaceDescriptor::UNINITIALIZED; VM_LAYOUT_CONSTANTS.max_chunks()],
+            // Note: descriptor_map is very large. Although it is initialized to
+            // SpaceDescriptor(0), the compiler and the standard library are not smart enough to
+            // elide the storing of 0 for each of the element.  Using standard vector creation,
+            // such as `vec![SpaceDescriptor::UNINITIALIZED; MAX_CHUNKS]`, will cause severe
+            // slowdown during start-up.
+            descriptor_map: unsafe {
+                new_zeroed_vec::<SpaceDescriptor>(VM_LAYOUT_CONSTANTS.max_chunks())
+            },
             high_water,
             base_address,
             fl_page_resources: vec![None; MAX_SPACES],
@@ -50,7 +58,7 @@ impl Map64 {
     }
 }
 
-impl Map for Map64 {
+impl VMMap for Map64 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
         debug_assert!(extent <= VM_LAYOUT_CONSTANTS.space_size_64);
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,

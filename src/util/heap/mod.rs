@@ -5,6 +5,7 @@ mod blockpageresource;
 pub mod blockpageresource_legacy;
 pub mod chunk_map;
 pub mod freelistpageresource;
+pub mod gc_trigger;
 mod heap_meta;
 pub mod monotonepageresource;
 pub mod pageresource;

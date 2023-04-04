@@ -49,17 +49,17 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
     crate::GC_START_TIME.store(t, Ordering::SeqCst);
 }
 
-/// Initialize an MMTk instance. A VM should call this method after creating an [MMTK](../mmtk/struct.MMTK.html)
+/// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
 /// instance but before using any of the methods provided in MMTk (except `process()` and `process_bulk()`).
 ///
 /// We expect a binding to ininitialize MMTk in the following steps:
 ///
-/// 1. Create an [MMTKBuilder](../mmtk/struct.MMTKBuilder.html) instance.
-/// 2. Set command line options for MMTKBuilder by [process()](./fn.process.html) or [process_bulk()](./fn.process_bulk.html).
+/// 1. Create an [`crate::MMTKBuilder`] instance.
+/// 2. Set command line options for MMTKBuilder by [`crate::memory_manager::process`] or [`crate::memory_manager::process_bulk`].
 /// 3. Initialize MMTk by calling this function, `mmtk_init()`, and pass the builder earlier. This call will return an MMTK instance.
 ///    Usually a binding store the MMTK instance statically as a singleton. We plan to allow multiple instances, but this is not yet fully
 ///    supported. Currently we assume a binding will only need one MMTk instance.
-/// 4. Enable garbage collection in MMTk by [enable_collection()](./fn.enable_collection.html). A binding should only call this once its
+/// 4. Enable garbage collection in MMTk by [`crate::memory_manager::enable_collection`]. A binding should only call this once its
 ///    thread system is ready. MMTk will not trigger garbage collection before this call.
 ///
 /// Note that this method will attempt to initialize a logger. If the VM would like to use its own logger, it should initialize the logger before calling this method.
@@ -439,7 +439,7 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     );
 
     let plan = mmtk.get_plan();
-    if plan.should_trigger_gc_when_heap_is_full() && plan.poll(false, None) {
+    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None) {
         debug!("Collection required");
         assert!(plan.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
         VM::VMCollection::block_for_gc(tls);
@@ -652,7 +652,6 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 #[cfg(feature = "is_mmtk_object")]
 pub fn is_mmtk_object(addr: Address) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP.get_checked(addr).is_mmtk_object(addr)
 }
 
@@ -801,7 +800,6 @@ pub fn add_finalizer<VM: VMBinding>(
 #[cfg(feature = "object_pinning")]
 pub fn pin_object<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .pin_object(object)
@@ -816,7 +814,6 @@ pub fn pin_object<VM: VMBinding>(object: ObjectReference) -> bool {
 #[cfg(feature = "object_pinning")]
 pub fn unpin_object<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .unpin_object(object)
@@ -829,7 +826,6 @@ pub fn unpin_object<VM: VMBinding>(object: ObjectReference) -> bool {
 #[cfg(feature = "object_pinning")]
 pub fn is_pinned<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    use crate::policy::sft_map::SFTMap;
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .is_object_pinned(object)
@@ -934,10 +930,4 @@ pub fn add_work_packets<VM: VMBinding>(
     packets: Vec<Box<dyn GCWork<VM>>>,
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
-}
-
-/// Add a callback to be notified after the transitive closure is finished.
-/// The callback should return true if it add more work packets to the closure bucket.
-pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + Fn() -> bool>) {
-    mmtk.scheduler.on_closure_end(f)
 }
