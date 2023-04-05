@@ -118,7 +118,10 @@ impl VMLayoutConstants {
             crate::util::memory::mprotect(unsafe { Address::from_usize(start - 4096) }, 4096)
                 .unwrap();
         }
-        let heap_end = (start + heap_size - 1 + BYTES_IN_CHUNK) & !(BYTES_IN_CHUNK - 1);
+        let heap_end = usize::min(
+            end,
+            (start + heap_size - 1 + BYTES_IN_CHUNK) & !(BYTES_IN_CHUNK - 1),
+        );
         Self {
             log_address_space: 35,
             heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
