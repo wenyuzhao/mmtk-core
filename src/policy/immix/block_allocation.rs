@@ -8,12 +8,14 @@ use crate::{
     vm::*,
     LazySweepingJobsCounter, MMTK,
 };
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 use std::sync::atomic::AtomicUsize;
+use std::sync::RwLock;
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: Option<&'static ImmixSpace<VM>>,
     nursery_blocks: AtomicUsize,
+    buffer: RwLock<Vec<Atomic<Block>>>,
     pub(crate) lxr: Option<&'static LXR<VM>>,
 }
 
@@ -22,6 +24,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         Self {
             space: None,
             nursery_blocks: AtomicUsize::new(0),
+            buffer: RwLock::new((0..32768).map(|_| Atomic::new(Block::ZERO)).collect()),
             lxr: None,
         }
     }
@@ -49,27 +52,24 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         // Sweep nursery blocks
         let total_nursery_blocks = self.nursery_blocks.load(Ordering::SeqCst);
         let stw_limit = usize::min(total_nursery_blocks, MAX_STW_SWEEP_BLOCKS);
-        let mut nursery_blocks = self.space().mutator_allocated_clean_blocks.lock().unwrap();
+        let blocks = self.buffer.read().unwrap();
         // 1. STW release a limited number of blocks
-        let mut stw_blocks = 0;
-        while !nursery_blocks.is_empty() && stw_blocks < stw_limit {
-            let blocks = nursery_blocks.pop().unwrap();
-            stw_blocks += blocks.len();
-            for block in blocks {
-                debug_assert_ne!(block.get_state(), super::block::BlockState::Unallocated);
-                block.rc_sweep_nursery(space, true);
-            }
+        for b in &blocks[0..stw_limit] {
+            let block = b.load(Ordering::Relaxed);
+            debug_assert_ne!(block.get_state(), super::block::BlockState::Unallocated);
+            block.rc_sweep_nursery(space, true);
         }
         // 2. Release remaining blocks concurrently after the pause
-        if !nursery_blocks.is_empty() && total_nursery_blocks > stw_blocks {
-            let mut packets = vec![];
-            while let Some(blocks) = nursery_blocks.pop() {
-                packets.push(Box::new(RCSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>);
-            }
+        if total_nursery_blocks > stw_limit {
+            let packets = blocks[stw_limit..total_nursery_blocks]
+                .chunks(1024)
+                .map(|c| {
+                    let blocks: Vec<Block> = c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+                    Box::new(RCSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
+                })
+                .collect();
             scheduler.postpone_all_prioritized(packets);
         }
-        // Reset
-        assert!(nursery_blocks.is_empty());
         self.nursery_blocks.store(0, Ordering::SeqCst);
     }
 
@@ -121,7 +121,19 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             Block::from_aligned_address(block_address)
         };
         if !copy {
-            self.nursery_blocks.fetch_add(1, Ordering::Relaxed);
+            let i = self.nursery_blocks.fetch_add(1, Ordering::SeqCst);
+            let buffer = self.buffer.read().unwrap();
+            if i < buffer.len() {
+                buffer[i].store(block, Ordering::SeqCst);
+            } else {
+                // resize
+                std::mem::drop(buffer);
+                let mut buffer = self.buffer.write().unwrap();
+                if i >= buffer.len() {
+                    buffer.resize_with(i << 1, || Atomic::new(Block::ZERO));
+                }
+                buffer[i].store(block, Ordering::Relaxed);
+            }
         }
         self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
         if self.space().common().zeroed && !copy && cfg!(feature = "force_zeroing") {

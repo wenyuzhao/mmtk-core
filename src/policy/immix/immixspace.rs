@@ -61,7 +61,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
     pub mutator_recycled_blocks: Mutex<Vec<Vec<Block>>>,
-    pub mutator_allocated_clean_blocks: Mutex<Vec<Vec<Block>>>,
+    pub mutator_allocated_clean_blocks: Mutex<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
