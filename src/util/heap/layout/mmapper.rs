@@ -45,6 +45,10 @@ pub trait Mmapper: Sync {
     // TODO: Fix the above to support unmapping.
     fn ensure_mapped(&self, start: Address, pages: usize) -> Result<()>;
 
+    fn ensure_unmapped(&self, _start: Address, _pages: usize) -> Result<()> {
+        unimplemented!("map32 only")
+    }
+
     /// Is the page pointed to by this address mapped? Returns true if
     /// the page at the given address is mapped.
     ///
@@ -96,6 +100,24 @@ impl MapState {
         };
         if res.is_ok() {
             state.store(MapState::Mapped, Ordering::Relaxed);
+        }
+        res
+    }
+
+    pub(super) fn transition_to_unmapped(
+        state: &Atomic<MapState>,
+        mmap_start: Address,
+    ) -> Result<()> {
+        let res = match state.load(Ordering::Relaxed) {
+            MapState::Unmapped => unreachable!(),
+            MapState::Protected => unreachable!(),
+            MapState::Quarantined => unreachable!(),
+            MapState::Mapped => munmap(mmap_start, MMAP_CHUNK_BYTES),
+        };
+        if res.is_ok() {
+            state.store(MapState::Unmapped, Ordering::Relaxed);
+        } else {
+            panic!("{:?}", res);
         }
         res
     }

@@ -1,5 +1,6 @@
 use super::map::VMMap;
 use crate::mmtk::SFT_MAP;
+use crate::util::alloc::embedded_meta_data::LOG_PAGES_IN_REGION;
 use crate::util::conversions;
 use crate::util::freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
@@ -188,7 +189,22 @@ impl VMMap for Map32 {
         let (_sync, self_mut) = self.mut_self_with_sync();
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        self_mut.free_contiguous_chunks_no_lock(chunk as _)
+        let freed_chunks = self_mut.free_contiguous_chunks_no_lock(chunk as _);
+        if cfg!(feature = "munmap") {
+            let result =
+                crate::mmtk::MMAPPER.ensure_unmapped(start, freed_chunks << LOG_PAGES_IN_REGION);
+            assert!(result.is_ok(), "{:?}", result);
+        } else if cfg!(feature = "madv_dontneed") {
+            unsafe {
+                let result = libc::madvise(
+                    start.to_mut_ptr(),
+                    freed_chunks << LOG_BYTES_IN_CHUNK,
+                    libc::MADV_DONTNEED,
+                );
+                assert_ne!(result, -1, "{:?}", std::io::Error::last_os_error());
+            }
+        }
+        freed_chunks
     }
 
     fn finalize_static_space_map(&self, from: Address, to: Address) {

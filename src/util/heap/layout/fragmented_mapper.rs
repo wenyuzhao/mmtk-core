@@ -161,6 +161,34 @@ impl Mmapper for FragmentedMapper {
         Ok(())
     }
 
+    fn ensure_unmapped(&self, mut start: Address, pages: usize) -> Result<()> {
+        let end = start + conversions::pages_to_bytes(pages);
+        // Iterate over the slabs covered
+        while start < end {
+            let base = Self::slab_align_down(start);
+            let high = if end > Self::slab_limit(start) && !Self::slab_limit(start).is_zero() {
+                Self::slab_limit(start)
+            } else {
+                end
+            };
+
+            let slab = Self::slab_align_down(start);
+            let start_chunk = Self::chunk_index(slab, start);
+            let end_chunk = Self::chunk_index(slab, conversions::mmap_chunk_align_up(high));
+
+            let mapped = self.get_or_allocate_slab_table(start);
+
+            /* Iterate over the chunks within the slab */
+            for (chunk, entry) in mapped.iter().enumerate().take(end_chunk).skip(start_chunk) {
+                let mmap_start = Self::chunk_index_to_address(base, chunk);
+                let _guard = self.lock.lock().unwrap();
+                MapState::transition_to_unmapped(entry, mmap_start)?;
+            }
+            start = high;
+        }
+        Ok(())
+    }
+
     /**
      * Return {@code true} if the given address has been mmapped
      *
