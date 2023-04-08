@@ -318,7 +318,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        if o.get_size::<VM>() >= crate::args().max_copy_size {
+        if o.get_size::<VM>() >= crate::args().max_young_evac_size {
             return true;
         }
         false
