@@ -236,23 +236,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         if *self.options().verbose >= 2 {
             gc_log!(
-                "GC({}) {:?} start. incs={} young-blocks={}({}M) reserved={}M collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
+                "GC({}) {:?} start. incs={} young-blocks={}({}M)",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 self.rc.inc_buffer_size(),
                 self.immix_space.block_allocation.nursery_blocks(),
                 self.immix_space.block_allocation.nursery_blocks() / 32,
-                self.get_reserved_pages() / 256,
-                self.get_collection_reserved_pages() / 256,
-                self.immix_space.defrag_headroom_pages() / 256,
-                self.immix_space.pr.available_pages() / 256,
-                if self.immix_space.common().contiguous {
-                    0
-                } else {
-                    (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
-                },
             );
         }
+        self.dump_heap_usage();
         match pause {
             Pause::FullTraceFast => self
                 .schedule_emergency_full_heap_collection::<RCImmixCollectRootEdges<VM>>(scheduler),
@@ -418,23 +410,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.avail_pages_at_end_of_last_gc
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
-        if *self.options().verbose >= 3 {
-            gc_log!(
-                "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
-                crate::GC_EPOCH.load(Ordering::SeqCst),
-                self.get_reserved_pages() / 256,
-                self.immix_space.reserved_pages() / 256,
-                self.los().reserved_pages() / 256,
-                self.get_collection_reserved_pages() / 256,
-                self.immix_space.defrag_headroom_pages() / 256,
-                self.immix_space.pr.available_pages() / 256,
-                if self.immix_space.common().contiguous {
-                    0
-                } else {
-                    (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
-                },
-            );
-        }
+        self.dump_heap_usage();
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -974,5 +950,25 @@ impl<VM: VMBinding> LXR<VM> {
 
     pub fn options(&self) -> &Options {
         &self.common.base.options
+    }
+
+    fn dump_heap_usage(&self) {
+        if *self.options().verbose >= 3 {
+            gc_log!(
+                "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
+                crate::GC_EPOCH.load(Ordering::SeqCst),
+                self.get_reserved_pages() / 256,
+                self.immix_space.reserved_pages() / 256,
+                self.los().reserved_pages() / 256,
+                self.get_collection_reserved_pages() / 256,
+                self.immix_space.defrag_headroom_pages() / 256,
+                self.immix_space.pr.available_pages() / 256,
+                if self.immix_space.common().contiguous {
+                    0
+                } else {
+                    (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
+                },
+            );
+        }
     }
 }
