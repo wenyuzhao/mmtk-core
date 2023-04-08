@@ -120,6 +120,7 @@ lxr_report_fragmentation = []
 madv_dontneed = []
 munmap = []
 virt_constraint = []
+lxr_no_survival_trigger = []
 
 bpr_unprioritized = []
 bpr_freelist = []

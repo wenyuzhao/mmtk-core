@@ -110,23 +110,17 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let predicted_survival = ((self.immix_space.block_allocation.nursery_mb() as f64
             * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
             << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
-        if predicted_survival >= crate::args().max_survival_mb {
-            // println!(
-            //     "Survival limits {} * {} > {} blocks={}",
-            //     self.immix_space.block_allocation.nursery_mb(),
-            //     super::SURVIVAL_RATIO_PREDICTOR.ratio(),
-            //     self.max_survival_mb.unwrap(),
-            //     self.immix_space.block_allocation.nursery_blocks()
-            // );
-            SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
-            return true;
+        if !cfg!(feature = "lxr_no_survival_trigger") {
+            if predicted_survival >= crate::args().max_survival_mb {
+                SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
+                return true;
+            }
         }
         if !self.immix_space.common().contiguous {
             let available_to_space = (self.immix_space.pr.available_pages()
                 + (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)))
                 / 256;
             if predicted_survival >= available_to_space {
-                SURVIVAL_TRIGGERED.store(true, Ordering::SeqCst);
                 return true;
             }
         }
@@ -335,18 +329,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        let max_survival_mb = crate::args().max_survival_mb;
-        if max_survival_mb != 0 && max_survival_mb != usize::MAX {
-            let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
-                * super::SURVIVAL_RATIO_PREDICTOR.ratio())
-                as usize;
-            let survival = usize::max(
-                max_survival_mb,
-                predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER,
-            );
-            return survival + self.immix_space.defrag_headroom_pages();
-        }
-        self.immix_space.defrag_headroom_pages()
+        let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
+            * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize;
+        let survival = predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
+        return survival + self.immix_space.defrag_headroom_pages();
     }
 
     fn get_used_pages(&self) -> usize {
