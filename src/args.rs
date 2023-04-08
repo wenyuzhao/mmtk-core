@@ -64,7 +64,7 @@ impl Default for RuntimeArgs {
             survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
                 .unwrap_or(false),
             survival_predictor_weighted: env_bool_arg("SURVIVAL_PREDICTOR_WEIGHTED")
-                .unwrap_or(true),
+                .unwrap_or(false),
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .unwrap_or(20),
