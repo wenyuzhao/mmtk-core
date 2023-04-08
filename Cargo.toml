@@ -75,6 +75,7 @@ no_map_fixed_noreplace = []
 # IX Features
 ix_block_only = []
 ix_no_defrag = []
+ix_retry_small_object_alloc = []
 
 # LXR Paraleters
 lxr_los_16k = []

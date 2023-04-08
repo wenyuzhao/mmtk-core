@@ -53,6 +53,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.request_for_large = false;
         self.line = None;
     }
+
+    fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
+        if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+            return Address::ZERO;
+        }
+        if self.acquire_recyclable_lines(size, align, offset) {
+            let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+            let new_cursor = result + size;
+            if new_cursor > self.limit {
+                Address::ZERO
+            } else {
+                fill_alignment_gap::<VM>(self.cursor, result);
+                self.cursor = new_cursor;
+                result
+            }
+        } else {
+            Address::ZERO
+        }
+    }
 }
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
@@ -113,6 +132,12 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     /// Acquire a clean block from ImmixSpace for allocation.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_once", self.tls);
+        if cfg!(feature = "ix_retry_small_object_alloc") {
+            let result = self.retry_alloc_slow_hot(size, align, offset);
+            if !result.is_zero() {
+                return result;
+            }
+        }
         self.acquire_clean_block(size, align, offset)
     }
 
