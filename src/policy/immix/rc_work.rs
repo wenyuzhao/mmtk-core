@@ -45,6 +45,17 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
+        let threshold = {
+            let chunk_defarg_percent = if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+                crate::args().chunk_defarg_percent << 1
+            } else {
+                crate::args().chunk_defarg_percent
+            };
+            let chunk_defarg_percent = chunk_defarg_percent.min(100);
+            let threshold = BLOCKS_IN_CHUNK * chunk_defarg_percent / 100;
+            threshold.max(1)
+        };
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
             // Skip unallocated blocks.
@@ -56,13 +67,6 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 .immix_space
                 .pr
                 .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
-            let threshold = if lxr.current_pause().unwrap() == Pause::FullTraceFast {
-                crate::args().chunk_defarg_threshold << 1
-            } else {
-                crate::args().chunk_defarg_threshold
-            };
-            const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
-            let threshold = usize::min(threshold, BLOCKS_IN_CHUNK - 1);
             if live_blocks_in_chunk < threshold {
                 let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
                 blocks_in_fragmented_chunks.push((block, dead_blocks));
