@@ -93,26 +93,26 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn reset_block_mark_for_mutator_reused_blocks(&self) {
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
-        self.reused_blocks.visit_slice(|blocks| {
-            for b in blocks {
-                let b = b.load(Ordering::Relaxed);
-                b.set_state(BlockState::Marked);
-            }
-        });
+        // self.reused_blocks.visit_slice(|blocks| {
+        //     for b in blocks {
+        //         let b = b.load(Ordering::Relaxed);
+        //         b.set_state(BlockState::Marked);
+        //     }
+        // });
     }
 
     pub fn sweep_mutator_reused_blocks(&self, pause: Pause) {
-        if pause != Pause::FullTraceFast && pause != Pause::FinalMark {
-            // SATB sweep has problem scanning mutator recycled blocks.
-            // Remaing the block state as "reusing" and reset them here.
-            self.reused_blocks.visit_slice(|blocks| {
-                for b in blocks {
-                    let b = b.load(Ordering::Relaxed);
-                    self.space().add_to_possibly_dead_mature_blocks(b, false);
-                }
-            });
-        }
-        self.reused_blocks.reset();
+        // if pause != Pause::FullTraceFast && pause != Pause::FinalMark {
+        //     // SATB sweep has problem scanning mutator recycled blocks.
+        //     // Remaing the block state as "reusing" and reset them here.
+        //     self.reused_blocks.visit_slice(|blocks| {
+        //         for b in blocks {
+        //             let b = b.load(Ordering::Relaxed);
+        //             self.space().add_to_possibly_dead_mature_blocks(b, false);
+        //         }
+        //     });
+        // }
+        // self.reused_blocks.reset();
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
@@ -225,9 +225,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                     if !copy && !block.attempt_mutator_reuse() {
                         continue;
                     }
-                    if !copy {
-                        self.reused_blocks.push(block);
-                    }
+                    // if !copy {
+                    //     self.reused_blocks.push(block);
+                    // }
                 }
                 block.init(copy, true, self.space());
                 return Some(block);

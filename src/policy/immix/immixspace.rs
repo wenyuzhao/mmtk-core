@@ -29,9 +29,9 @@ use crate::{
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
+use spin::Mutex;
 use std::mem;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 use std::sync::{atomic::AtomicU8, Arc};
 
 pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
@@ -60,8 +60,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub block_allocation: BlockAllocation<VM>,
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
-    // pub mutator_recycled_blocks: Mutex<Vec<Vec<Block>>>,
-    // pub mutator_allocated_clean_blocks: Mutex<Vec<Block>>,
+    pub mutator_recycled_blocks: Mutex<Vec<Block>>,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
@@ -327,8 +326,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             block_allocation: BlockAllocation::new(),
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
-            // mutator_recycled_blocks: Default::default(),
-            // mutator_allocated_clean_blocks: Default::default(),
+            mutator_recycled_blocks: Default::default(),
             mature_evac_remsets: Default::default(),
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
@@ -431,6 +429,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
         }
+        // SATB sweep has problem scanning mutator recycled blocks.
+        // Remaing the block state as "reusing" and reset them here.
+        let mut blocks = self.mutator_recycled_blocks.lock();
+        for b in &*blocks {
+            b.set_state(BlockState::Marked);
+        }
+        if !(pause == Pause::FullTraceFast || pause == Pause::FinalMark) {
+            for b in &*blocks {
+                self.add_to_possibly_dead_mature_blocks(*b, false);
+            }
+        }
+        blocks.clear();
         self.block_allocation
             .reset_block_mark_for_mutator_reused_blocks();
         if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
@@ -660,7 +670,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Trace and mark objects without evacuation.
     pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
-        mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock().unwrap());
+        mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock());
         self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
     }
 
