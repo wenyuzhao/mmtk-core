@@ -566,7 +566,7 @@ pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, u
         // let curr = size * count;
         accumulative_count += count;
         eprintln!(
-            " - obj-size={} ({}) count={} total={} accumulative-count={} ({}%)",
+            " - obj-size={} ({}) count={} total-size={} accumulative-count={} ({}%)",
             size,
             if *size < (1 << 10) {
                 format!("{}B", *size)
