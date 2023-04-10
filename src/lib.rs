@@ -49,6 +49,7 @@ mod gc_log;
 mod mmtk;
 pub use mmtk::MMTKBuilder;
 use std::{
+    collections::HashMap,
     fs::File,
     io::Write,
     sync::{
@@ -529,4 +530,58 @@ pub fn gc_worker_id() -> Option<usize> {
 
 pub(crate) fn args() -> &'static crate::args::RuntimeArgs {
     crate::args::RuntimeArgs::get()
+}
+
+lazy_static! {
+    static ref OBJ_COUNT: std::sync::Mutex<HashMap<usize, (usize, usize)>> =
+        std::sync::Mutex::new(HashMap::new());
+}
+
+fn record_obj(size: usize) {
+    assert!(cfg!(feature = "object_size_distribution"));
+    let mut counts = OBJ_COUNT.lock().unwrap();
+    counts
+        .entry(size.next_power_of_two())
+        .and_modify(|x| {
+            x.0 += 1;
+            x.1 += size;
+        })
+        .or_insert((1, size));
+}
+
+pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, usize)>) {
+    assert!(cfg!(feature = "object_size_distribution"));
+    // let mut total_size: usize = 0;
+    let mut total_count: usize = 0;
+    let mut table = vec![];
+    for (size, v) in &*counts {
+        // total_size += v.1;
+        total_count += v.0;
+        table.push((size, v));
+    }
+    table.sort_by_key(|x| x.0);
+    eprintln!("{} Size Distribution:", kind);
+    let mut accumulative_count = 0;
+    for (size, (count, total)) in table {
+        // let curr = size * count;
+        accumulative_count += count;
+        eprintln!(
+            " - obj-size={} ({}) count={} total={} accumulative-count={} ({}%)",
+            size,
+            if *size < (1 << 10) {
+                format!("{}B", *size)
+            } else if *size < (1 << 20) {
+                format!("{}K", *size >> 10)
+            } else if *size < (1 << 30) {
+                format!("{}M", *size >> 20)
+            } else {
+                format!("{}G", *size >> 30)
+            },
+            count,
+            total,
+            accumulative_count,
+            (100 * accumulative_count) as f64 / total_count as f64
+        );
+    }
+    counts.clear();
 }

@@ -411,6 +411,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
         self.dump_heap_usage();
+        if cfg!(feature = "object_size_distribution") {
+            if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+                crate::dump_and_reset_obj_dist("Static", &mut crate::OBJ_COUNT.lock().unwrap());
+            }
+        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]

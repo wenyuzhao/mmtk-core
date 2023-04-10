@@ -147,6 +147,9 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             },
         );
         if self.rc.count(object) != 0 {
+            if cfg!(feature = "object_size_distribution") {
+                crate::record_obj(object.get_size::<VM>());
+            }
             for (e, t, validity) in cached_children {
                 if t.is_null() || self.rc.count(t) == 0 {
                     continue;
@@ -475,6 +478,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
 
 impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
+        if cfg!(feature = "object_size_distribution") {
+            crate::record_obj(object.get_size::<VM>());
+        }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
@@ -576,6 +582,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
 impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
+        if cfg!(feature = "object_size_distribution") {
+            crate::record_obj(object.get_size::<VM>());
+        }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
