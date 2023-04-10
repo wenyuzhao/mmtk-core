@@ -298,7 +298,7 @@ impl<B: Region> ChunkPool<B> {
             .store_atomic::<u8>(block.start(), 0, Ordering::SeqCst);
         if Self::cross_boundary(false, live_blocks) {
             let chunk_is_removed = self.move_chunk(chunk);
-            if chunk_is_removed {
+            if chunk_is_removed && live_blocks == 0 {
                 Some(chunk)
             } else {
                 None

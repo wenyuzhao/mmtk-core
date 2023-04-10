@@ -221,7 +221,6 @@ pub trait Allocator<VM: VMBinding>: Downcast {
             };
 
             if !is_mutator {
-                debug_assert!(!result.is_zero());
                 return result;
             }
 

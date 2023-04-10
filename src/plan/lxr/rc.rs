@@ -138,7 +138,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self.rc.promote(o);
-            if in_nursery_block {
+            if in_nursery_block || copied {
                 self.survival_ratio_predictor_local
                     .record_promotion(o.get_size::<VM>());
             }
@@ -318,7 +318,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        if o.get_size::<VM>() >= crate::args().max_copy_size {
+        if o.get_size::<VM>() >= crate::args().max_young_evac_size {
             return true;
         }
         false

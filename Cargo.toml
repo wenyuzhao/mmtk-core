@@ -75,6 +75,7 @@ no_map_fixed_noreplace = []
 # IX Features
 ix_block_only = []
 ix_no_defrag = []
+ix_retry_small_object_alloc = []
 
 # LXR Paraleters
 lxr_los_16k = []
@@ -116,6 +117,10 @@ lxr_evacuate_nursery_in_recycled_lines = []
 lxr_delayed_nursery_evacuation = []
 lxr_enable_initial_alloc_limit = []
 lxr_report_fragmentation = []
+madv_dontneed = []
+munmap = []
+virt_constraint = []
+lxr_no_survival_trigger = []
 
 bpr_unprioritized = []
 bpr_freelist = []

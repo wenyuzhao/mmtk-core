@@ -21,7 +21,7 @@ pub(crate) struct RuntimeArgs {
     #[allow(unused)]
     pub(crate) max_mature_defrag_percent: usize,
     pub(crate) max_pause_millis: Option<usize>,
-    pub(crate) max_copy_size: usize,
+    pub(crate) max_young_evac_size: usize,
     pub(crate) concurrent_marking_stop_blocks: usize,
     pub(crate) max_survival_mb: usize,
     pub(crate) survival_predictor_harmonic_mean: bool,
@@ -29,7 +29,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) trace_threshold: usize,
     pub(crate) min_reuse_lines: usize,
     pub(crate) no_recursive_dec: bool,
-    pub(crate) chunk_defarg_threshold: usize,
+    pub(crate) chunk_defarg_percent: usize,
 }
 
 impl Default for RuntimeArgs {
@@ -56,19 +56,19 @@ impl Default for RuntimeArgs {
             concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
-            max_copy_size: env_arg("MAX_COPY_SIZE").unwrap_or(512),
+            max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(usize::MAX),
             concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
             max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128),
             survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
                 .unwrap_or(false),
             survival_predictor_weighted: env_bool_arg("SURVIVAL_PREDICTOR_WEIGHTED")
-                .unwrap_or(true),
+                .unwrap_or(false),
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .unwrap_or(20),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
             no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
-            chunk_defarg_threshold: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
+            chunk_defarg_percent: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
         }
     }
 }

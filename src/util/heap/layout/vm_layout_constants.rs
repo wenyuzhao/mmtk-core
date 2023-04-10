@@ -118,10 +118,20 @@ impl VMLayoutConstants {
             crate::util::memory::mprotect(unsafe { Address::from_usize(start - 4096) }, 4096)
                 .unwrap();
         }
+
+        let heap_end = if cfg!(feature = "virt_constraint") {
+            usize::min(
+                end,
+                (start + heap_size - 1 + BYTES_IN_CHUNK) & !(BYTES_IN_CHUNK - 1),
+            )
+        } else {
+            end
+        };
+
         Self {
             log_address_space: 35,
             heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(heap_end) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
             max_chunks: end >> LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
