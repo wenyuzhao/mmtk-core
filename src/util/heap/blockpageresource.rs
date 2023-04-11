@@ -396,7 +396,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         mut metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
-        Self::append_local_metadata(&mut metadata);
+        // Self::append_local_metadata(&mut metadata);
         Self {
             flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
             pool: ChunkPool::new_compressed_pointers(),
@@ -418,14 +418,18 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if start.is_zero() {
             return None;
         }
-        if let Err(mmap_error) = crate::mmtk::MMAPPER
-            .ensure_mapped(start, PAGES_IN_CHUNK as _)
-            .and(
-                self.common()
-                    .metadata
-                    .try_map_metadata_space(start, BYTES_IN_CHUNK),
-            )
-        {
+        // map metadata
+        let metadata = SideMetadataContext {
+            global: vec![],
+            local: vec![
+                ChunkList::PREV,
+                ChunkList::NEXT,
+                ChunkPool::<B>::CHUNK_BIN,
+                ChunkPool::<B>::CHUNK_LIVE_BLOCKS,
+                B::BPR_ALLOC_TABLE.unwrap(),
+            ],
+        };
+        if let Err(mmap_error) = metadata.try_map_metadata_space(start, BYTES_IN_CHUNK) {
             crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
         }
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
