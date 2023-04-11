@@ -115,13 +115,11 @@ impl VMMap for Map32 {
         debug_assert!(chunk != 0);
         if chunk == -1 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
-            // if cfg!(feature = "sanity") {
-            gc_log!(
+            gc_log!([1]
                 "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
                 chunks,
                 self.total_available_discontiguous_chunks
             );
-            // }
             return unsafe { Address::zero() };
         }
         self_mut.total_available_discontiguous_chunks -= chunks;

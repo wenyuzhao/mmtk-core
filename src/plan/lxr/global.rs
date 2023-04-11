@@ -234,16 +234,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
-        if *self.options().verbose >= 2 {
-            gc_log!(
-                "GC({}) {:?} start. incs={} young-blocks={}({}M)",
-                crate::GC_EPOCH.load(Ordering::SeqCst),
-                pause,
-                self.rc.inc_buffer_size(),
-                self.immix_space.block_allocation.nursery_blocks(),
-                self.immix_space.block_allocation.nursery_blocks() / 32,
-            );
-        }
+        gc_log!([2]
+            "GC({}) {:?} start. incs={} young-blocks={}({}M)",
+            crate::GC_EPOCH.load(Ordering::SeqCst),
+            pause,
+            self.rc.inc_buffer_size(),
+            self.immix_space.block_allocation.nursery_blocks(),
+            self.immix_space.block_allocation.nursery_blocks() / 32,
+        );
         self.dump_heap_usage();
         match pause {
             Pause::FullTraceFast => self
@@ -295,9 +293,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn release(&mut self, tls: VMWorkerThread) {
         let new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
-        if *self.options().verbose >= 3 {
-            gc_log!(" - updated survival ratio: {}", new_ratio);
-        }
+        gc_log!([3] " - updated survival ratio: {}", new_ratio);
         let pause = self.current_pause().unwrap();
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
@@ -555,9 +551,7 @@ impl<VM: VMBinding> LXR<VM> {
             || self.previous_pause() == Some(Pause::FullTraceFast)
         {
             let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
-            if *self.options().verbose >= 3 {
-                gc_log!(" - predicted live mature pages: {}", live_mature_pages)
-            }
+            gc_log!([3] " - predicted live mature pages: {}", live_mature_pages)
         }
         let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
         let garbage = if pages_after_gc > live_mature_pages {
@@ -599,13 +593,10 @@ impl<VM: VMBinding> LXR<VM> {
         }
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        if *self.options().verbose >= 2 {
-            gc_log!(
-                " - next_gc_may_perform_cycle_collection = {}",
-                self.next_gc_may_perform_cycle_collection
-                    .load(Ordering::Relaxed)
-            );
-        }
+        gc_log!([2]
+            " - next_gc_may_perform_cycle_collection = {}",
+            self.next_gc_may_perform_cycle_collection.load(Ordering::Relaxed)
+        );
         // If CM is finished, do a final mark pause
         if self.concurrent_marking_enabled()
             && concurrent_marking_in_progress
@@ -899,15 +890,13 @@ impl<VM: VMBinding> LXR<VM> {
                 .downcast_ref::<Self>()
                 .unwrap();
             lxr.immix_space.flush_page_resource();
-            if *lxr.options().verbose >= 2 {
-                gc_log!(
-                    " - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
-                    crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
-                    lxr.get_reserved_pages() / 256,
-                    lxr.get_total_pages() / 256,
-                    crate::gc_start_time_ms()
-                );
-            }
+            gc_log!([2]
+                " - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
+                crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
+                lxr.get_reserved_pages() / 256,
+                lxr.get_total_pages() / 256,
+                crate::gc_start_time_ms()
+            );
             // Update counters
             if !crate::args::LAZY_DECREMENTS {
                 HEAP_AFTER_GC.store(lxr.get_used_pages(), Ordering::SeqCst);
@@ -958,22 +947,20 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn dump_heap_usage(&self) {
-        if *self.options().verbose >= 3 {
-            gc_log!(
-                "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
-                crate::GC_EPOCH.load(Ordering::SeqCst),
-                self.get_reserved_pages() / 256,
-                self.immix_space.reserved_pages() / 256,
-                self.los().reserved_pages() / 256,
-                self.get_collection_reserved_pages() / 256,
-                self.immix_space.defrag_headroom_pages() / 256,
-                self.immix_space.pr.available_pages() / 256,
-                if self.immix_space.common().contiguous {
-                    0
-                } else {
-                    (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
-                },
-            );
-        }
+        gc_log!([3]
+            "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
+            crate::GC_EPOCH.load(Ordering::SeqCst),
+            self.get_reserved_pages() / 256,
+            self.immix_space.reserved_pages() / 256,
+            self.los().reserved_pages() / 256,
+            self.get_collection_reserved_pages() / 256,
+            self.immix_space.defrag_headroom_pages() / 256,
+            self.immix_space.pr.available_pages() / 256,
+            if self.immix_space.common().contiguous {
+                0
+            } else {
+                (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
+            },
+        );
     }
 }

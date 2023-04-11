@@ -585,3 +585,9 @@ pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, u
     }
     counts.clear();
 }
+
+static VERBOSE: AtomicUsize = AtomicUsize::new(0);
+
+fn verbose(level: usize) -> bool {
+    VERBOSE.load(Ordering::Relaxed) >= level
+}

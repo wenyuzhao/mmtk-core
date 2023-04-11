@@ -39,13 +39,11 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
         crate::COUNTERS.yield_nanos.fetch_add(t, Ordering::Relaxed);
     }
 
-    if *mmtk.options.verbose >= 3 {
-        gc_log!(
-            " - ({:.3}ms) Safepoint start. {:.6}ms since gc was triggered",
-            0f64,
-            crate::gc_trigger_time_ms(),
-        );
-    }
+    gc_log!([3]
+        " - ({:.3}ms) Safepoint start. {:.6}ms since gc was triggered",
+        0f64,
+        crate::gc_trigger_time_ms(),
+    );
     crate::GC_START_TIME.store(t, Ordering::SeqCst);
 }
 
