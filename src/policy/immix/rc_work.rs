@@ -471,14 +471,12 @@ impl MatureEvacuationSet {
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         // let count2 = selected_blocks.len() - count1;
-        if *space.options.verbose >= 2 {
-            gc_log!(
-                " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
-                copy_bytes,
-                selected_blocks.len(),
-                count1,
-            );
-        }
+        gc_log!([2]
+            " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
+            copy_bytes,
+            selected_blocks.len(),
+            count1,
+        );
         self.num_defrag_blocks
             .store(selected_blocks.len(), Ordering::SeqCst);
         let mut defrag_blocks = self.defrag_blocks.lock().unwrap();

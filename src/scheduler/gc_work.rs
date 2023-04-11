@@ -222,13 +222,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
                 .current_gc_should_prepare_for_class_unloading(),
         );
         trace!("stop_all_mutators end");
-        if *mmtk.options.verbose >= 2 {
+        if crate::verbose(2) {
             crate::RESERVED_PAGES_AT_GC_START
                 .store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);
         }
-        if *mmtk.options.verbose >= 3 {
-            gc_log!(" - ({:.3}ms) Mutators stopped", crate::gc_start_time_ms());
-        }
+        gc_log!([3] " - ({:.3}ms) Mutators stopped", crate::gc_start_time_ms());
         #[cfg(feature = "sanity")]
         mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
         mmtk.plan.gc_pause_start(&mmtk.scheduler);
@@ -281,7 +279,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .map(|ix| ix.current_pause().unwrap())
             .unwrap_or(Pause::FullTraceFast);
         crate::add_pause_time(pause, pause_time.as_nanos());
-        if *mmtk.options.verbose >= 2 {
+        if crate::verbose(2) {
             let _released_n =
                 crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
             let _released =
@@ -296,7 +294,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 Pause::FinalMark => "FinalMark",
                 _ => "Full",
             };
-            gc_log!(
+            gc_log!([2]
                 "GC({}) {} finished. {}M->{}M({}M) pause-time={:.3}ms",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,

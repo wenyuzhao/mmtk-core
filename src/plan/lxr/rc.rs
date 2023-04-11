@@ -375,7 +375,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     self.promote(new, true, false, depth);
                     new
                 } else {
-                    gc_log!("to-space overflow");
+                    gc_log!([1] "to-space overflow");
                     // Object is not moved.
                     let r = self.rc.inc(o);
                     object_forwarding::clear_forwarding_bits::<VM>(o);
@@ -575,13 +575,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if over_space || over_time {
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
-                if *self.lxr().options().verbose >= 2 {
-                    gc_log!(
-                        " - Stop evacuation. over_space={} over_time={}",
-                        over_space,
-                        over_time
-                    );
-                }
+                gc_log!([2]
+                    " - Stop evacuation. over_space={} over_time={}",
+                    over_space,
+                    over_time
+                );
             }
         }
         // Process main buffer

@@ -78,7 +78,8 @@ impl Map32 {
             MIN_LARGE_CHUNK_RESERVE,
             (virtual_space_size as f64 * LARGE_CHUNK_RESERVE_RATIO).ceil() as usize,
         );
-        let large_chunk_reserve_chunks = (large_chunk_reserve_bytes >> LOG_BYTES_IN_CHUNK).next_power_of_two();
+        let large_chunk_reserve_chunks =
+            (large_chunk_reserve_bytes >> LOG_BYTES_IN_CHUNK).next_power_of_two();
         VM_LAYOUT_CONSTANTS.heap_end - (large_chunk_reserve_chunks << LOG_BYTES_IN_CHUNK)
     }
 }
@@ -158,14 +159,11 @@ impl VMMap for Map32 {
         debug_assert!(chunk != 0);
         if chunk == -1 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
-            if crate::verbose(3) {
-                gc_log!(
-                    "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={} {}",
-                    chunks,
-                    self.total_available_discontiguous_chunks,
-                    self.total_available_large_discontiguous_chunks
-                );
-            }
+            gc_log!([1]
+                "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
+                chunks,
+                self.total_available_discontiguous_chunks
+            );
             return unsafe { Address::zero() };
         }
         self_mut.total_available_discontiguous_chunks -= chunks;
