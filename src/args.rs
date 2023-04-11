@@ -14,6 +14,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) incs_limit: Option<usize>,
     pub(crate) blocks_limit: Option<usize>,
     pub(crate) no_mutator_line_recycling: bool,
+    pub(crate) lock_free_blocks: usize,
     pub(crate) nursery_blocks: Option<usize>,
     pub(crate) nursery_ratio: Option<usize>,
     pub(crate) lower_concurrent_worker_priority: bool,
@@ -49,6 +50,7 @@ impl Default for RuntimeArgs {
             incs_limit: env_arg("INCS_LIMIT"),
             blocks_limit: env_arg("BLOCKS_LIMIT"),
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
+            lock_free_blocks: env_arg("LOCK_FREE_BLOCKS").unwrap_or_else(|| 1 * num_cpus::get()),
             nursery_blocks: env_arg("NURSERY_BLOCKS"),
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")

@@ -435,19 +435,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         for b in &*blocks {
             b.set_state(BlockState::Marked);
         }
-        if !(pause == Pause::FullTraceFast || pause == Pause::FinalMark) {
+        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+            // Release young blocks to reduce to-space overflow
+            let scheduler = self.scheduler.clone();
+            self.block_allocation.sweep_and_reset(&scheduler);
+            self.flush_page_resource();
+        } else {
             for b in &*blocks {
                 self.add_to_possibly_dead_mature_blocks(*b, false);
             }
         }
         blocks.clear();
-        self.block_allocation
-            .reset_block_mark_for_mutator_reused_blocks();
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            // Release young blocks to reduce to-space overflow
-            self.block_allocation.sweep_nursery_blocks(&self.scheduler);
-            self.flush_page_resource();
-        }
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
@@ -458,8 +456,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn release_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        self.block_allocation.sweep_nursery_blocks(&self.scheduler);
-        self.block_allocation.sweep_mutator_reused_blocks(pause);
+        let scheduler = self.scheduler.clone();
+        self.block_allocation.sweep_and_reset(&scheduler);
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
