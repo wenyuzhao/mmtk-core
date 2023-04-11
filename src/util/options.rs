@@ -113,6 +113,8 @@ pub struct MMTKOption<T: Debug + Clone> {
     from_env_var: bool,
     /// Can we set this option through command line options/API?
     from_command_line: bool,
+    /// Is this a default value?
+    pub is_default: bool,
 }
 
 impl<T: Debug + Clone> MMTKOption<T> {
@@ -140,6 +142,7 @@ impl<T: Debug + Clone> MMTKOption<T> {
             validator,
             from_env_var,
             from_command_line,
+            is_default: true,
         }
     }
 
@@ -147,6 +150,7 @@ impl<T: Debug + Clone> MMTKOption<T> {
     pub fn set(&mut self, value: T) -> bool {
         if (self.validator)(&value) {
             self.value = value;
+            self.is_default = false;
             return true;
         }
         false
