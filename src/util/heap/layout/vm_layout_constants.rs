@@ -101,8 +101,8 @@ impl VMLayoutConstants {
         );
         let mut start: usize = 0x4000_0000;
         let mut end: usize = match start + heap_size {
-            // end if end <= (4usize << 30) => 4usize << 30,
-            // end if end <= (32usize << 30) => 32usize << 30,
+            end if end <= (4usize << 30) => 4usize << 30,
+            end if end <= (32usize << 30) => 32usize << 30,
             _ => 0x4000_0000 + (32usize << 30) - BYTES_IN_CHUNK,
         };
         // A workaround to avoid address conflict with the OpenJDK

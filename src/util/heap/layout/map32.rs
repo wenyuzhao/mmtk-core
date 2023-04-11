@@ -14,6 +14,8 @@ use std::sync::{Mutex, MutexGuard};
 
 const SMALL_CHUNK_SPACE_BOUNDARY: usize = 30 << 30;
 
+// const LARGE_CH
+
 pub struct Map32 {
     prev_link: Vec<i32>,
     next_link: Vec<i32>,
@@ -67,6 +69,18 @@ impl Map32 {
     fn is_large_chunk_allocation(chunks: usize) -> bool {
         chunks > 1
     }
+
+    fn get_large_chunk_reserve_boundary() -> Address {
+        const LARGE_CHUNK_RESERVE_RATIO: f64 = 1f64 / 32f64;
+        const MIN_LARGE_CHUNK_RESERVE: usize = 512 << 20;
+        let virtual_space_size = VM_LAYOUT_CONSTANTS.heap_end - VM_LAYOUT_CONSTANTS.heap_start;
+        let large_chunk_reserve_bytes = usize::max(
+            MIN_LARGE_CHUNK_RESERVE,
+            (virtual_space_size as f64 * LARGE_CHUNK_RESERVE_RATIO).ceil() as usize,
+        );
+        let large_chunk_reserve_chunks = (large_chunk_reserve_bytes >> LOG_BYTES_IN_CHUNK).next_power_of_two();
+        VM_LAYOUT_CONSTANTS.heap_end - (large_chunk_reserve_chunks << LOG_BYTES_IN_CHUNK)
+    }
 }
 
 impl VMMap for Map32 {
@@ -81,13 +95,7 @@ impl VMMap for Map32 {
                 self.descriptor_map[index].is_empty(),
                 "Conflicting virtual address request"
             );
-            // println!(
-            //     "Set descriptor {:?} for Chunk {}",
-            //     descriptor,
-            //     conversions::chunk_index_to_address(index)
-            // );
             self_mut.descriptor_map[index] = descriptor;
-            //   VM.barriers.objectArrayStoreNoGCBarrier(spaceMap, index, space);
             e += BYTES_IN_CHUNK;
         }
     }
@@ -125,9 +133,11 @@ impl VMMap for Map32 {
         head: Address,
     ) -> Address {
         let (_sync, self_mut) = self.mut_self_with_sync();
+        let mut large = false;
         let chunk = if !Self::is_large_chunk_allocation(chunks) {
             let r = self_mut.region_map.alloc(chunks as _);
             if r == -1 {
+                large = true;
                 self_mut.large_region_map.alloc(chunks as _)
             } else {
                 r
@@ -136,8 +146,10 @@ impl VMMap for Map32 {
             if crate::verbose(3) {
                 gc_log!("Alloc {} large chunks", chunks);
             }
+            large = true;
             let r = self_mut.large_region_map.alloc(chunks as _);
             if r == -1 {
+                large = false;
                 self_mut.region_map.alloc(chunks as _)
             } else {
                 r
@@ -148,16 +160,16 @@ impl VMMap for Map32 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
             if crate::verbose(3) {
                 gc_log!(
-                "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={} {}",
-                chunks,
-                self.total_available_discontiguous_chunks,
-                self.total_available_large_discontiguous_chunks
-            );
+                    "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={} {}",
+                    chunks,
+                    self.total_available_discontiguous_chunks,
+                    self.total_available_large_discontiguous_chunks
+                );
             }
             return unsafe { Address::zero() };
         }
         self_mut.total_available_discontiguous_chunks -= chunks;
-        if chunks != 1 {
+        if large {
             self_mut.total_available_large_discontiguous_chunks -= chunks;
         }
         let rtn = conversions::chunk_index_to_address(chunk as _);
@@ -313,11 +325,10 @@ impl VMMap for Map32 {
         }
         /* set up the global page map and place chunks on free list */
         let mut first_page = 0;
+        let large_chunk_boundary = Self::get_large_chunk_reserve_boundary();
         for chunk_index in first_chunk..=last_chunk {
             self_mut.total_available_discontiguous_chunks += 1;
-            if conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start
-                >= SMALL_CHUNK_SPACE_BOUNDARY
-            {
+            if conversions::chunk_index_to_address(chunk_index) >= large_chunk_boundary {
                 self_mut.total_available_large_discontiguous_chunks += 1;
                 self_mut.large_region_map.free(chunk_index as _, false); // put this chunk on the free list
             } else {
