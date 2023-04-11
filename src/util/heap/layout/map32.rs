@@ -147,7 +147,7 @@ impl VMMap for Map32 {
         if chunk == -1 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
             if crate::verbose(3) {
-            gc_log!(
+                gc_log!(
                 "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={} {}",
                 chunks,
                 self.total_available_discontiguous_chunks,
@@ -301,7 +301,9 @@ impl VMMap for Map32 {
                 alloced_chunk,
                 unavail_start_chunk
             );
-            let alloced_chunk = self_mut.large_region_map.alloc_first_fit(trailing_chunks as _);
+            let alloced_chunk = self_mut
+                .large_region_map
+                .alloc_first_fit(trailing_chunks as _);
             debug_assert!(
                 alloced_chunk == unavail_start_chunk as i32,
                 "{} != {}",
@@ -313,7 +315,9 @@ impl VMMap for Map32 {
         let mut first_page = 0;
         for chunk_index in first_chunk..=last_chunk {
             self_mut.total_available_discontiguous_chunks += 1;
-            if conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start >= SMALL_CHUNK_SPACE_BOUNDARY {
+            if conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start
+                >= SMALL_CHUNK_SPACE_BOUNDARY
+            {
                 self_mut.total_available_large_discontiguous_chunks += 1;
                 self_mut.large_region_map.free(chunk_index as _, false); // put this chunk on the free list
             } else {
@@ -327,8 +331,14 @@ impl VMMap for Map32 {
             first_page += PAGES_IN_CHUNK as i32;
         }
         if crate::verbose(3) {
-            gc_log!("total_available_discontiguous_chunks = {}", self.total_available_discontiguous_chunks);
-            gc_log!("total_available_large_discontiguous_chunks = {}", self.total_available_large_discontiguous_chunks);
+            gc_log!(
+                "total_available_discontiguous_chunks = {}",
+                self.total_available_discontiguous_chunks
+            );
+            gc_log!(
+                "total_available_large_discontiguous_chunks = {}",
+                self.total_available_large_discontiguous_chunks
+            );
         }
         self_mut.finalized = true;
     }
