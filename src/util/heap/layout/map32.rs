@@ -12,6 +12,8 @@ use crate::util::Address;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+const SMALL_CHUNK_SPACE_BOUNDARY: usize = 30 << 30;
+
 pub struct Map32 {
     prev_link: Vec<i32>,
     next_link: Vec<i32>,
@@ -122,7 +124,7 @@ impl VMMap for Map32 {
         let chunk = if chunks == 1 {
             self_mut.region_map.alloc(chunks as _)
         } else {
-            println!("Alloc {} chunks", chunks);
+            println!("Alloc {} large chunks", chunks);
             self_mut.large_region_map.alloc(chunks as _)
         };
         debug_assert!(chunk != 0);
@@ -168,7 +170,7 @@ impl VMMap for Map32 {
     fn get_contiguous_region_chunks(&self, start: Address) -> usize {
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        if start - VM_LAYOUT_CONSTANTS.heap_start >= (24 << 30) {
+        if start - VM_LAYOUT_CONSTANTS.heap_start >= SMALL_CHUNK_SPACE_BOUNDARY {
             self.large_region_map.size(chunk as i32) as _
         } else {
             self.region_map.size(chunk as i32) as _
@@ -191,7 +193,7 @@ impl VMMap for Map32 {
         debug!("free_all_chunks: {}", any_chunk);
         let (_sync, self_mut) = self.mut_self_with_sync();
         debug_assert!(any_chunk == conversions::chunk_align_down(any_chunk));
-        let large = any_chunk - VM_LAYOUT_CONSTANTS.heap_start >= (24 << 30);
+        let large = any_chunk - VM_LAYOUT_CONSTANTS.heap_start >= SMALL_CHUNK_SPACE_BOUNDARY;
         if !any_chunk.is_zero() {
             let chunk = any_chunk.chunk_index();
             while self_mut.next_link[chunk] != 0 {
@@ -210,7 +212,7 @@ impl VMMap for Map32 {
         debug!("free_contiguous_chunks: {}", start);
         let (_sync, self_mut) = self.mut_self_with_sync();
         debug_assert!(start == conversions::chunk_align_down(start));
-        let large = start - VM_LAYOUT_CONSTANTS.heap_start >= (24 << 30);
+        let large = (start - VM_LAYOUT_CONSTANTS.heap_start) >= SMALL_CHUNK_SPACE_BOUNDARY;
         let chunk = start.chunk_index();
         let freed_chunks = self_mut.free_contiguous_chunks_no_lock(chunk as _, large);
         if cfg!(feature = "munmap") {
@@ -279,9 +281,13 @@ impl VMMap for Map32 {
         }
         if trailing_chunks != 0 {
             let alloced_chunk = self_mut.region_map.alloc_first_fit(trailing_chunks as _);
-            let alloced_chunk = self_mut
-                .large_region_map
-                .alloc_first_fit(trailing_chunks as _);
+            debug_assert!(
+                alloced_chunk == unavail_start_chunk as i32,
+                "{} != {}",
+                alloced_chunk,
+                unavail_start_chunk
+            );
+            let alloced_chunk = self_mut.large_region_map.alloc_first_fit(trailing_chunks as _);
             debug_assert!(
                 alloced_chunk == unavail_start_chunk as i32,
                 "{} != {}",
@@ -293,15 +299,8 @@ impl VMMap for Map32 {
         let mut first_page = 0;
         for chunk_index in first_chunk..=last_chunk {
             self_mut.total_available_discontiguous_chunks += 1;
-            println!(
-                "chunk {:?} {}",
-                conversions::chunk_index_to_address(chunk_index),
-                conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start
-                    >= 24 << 30
-            );
-            if conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start
-                >= 24 << 30
-            {
+            println!("chunk {:?} {}", conversions::chunk_index_to_address(chunk_index), conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start >= SMALL_CHUNK_SPACE_BOUNDARY);
+            if conversions::chunk_index_to_address(chunk_index) - VM_LAYOUT_CONSTANTS.heap_start >= SMALL_CHUNK_SPACE_BOUNDARY {
                 self_mut.total_available_large_discontiguous_chunks += 1;
                 self_mut.large_region_map.free(chunk_index as _, false); // put this chunk on the free list
             } else {
@@ -314,6 +313,8 @@ impl VMMap for Map32 {
             debug_assert!(alloced_pages == first_page);
             first_page += PAGES_IN_CHUNK as i32;
         }
+        eprintln!("total_available_discontiguous_chunks = {}", self.total_available_discontiguous_chunks);
+        eprintln!("total_available_large_discontiguous_chunks = {}", self.total_available_large_discontiguous_chunks);
         self_mut.finalized = true;
     }
 
