@@ -1,5 +1,6 @@
 use crate::plan::PlanConstraints;
 use crate::scheduler::GCWorkScheduler;
+use crate::util::alloc::embedded_meta_data::LOG_PAGES_IN_REGION;
 use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::{
     SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
@@ -159,40 +160,47 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     let bytes = conversions::pages_to_bytes(res.pages);
 
                     let map_sidemetadata = || {
+                        let pages = res.growed_chunks << LOG_PAGES_IN_REGION;
                         // Mmap the pages and the side metadata, and handle error. In case of any error,
                         // we will either call back to the VM for OOM, or simply panic.
-                        if let Err(mmap_error) = self
-                            .common()
-                            .mmapper
-                            .ensure_mapped(res.start, res.pages)
-                            .and(
+                        if let Err(mmap_error) =
+                            self.common().mmapper.ensure_mapped(res.start, pages).and(
                                 self.get_page_resource()
                                     .common()
                                     .metadata
-                                    .try_map_metadata_space(res.start, bytes),
+                                    .try_map_metadata_space(
+                                        res.start,
+                                        res.growed_chunks << LOG_BYTES_IN_CHUNK,
+                                    ),
                             )
                         {
                             memory::handle_mmap_error::<VM>(mmap_error, tls);
                         }
                     };
                     let grow_space = || {
-                        self.grow_space(res.start, bytes, res.new_chunk);
+                        self.grow_space(
+                            res.start,
+                            res.growed_chunks << LOG_BYTES_IN_CHUNK,
+                            res.new_chunk,
+                        );
                     };
 
-                    // The scope of the lock is important in terms of performance when we have many allocator threads.
-                    if SFT_MAP.get_side_metadata().is_some() {
-                        // If the SFT map uses side metadata, so we have to initialize side metadata first.
-                        map_sidemetadata();
-                        // then grow space, which will use the side metadata we mapped above
-                        grow_space();
-                        // then we can drop the lock after grow_space()
-                        // drop(lock);
-                    } else {
-                        // In normal cases, we can drop lock immediately after grow_space()
-                        grow_space();
-                        // drop(lock);
-                        // and map side metadata without holding the lock
-                        map_sidemetadata();
+                    if res.new_chunk {
+                        // The scope of the lock is important in terms of performance when we have many allocator threads.
+                        if SFT_MAP.get_side_metadata().is_some() {
+                            // If the SFT map uses side metadata, so we have to initialize side metadata first.
+                            map_sidemetadata();
+                            // then grow space, which will use the side metadata we mapped above
+                            grow_space();
+                            // then we can drop the lock after grow_space()
+                            // drop(lock);
+                        } else {
+                            // In normal cases, we can drop lock immediately after grow_space()
+                            grow_space();
+                            // drop(lock);
+                            // and map side metadata without holding the lock
+                            map_sidemetadata();
+                        }
                     }
 
                     // TODO: Concurrent zeroing
