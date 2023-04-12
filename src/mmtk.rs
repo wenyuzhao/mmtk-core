@@ -157,9 +157,7 @@ impl<VM: VMBinding> MMTK<VM> {
         }
     }
 
-    pub fn harness_begin(&self, tls: VMMutatorThread) {
-        // FIXME Do a full heap GC if we have generational GC
-        self.plan.handle_user_collection_request(tls, true);
+    pub fn harness_begin(&self, _tls: VMMutatorThread) {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.plan.base().stats.start_all();
         self.scheduler.enable_stat();
