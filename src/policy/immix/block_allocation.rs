@@ -186,7 +186,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Allocate a clean block.
     pub fn get_clean_block(&self, tls: VMThread, copy: bool, _lock_free: bool) -> Option<Block> {
         let block = {
-            let block_address = self.space().acquire_no_lock(tls, Block::PAGES);
+            let block_address = self.space().acquire(tls, Block::PAGES);
             if block_address.is_zero() {
                 return None;
             }
