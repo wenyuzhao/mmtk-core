@@ -16,7 +16,7 @@ pub const MAX_IMMIX_OBJECT_SIZE: usize = {
     } else if cfg!(feature = "lxr_los_32k") {
         32 * 1024
     } else {
-        Block::BYTES >> 1
+        Block::BYTES
     }
 };
 
