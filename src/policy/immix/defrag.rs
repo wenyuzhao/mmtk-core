@@ -30,7 +30,7 @@ impl Defrag {
     const DEFRAG_LINE_REUSE_RATIO: f32 = 0.99;
     const MIN_SPILL_THRESHOLD: usize = 2;
     const DEFRAG_STRESS: bool = false;
-    const DEFRAG_HEADROOM_PERCENT: usize = 2;
+    const DEFRAG_HEADROOM_PERCENT: usize = 5;
 
     /// Allocate a new local histogram.
     pub const fn new_histogram(&self) -> Histogram {

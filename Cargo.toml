@@ -121,6 +121,7 @@ madv_dontneed = []
 munmap = []
 virt_constraint = []
 lxr_no_survival_trigger = []
+object_size_distribution = []
 
 bpr_unprioritized = []
 bpr_freelist = []

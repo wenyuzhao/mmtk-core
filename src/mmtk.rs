@@ -97,6 +97,8 @@ pub struct MMTK<VM: VMBinding> {
 
 impl<VM: VMBinding> MMTK<VM> {
     pub fn new(options: Arc<Options>) -> Self {
+        crate::VERBOSE.store(*options.verbose, Ordering::SeqCst);
+
         if cfg!(target_pointer_width = "32") {
             VMLayoutConstants::set_address_space(AddressSpaceKind::_32Bits);
         } else if *options.use_35bit_address_space {

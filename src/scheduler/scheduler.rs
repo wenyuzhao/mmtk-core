@@ -458,10 +458,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let bucket_opened = bucket.update(self);
-            let verbose = *GCWorker::<VM>::current().mmtk.options.verbose >= 3;
+            let verbose = crate::verbose(3);
             if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
                 if verbose {
-                    gc_log!(
+                    gc_log!([3]
                         " - ({:.3}ms) Start GC Stage: {:?}",
                         crate::GC_START_TIME
                             .load(Ordering::SeqCst)
@@ -726,13 +726,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         {
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
             second_stw_bucket.activate();
-            if *mmtk.options.verbose >= 3 {
-                gc_log!(
-                    " - ({:.3}ms) Start GC Stage: {:?}",
-                    crate::gc_start_time_ms(),
-                    WorkBucketStage::from_usize(2)
-                );
-            }
+            gc_log!([3]
+                " - ({:.3}ms) Start GC Stage: {:?}",
+                crate::gc_start_time_ms(),
+                WorkBucketStage::from_usize(2)
+            );
         }
         let _guard = self.worker_monitor.0.lock().unwrap();
         // println!("Notify ALL 3");
