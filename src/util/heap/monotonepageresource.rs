@@ -1,5 +1,5 @@
 use super::layout::vm_layout_constants::{BYTES_IN_CHUNK, PAGES_IN_CHUNK};
-use crate::policy::space::required_chunks;
+use crate::policy::space::{required_chunks, Space};
 use crate::util::address::Address;
 use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::SideMetadataContext;
@@ -71,6 +71,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         debug!(
             "In MonotonePageResource, reserved_pages = {}, required_pages = {}",
@@ -128,6 +129,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             rtn = sync.cursor;
             tmp = sync.cursor + bytes;
             new_chunk = true;
+            space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, new_chunk)
         }
 
         debug_assert!(rtn >= sync.cursor && rtn < sync.cursor + bytes);

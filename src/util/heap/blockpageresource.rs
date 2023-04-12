@@ -2,6 +2,7 @@ use super::chunk_map::Chunk;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
 use crate::policy::immix::block::Block;
+use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout_constants::*;
@@ -334,9 +335,10 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if let Some((block, new_chunk)) =
-            self.allocate_block(space_descriptor, reserved_pages, required_pages, tls)
+            self.allocate_block(space_descriptor, reserved_pages, required_pages, tls, space)
         {
             Ok(PRAllocResult {
                 start: block.start(),
@@ -396,7 +398,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         mut metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
-        // Self::append_local_metadata(&mut metadata);
+        Self::append_local_metadata(&mut metadata);
         Self {
             flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
             pool: ChunkPool::new_compressed_pointers(),
@@ -407,7 +409,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    fn alloc_chunk(&self, descriptor: SpaceDescriptor, tls: VMThread) -> Option<Chunk> {
+    fn alloc_chunk(
+        &self,
+        descriptor: SpaceDescriptor,
+        tls: VMThread,
+        space: &dyn Space<VM>,
+    ) -> Option<Chunk> {
         if self.common().contiguous {
             if let Some(chunk) = self.chunk_queue.pop() {
                 self.total_chunks.fetch_add(1, Ordering::SeqCst);
@@ -418,20 +425,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if start.is_zero() {
             return None;
         }
-        // map metadata
-        let metadata = SideMetadataContext {
-            global: vec![],
-            local: vec![
-                ChunkList::PREV,
-                ChunkList::NEXT,
-                ChunkPool::<B>::CHUNK_BIN,
-                ChunkPool::<B>::CHUNK_LIVE_BLOCKS,
-                B::BPR_ALLOC_TABLE.unwrap(),
-            ],
-        };
-        if let Err(mmap_error) = metadata.try_map_metadata_space(start, BYTES_IN_CHUNK) {
+        if let Err(mmap_error) = crate::mmtk::MMAPPER
+            .ensure_mapped(start, PAGES_IN_CHUNK as _)
+            .and(
+                self.common()
+                    .metadata
+                    .try_map_metadata_space(start, BYTES_IN_CHUNK),
+            )
+        {
             crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
         }
+        space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
         Some(Chunk::from_aligned_address(start))
     }
@@ -464,6 +468,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Option<(B, bool)> {
         if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
             return Some(result);
@@ -472,7 +477,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
             return Some(result);
         }
-        if let Some(chunk) = self.alloc_chunk(space_descriptor, tls) {
+        if let Some(chunk) = self.alloc_chunk(space_descriptor, tls, space) {
             let block = self.pool.alloc_block_from_new_chunk(chunk);
             self.commit_pages(reserved_pages, required_pages, tls);
             return Some((block, true));

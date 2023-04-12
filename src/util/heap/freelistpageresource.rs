@@ -5,6 +5,7 @@ use super::layout::vm_layout_constants::{PAGES_IN_CHUNK, PAGES_IN_SPACE64};
 use super::layout::VMMap;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
+use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::alloc::embedded_meta_data::*;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
@@ -95,6 +96,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
@@ -155,6 +157,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             {
                 memory::handle_mmap_error::<VM>(mmap_error, tls);
             }
+            space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, true);
         }
         Result::Ok(PRAllocResult {
             start: rtn,

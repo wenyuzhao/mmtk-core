@@ -1,3 +1,4 @@
+use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::conversions;
 use crate::util::metadata::side_metadata::SideMetadataContext;
@@ -20,8 +21,9 @@ pub trait PageResource<VM: VMBinding>: 'static {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        self.alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+        self.alloc_pages(space_descriptor, reserved_pages, required_pages, tls, space)
     }
 
     // XXX: In the original code reserve_pages & clear_request explicitly
@@ -58,6 +60,7 @@ pub trait PageResource<VM: VMBinding>: 'static {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail>;
 
     /**

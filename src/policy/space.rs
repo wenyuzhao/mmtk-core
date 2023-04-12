@@ -1,6 +1,5 @@
 use crate::plan::PlanConstraints;
 use crate::scheduler::GCWorkScheduler;
-use crate::util::alloc::embedded_meta_data::LOG_PAGES_IN_REGION;
 use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::{
     SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
@@ -74,46 +73,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
             VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
             Address::ZERO
         } else {
-            let lock = self.common().acquire_lock.lock().unwrap();
-            match pr.get_new_pages(self.common().descriptor, pages_reserved, pages, tls) {
+            match pr.get_new_pages(
+                self.common().descriptor,
+                pages_reserved,
+                pages,
+                tls,
+                self.as_space(),
+            ) {
                 Ok(res) => {
                     let bytes = conversions::pages_to_bytes(res.pages);
-                    let map_sidemetadata = || {
-                        // Mmap the pages and the side metadata, and handle error. In case of any error,
-                        // we will either call back to the VM for OOM, or simply panic.
-                        if let Err(mmap_error) = self
-                            .common()
-                            .mmapper
-                            .ensure_mapped(res.start, res.pages)
-                            .and(
-                                self.get_page_resource()
-                                    .common()
-                                    .metadata
-                                    .try_map_metadata_space(res.start, bytes),
-                            )
-                        {
-                            memory::handle_mmap_error::<VM>(mmap_error, tls);
-                        }
-                    };
-                    let grow_space = || {
-                        self.grow_space(res.start, bytes, res.new_chunk);
-                    };
-
-                    // The scope of the lock is important in terms of performance when we have many allocator threads.
-                    if SFT_MAP.get_side_metadata().is_some() {
-                        // If the SFT map uses side metadata, so we have to initialize side metadata first.
-                        map_sidemetadata();
-                        // then grow space, which will use the side metadata we mapped above
-                        grow_space();
-                        // then we can drop the lock after grow_space()
-                        drop(lock);
-                    } else {
-                        // In normal cases, we can drop lock immediately after grow_space()
-                        grow_space();
-                        drop(lock);
-                        // and map side metadata without holding the lock
-                        map_sidemetadata();
-                    }
                     // TODO: Concurrent zeroing
                     if self.common().zeroed && is_mutator && cfg!(feature = "force_zeroing") {
                         memory::zero(res.start, bytes);
@@ -146,75 +114,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
                     Address::ZERO
                 }
-            }
-        }
-    }
-
-    fn bulk_poll(&self, tls: VMThread, total_pages: usize) -> Result<(), ()> {
-        let should_poll = VM::VMActivePlan::is_mutator(tls);
-        let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();
-        let pr = self.get_page_resource();
-        let pages_reserved = pr.reserve_pages(total_pages);
-        let gc_required = should_poll && self.get_gc_trigger().poll(false, Some(self.as_space()));
-        pr.clear_request(pages_reserved);
-        if gc_required {
-            if !allow_poll {
-                panic!("Collection is not enabled.");
-            }
-            Err(())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// The caller needs to ensure this is called by only one thread.
-    unsafe fn bulk_acquire_uninterruptible(
-        &self,
-        tls: VMThread,
-        pages: usize,
-        poll_on_failure: bool,
-    ) -> Option<Address> {
-        let pr = self.get_page_resource();
-        let pages_reserved = pr.reserve_pages(pages);
-        let should_poll = VM::VMActivePlan::is_mutator(tls);
-        let allow_poll = should_poll && VM::VMActivePlan::global().is_initialized();
-        match pr.alloc_pages(self.common().descriptor, pages_reserved, pages, tls) {
-            Ok(res) => {
-                // The following code was guarded by a page resource lock in Java MMTk.
-                // I think they are thread safe and we do not need a lock. So they
-                // are no longer guarded by a lock. If we see any issue here, considering
-                // adding a space lock here.
-                let bytes = crate::util::conversions::pages_to_bytes(res.pages);
-                self.grow_space(res.start, bytes, res.new_chunk);
-                // Mmap the pages and the side metadata, and handle error. In case of any error,
-                // we will either call back to the VM for OOM, or simply panic.
-                if res.new_chunk {
-                    if let Err(mmap_error) = self
-                        .common()
-                        .mmapper
-                        .ensure_mapped(res.start, res.pages)
-                        .and(
-                            pr.common()
-                                .metadata
-                                .try_map_metadata_space(res.start, bytes),
-                        )
-                    {
-                        crate::util::memory::handle_mmap_error::<VM>(mmap_error, tls);
-                    }
-                }
-                debug!("Space.acquire(), returned = {}", res.start);
-                Some(res.start)
-            }
-            Err(_) => {
-                if poll_on_failure {
-                    if !allow_poll {
-                        panic!("Physical allocation failed when polling not allowed!");
-                    }
-                    let gc_performed = self.get_gc_trigger().poll(true, Some(self.as_space()));
-                    debug_assert!(gc_performed, "GC not performed when forced.");
-                }
-                pr.clear_request(pages_reserved);
-                None
             }
         }
     }

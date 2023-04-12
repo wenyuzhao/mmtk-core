@@ -1,6 +1,7 @@
 use super::chunk_map::Chunk;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
+use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout_constants::*;
@@ -48,11 +49,12 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
+        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if enable_flpr_alloc() {
             // TODO: Lock-free implementation
             self.flpr
-                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls, space)
         } else {
             self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
         }
