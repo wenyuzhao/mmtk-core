@@ -8,7 +8,6 @@ use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
-use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::opaque_pointer::*;
@@ -331,20 +330,18 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if let Some((block, new_chunk)) =
-            self.allocate_block(space_descriptor, reserved_pages, required_pages, tls, space)
+            self.allocate_block(space, reserved_pages, required_pages, tls)
         {
             Ok(PRAllocResult {
                 start: block.start(),
                 pages: required_pages,
                 new_chunk,
-                growed_chunks: if new_chunk { 1 } else { 0 },
             })
         } else {
             Err(PRAllocFail)
@@ -409,19 +406,16 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    fn alloc_chunk(
-        &self,
-        descriptor: SpaceDescriptor,
-        tls: VMThread,
-        space: &dyn Space<VM>,
-    ) -> Option<Chunk> {
+    fn alloc_chunk(&self, space: &dyn Space<VM>, tls: VMThread) -> Option<Chunk> {
         if self.common().contiguous {
             if let Some(chunk) = self.chunk_queue.pop() {
                 self.total_chunks.fetch_add(1, Ordering::SeqCst);
                 return Some(chunk);
             }
         }
-        let start = self.common().grow_discontiguous_space(descriptor, 1);
+        let start = self
+            .common()
+            .grow_discontiguous_space(space.common().descriptor, 1);
         if start.is_zero() {
             return None;
         }
@@ -464,11 +458,10 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     fn allocate_block(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Option<(B, bool)> {
         if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
             return Some(result);
@@ -477,7 +470,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
             return Some(result);
         }
-        if let Some(chunk) = self.alloc_chunk(space_descriptor, tls, space) {
+        if let Some(chunk) = self.alloc_chunk(space, tls) {
             let block = self.pool.alloc_block_from_new_chunk(chunk);
             self.commit_pages(reserved_pages, required_pages, tls);
             return Some((block, true));

@@ -67,11 +67,10 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         debug!(
             "In MonotonePageResource, reserved_pages = {}, required_pages = {}",
@@ -95,7 +94,10 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                 || (chunk_align_down(sync.cursor) != sync.current_chunk
                     && chunk_align_down(sync.cursor) != sync.current_chunk + BYTES_IN_CHUNK)
             {
-                self.log_chunk_fields(space_descriptor, "MonotonePageResource.alloc_pages:fail");
+                self.log_chunk_fields(
+                    space.common().descriptor,
+                    "MonotonePageResource.alloc_pages:fail",
+                );
             }
             assert!(sync.current_chunk <= sync.cursor);
             assert!(
@@ -110,14 +112,13 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         let mut tmp = sync.cursor + bytes;
         debug!("tmp={:?}", tmp);
 
-        let mut growed_chunks = 0;
         if !self.common().contiguous && tmp > sync.sentinel {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
             let required_chunks = required_chunks(required_pages);
-            growed_chunks = required_chunks;
+            let growed_chunks = required_chunks;
             sync.current_chunk = self
                 .common
-                .grow_discontiguous_space(space_descriptor, required_chunks); // Returns zero on failure
+                .grow_discontiguous_space(space.common().descriptor, required_chunks); // Returns zero on failure
             sync.cursor = sync.current_chunk;
             sync.sentinel = sync.cursor
                 + if sync.current_chunk.is_zero() {
@@ -151,7 +152,6 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                 start: rtn,
                 pages: required_pages,
                 new_chunk,
-                growed_chunks,
             })
         }
     }

@@ -45,18 +45,22 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if enable_flpr_alloc() {
             // TODO: Lock-free implementation
             self.flpr
-                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls, space)
+                .alloc_pages(space, reserved_pages, required_pages, tls)
         } else {
-            self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
+            self.alloc_pages_fast(
+                space.common().descriptor,
+                reserved_pages,
+                required_pages,
+                tls,
+            )
         }
     }
 
@@ -118,7 +122,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 start: block.start(),
                 pages: required_pages,
                 new_chunk: false,
-                growed_chunks: 1,
             });
         }
         // Grow space (a chunk at a time)
@@ -153,7 +156,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             start: first_block,
             pages: required_pages,
             new_chunk: true,
-            growed_chunks: 1,
         })
     }
 
@@ -174,7 +176,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 start: block.start(),
                 pages: required_pages,
                 new_chunk: false,
-                growed_chunks: 1,
             });
         }
         // Slow-path：we need to grow space

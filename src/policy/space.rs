@@ -73,25 +73,12 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
             VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
             Address::ZERO
         } else {
-            match pr.get_new_pages(
-                self.common().descriptor,
-                pages_reserved,
-                pages,
-                tls,
-                self.as_space(),
-            ) {
+            match pr.get_new_pages(self.as_space(), pages_reserved, pages, tls) {
                 Ok(res) => {
                     let bytes = conversions::pages_to_bytes(res.pages);
                     // TODO: Concurrent zeroing
                     if self.common().zeroed && is_mutator && cfg!(feature = "force_zeroing") {
                         memory::zero(res.start, bytes);
-                    }
-                    if res.new_chunk {
-                        self.grow_space(
-                            res.start,
-                            res.growed_chunks << LOG_BYTES_IN_CHUNK,
-                            res.new_chunk,
-                        );
                     }
                     res.start
                 }
@@ -410,10 +397,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             needs_field_log_bit: args.plan_args.constraints.needs_field_log_bit,
             gc_trigger: args.plan_args.gc_trigger,
-            // metadata: SideMetadataContext {
-            //     global: args.plan_args.global_side_metadata_specs,
-            //     local: args.local_side_metadata_specs,
-            // },
             acquire_lock: Mutex::new(()),
             p: PhantomData,
         };

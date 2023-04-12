@@ -17,13 +17,12 @@ pub trait PageResource<VM: VMBinding>: 'static {
     /// Return The start of the first page if successful, zero on failure.
     fn get_new_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        self.alloc_pages(space_descriptor, reserved_pages, required_pages, tls, space)
+        self.alloc_pages(space, reserved_pages, required_pages, tls)
     }
 
     // XXX: In the original code reserve_pages & clear_request explicitly
@@ -56,11 +55,10 @@ pub trait PageResource<VM: VMBinding>: 'static {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail>;
 
     /**
@@ -116,7 +114,6 @@ pub struct PRAllocResult {
     pub start: Address,
     pub pages: usize,
     pub new_chunk: bool,
-    pub growed_chunks: usize,
 }
 
 pub struct PRAllocFail;

@@ -92,11 +92,10 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
-        space: &dyn Space<VM>,
     ) -> Result<PRAllocResult, PRAllocFail> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
@@ -107,8 +106,11 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
         let mut growed_chunks = 0;
         if page_offset == freelist::FAILURE && self.common.growable {
             growed_chunks = crate::policy::space::required_chunks(required_pages);
-            page_offset =
-                self_mut.allocate_contiguous_chunks(space_descriptor, required_pages, &mut sync);
+            page_offset = self_mut.allocate_contiguous_chunks(
+                space.common().descriptor,
+                required_pages,
+                &mut sync,
+            );
             new_chunk = true;
         }
 
@@ -163,7 +165,6 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
             start: rtn,
             pages: required_pages,
             new_chunk,
-            growed_chunks,
         })
     }
 }
@@ -285,7 +286,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             start: rtn,
             pages: PAGES_IN_CHUNK,
             new_chunk: true,
-            growed_chunks: 1,
         })
     }
 
