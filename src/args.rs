@@ -56,7 +56,7 @@ impl Default for RuntimeArgs {
             concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
-            max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(usize::MAX),
+            max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
             concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
             max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128),
             survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")

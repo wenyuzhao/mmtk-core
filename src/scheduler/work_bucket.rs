@@ -223,9 +223,14 @@ impl<VM: VMBinding> WorkBucket<VM> {
         if work_vec.is_empty() {
             return;
         }
+        let len = work_vec.len();
         self.queue.push_all(work_vec);
         if self.is_activated() {
-            self.notify_all_workers();
+            if len == 1 {
+                self.notify_one_worker();
+            } else {
+                self.notify_all_workers();
+            }
         }
     }
 
