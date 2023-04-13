@@ -157,7 +157,12 @@ impl<VM: VMBinding> MMTK<VM> {
         }
     }
 
-    pub fn harness_begin(&self, _tls: VMMutatorThread) {
+    pub fn harness_begin(&self, tls: VMMutatorThread) {
+        self.plan.handle_user_collection_request(tls, true);
+        if tls.0 .0.is_null() {
+            use crate::vm::Collection;
+            VM::VMCollection::block_for_gc(tls);
+        }
         self.inside_harness.store(true, Ordering::SeqCst);
         self.plan.base().stats.start_all();
         self.scheduler.enable_stat();
