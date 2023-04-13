@@ -67,6 +67,7 @@ pub struct LXR<VM: VMBinding> {
     current_pause: Atomic<Option<Pause>>,
     previous_pause: Atomic<Option<Pause>>,
     next_gc_may_perform_cycle_collection: AtomicBool,
+    next_gc_may_perform_emergency_collection: AtomicBool,
     last_gc_was_defrag: AtomicBool,
     nursery_blocks: Option<usize>,
     avail_pages_at_end_of_last_gc: AtomicUsize,
@@ -401,11 +402,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
             self.next_gc_may_perform_cycle_collection
                 .store(perform_cycle_collection, Ordering::SeqCst);
+            self.next_gc_may_perform_emergency_collection
+                .store(false, Ordering::SeqCst);
             self.perform_cycle_collection.store(false, Ordering::SeqCst);
         }
         self.avail_pages_at_end_of_last_gc
             .store(self.get_available_pages(), Ordering::SeqCst);
-        HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
+        HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
         self.dump_heap_usage();
         if cfg!(feature = "object_size_distribution") {
             if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
@@ -500,6 +503,7 @@ impl<VM: VMBinding> LXR<VM> {
             common: CommonPlan::new(plan_args),
             perform_cycle_collection: AtomicBool::new(false),
             next_gc_may_perform_cycle_collection: AtomicBool::new(false),
+            next_gc_may_perform_emergency_collection: AtomicBool::new(false),
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
@@ -534,7 +538,7 @@ impl<VM: VMBinding> LXR<VM> {
         self.concurrent_marking_enabled() && self.in_concurrent_marking.load(Ordering::Relaxed)
     }
 
-    fn decide_next_gc_may_perform_cycle_collection(&self) {
+    fn decide_next_gc_may_perform_cycle_collection(&self, pause: Pause) {
         let (lock, cvar) = &self.next_gc_selected;
         let notify = || {
             let mut gc_selection_done = lock.lock().unwrap();
@@ -547,9 +551,7 @@ impl<VM: VMBinding> LXR<VM> {
                 .load(Ordering::SeqCst)
                 << Block::LOG_PAGES,
         );
-        if self.previous_pause() == Some(Pause::FinalMark)
-            || self.previous_pause() == Some(Pause::FullTraceFast)
-        {
+        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
             let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
             gc_log!([3] " - predicted live mature pages: {}", live_mature_pages)
         }
@@ -561,12 +563,18 @@ impl<VM: VMBinding> LXR<VM> {
         };
         let total_pages = self.get_total_pages();
         let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
+        self.next_gc_may_perform_emergency_collection
+            .store(false, Ordering::SeqCst);
         if !self.concurrent_marking_in_progress()
             && garbage * 100 >= crate::args().trace_threshold as usize * total_pages
             || available_blocks < crate::args().concurrent_marking_stop_blocks
         {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
+            if available_blocks < crate::args().concurrent_marking_stop_blocks {
+                self.next_gc_may_perform_emergency_collection
+                    .store(true, Ordering::SeqCst);
+            }
             if self.concurrent_marking_enabled()
                 && !self.concurrent_marking_in_progress()
                 && !cfg!(feature = "sanity")
@@ -597,6 +605,11 @@ impl<VM: VMBinding> LXR<VM> {
             " - next_gc_may_perform_cycle_collection = {}",
             self.next_gc_may_perform_cycle_collection.load(Ordering::Relaxed)
         );
+        gc_log!([2]
+            " - next_gc_may_perform_emergency_collection = {}",
+            self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed)
+        );
+
         // If CM is finished, do a final mark pause
         if self.concurrent_marking_enabled()
             && concurrent_marking_in_progress
@@ -630,7 +643,11 @@ impl<VM: VMBinding> LXR<VM> {
             .load(Ordering::Relaxed)
             && !concurrent_marking_in_progress
         {
-            return if self.concurrent_marking_enabled() {
+            return if self.concurrent_marking_enabled()
+                && !self
+                    .next_gc_may_perform_emergency_collection
+                    .load(Ordering::Relaxed)
+            {
                 Pause::InitialMark
             } else {
                 Pause::FullTraceFast
@@ -923,7 +940,12 @@ impl<VM: VMBinding> LXR<VM> {
                 let max = crate::COUNTERS.max_used_pages.load(o);
                 crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
             }
-            lxr.decide_next_gc_may_perform_cycle_collection();
+            let pause = if lxr.current_pause().is_none() {
+                lxr.previous_pause().unwrap()
+            } else {
+                lxr.current_pause().unwrap()
+            };
+            lxr.decide_next_gc_may_perform_cycle_collection(pause);
         }));
 
         if let Some(nursery_ratio) = crate::args().nursery_ratio {
