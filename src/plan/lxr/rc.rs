@@ -232,15 +232,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor += heap_bytes_per_unlog_bit;
             }
         };
-        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 1024 {
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 128 {
             let data = VM::VMScanning::obj_array_data(o);
             let mut packets = vec![];
             for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = Box::new(ProcessIncs::<VM, EDGE_KIND_NURSERY>::new_array_slice(
-                    chunk, self.lxr,
-                ));
+                let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new_array_slice(chunk, self.lxr);
                 w.depth = depth + 1;
-                packets.push(w as Box<dyn GCWork<VM>>);
+                packets.push(Box::new(w) as Box<dyn GCWork<VM>>);
             }
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
