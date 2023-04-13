@@ -1,5 +1,7 @@
+use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::conversions;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::ActivePlan;
 use std::sync::Mutex;
@@ -15,12 +17,12 @@ pub trait PageResource<VM: VMBinding>: 'static {
     /// Return The start of the first page if successful, zero on failure.
     fn get_new_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
-        self.alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+        self.alloc_pages(space, reserved_pages, required_pages, tls)
     }
 
     // XXX: In the original code reserve_pages & clear_request explicitly
@@ -53,7 +55,7 @@ pub trait PageResource<VM: VMBinding>: 'static {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
@@ -123,10 +125,17 @@ pub struct CommonPageResource {
 
     pub vm_map: &'static dyn VMMap,
     head_discontiguous_region: Mutex<Address>,
+
+    pub metadata: SideMetadataContext,
 }
 
 impl CommonPageResource {
-    pub fn new(contiguous: bool, growable: bool, vm_map: &'static dyn VMMap) -> CommonPageResource {
+    pub fn new(
+        contiguous: bool,
+        growable: bool,
+        vm_map: &'static dyn VMMap,
+        metadata: SideMetadataContext,
+    ) -> CommonPageResource {
         CommonPageResource {
             accounting: PageAccounting::new(),
 
@@ -135,6 +144,8 @@ impl CommonPageResource {
             vm_map,
 
             head_discontiguous_region: Mutex::new(Address::ZERO),
+
+            metadata,
         }
     }
 

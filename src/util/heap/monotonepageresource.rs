@@ -1,7 +1,8 @@
 use super::layout::vm_layout_constants::{BYTES_IN_CHUNK, PAGES_IN_CHUNK};
-use crate::policy::space::required_chunks;
+use crate::policy::space::{required_chunks, Space};
 use crate::util::address::Address;
 use crate::util::conversions::*;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::util::alloc::embedded_meta_data::*;
@@ -66,7 +67,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
@@ -93,7 +94,10 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                 || (chunk_align_down(sync.cursor) != sync.current_chunk
                     && chunk_align_down(sync.cursor) != sync.current_chunk + BYTES_IN_CHUNK)
             {
-                self.log_chunk_fields(space_descriptor, "MonotonePageResource.alloc_pages:fail");
+                self.log_chunk_fields(
+                    space.common().descriptor,
+                    "MonotonePageResource.alloc_pages:fail",
+                );
             }
             assert!(sync.current_chunk <= sync.cursor);
             assert!(
@@ -111,9 +115,10 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         if !self.common().contiguous && tmp > sync.sentinel {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
             let required_chunks = required_chunks(required_pages);
+            let growed_chunks = required_chunks;
             sync.current_chunk = self
                 .common
-                .grow_discontiguous_space(space_descriptor, required_chunks); // Returns zero on failure
+                .grow_discontiguous_space(space.common().descriptor, required_chunks); // Returns zero on failure
             sync.cursor = sync.current_chunk;
             sync.sentinel = sync.cursor
                 + if sync.current_chunk.is_zero() {
@@ -125,6 +130,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             rtn = sync.cursor;
             tmp = sync.cursor + bytes;
             new_chunk = true;
+            space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, new_chunk)
         }
 
         debug_assert!(rtn >= sync.cursor && rtn < sync.cursor + bytes);
@@ -152,11 +158,21 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 }
 
 impl<VM: VMBinding> MonotonePageResource<VM> {
-    pub fn new_contiguous(start: Address, bytes: usize, vm_map: &'static dyn VMMap) -> Self {
+    pub fn new_contiguous(
+        start: Address,
+        bytes: usize,
+        vm_map: &'static dyn VMMap,
+        metadata: SideMetadataContext,
+    ) -> Self {
         let sentinel = start + bytes;
 
         MonotonePageResource {
-            common: CommonPageResource::new(true, cfg!(target_pointer_width = "64"), vm_map),
+            common: CommonPageResource::new(
+                true,
+                cfg!(target_pointer_width = "64"),
+                vm_map,
+                metadata,
+            ),
             sync: Mutex::new(MonotonePageResourceSync {
                 cursor: start,
                 current_chunk: chunk_align_down(start),
@@ -171,9 +187,9 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    pub fn new_discontiguous(vm_map: &'static dyn VMMap) -> Self {
+    pub fn new_discontiguous(vm_map: &'static dyn VMMap, metadata: SideMetadataContext) -> Self {
         MonotonePageResource {
-            common: CommonPageResource::new(false, true, vm_map),
+            common: CommonPageResource::new(false, true, vm_map, metadata),
             sync: Mutex::new(MonotonePageResourceSync {
                 cursor: unsafe { Address::zero() },
                 current_chunk: unsafe { Address::zero() },

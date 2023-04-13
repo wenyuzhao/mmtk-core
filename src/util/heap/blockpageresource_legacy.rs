@@ -1,6 +1,7 @@
 use super::chunk_map::Chunk;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
+use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::heap::layout::vm_layout_constants::*;
@@ -8,6 +9,7 @@ use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
@@ -43,7 +45,7 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
 
     fn alloc_pages(
         &self,
-        space_descriptor: SpaceDescriptor,
+        space: &dyn Space<VM>,
         reserved_pages: usize,
         required_pages: usize,
         tls: VMThread,
@@ -51,9 +53,14 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         if enable_flpr_alloc() {
             // TODO: Lock-free implementation
             self.flpr
-                .alloc_pages(space_descriptor, reserved_pages, required_pages, tls)
+                .alloc_pages(space, reserved_pages, required_pages, tls)
         } else {
-            self.alloc_pages_fast(space_descriptor, reserved_pages, required_pages, tls)
+            self.alloc_pages_fast(
+                space.common().descriptor,
+                reserved_pages,
+                required_pages,
+                tls,
+            )
         }
     }
 
@@ -74,10 +81,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         bytes: usize,
         vm_map: &'static dyn VMMap,
         num_workers: usize,
+        metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
-            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map),
+            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map, metadata),
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
         }
@@ -87,10 +95,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         log_pages: usize,
         vm_map: &'static dyn VMMap,
         num_workers: usize,
+        metadata: SideMetadataContext,
     ) -> Self {
         assert!((1 << log_pages) <= PAGES_IN_CHUNK);
         Self {
-            flpr: FreeListPageResource::new_discontiguous(vm_map),
+            flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
             block_queue: BlockPool::new(num_workers),
             sync: Mutex::new(()),
         }

@@ -185,16 +185,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    pub fn flush(&mut self) {
-        if !self.mutator_recycled_blocks.is_empty() {
-            let mut v = Box::new(vec![]);
-            std::mem::swap(&mut v, &mut self.mutator_recycled_blocks);
-            self.immix_space()
-                .mutator_recycled_blocks
-                .lock()
-                .append(&mut v);
-        }
-    }
+    pub fn flush(&mut self) {}
 
     pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
         self.space
@@ -279,9 +270,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-                if !self.copy && self.immix_space().rc_enabled {
-                    self.mutator_recycled_blocks.push(block);
-                }
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
                 true

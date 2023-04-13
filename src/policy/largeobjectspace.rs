@@ -156,7 +156,8 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     }
 
     fn initialize_sft(&self) {
-        self.common().initialize_sft(self.as_sft())
+        self.common()
+            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
     }
 
     fn common(&self) -> &CommonSpace<VM> {
@@ -192,15 +193,17 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     ) -> Self {
         let is_discontiguous = args.vmrequest.is_discontiguous();
         let vm_map = args.vm_map;
-        let common = CommonSpace::new(args.into_policy_args(
+        let policy_args = args.into_policy_args(
             false,
             false,
             metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC]),
-        ));
+        );
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
         let mut pr = if is_discontiguous {
-            FreeListPageResource::new_discontiguous(vm_map)
+            FreeListPageResource::new_discontiguous(vm_map, metadata)
         } else {
-            FreeListPageResource::new_contiguous(common.start, common.extent, vm_map)
+            FreeListPageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
         };
         pr.protect_memory_on_release = protect_memory_on_release;
         LargeObjectSpace {

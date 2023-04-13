@@ -145,7 +145,8 @@ impl<VM: VMBinding> Space<VM> for MarkSweepSpace<VM> {
     }
 
     fn initialize_sft(&self) {
-        self.common().initialize_sft(self.as_sft())
+        self.common()
+            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
     }
 
     fn common(&self) -> &CommonSpace<VM> {
@@ -206,12 +207,14 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
             ])
         };
-        let common = CommonSpace::new(args.into_policy_args(false, false, local_specs));
+        let policy_args = args.into_policy_args(false, false, local_specs);
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
         MarkSweepSpace {
             pr: if is_discontiguous {
-                FreeListPageResource::new_discontiguous(vm_map)
+                FreeListPageResource::new_discontiguous(vm_map, metadata)
             } else {
-                FreeListPageResource::new_contiguous(common.start, common.extent, vm_map)
+                FreeListPageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
             },
             common,
             chunk_map: ChunkMap::new(),

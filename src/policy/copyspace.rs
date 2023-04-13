@@ -105,7 +105,8 @@ impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
     }
 
     fn initialize_sft(&self) {
-        self.common().initialize_sft(self.as_sft())
+        self.common()
+            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
@@ -137,19 +138,22 @@ impl<VM: VMBinding> CopySpace<VM> {
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>, from_space: bool) -> Self {
         let vm_map = args.vm_map;
         let is_discontiguous = args.vmrequest.is_discontiguous();
-        let common = CommonSpace::new(args.into_policy_args(
+        let policy_args = args.into_policy_args(
             true,
             false,
             extract_side_metadata(&[
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
             ]),
-        ));
+        );
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
+
         CopySpace {
             pr: if is_discontiguous {
-                MonotonePageResource::new_discontiguous(vm_map)
+                MonotonePageResource::new_discontiguous(vm_map, metadata)
             } else {
-                MonotonePageResource::new_contiguous(common.start, common.extent, vm_map)
+                MonotonePageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
             },
             common,
             from_space: AtomicBool::new(from_space),
@@ -175,7 +179,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             self.reset_alloc_bit();
             self.pr.reset();
         }
-        self.common.metadata.reset();
+        // self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
     }
 
