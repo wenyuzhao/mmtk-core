@@ -58,8 +58,9 @@ impl SurvivalRatioPredictor {
         #[cfg(feature = "lxr_total_promoted_size_counter")]
         {
             gc_log!([2]
-                " - promoted size: {}",
-                self.total_promote_vol.load(Ordering::SeqCst)
+                " - promoted size = {}, copied size = {}",
+                self.total_promote_vol.load(Ordering::SeqCst),
+                self.copy_promote_vol.load(Ordering::SeqCst),
             );
             self.total_promote_vol.store(0, Ordering::SeqCst);
         }
