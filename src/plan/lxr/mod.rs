@@ -96,9 +96,10 @@ impl SurvivalRatioPredictorLocal {
     }
 
     pub fn sync(&self) {
-        SURVIVAL_RATIO_PREDICTOR
-            .copy_promote_vol
-            .fetch_add(self.copy_promote_vol.load(Ordering::Relaxed), Ordering::Relaxed);
+        SURVIVAL_RATIO_PREDICTOR.copy_promote_vol.fetch_add(
+            self.copy_promote_vol.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
     }
 }
 
