@@ -1002,7 +1002,6 @@ impl<VM: VMBinding> LXR<VM> {
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
             self.nursery_blocks = Some(nursery_blocks);
         }
-        println!("self.nursery_blocks = {:?}", self.nursery_blocks);
     }
 
     fn set_concurrent_marking_state(&self, active: bool) {
