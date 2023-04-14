@@ -42,7 +42,7 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
-    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
     const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
@@ -120,9 +120,9 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
-        if !edge.to_address().is_logged::<VM>() {
+        if !edge.to_address().is_field_logged::<VM>() {
             let old = edge.load();
-            edge.to_address().log::<VM>();
+            edge.to_address().log_field::<VM>();
             Ok(old)
         } else {
             Err(())

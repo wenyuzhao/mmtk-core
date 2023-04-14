@@ -683,7 +683,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
         if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
-            block.clear_log_table::<VM>();
+            block.clear_field_unlog_table::<VM>();
         }
         self.num_clean_blocks_released
             .fetch_add(1, Ordering::Relaxed);
@@ -1153,9 +1153,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         if self.common.needs_log_bit {
             if !copy {
-                Line::clear_log_table::<VM>(start..end);
+                Line::clear_field_unlog_table::<VM>(start..end);
             } else {
-                Line::initialize_log_table_as_unlogged::<VM>(start..end);
+                Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
             }
             Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
@@ -1217,9 +1217,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 return self.normal_get_next_available_lines(end);
             };
         }
-        if self.common.needs_log_bit {
-            Line::clear_log_table::<VM>(start..end);
-        }
+        // if self.common.needs_log_bit {
+        //     Line::clear_log_table::<VM>(start..end);
+        // }
         Some((start, end))
     }
 

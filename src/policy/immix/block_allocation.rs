@@ -164,7 +164,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         // Initialize unlog table
         if self.space().rc_enabled && copy {
-            block.initialize_log_table_as_unlogged::<VM>();
+            block.initialize_field_unlog_table_as_unlogged::<VM>();
         }
         // Initialize mark table
         if self.space().rc_enabled {

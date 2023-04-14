@@ -469,8 +469,8 @@ impl Block {
         Self::LOG_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
-    pub fn clear_log_table<VM: VMBinding>(&self) {
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    pub fn clear_field_unlog_table<VM: VMBinding>(&self) {
+        VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec()
             .bzero_metadata(self.start(), Block::BYTES);
@@ -486,8 +486,8 @@ impl Block {
         }
     }
 
-    pub fn initialize_log_table_as_unlogged<VM: VMBinding>(&self) {
-        let meta = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    pub fn initialize_field_unlog_table_as_unlogged<VM: VMBinding>(&self) {
+        let meta = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec();
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();

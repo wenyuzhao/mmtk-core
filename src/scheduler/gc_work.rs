@@ -1024,7 +1024,7 @@ impl<VM: VMBinding> UnlogEdges<VM> {
 impl<VM: VMBinding> GCWork<VM> for UnlogEdges<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.unlog_edges(
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                 .as_spec()
                 .extract_side_spec(),
         );

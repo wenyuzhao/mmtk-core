@@ -365,10 +365,10 @@ impl Address {
         unsafe { RC_LOCK_BITS.load::<u8>(self) == LOCKED_VALUE }
     }
 
-    pub fn is_logged<VM: VMBinding>(self) -> bool {
+    pub fn is_field_logged<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
         unsafe {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                 .as_spec()
                 .extract_side_spec()
                 .load::<u8>(self)
@@ -376,9 +376,9 @@ impl Address {
         }
     }
 
-    pub fn attempt_log<VM: VMBinding>(self) -> bool {
+    pub fn attempt_log_field<VM: VMBinding>(self) -> bool {
         debug_assert!(!self.is_zero());
-        let log_bit = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        let log_bit = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec();
         loop {
@@ -401,17 +401,17 @@ impl Address {
         }
     }
 
-    pub fn log<VM: VMBinding>(self) {
+    pub fn log_field<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec()
             .store_atomic(self, LOGGED_VALUE, Ordering::Relaxed)
     }
 
-    pub fn unlog<VM: VMBinding>(self) {
+    pub fn unlog_field<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
-        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+        VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec()
             .store_atomic(self, UNLOGGED_VALUE, Ordering::Relaxed)
@@ -665,14 +665,14 @@ impl ObjectReference {
 
     pub fn log_start_address<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        self.to_address::<VM>().unlog::<VM>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM>();
+        self.to_address::<VM>().unlog_field::<VM>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log_field::<VM>();
     }
 
     pub fn clear_start_address_log<VM: VMBinding>(self) {
         debug_assert!(!self.is_null());
-        self.to_address::<VM>().log::<VM>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log::<VM>();
+        self.to_address::<VM>().log_field::<VM>();
+        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log_field::<VM>();
     }
 
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
@@ -708,7 +708,7 @@ impl ObjectReference {
 
     pub fn fix_start_address<VM: VMBinding>(self) -> Self {
         let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
-        if !(a + BYTES_IN_WORD).is_logged::<VM>() {
+        if !(a + BYTES_IN_WORD).is_field_logged::<VM>() {
             (a + BYTES_IN_WORD).to_object_reference::<VM>()
         } else {
             a.to_object_reference::<VM>()

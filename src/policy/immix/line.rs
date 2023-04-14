@@ -160,8 +160,8 @@ impl Line {
         assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
-    pub fn clear_log_table<VM: VMBinding>(lines: Range<Line>) {
-        let unlog_bit = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    pub fn clear_field_unlog_table<VM: VMBinding>(lines: Range<Line>) {
+        let unlog_bit = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec();
         let log_meta_bits_per_line = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize
@@ -180,8 +180,8 @@ impl Line {
         crate::util::memory::zero(meta_start, meta_bytes)
     }
 
-    pub fn initialize_log_table_as_unlogged<VM: VMBinding>(lines: Range<Line>) {
-        let unlog_bit = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    pub fn initialize_field_unlog_table_as_unlogged<VM: VMBinding>(lines: Range<Line>) {
+        let unlog_bit = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
             .as_spec()
             .extract_side_spec();
         let log_meta_bits_per_line = Line::LOG_BYTES - LOG_BYTES_IN_WORD as usize

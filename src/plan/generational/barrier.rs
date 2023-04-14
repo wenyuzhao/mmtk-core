@@ -4,7 +4,6 @@ use crate::plan::barriers::BarrierSemantics;
 use crate::plan::PlanTraceObject;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
-use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::*;
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::VMBinding;
@@ -85,11 +84,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
         // Only enqueue array slices in mature spaces
         if !self.plan.is_address_in_nursery(dst.start()) {
             // enqueue
-            debug_assert_eq!(
-                dst.bytes() & (BYTES_IN_ADDRESS - 1),
-                0,
-                "bytes should be a multiple of words"
-            );
             self.region_modbuf.push(dst);
             self.region_modbuf
                 .is_full()

@@ -513,7 +513,7 @@ impl<VM: VMBinding> LXR<VM> {
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
             MetadataSpec::OnSide(
-                *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                     .as_spec()
                     .extract_side_spec(),
             ),

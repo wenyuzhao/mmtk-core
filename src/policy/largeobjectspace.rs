@@ -343,7 +343,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                         };
                         for i in (0..object.get_size::<VM>()).step_by(step) {
                             let a = object.to_address::<VM>() + i;
-                            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(
+                            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC.mark_as_unlogged::<VM>(
                                 a.to_object_reference::<VM>(),
                                 Ordering::SeqCst,
                             );
@@ -391,7 +391,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        if o.to_address::<VM>().attempt_log::<VM>() {
+        if o.to_address::<VM>().attempt_log_field::<VM>() {
             // println!(" - add to rc_dead_objects {:?}", o);
             self.rc_dead_objects.push(o);
         }
@@ -548,7 +548,7 @@ impl RCReleaseMatureLOS {
         let mut total_released_pages = 0;
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
-            o.to_address::<VM>().unlog::<VM>();
+            o.to_address::<VM>().unlog_field::<VM>();
             if removed {
                 let pages = los.release_object(o.to_address::<VM>());
                 total_released_pages += pages;

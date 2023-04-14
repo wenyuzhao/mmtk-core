@@ -107,9 +107,9 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
 
     #[allow(unused)]
     fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
-        if !edge.is_logged::<VM>() {
+        if !edge.is_field_logged::<VM>() {
             let old: ObjectReference = unsafe { edge.load() };
-            edge.log::<VM>();
+            edge.log_field::<VM>();
             Ok(old)
         } else {
             Err(())

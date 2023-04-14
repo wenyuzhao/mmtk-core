@@ -69,6 +69,8 @@ pub trait ObjectModel<VM: VMBinding> {
     /// This bit is also referred to as unlogged bit in Java MMTk for this reason.
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec;
 
+    const GLOBAL_FIELD_UNLOG_BIT_SPEC: VMGlobalFieldUnlogBitSpec;
+
     /// The metadata specification for the forwarding pointer, used by copying plans. Word size.
     const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec;
     /// The metadata specification for the forwarding status bits, used by copying plans. 2 bits.
@@ -454,6 +456,7 @@ pub trait ObjectModel<VM: VMBinding> {
 
 pub mod specs {
     use crate::util::constants::LOG_BITS_IN_WORD;
+    use crate::util::constants::LOG_BYTES_IN_ADDRESS;
     use crate::util::constants::LOG_BYTES_IN_PAGE;
     use crate::util::constants::LOG_MIN_OBJECT_SIZE;
     use crate::util::metadata::side_metadata::*;
@@ -545,6 +548,7 @@ pub mod specs {
 
     // Log bit: 1 bit per object, global
     define_vm_metadata_spec!(VMGlobalLogBitSpec, true, 0, LOG_MIN_OBJECT_SIZE);
+    define_vm_metadata_spec!(VMGlobalFieldUnlogBitSpec, true, 0, LOG_BYTES_IN_ADDRESS);
     // Forwarding pointer: word size per object, local
     define_vm_metadata_spec!(
         VMLocalForwardingPointerSpec,

@@ -47,7 +47,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
-    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
 
@@ -201,7 +201,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             }
-            o.to_address::<VM>().unlog::<VM>();
+            o.to_address::<VM>().unlog_field::<VM>();
         } else if in_place_promotion {
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                 12usize
@@ -217,7 +217,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor.align_up(heap_bytes_per_unlog_byte),
             );
             while cursor < end && !cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
-                cursor.unlog::<VM>();
+                cursor.unlog_field::<VM>();
                 cursor += heap_bytes_per_unlog_bit;
             }
             while cursor < aligned_end {
@@ -226,12 +226,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     meta += 1usize;
                     cursor += heap_bytes_per_unlog_byte;
                 } else {
-                    cursor.unlog::<VM>();
+                    cursor.unlog_field::<VM>();
                     cursor += heap_bytes_per_unlog_bit;
                 }
             }
             while cursor < end {
-                cursor.unlog::<VM>();
+                cursor.unlog_field::<VM>();
                 cursor += heap_bytes_per_unlog_bit;
             }
         };
@@ -408,7 +408,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE {
-            e.to_address().unlog::<VM>();
+            e.to_address().unlog_field::<VM>();
         }
         if o.is_null() {
             return None;

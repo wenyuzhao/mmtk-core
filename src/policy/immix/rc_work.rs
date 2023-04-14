@@ -327,7 +327,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             }
             // Clear unlog table on CM
             if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
-                block.initialize_log_table_as_unlogged::<VM>();
+                block.initialize_field_unlog_table_as_unlogged::<VM>();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
