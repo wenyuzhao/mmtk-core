@@ -138,9 +138,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self.rc.promote(o);
-            if in_nursery_block || copied {
+            if copied {
                 self.survival_ratio_predictor_local
-                    .record_promotion(o.get_size::<VM>());
+                    .record_copied_promotion(o.get_size::<VM>());
             }
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));

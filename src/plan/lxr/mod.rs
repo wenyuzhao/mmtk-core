@@ -28,14 +28,14 @@ const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredictor {
     prev_ratio: Atomic::new(0.01),
     alloc_vol: AtomicUsize::new(0),
-    promote_vol: AtomicUsize::new(0),
+    copy_promote_vol: AtomicUsize::new(0),
     pause_start: Atomic::new(SystemTime::UNIX_EPOCH),
 };
 
 pub struct SurvivalRatioPredictor {
     prev_ratio: Atomic<f64>,
     alloc_vol: AtomicUsize,
-    promote_vol: AtomicUsize,
+    copy_promote_vol: AtomicUsize,
     pub pause_start: Atomic<SystemTime>,
 }
 
@@ -55,7 +55,7 @@ impl SurvivalRatioPredictor {
             return self.ratio();
         }
         let prev = self.prev_ratio.load(Ordering::SeqCst);
-        let curr = self.promote_vol.load(Ordering::SeqCst) as f64
+        let curr = self.copy_promote_vol.load(Ordering::SeqCst) as f64
             / self.alloc_vol.load(Ordering::SeqCst) as f64;
         let curr = f64::min(curr, 1.0);
         let ratio = if crate::args().survival_predictor_weighted {
@@ -77,28 +77,28 @@ impl SurvivalRatioPredictor {
         crate::add_survival_ratio(curr, prev);
         self.prev_ratio.store(ratio, Ordering::SeqCst);
         self.alloc_vol.store(0, Ordering::SeqCst);
-        self.promote_vol.store(0, Ordering::SeqCst);
+        self.copy_promote_vol.store(0, Ordering::SeqCst);
         ratio
     }
 }
 
 #[derive(Default)]
 pub struct SurvivalRatioPredictorLocal {
-    promote_vol: AtomicUsize,
+    copy_promote_vol: AtomicUsize,
 }
 
 impl SurvivalRatioPredictorLocal {
-    pub fn record_promotion(&self, size: usize) {
-        self.promote_vol.store(
-            self.promote_vol.load(Ordering::Relaxed) + size,
+    pub fn record_copied_promotion(&self, size: usize) {
+        self.copy_promote_vol.store(
+            self.copy_promote_vol.load(Ordering::Relaxed) + size,
             Ordering::Relaxed,
         );
     }
 
     pub fn sync(&self) {
         SURVIVAL_RATIO_PREDICTOR
-            .promote_vol
-            .fetch_add(self.promote_vol.load(Ordering::Relaxed), Ordering::Relaxed);
+            .copy_promote_vol
+            .fetch_add(self.copy_promote_vol.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 }
 
