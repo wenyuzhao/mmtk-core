@@ -232,12 +232,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.affinity.resolve_affinity(thread);
     }
 
-    /// Schedule all the common work packets
-    pub fn schedule_common_work<C: GCWorkContext<VM = VM> + 'static>(
+    pub fn schedule_common_work_no_refs<C: GCWorkContext<VM = VM> + 'static>(
         &self,
         plan: &'static C::PlanType,
     ) {
-        use crate::plan::Plan;
         use crate::scheduler::gc_work::*;
         // Stop & scan mutators (mutator scanning can happen before STW)
         self.work_buckets[WorkBucketStage::Unconstrained]
@@ -263,7 +261,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             self.work_buckets[WorkBucketStage::Final]
                 .add(ScheduleSanityGC::<C::PlanType>::new(plan));
         }
+    }
 
+    /// Schedule all the common work packets
+    pub fn schedule_common_work<C: GCWorkContext<VM = VM> + 'static>(
+        &self,
+        plan: &'static C::PlanType,
+    ) {
+        self.schedule_common_work_no_refs::<C>(plan);
+
+        use crate::plan::Plan;
+        use crate::scheduler::gc_work::*;
         // Reference processing
         if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
             // use crate::util::reference_processor::{

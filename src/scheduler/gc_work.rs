@@ -776,8 +776,8 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         sft.sft_trace_object(&mut self.base.nodes, object, worker)
     }
 
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
-        ScanObjects::<Self>::new(nodes, false, roots)
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
+        unimplemented!()
     }
 }
 
@@ -875,6 +875,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
         mmtk: &'static MMTK<<Self::E as ProcessEdgesWork>::VM>,
         should_discover_reference: bool,
+        should_claim_and_scan_clds: bool,
     ) {
         let tls = worker.tls;
 
@@ -913,7 +914,11 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Then scan those objects for edges.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker, should_discover_reference);
+            let mut closure = ObjectsClosure::<Self::E>::new(
+                worker,
+                should_discover_reference,
+                should_claim_and_scan_clds,
+            );
             for object in objects_to_scan.iter().copied() {
                 if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     trace!("Scan object (edge) {}", object);
@@ -969,16 +974,24 @@ pub struct ScanObjects<Edges: ProcessEdgesWork> {
     roots: bool,
     phantom: PhantomData<Edges>,
     pub discovery: bool,
+    claim_and_scan_clds: bool,
 }
 
 impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
-    pub fn new(buffer: Vec<ObjectReference>, concurrent: bool, roots: bool) -> Self {
+    pub fn new(
+        buffer: Vec<ObjectReference>,
+        concurrent: bool,
+        roots: bool,
+        discovery: bool,
+        claim_and_scan_clds: bool,
+    ) -> Self {
         Self {
             buffer,
             concurrent,
             roots,
             phantom: PhantomData,
-            discovery: false,
+            discovery,
+            claim_and_scan_clds,
         }
     }
 }
@@ -995,14 +1008,26 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
     }
 
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self {
-        Self::new(buffer, self.concurrent, false)
+        Self::new(
+            buffer,
+            self.concurrent,
+            false,
+            self.discovery,
+            self.claim_and_scan_clds,
+        )
     }
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, self.discovery);
+        self.do_work_common(
+            &self.buffer,
+            worker,
+            mmtk,
+            self.discovery,
+            self.claim_and_scan_clds,
+        );
         trace!("ScanObjects End");
     }
 }
@@ -1070,7 +1095,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         nodes: Vec<ObjectReference>,
         roots: bool,
     ) -> Self::ScanObjectsWorkType {
-        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, roots)
+        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, roots, true, true)
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
@@ -1118,6 +1143,8 @@ pub struct PlanScanObjects<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceO
     #[allow(dead_code)]
     concurrent: bool,
     roots: bool,
+    discover_refs: bool,
+    claim_and_scan_clds: bool,
     phantom: PhantomData<E>,
 }
 
@@ -1127,12 +1154,16 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> PlanScan
         buffer: Vec<ObjectReference>,
         concurrent: bool,
         roots: bool,
+        discover_refs: bool,
+        claim_and_scan_clds: bool,
     ) -> Self {
         Self {
             plan,
             buffer,
             concurrent,
             roots,
+            discover_refs,
+            claim_and_scan_clds,
             phantom: PhantomData,
         }
     }
@@ -1152,7 +1183,14 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> ScanObje
     }
 
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self {
-        Self::new(self.plan, buffer, self.concurrent, false)
+        Self::new(
+            self.plan,
+            buffer,
+            self.concurrent,
+            false,
+            self.discover_refs,
+            self.claim_and_scan_clds,
+        )
     }
 }
 
@@ -1161,7 +1199,13 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, true);
+        self.do_work_common(
+            &self.buffer,
+            worker,
+            mmtk,
+            self.discover_refs,
+            self.claim_and_scan_clds,
+        );
         trace!("PlanScanObjects End");
     }
 }

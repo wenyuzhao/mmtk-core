@@ -94,14 +94,20 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     buffer: VectorQueue<EdgeOf<E>>,
     worker: &'a mut GCWorker<E::VM>,
     should_discover_references: bool,
+    should_claim_and_scan_clds: bool,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
-    pub fn new(worker: &'a mut GCWorker<E::VM>, should_discover_references: bool) -> Self {
+    pub fn new(
+        worker: &'a mut GCWorker<E::VM>,
+        should_discover_references: bool,
+        should_claim_and_scan_clds: bool,
+    ) -> Self {
         Self {
             buffer: VectorQueue::new(),
             worker,
             should_discover_references,
+            should_claim_and_scan_clds,
         }
     }
 
@@ -119,6 +125,12 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
+    }
+    fn should_claim_clds(&self) -> bool {
+        self.should_claim_and_scan_clds
+    }
+    fn should_follow_clds(&self) -> bool {
+        self.should_claim_and_scan_clds
     }
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         #[cfg(debug_assertions)]

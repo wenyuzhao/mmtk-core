@@ -51,7 +51,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         nodes: Vec<ObjectReference>,
         roots: bool,
     ) -> Self::ScanObjectsWorkType {
-        PlanScanObjects::new(self.plan, nodes, false, roots)
+        PlanScanObjects::new(self.plan, nodes, false, roots, false, false)
     }
 }
 
@@ -106,7 +106,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
             // Scan objects in the modbuf and forward pointers
             let modbuf = std::mem::take(&mut self.modbuf);
             GCWork::do_work(
-                &mut ScanObjects::<E>::new(modbuf, false, false),
+                &mut ScanObjects::<E>::new(modbuf, false, false, false, false),
                 worker,
                 mmtk,
             )

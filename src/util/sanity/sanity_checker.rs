@@ -234,7 +234,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         {
             if self.edge.unwrap().to_address().is_mapped() {
                 assert!(
-                    !self.edge.unwrap().to_address().is_logged::<VM>(),
+                    !self.edge.unwrap().to_address().is_field_logged::<VM>(),
                     "{:?} -> {:?} is logged",
                     self.edge,
                     object
@@ -312,7 +312,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         nodes: Vec<ObjectReference>,
         roots: bool,
     ) -> Self::ScanObjectsWorkType {
-        let mut x = ScanObjects::<Self>::new(nodes, false, roots);
+        let mut x = ScanObjects::<Self>::new(nodes, false, roots, false, false);
         x.discovery = false;
         x
     }

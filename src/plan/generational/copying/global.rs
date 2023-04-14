@@ -86,9 +86,12 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         if is_full_heap {
+            println!("Full GC");
+            unimplemented!();
             scheduler.schedule_common_work::<GenCopyGCWorkContext<VM>>(self);
         } else {
-            scheduler.schedule_common_work::<GenCopyNurseryGCWorkContext<VM>>(self);
+            println!("Nursery GC");
+            scheduler.schedule_common_work_no_refs::<GenCopyNurseryGCWorkContext<VM>>(self);
         }
     }
 
@@ -156,6 +159,18 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
 
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = Self::VM>> {
         Some(self)
+    }
+
+    fn current_gc_should_scan_all_classloader_strong_roots(&self) -> bool {
+        self.gen.gc_full_heap.load(Ordering::SeqCst)
+    }
+
+    fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
+        self.gen.gc_full_heap.load(Ordering::SeqCst)
+    }
+
+    fn current_gc_should_perform_class_unloading(&self) -> bool {
+        self.gen.gc_full_heap.load(Ordering::SeqCst)
     }
 }
 
