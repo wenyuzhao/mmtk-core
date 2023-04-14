@@ -23,8 +23,8 @@ pub const LOG_REF_COUNT_BITS: usize = {
     }
 };
 pub const REF_COUNT_BITS: u8 = 1 << LOG_REF_COUNT_BITS;
-pub const REF_COUNT_MASK: u8 = (1 << REF_COUNT_BITS) - 1;
-pub const MAX_REF_COUNT: u8 = (1 << REF_COUNT_BITS) - 1;
+pub const REF_COUNT_MASK: u8 = (((1u16 << REF_COUNT_BITS) - 1) & 0xff) as u8;
+pub const MAX_REF_COUNT: u8 = REF_COUNT_MASK;
 
 pub const LOG_MIN_OBJECT_SIZE: usize = 4;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
