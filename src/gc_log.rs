@@ -7,6 +7,6 @@ macro_rules! gc_log {
         }
     }};
     ($($arg:tt)*) => {{
-        gc_log!([1] $($arg)*)
+        gc_log!([2] $($arg)*)
     }};
 }

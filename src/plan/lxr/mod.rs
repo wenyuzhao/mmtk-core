@@ -29,6 +29,8 @@ pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredi
     prev_ratio: Atomic::new(0.01),
     alloc_vol: AtomicUsize::new(0),
     copy_promote_vol: AtomicUsize::new(0),
+    #[cfg(feature = "lxr_total_promoted_size_counter")]
+    total_promote_vol: AtomicUsize::new(0),
     pause_start: Atomic::new(SystemTime::UNIX_EPOCH),
 };
 
@@ -36,6 +38,8 @@ pub struct SurvivalRatioPredictor {
     prev_ratio: Atomic<f64>,
     alloc_vol: AtomicUsize,
     copy_promote_vol: AtomicUsize,
+    #[cfg(feature = "lxr_total_promoted_size_counter")]
+    total_promote_vol: AtomicUsize,
     pub pause_start: Atomic<SystemTime>,
 }
 
@@ -51,7 +55,16 @@ impl SurvivalRatioPredictor {
     }
 
     pub fn update_ratio(&self) -> f64 {
+        #[cfg(feature = "lxr_total_promoted_size_counter")]
+        {
+            gc_log!([2]
+                " - promoted Size: {}",
+                self.total_promote_vol.load(Ordering::SeqCst)
+            );
+            self.total_promote_vol.store(0, Ordering::SeqCst);
+        }
         if self.alloc_vol.load(Ordering::SeqCst) == 0 {
+            self.copy_promote_vol.store(0, Ordering::SeqCst);
             return self.ratio();
         }
         let prev = self.prev_ratio.load(Ordering::SeqCst);
@@ -85,6 +98,8 @@ impl SurvivalRatioPredictor {
 #[derive(Default)]
 pub struct SurvivalRatioPredictorLocal {
     copy_promote_vol: AtomicUsize,
+    #[cfg(feature = "lxr_total_promoted_size_counter")]
+    total_promote_vol: AtomicUsize,
 }
 
 impl SurvivalRatioPredictorLocal {
@@ -95,9 +110,22 @@ impl SurvivalRatioPredictorLocal {
         );
     }
 
+    #[cfg(feature = "lxr_total_promoted_size_counter")]
+    pub fn record_total_promotion(&self, size: usize) {
+        self.total_promote_vol.store(
+            self.total_promote_vol.load(Ordering::Relaxed) + size,
+            Ordering::Relaxed,
+        );
+    }
+
     pub fn sync(&self) {
         SURVIVAL_RATIO_PREDICTOR.copy_promote_vol.fetch_add(
             self.copy_promote_vol.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        #[cfg(feature = "lxr_total_promoted_size_counter")]
+        SURVIVAL_RATIO_PREDICTOR.total_promote_vol.fetch_add(
+            self.total_promote_vol.load(Ordering::Relaxed),
             Ordering::Relaxed,
         );
     }

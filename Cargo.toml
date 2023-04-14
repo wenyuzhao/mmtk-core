@@ -122,6 +122,7 @@ munmap = []
 virt_constraint = []
 lxr_no_survival_trigger = []
 object_size_distribution = []
+lxr_total_promoted_size_counter = []
 
 bpr_unprioritized = []
 bpr_freelist = []
