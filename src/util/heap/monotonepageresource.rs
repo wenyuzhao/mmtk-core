@@ -1,8 +1,9 @@
 use super::layout::vm_layout_constants::{BYTES_IN_CHUNK, PAGES_IN_CHUNK};
 use crate::policy::space::{required_chunks, Space};
 use crate::util::address::Address;
-use crate::util::conversions::*;
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::metadata::side_metadata::SideMetadataContext;
+use crate::util::{conversions::*, memory};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::util::alloc::embedded_meta_data::*;
@@ -30,6 +31,7 @@ struct MonotonePageResourceSync {
     sentinel: Address,
     /** Base address of the current chunk of addresses */
     current_chunk: Address,
+    contiguous_start_chunk: Address,
     conditional: MonotonePageResourceConditional,
 }
 
@@ -112,10 +114,11 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
         let mut tmp = sync.cursor + bytes;
         debug!("tmp={:?}", tmp);
 
+        let mut growed_chunks = 0;
         if !self.common().contiguous && tmp > sync.sentinel {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
             let required_chunks = required_chunks(required_pages);
-            let growed_chunks = required_chunks;
+            growed_chunks = required_chunks;
             sync.current_chunk = self
                 .common
                 .grow_discontiguous_space(space.common().descriptor, required_chunks); // Returns zero on failure
@@ -130,7 +133,6 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             rtn = sync.cursor;
             tmp = sync.cursor + bytes;
             new_chunk = true;
-            space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, new_chunk)
         }
 
         debug_assert!(rtn >= sync.cursor && rtn < sync.cursor + bytes);
@@ -144,10 +146,34 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 
             /* In a contiguous space we can bump along into the next chunk, so preserve the currentChunk invariant */
             if self.common().contiguous && chunk_align_down(sync.cursor) != sync.current_chunk {
-                sync.current_chunk = chunk_align_down(sync.cursor);
+                let new_current_chunk = chunk_align_down(sync.cursor);
+                if sync.current_chunk.is_zero() {
+                    growed_chunks = 1
+                        + ((new_current_chunk - sync.contiguous_start_chunk) >> LOG_BYTES_IN_CHUNK);
+                } else {
+                    growed_chunks = (new_current_chunk - sync.current_chunk) >> LOG_BYTES_IN_CHUNK;
+                }
+                sync.current_chunk = new_current_chunk;
+                new_chunk = true;
             }
             self.commit_pages(reserved_pages, required_pages, tls);
 
+            if new_chunk {
+                let new_chunks_start = rtn.align_up(BYTES_IN_CHUNK);
+                if let Err(mmap_error) = crate::mmtk::MMAPPER
+                    .ensure_mapped(
+                        new_chunks_start,
+                        growed_chunks << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize),
+                    )
+                    .and(self.common().metadata.try_map_metadata_space(
+                        new_chunks_start,
+                        growed_chunks << LOG_BYTES_IN_CHUNK,
+                    ))
+                {
+                    memory::handle_mmap_error::<VM>(mmap_error, tls);
+                }
+                space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, true);
+            }
             Result::Ok(PRAllocResult {
                 start: rtn,
                 pages: required_pages,
@@ -175,7 +201,8 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
             ),
             sync: Mutex::new(MonotonePageResourceSync {
                 cursor: start,
-                current_chunk: chunk_align_down(start),
+                current_chunk: Address::ZERO,
+                contiguous_start_chunk: chunk_align_down(start),
                 sentinel,
                 conditional: MonotonePageResourceConditional::Contiguous {
                     start,
@@ -193,6 +220,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
             sync: Mutex::new(MonotonePageResourceSync {
                 cursor: unsafe { Address::zero() },
                 current_chunk: unsafe { Address::zero() },
+                contiguous_start_chunk: Address::ZERO,
                 sentinel: unsafe { Address::zero() },
                 conditional: MonotonePageResourceConditional::Discontiguous,
             }),
@@ -295,6 +323,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 MonotonePageResourceConditional::Contiguous { start: _start, .. } => _start,
                 _ => unreachable!(),
             };
+            guard.current_chunk = Address::ZERO;
         } else if !guard.cursor.is_zero() {
             let bytes = guard.cursor - guard.current_chunk;
             self.release_pages_extent(guard.current_chunk, bytes);
