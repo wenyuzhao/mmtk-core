@@ -161,12 +161,11 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn cross_boundary(inc: bool, current_live_blocks: u8) -> bool {
-        assert_eq!(Self::BLOCKS_IN_CHUNK, 128);
         let mut x = current_live_blocks;
         if !inc {
             x += 1;
         }
-        x == 128 || x == 96 || x == 64 || x == 32 || x == 1
+        x.is_power_of_two()
     }
 
     #[cold]
