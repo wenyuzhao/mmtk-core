@@ -12,7 +12,6 @@ use std::{env, str::FromStr};
 #[derive(Debug)]
 pub(crate) struct RuntimeArgs {
     pub(crate) incs_limit: Option<usize>,
-    pub(crate) blocks_limit: Option<usize>,
     pub(crate) no_mutator_line_recycling: bool,
     pub(crate) nursery_blocks: Option<usize>,
     pub(crate) nursery_ratio: Option<usize>,
@@ -47,9 +46,14 @@ impl Default for RuntimeArgs {
         }
         Self {
             incs_limit: env_arg("INCS_LIMIT"),
-            blocks_limit: env_arg("BLOCKS_LIMIT"),
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
-            nursery_blocks: env_arg("NURSERY_BLOCKS"),
+            nursery_blocks: env_arg("NURSERY_BLOCKS").or(
+                if cfg!(feature = "lxr_fixed_young_size") {
+                    Some(327680)
+                } else {
+                    None
+                },
+            ),
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
@@ -58,7 +62,11 @@ impl Default for RuntimeArgs {
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
             concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
-            max_survival_mb: env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128),
+            max_survival_mb: if cfg!(feature = "lxr_fixed_young_size") {
+                usize::MAX
+            } else {
+                env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128)
+            },
             survival_predictor_harmonic_mean: env_bool_arg("SURVIVAL_PREDICTOR_HARMONIC_MEAN")
                 .unwrap_or(false),
             survival_predictor_weighted: env_bool_arg("SURVIVAL_PREDICTOR_WEIGHTED")

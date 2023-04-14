@@ -123,6 +123,7 @@ virt_constraint = []
 lxr_no_survival_trigger = []
 object_size_distribution = []
 lxr_total_promoted_size_counter = []
+lxr_fixed_young_size = []
 
 bpr_unprioritized = []
 bpr_freelist = []
