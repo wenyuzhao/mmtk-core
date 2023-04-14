@@ -57,6 +57,7 @@ use mmtk_macros::PlanTraceObject;
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 enum GCCause {
+    Unknown,
     FullHeap,
     Emergency,
     UserTriggered,
@@ -89,7 +90,7 @@ pub struct LXR<VM: VMBinding> {
     pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub rc: RefCountHelper<VM>,
-    gc_cause: Atomic<Option<GCCause>>,
+    gc_cause: Atomic<GCCause>,
 }
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -118,8 +119,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
-            self.gc_cause
-                .store(Some(GCCause::FullHeap), Ordering::Relaxed);
+            self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
             return true;
         }
         // Survival limits
@@ -129,8 +129,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if !cfg!(feature = "lxr_no_survival_trigger") {
             if predicted_survival >= crate::args().max_survival_mb {
                 SURVIVAL_TRIGGERED.store(true, Ordering::Relaxed);
-                self.gc_cause
-                    .store(Some(GCCause::Survival), Ordering::Relaxed);
+                self.gc_cause.store(GCCause::Survival, Ordering::Relaxed);
                 return true;
             }
         }
@@ -140,7 +139,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 / 256;
             if predicted_survival >= available_to_space {
                 self.gc_cause
-                    .store(Some(GCCause::ImmixSpaceFull), Ordering::Relaxed);
+                    .store(GCCause::ImmixSpaceFull, Ordering::Relaxed);
                 return true;
             }
         }
@@ -178,8 +177,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .map(|x| self.rc.inc_buffer_size() >= x)
                 .unwrap_or(false)
         {
-            self.gc_cause
-                .store(Some(GCCause::Increments), Ordering::Relaxed);
+            self.gc_cause.store(GCCause::Increments, Ordering::Relaxed);
             return true;
         }
         // fresh young blocks limits
@@ -190,7 +188,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .unwrap_or(false)
         {
             self.gc_cause
-                .store(Some(GCCause::FixedNursery), Ordering::Relaxed);
+                .store(GCCause::FixedNursery, Ordering::Relaxed);
             return true;
         }
         // Concurrent tracing finished
@@ -259,9 +257,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .fetch_add(1, Ordering::SeqCst);
         }
         let gc_cause = if self.is_emergency_collection() {
-            Some(GCCause::Emergency)
+            GCCause::Emergency
         } else if self.base().is_user_triggered_collection() {
-            Some(GCCause::UserTriggered)
+            GCCause::UserTriggered
         } else {
             self.gc_cause.load(Ordering::SeqCst)
         };
@@ -546,7 +544,7 @@ impl<VM: VMBinding> LXR<VM> {
             prev_roots: Default::default(),
             curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
-            gc_cause: Atomic::new(None),
+            gc_cause: Atomic::new(GCCause::Unknown),
         });
 
         lxr.gc_init(&options);
@@ -634,12 +632,9 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         gc_log!([2]
-            " - next_gc_may_perform_cycle_collection = {}",
-            self.next_gc_may_perform_cycle_collection.load(Ordering::Relaxed)
-        );
-        gc_log!([2]
-            " - next_gc_may_perform_emergency_collection = {}",
-            self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed)
+            " - next gc mey perform: cycle_collection = {}, emergency_collection = {}",
+            self.next_gc_may_perform_cycle_collection.load(Ordering::Relaxed),
+            self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
         );
 
         // If CM is finished, do a final mark pause
@@ -934,12 +929,29 @@ impl<VM: VMBinding> LXR<VM> {
                 .downcast_ref::<Self>()
                 .unwrap();
             lxr.immix_space.flush_page_resource();
+            let released_blocks = lxr
+                .immix_space
+                .num_clean_blocks_released_lazy
+                .load(Ordering::SeqCst);
+            let released_los_pages = lxr.los().num_pages_released_lazy.load(Ordering::SeqCst);
+            let total_released_bytes =
+                (released_blocks << Block::LOG_BYTES) + (released_los_pages << LOG_BYTES_IN_PAGE);
             gc_log!([2]
-                " - lazy jobs finished {}M->{}M({}M) since-gc-start={:.3}ms",
-                crate::RESERVED_PAGES_AT_GC_END.load(Ordering::SeqCst) / 256,
+                " - lazy jobs finished since-gc-start={:.3}ms, current-reserved-heap={}M({}M), released-blocks={}, released-los-pages={}, total-released={}",
+                crate::gc_start_time_ms(),
                 lxr.get_reserved_pages() / 256,
                 lxr.get_total_pages() / 256,
-                crate::gc_start_time_ms()
+                released_blocks,
+                released_los_pages,
+                if total_released_bytes < BYTES_IN_KBYTE {
+                    format!("{}B", total_released_bytes)
+                } else if total_released_bytes < BYTES_IN_MBYTE {
+                    format!("{}K", total_released_bytes >> LOG_BYTES_IN_KBYTE)
+                } else if total_released_bytes < (1 << 30) {
+                    format!("{}M", total_released_bytes >> LOG_BYTES_IN_MBYTE)
+                } else {
+                    format!("{}G", total_released_bytes >> 30)
+                }
             );
             gc_log!([2]
                 " - num_clean_blocks_released_lazy = {}",
