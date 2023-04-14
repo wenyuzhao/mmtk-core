@@ -914,6 +914,12 @@ impl<VM: VMBinding> LXR<VM> {
                 lxr.get_total_pages() / 256,
                 crate::gc_start_time_ms()
             );
+            gc_log!([2]
+                " - num_clean_blocks_released_lazy = {}",
+                lxr.immix_space
+                .num_clean_blocks_released_lazy
+                .load(Ordering::SeqCst)
+            );
             // Update counters
             if !crate::args::LAZY_DECREMENTS {
                 HEAP_AFTER_GC.store(lxr.get_used_pages(), Ordering::SeqCst);
