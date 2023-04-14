@@ -440,6 +440,13 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Arguments:
     /// * `object`: The object to be dumped.
     fn dump_object(object: ObjectReference);
+
+    /// Return if an object is valid from the runtime point of view. This is used
+    /// to debug MMTk.
+    fn is_object_sane(_object: ObjectReference) -> bool {
+        true
+    }
+
     fn dump_object_s(object: ObjectReference) -> String;
 
     fn get_class_pointer(object: ObjectReference) -> Address;

@@ -58,6 +58,9 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::MarkCompact => {
             crate::plan::markcompact::mutator::create_markcompact_mutator(tls, &*mmtk.plan)
         }
+        PlanSelector::StickyImmix => {
+            crate::plan::sticky::immix::mutator::create_stickyimmix_mutator(tls, mmtk)
+        }
         PlanSelector::LXR => crate::plan::lxr::mutator::create_lxr_mutator(tls, mmtk),
     })
 }
@@ -101,6 +104,9 @@ pub fn create_plan<VM: VMBinding>(
         }
         PlanSelector::MarkCompact => {
             Box::new(crate::plan::markcompact::MarkCompact::new(args)) as Box<dyn Plan<VM = VM>>
+        }
+        PlanSelector::StickyImmix => {
+            Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM>>
         }
         PlanSelector::LXR => crate::plan::lxr::LXR::new(args) as Box<dyn Plan<VM = VM>>,
     };
@@ -280,6 +286,13 @@ pub trait Plan: 'static + Sync + Downcast {
         //    the reserved pages is larger than total pages after the copying GC (the reserved pages after a GC
         //    may be larger than the reserved pages before a GC, as we may end up using more memory for thread local
         //    buffers for copy allocators).
+        trace!(
+            "Total pages = {}, reserved pages = {}, available pages = {}",
+            self.get_total_pages(),
+            self.get_reserved_pages(),
+            self.get_reserved_pages()
+                .saturating_sub(self.get_reserved_pages())
+        );
         self.get_total_pages()
             .saturating_sub(self.get_reserved_pages())
     }
@@ -304,24 +317,30 @@ pub trait Plan: 'static + Sync + Downcast {
         self.base().emergency_collection.load(Ordering::Relaxed) || VM_MAP.out_of_virtual_space()
     }
 
-    /// The application code has requested a collection.
-    fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
+    /// The application code has requested a collection. This is just a GC hint, and
+    /// we may ignore it.
+    ///
+    /// # Arguments
+    /// * `tls`: The mutator thread that requests the GC
+    /// * `force`: The request cannot be ignored (except for NoGC)
+    /// * `exhaustive`: The requested GC should be exhaustive. This is also a hint.
+    fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool, exhaustive: bool) {
+        // For exhaustive on generational plans, we force a full heap GC.
+        // A plan may implement this method themselves to handle the exhaustive GC.
+        if exhaustive {
+            if let Some(gen) = self.generational() {
+                gen.force_full_heap_collection();
+            }
+        }
         self.base().handle_user_collection_request(tls, force)
     }
 
     /// Return whether last GC was an exhaustive attempt to collect the heap.
-    /// For many collectors this is the same as asking whether the last GC was a full heap collection.
+    /// For example, for generational GCs, minor collection is not an exhaustive collection.
+    /// For example, for Immix, fast collection (no defragmentation) is not an exhaustive collection.
     fn last_collection_was_exhaustive(&self) -> bool {
-        self.last_collection_full_heap()
-    }
-
-    /// Return whether last GC is a full GC.
-    fn last_collection_full_heap(&self) -> bool {
         true
     }
-
-    /// Force the next collection to be full heap.
-    fn force_full_heap_collection(&self) {}
 
     fn modify_check(&self, object: ObjectReference) {
         assert!(
@@ -352,6 +371,15 @@ pub trait Plan: 'static + Sync + Downcast {
     }
 
     fn current_gc_should_perform_class_unloading(&self) -> bool {
+        true
+    }
+
+    /// An object is firstly reached by a sanity GC. So the object is reachable
+    /// in the current GC, and all the GC work has been done for the object (such as
+    /// tracing and releasing). A plan can implement this to
+    /// use plan specific semantics to check if the object is sane.
+    /// Return true if the object is considered valid by the plan.
+    fn sanity_check_object(&self, _object: ObjectReference) -> bool {
         true
     }
 }
@@ -712,7 +740,9 @@ impl<VM: VMBinding> BasePlan<VM> {
             .store(emergency_collection, Ordering::Relaxed);
 
         if emergency_collection {
-            plan.force_full_heap_collection();
+            if let Some(gen) = plan.generational() {
+                gen.force_full_heap_collection();
+            }
         }
     }
 

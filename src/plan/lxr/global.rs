@@ -14,6 +14,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::rc_work::UpdateWeakProcessor;
+use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -524,8 +525,13 @@ impl<VM: VMBinding> LXR<VM> {
             constraints: &LXR_CONSTRAINTS,
             global_side_metadata_specs,
         };
-        let mut immix_space =
-            ImmixSpace::new(plan_args.get_space_args("immix", true, VMRequest::discontiguous()));
+        let mut immix_space = ImmixSpace::new(
+            plan_args.get_space_args("immix", true, VMRequest::discontiguous()),
+            ImmixSpaceArgs {
+                unlog_object_when_traced: false,
+                reset_log_bit_in_major_gc: false,
+            },
+        );
         immix_space.cm_enabled = true;
         let mut lxr = Box::new(LXR {
             immix_space,

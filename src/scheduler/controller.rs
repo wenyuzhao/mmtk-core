@@ -58,11 +58,6 @@ impl<VM: VMBinding> GCController<VM> {
             self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
 
-            // For heap growth logic
-            // FIXME: This is not used. However, we probably want to set a 'user_triggered' flag
-            // when GC is requested.
-            // let user_triggered_collection: bool = SelectedPlan::is_user_triggered_collection();
-
             self.do_gc_until_completion();
             debug!("[STWController: Worker threads complete!]");
         }
@@ -89,10 +84,7 @@ impl<VM: VMBinding> GCController<VM> {
     /// Coordinate workers to perform GC in response to a GC request.
     pub fn do_gc_until_completion(&mut self) {
         self.scheduler.in_gc_pause.store(true, Ordering::SeqCst);
-        // if !crate::LazySweepingJobs::all_finished() {
-        //     self.scheduler.work_buckets[WorkBucketStage::Unconstrained].force_notify_all_workers();
-        // }
-
+        let gc_start = std::time::Instant::now();
         // Schedule collection.
         self.initiate_coordinator_work(&mut ScheduleCollection, true);
 
@@ -150,7 +142,9 @@ impl<VM: VMBinding> GCController<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
-        let mut end_of_gc = EndOfGC;
+        let mut end_of_gc = EndOfGC {
+            elapsed: gc_start.elapsed(),
+        };
 
         // Note: We cannot use `initiate_coordinator_work` here.  If we increment the
         // `pending_coordinator_packets` counter when a worker spuriously wakes up, it may try to

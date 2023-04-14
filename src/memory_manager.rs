@@ -98,6 +98,7 @@ pub fn mmtk_init<VM: VMBinding>(builder: &MMTKBuilder) -> Box<MMTK<VM>> {
     }
     crate::args::RuntimeArgs::init();
     let mmtk = builder.build();
+
     info!("Initialized MMTk with {:?}", *mmtk.options.plan);
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
@@ -595,7 +596,7 @@ pub fn handle_user_collection_request<VM: VMBinding>(
     tls: VMMutatorThread,
     force: bool,
 ) {
-    mmtk.plan.handle_user_collection_request(tls, force);
+    mmtk.plan.handle_user_collection_request(tls, force, false);
 }
 
 /// Is the object alive?

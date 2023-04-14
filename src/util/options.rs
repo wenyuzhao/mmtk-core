@@ -26,6 +26,7 @@ pub enum PlanSelector {
     PageProtect,
     Immix,
     MarkCompact,
+    StickyImmix,
     LXR,
 }
 

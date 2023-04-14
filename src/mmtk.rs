@@ -158,7 +158,7 @@ impl<VM: VMBinding> MMTK<VM> {
     }
 
     pub fn harness_begin(&self, tls: VMMutatorThread) {
-        self.plan.handle_user_collection_request(tls, true);
+        self.plan.handle_user_collection_request(tls, true, true);
         if tls.0 .0.is_null() {
             use crate::vm::Collection;
             VM::VMCollection::block_for_gc(tls);

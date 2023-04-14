@@ -62,6 +62,8 @@ pub static GEN_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     needs_log_bit: ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier),
     needs_field_log_bit: false,
     barrier: *ACTIVE_BARRIER,
+    // We may trace duplicate edges in sticky immix (or any plan that uses object remembering barrier). See https://github.com/mmtk/mmtk-core/issues/743.
+    may_trace_duplicate_edges: ACTIVE_BARRIER.equals(BarrierSelector::ObjectBarrier),
     max_non_los_default_alloc_bytes: crate::util::rust_util::min_of_usize(
         crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
         *crate::util::options::NURSERY_SIZE,

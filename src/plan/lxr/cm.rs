@@ -101,7 +101,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space(object) {
-            self.plan.immix_space.fast_trace_object(self, object);
+            self.plan
+                .immix_space
+                .trace_object_without_moving(self, object);
         } else if self.plan.los().in_space(object) {
             self.plan.los().trace_object(self, object);
         }

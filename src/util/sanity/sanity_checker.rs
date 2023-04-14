@@ -118,6 +118,7 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
         Self::update_mark_state();
         <P::VM as VMBinding>::VMCollection::clear_cld_claimed_marks();
+        info!("Sanity GC prepare");
         mmtk.plan.enter_sanity();
         {
             let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
@@ -146,6 +147,7 @@ impl<P: Plan> SanityRelease<P> {
 
 impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
+        info!("Sanity GC release");
         mmtk.plan.leave_sanity();
         mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
         for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {

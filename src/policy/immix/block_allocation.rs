@@ -5,7 +5,6 @@ use crate::{
     plan::lxr::LXR,
     policy::space::Space,
     scheduler::{GCWork, GCWorkScheduler, GCWorker},
-    util::{heap::chunk_map::ChunkState, linear_scan::Region, VMThread},
     vm::*,
     LazySweepingJobsCounter, MMTK,
 };
@@ -13,7 +12,7 @@ use atomic::{Atomic, Ordering};
 use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 
-struct BlockCache {
+pub(super) struct BlockCache {
     cursor: AtomicUsize,
     buffer: RwLock<Vec<Atomic<Block>>>,
 }
@@ -30,7 +29,7 @@ impl BlockCache {
         self.cursor.load(Ordering::SeqCst)
     }
 
-    fn push(&self, block: Block) {
+    pub fn push(&self, block: Block) {
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
         let buffer = self.buffer.read().unwrap();
         if i < buffer.len() {
@@ -59,8 +58,8 @@ impl BlockCache {
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: Option<&'static ImmixSpace<VM>>,
-    nursery_blocks: BlockCache,
-    reused_blocks: BlockCache,
+    pub(super) nursery_blocks: BlockCache,
+    pub(super) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
 }
 
@@ -153,7 +152,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         lxr.concurrent_marking_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
     }
 
-    fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
+    pub(super) fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
         }
@@ -178,62 +177,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         // println!("Alloc {:?} {}", block, copy);
         block.init(copy, false, self.space());
-        self.space()
-            .chunk_map
-            .set(block.chunk(), ChunkState::Allocated);
-    }
-
-    /// Allocate a clean block.
-    pub fn get_clean_block(&self, tls: VMThread, copy: bool, _lock_free: bool) -> Option<Block> {
-        let block = {
-            let block_address = self.space().acquire(tls, Block::PAGES);
-            if block_address.is_zero() {
-                return None;
-            }
-            Block::from_aligned_address(block_address)
-        };
-        if !copy && self.space().rc_enabled {
-            self.nursery_blocks.push(block);
-        }
-        self.initialize_new_clean_block(block, copy, self.space().cm_enabled);
         if self.space().common().zeroed && !copy && cfg!(feature = "force_zeroing") {
             crate::util::memory::zero_w(block.start(), Block::BYTES);
-        }
-        Some(block)
-    }
-
-    /// Pop a reusable block from the reusable block list.
-    pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
-        if super::BLOCK_ONLY {
-            return None;
-        }
-        loop {
-            if let Some(block) = self.space().reusable_blocks.pop() {
-                if copy && block.is_defrag_source() {
-                    continue;
-                }
-                if self.space().rc_enabled {
-                    if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
-                        continue;
-                    }
-                    // Blocks in the `reusable_blocks` queue can be released after some RC collections.
-                    // These blocks can either have `Unallocated` state, or be reallocated again.
-                    // Skip these cases and only return the truly reusable blocks.
-                    if !block.get_state().is_reusable() {
-                        continue;
-                    }
-                    if !copy && !block.attempt_mutator_reuse() {
-                        continue;
-                    }
-                    if !copy {
-                        self.reused_blocks.push(block);
-                    }
-                }
-                block.init(copy, true, self.space());
-                return Some(block);
-            } else {
-                return None;
-            }
         }
     }
 }
