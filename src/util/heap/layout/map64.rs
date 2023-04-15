@@ -45,7 +45,9 @@ impl Map64 {
             // elide the storing of 0 for each of the element.  Using standard vector creation,
             // such as `vec![SpaceDescriptor::UNINITIALIZED; MAX_CHUNKS]`, will cause severe
             // slowdown during start-up.
-            descriptor_map: unsafe { new_zeroed_vec::<SpaceDescriptor>(MAX_CHUNKS) },
+            descriptor_map: unsafe {
+                new_zeroed_vec::<SpaceDescriptor>(VM_LAYOUT_CONSTANTS.max_chunks())
+            },
             high_water,
             base_address,
             fl_page_resources: vec![None; MAX_SPACES],
@@ -58,8 +60,7 @@ impl Map64 {
 
 impl VMMap for Map64 {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        debug_assert!(Self::is_space_start(start));
-        debug_assert!(extent <= SPACE_SIZE_64);
+        debug_assert!(extent <= VM_LAYOUT_CONSTANTS.space_size_64);
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.
         let self_mut = unsafe { self.mut_self() };
@@ -68,7 +69,7 @@ impl VMMap for Map64 {
     }
 
     fn create_freelist(&self, start: Address) -> Box<dyn FreeList> {
-        let units = SPACE_SIZE_64 >> LOG_BYTES_IN_PAGE;
+        let units = VM_LAYOUT_CONSTANTS.space_size_64 >> LOG_BYTES_IN_PAGE;
         self.create_parent_freelist(start, units, units as _)
     }
 
@@ -134,7 +135,7 @@ impl VMMap for Map64 {
         let free_list = self.fl_map[Self::space_index(descriptor.get_start()).unwrap()];
         if let Some(free_list) = free_list {
             let free_list =
-                unsafe { &mut *(free_list as *const _ as usize as *mut RawMemoryFreeList) };
+                unsafe { &mut *(free_list as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
             free_list.grow_freelist(conversions::bytes_to_pages(extent) as _);
             let base_page = conversions::bytes_to_pages(rtn - self.base_address[index]);
             for offset in (0..(chunks * PAGES_IN_CHUNK)).step_by(PAGES_IN_CHUNK) {
@@ -181,7 +182,8 @@ impl VMMap for Map64 {
         for pr in 0..MAX_SPACES {
             if let Some(fl) = self_mut.fl_map[pr] {
                 #[allow(clippy::cast_ref_to_mut)]
-                let fl_mut: &mut RawMemoryFreeList = unsafe { &mut *(fl as *const _ as *mut _) };
+                let fl_mut: &mut RawMemoryFreeList =
+                    unsafe { &mut *(fl as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
                 fl_mut.grow_freelist(0);
             }
         }
@@ -194,8 +196,10 @@ impl VMMap for Map64 {
         for pr in 0..MAX_SPACES {
             if let Some(fl) = self_mut.fl_page_resources[pr] {
                 #[allow(clippy::cast_ref_to_mut)]
-                let fl_mut: &mut CommonFreeListPageResource =
-                    unsafe { &mut *(fl as *const _ as *mut _) };
+                let fl_mut: &mut CommonFreeListPageResource = unsafe {
+                    &mut *(fl as *const CommonFreeListPageResource
+                        as *mut CommonFreeListPageResource)
+                };
                 fl_mut.resize_freelist(conversions::chunk_align_up(
                     self.fl_map[pr].unwrap().get_limit(),
                 ));
@@ -228,18 +232,18 @@ impl Map64 {
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
     unsafe fn mut_self(&self) -> &mut Self {
-        &mut *(self as *const _ as *mut _)
+        &mut *(self as *const Self as *mut Self)
     }
 
     fn space_index(addr: Address) -> Option<usize> {
-        if addr > HEAP_END {
+        if addr > VM_LAYOUT_CONSTANTS.heap_end {
             return None;
         }
-        Some(addr >> SPACE_SHIFT_64)
+        Some(addr >> VM_LAYOUT_CONSTANTS.space_shift_64)
     }
 
     fn is_space_start(base: Address) -> bool {
-        (base & !SPACE_MASK_64) == 0
+        (base & !VM_LAYOUT_CONSTANTS.space_mask_64) == 0
     }
 }
 
