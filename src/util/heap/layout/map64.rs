@@ -134,6 +134,7 @@ impl VMMap for Map64 {
         /* Grow the free list to accommodate the new chunks */
         let free_list = self.fl_map[Self::space_index(descriptor.get_start()).unwrap()];
         if let Some(free_list) = free_list {
+            #[allow(clippy::cast_ref_to_mut)]
             let free_list =
                 unsafe { &mut *(free_list as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
             free_list.grow_freelist(conversions::bytes_to_pages(extent) as _);

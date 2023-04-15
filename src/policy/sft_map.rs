@@ -1,5 +1,4 @@
 use super::sft::*;
-use crate::util::heap::layout::vm_layout_constants::VMLayoutConstants;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
 
@@ -67,6 +66,7 @@ pub(crate) fn create_sft_map() -> Box<dyn SFTMap> {
             // 64-bit malloc mark sweep needs a chunk-based SFT map, but the sparse map is not suitable for 64bits.
             return Box::new(dense_chunk_map::SFTDenseChunkMap::<'static>::new());
         } else if #[cfg(target_pointer_width = "64")] {
+            use crate::util::heap::layout::vm_layout_constants::VMLayoutConstants;
             if !VMLayoutConstants::get_address_space().is_compressed_pointer_space() {
                 return Box::new(space_map::SFTSpaceMap::<'static>::new());
             } else {

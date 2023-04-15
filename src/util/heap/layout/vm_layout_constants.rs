@@ -161,10 +161,7 @@ pub enum AddressSpaceKind {
 
 impl AddressSpaceKind {
     pub const fn is_compressed_pointer_space(&self) -> bool {
-        match self {
-            Self::_64BitsWithPointerCompression { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::_64BitsWithPointerCompression { .. })
     }
 }
 

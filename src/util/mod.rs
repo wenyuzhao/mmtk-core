@@ -42,7 +42,7 @@ pub(crate) mod erase_vm;
 /// Finalization implementation.
 pub(crate) mod finalizable_processor;
 /// Heap implementation, including page resource, mmapper, etc.
-pub mod heap;
+pub(crate) mod heap;
 #[cfg(feature = "is_mmtk_object")]
 pub mod is_mmtk_object;
 /// Logger initialization
@@ -78,5 +78,6 @@ mod raw_memory_freelist;
 
 pub use self::address::Address;
 pub use self::address::ObjectReference;
+pub use self::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
