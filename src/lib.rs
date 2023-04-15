@@ -43,6 +43,9 @@ extern crate crossbeam;
 extern crate num_cpus;
 #[macro_use]
 extern crate downcast_rs;
+#[cfg(feature = "tracing")]
+#[macro_use]
+extern crate probe;
 
 #[macro_use]
 mod gc_log;

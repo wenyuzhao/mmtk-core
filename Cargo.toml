@@ -44,6 +44,7 @@ cfg-if = "1.0.0"
 itertools = "0.10.5"
 sys-info = "0.9"
 regex = "1.7.0"
+probe = { version = "0.3", optional = true }
 
 [dev-dependencies]
 rand = "0.7.3"
@@ -222,3 +223,5 @@ eager_sweeping = []
 # and will affect all the plans in the build. Please be aware of the consequence, and this is only meant to be experimental use.
 malloc_mark_sweep = []
 # Group:end
+
+tracing = ["probe"]

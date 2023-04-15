@@ -458,6 +458,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let bucket_opened = bucket.update(self);
+            #[cfg(feature = "tracing")]
+            if bucket_opened {
+                probe!(mmtk, bucket_opened, id);
+            }
             let verbose = crate::verbose(3);
             if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
                 if verbose {
