@@ -3,6 +3,7 @@ pub mod vm_layout_constants;
 
 mod mmapper;
 pub use self::mmapper::Mmapper;
+#[cfg(target_pointer_width = "32")]
 mod byte_map_mmapper;
 #[cfg(target_pointer_width = "64")]
 mod fragmented_mapper;

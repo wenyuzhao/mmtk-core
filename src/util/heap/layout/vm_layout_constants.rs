@@ -1,5 +1,3 @@
-use spin::Mutex;
-
 use super::heap_parameters::*;
 use crate::util::constants::*;
 use crate::util::Address;
@@ -85,7 +83,7 @@ impl VMLayoutConstants {
             heap_start: chunk_align_down(unsafe {
                 Address::from_usize(0x0000_0200_0000_0000usize)
             }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2000_0000_0000usize) }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(0x0000_2200_0000_0000usize) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0xdc0_0000) }).as_usize(),
             max_chunks: 1 << (Self::LOG_ARCH_ADDRESS_SPACE - LOG_BYTES_IN_CHUNK),
             log_space_extent: 41,
@@ -142,13 +140,17 @@ impl VMLayoutConstants {
     }
 
     pub fn set_address_space(kind: AddressSpaceKind) {
-        let mut guard = ADDRESS_SPACE_KIND.lock();
-        assert!(guard.is_none(), "Address space can only be set once");
-        *guard = Some(kind);
+        unsafe {
+            assert!(
+                ADDRESS_SPACE_KIND.is_none(),
+                "Address space can only be set once"
+            );
+            ADDRESS_SPACE_KIND = Some(kind);
+        }
     }
 
     pub fn get_address_space() -> AddressSpaceKind {
-        ADDRESS_SPACE_KIND.lock().unwrap()
+        unsafe { ADDRESS_SPACE_KIND.expect("Address space is not initialized") }
     }
 }
 
@@ -165,14 +167,22 @@ impl AddressSpaceKind {
     }
 }
 
-static ADDRESS_SPACE_KIND: Mutex<Option<AddressSpaceKind>> = Mutex::new(None);
+static mut ADDRESS_SPACE_KIND: Option<AddressSpaceKind> = {
+    if cfg!(test) {
+        if cfg!(target_pointer_width = "32") {
+            Some(AddressSpaceKind::_32Bits)
+        } else {
+            Some(AddressSpaceKind::_64Bits)
+        }
+    } else {
+        None
+    }
+};
 
 lazy_static! {
     pub static ref VM_LAYOUT_CONSTANTS: VMLayoutConstants = {
-        let las = ADDRESS_SPACE_KIND
-            .lock()
-            .expect("Address space is not initialized");
-        match las {
+        let addr_space = VMLayoutConstants::get_address_space();
+        match addr_space {
             AddressSpaceKind::_32Bits => unimplemented!(),
             AddressSpaceKind::_64Bits => VMLayoutConstants::new_64bit(),
             AddressSpaceKind::_64BitsWithPointerCompression { max_heap_size } => {
