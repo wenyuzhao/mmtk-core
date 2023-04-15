@@ -136,7 +136,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                     .map(|c| {
                         let blocks: Vec<Block> =
                             c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
-                        Box::new(RCSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
+                        Box::new(RCLazySweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
                     })
                     .collect();
                 scheduler.postpone_all_prioritized(packets);
@@ -238,12 +238,12 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 }
 
-pub struct RCSweepNurseryBlocks {
+pub struct RCLazySweepNurseryBlocks {
     blocks: Vec<Block>,
     _counter: LazySweepingJobsCounter,
 }
 
-impl RCSweepNurseryBlocks {
+impl RCLazySweepNurseryBlocks {
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
             blocks,
@@ -252,7 +252,7 @@ impl RCSweepNurseryBlocks {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for RCSweepNurseryBlocks {
+impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
         let mut released_blocks = 0;

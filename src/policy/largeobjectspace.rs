@@ -534,14 +534,22 @@ impl RCReleaseMatureLOS {
     fn do_work_impl<VM: VMBinding>(&self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
         let mut mature_objects = los.rc_mature_objects.lock();
+        let mut total_released_pages = 0;
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
             o.to_address::<VM>().unlog::<VM>();
             if removed {
                 let pages = los.release_object(o.to_address::<VM>());
-                los.num_pages_released_lazy
-                    .fetch_add(pages, Ordering::Relaxed);
+                total_released_pages += pages;
             }
+        }
+        let lxr = mmtk
+            .plan
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+            .unwrap();
+        if total_released_pages != 0 && lxr.current_pause().is_none() {
+            los.num_pages_released_lazy
+                .fetch_add(total_released_pages, Ordering::Relaxed);
         }
     }
 }
