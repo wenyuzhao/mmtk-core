@@ -233,6 +233,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     ) {
         self.semantics.memory_region_copy_slow(src, dst);
     }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        self.semantics.object_reference_clone_pre(obj)
+    }
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.

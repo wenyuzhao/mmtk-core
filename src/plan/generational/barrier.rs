@@ -90,4 +90,11 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
                 .then(|| self.flush_region_modbuf());
         }
     }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        if !self.plan.is_object_in_nursery(obj) {
+            self.modbuf.push(obj);
+            self.modbuf.is_full().then(|| self.flush_modbuf());
+        }
+    }
 }
