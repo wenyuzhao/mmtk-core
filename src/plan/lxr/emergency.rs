@@ -61,8 +61,6 @@ pub fn schedule_second_pass_preparation_tasks<VM: VMBinding>(scheduler: &GCWorkS
     scheduler.work_buckets[WorkBucketStage::PrepareForSecondClosure].bulk_add(vec![
         Box::new(LXREmergencyBlockSweepingAndEvacuationSetSelection),
         Box::new(LXRSweepMatureLOSAfterGCFirstTrace),
-        Box::new(LXREmergencyResetImmixMarkTable),
-        Box::new(LXREmergencyResetLOSMarkTable),
         Box::new(LXREmergencyClearCLDReclaimedMarks),
     ]);
 }
@@ -97,27 +95,6 @@ impl<VM: VMBinding> GCWork<VM> for LXREmergencyResetMarkTableForChunk {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
             .extract_side_spec()
             .bzero_metadata(self.0.start(), Chunk::BYTES);
-    }
-}
-
-struct LXREmergencyResetLOSMarkTable;
-
-impl<VM: VMBinding> GCWork<VM> for LXREmergencyResetLOSMarkTable {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        mmtk.get_plan().common().los.zero_mark_bits();
-    }
-}
-
-struct LXREmergencyResetImmixMarkTable;
-
-impl<VM: VMBinding> GCWork<VM> for LXREmergencyResetImmixMarkTable {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        mmtk.scheduler.work_buckets[WorkBucketStage::PrepareForSecondClosure].bulk_add(
-            lxr.immix_space
-                .chunk_map
-                .generate_tasks(|chunk| Box::new(LXREmergencyResetMarkTableForChunk(chunk))),
-        );
     }
 }
 
@@ -168,22 +145,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyMarkTrace<VM> {
         if object.is_null() {
             return object;
         }
-        let _ = self.lxr.rc.inc(object);
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         debug_assert!(object.class_is_valid::<VM>());
-        let forwarded = if self.lxr.immix_space.in_space(object) {
-            self.lxr.immix_space.trace_mark_rc_mature_object(
-                self,
-                object,
-                Pause::FullTraceFast,
-                true,
-            )
-        } else {
-            self.lxr.los().trace_object(self, object)
-        };
-        debug_assert_eq!(forwarded, object);
-        forwarded
+        if self.lxr.rc.inc(object) == Ok(0) {
+            if self.lxr.immix_space.in_space(object) {
+                self.lxr.rc.mark_potential_straddle_object(object);
+            }
+            self.enqueue(object);
+        }
+        object
     }
 
     fn process_edges(&mut self) {
@@ -226,12 +197,7 @@ impl<VM: VMBinding> ObjectQueue for LXREmergencyMarkTrace<VM> {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
         }
-        if self.lxr.immix_space.in_space(object) {
-            self.lxr.rc.mark_potential_straddle_object(object);
-        }
-        gc_log!([4] "scan {:?}", object);
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
-            gc_log!([4] " - {:?}.{:?} -> {:?}", object, e.to_address(), e.load());
             self.next_edges.push(e);
             if self.next_edges.is_full() {
                 self.flush();
