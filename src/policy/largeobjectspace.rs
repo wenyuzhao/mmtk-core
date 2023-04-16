@@ -549,7 +549,14 @@ impl RCSweepMatureLOS {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
         Self { _counter: counter }
     }
-    fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
+    fn do_work(
+        &mut self,
+        _worker: &mut crate::scheduler::GCWorker<VM>,
+        mmtk: &'static crate::MMTK<VM>,
+    ) {
         let lxr = mmtk
             .plan
             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
@@ -559,16 +566,6 @@ impl RCSweepMatureLOS {
         los.sweep_rc_mature_objects(mmtk, &|o| {
             !(!los.is_marked(o) && (is_emergency_gc || los.rc.count(o) != 0))
         });
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
-    fn do_work(
-        &mut self,
-        _worker: &mut crate::scheduler::GCWorker<VM>,
-        mmtk: &'static crate::MMTK<VM>,
-    ) {
-        self.do_work_impl(mmtk)
     }
 }
 
