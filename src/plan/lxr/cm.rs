@@ -388,24 +388,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if self.roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
-        if self.pause == Pause::FullTraceFast {
-            for i in 0..self.edges.len() {
-                self.process_mark_edge(self.edges[i])
-            }
-        } else if self.remset_recorded_edges {
-            for i in 0..self.edges.len() {
-                self.process_remset_edge(self.edges[i], i)
-            }
-        } else {
-            for i in 0..self.edges.len() {
-                self.process_edge(self.edges[i])
-            }
-        }
-        self.flush();
+        self.process_edges_impl(self.remset_recorded_edges);
         if self.roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
         }
+        while !self.next_edges.is_empty() {
+            self.edges = self.next_edges.take();
+            self.process_edges_impl(false);
+        }
+        self.flush();
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
@@ -424,34 +416,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
-    fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
-        debug_assert_ne!(self.lxr.rc.count(object), 0);
-        debug_assert!(object.is_in_any_space());
-        debug_assert!(object.to_address::<VM>().is_aligned_to(8));
-        debug_assert!(object.class_is_valid::<VM>());
-        let x = if self.lxr.immix_space.in_space(object) {
-            let pause = self.pause;
-            let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object(
-                self,
-                object,
-                CopySemantics::DefaultCopy,
-                pause,
-                true,
-                worker,
-            )
-        } else {
-            self.lxr.los().trace_object(self, object)
-        };
-        if self.roots {
-            self.forwarded_roots.push(x)
-        }
-        x
-    }
-
     fn process_remset_edge(&mut self, slot: EdgeOf<Self>, i: usize) {
         let object = slot.load();
         if object != self.refs[i] {
@@ -466,12 +430,15 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         super::record_edge_for_validation(slot, new_object);
     }
 
-    fn process_mark_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
-        let new_object = self.trace_and_mark_object(object);
-        super::record_edge_for_validation(slot, new_object);
-        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            slot.store(new_object);
+    fn process_edges_impl(&mut self, remset_recorded_edges: bool) {
+        if remset_recorded_edges {
+            for i in 0..self.edges.len() {
+                self.process_remset_edge(self.edges[i], i)
+            }
+        } else {
+            for i in 0..self.edges.len() {
+                self.process_edge(self.edges[i])
+            }
         }
     }
 }
@@ -569,14 +536,25 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
     fn process_edges(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
-        for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge(self, self.edges[i])
+        self.process_edges_impl();
+        debug_assert!(!self.roots);
+        while !self.next_edges.is_empty() {
+            self.edges = self.next_edges.take();
+            self.process_edges_impl();
         }
         self.flush();
     }
 
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
+    }
+}
+
+impl<VM: VMBinding> LXRWeakRefProcessEdges<VM> {
+    fn process_edges_impl(&mut self) {
+        for i in 0..self.edges.len() {
+            self.process_edge(self.edges[i])
+        }
     }
 }
 

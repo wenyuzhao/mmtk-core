@@ -194,7 +194,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyMarkTrace<VM> {
                 LXREmergencyForwardTrace::new(roots, !self.cld_roots, self.worker().mmtk),
             )
         }
-        if !self.next_edges.is_empty() {
+        while !self.next_edges.is_empty() {
             self.edges = self.next_edges.take();
             self.process_edges_impl();
         }
@@ -318,7 +318,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyWeakRefProcessEdges<VM> {
     fn process_edges(&mut self) {
         self.process_edges_impl();
         debug_assert!(!self.roots);
-        if !self.next_edges.is_empty() {
+        while !self.next_edges.is_empty() {
             self.edges = self.next_edges.take();
             self.process_edges_impl();
         }
@@ -440,7 +440,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyForwardTrace<VM> {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
         }
-        if !self.next_edges.is_empty() {
+        while !self.next_edges.is_empty() {
             self.edges = self.next_edges.take();
             self.process_edges_impl();
         }
