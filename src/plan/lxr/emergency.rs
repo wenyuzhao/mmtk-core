@@ -169,7 +169,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyMarkTrace<VM> {
             return object;
         }
         let _ = self.lxr.rc.inc(object);
-        // debug_assert_ne!(self.lxr.rc.count(object), 0);
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         debug_assert!(object.class_is_valid::<VM>());
@@ -183,7 +182,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyMarkTrace<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        assert_eq!(forwarded, object);
+        debug_assert_eq!(forwarded, object);
         forwarded
     }
 
@@ -199,6 +198,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyMarkTrace<VM> {
             self.edges = self.next_edges.take();
             self.process_edges_impl();
         }
+        self.flush();
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
@@ -214,11 +214,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyMarkTrace<VM> {
 
 impl<VM: VMBinding> LXREmergencyMarkTrace<VM> {
     fn process_edges_impl(&mut self) {
-        assert_eq!(self.lxr.current_pause(), Some(Pause::FullTraceFast));
+        debug_assert_eq!(self.lxr.current_pause(), Some(Pause::FullTraceFast));
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])
         }
-        self.flush();
     }
 }
 
@@ -256,7 +255,6 @@ impl<VM: VMBinding> DerefMut for LXREmergencyMarkTrace<VM> {
 
 pub struct LXREmergencyWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
-    pause: Pause,
     base: ProcessEdgesBase<VM>,
     next_edges: VectorQueue<EdgeOf<Self>>,
 }
@@ -272,7 +270,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyWeakRefProcessEdges<VM> {
         Self {
             lxr,
             base,
-            pause: Pause::RefCount,
             next_edges: VectorQueue::new(),
         }
     }
@@ -294,16 +291,14 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyWeakRefProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        let _ = self.lxr.rc.inc(object);
-        assert_ne!(self.lxr.rc.count(object), 0);
+        debug_assert_ne!(self.lxr.rc.count(object), 0);
         if self.lxr.immix_space.in_space(object) {
-            let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
                 self,
                 object,
                 CopySemantics::DefaultCopy,
-                pause,
+                Pause::FullTraceFast,
                 true,
                 worker,
             )
@@ -321,15 +316,26 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyWeakRefProcessEdges<VM> {
     }
 
     fn process_edges(&mut self) {
-        self.pause = self.lxr.current_pause().unwrap();
-        for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge(self, self.edges[i])
+        self.process_edges_impl();
+        debug_assert!(!self.roots);
+        if !self.next_edges.is_empty() {
+            self.edges = self.next_edges.take();
+            self.process_edges_impl();
         }
         self.flush();
     }
 
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
         unreachable!()
+    }
+}
+
+impl<VM: VMBinding> LXREmergencyWeakRefProcessEdges<VM> {
+    fn process_edges_impl(&mut self) {
+        debug_assert_eq!(self.lxr.current_pause(), Some(Pause::FullTraceFast));
+        for i in 0..self.edges.len() {
+            self.process_edge(self.edges[i])
+        }
     }
 }
 
@@ -402,8 +408,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyForwardTrace<VM> {
         if object.is_null() {
             return object;
         }
-        let _ = self.lxr.rc.inc(object);
-        assert_ne!(self.lxr.rc.count(object), 0);
+        debug_assert_ne!(self.lxr.rc.count(object), 0);
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         debug_assert!(object.class_is_valid::<VM>());
@@ -439,6 +444,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyForwardTrace<VM> {
             self.edges = self.next_edges.take();
             self.process_edges_impl();
         }
+        self.flush();
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
@@ -457,11 +463,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXREmergencyForwardTrace<VM> {
 
 impl<VM: VMBinding> LXREmergencyForwardTrace<VM> {
     fn process_edges_impl(&mut self) {
-        assert_eq!(self.lxr.current_pause(), Some(Pause::FullTraceFast));
+        debug_assert_eq!(self.lxr.current_pause(), Some(Pause::FullTraceFast));
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])
         }
-        self.flush();
     }
 }
 
