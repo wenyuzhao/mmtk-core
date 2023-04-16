@@ -372,8 +372,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn zero_rc_bits(&self) {
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.mark_state = 1;
         if self.pr.common().contiguous {
             unimplemented!()
         } else {
