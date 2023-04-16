@@ -502,30 +502,16 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
         }
     }
-}
 
-fn get_super_page(cell: Address) -> Address {
-    cell.align_down(BYTES_IN_PAGE)
-}
-
-pub struct RCSweepMatureLOS {
-    _counter: LazySweepingJobsCounter,
-}
-
-impl RCSweepMatureLOS {
-    pub fn new(counter: LazySweepingJobsCounter) -> Self {
-        Self { _counter: counter }
-    }
-    fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
-        let lxr = mmtk
-            .plan
-            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
-            .unwrap();
+    pub fn sweep_rc_mature_objects(
+        &self,
+        mmtk: &'static crate::MMTK<VM>,
+        is_live: &impl Fn(ObjectReference) -> bool,
+    ) {
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
-        let is_emergency_gc = lxr.current_pause() == Some(Pause::FullTraceFast);
         for o in mature_objects.iter() {
-            if !los.is_marked(*o) && (is_emergency_gc || los.rc.count(*o) != 0) {
+            if !is_live(*o) {
                 crate::stat(|s| {
                     s.dead_mature_objects += 1;
                     s.dead_mature_volume += o.get_size::<VM>();
@@ -548,6 +534,31 @@ impl RCSweepMatureLOS {
                 los.rc_free(*o);
             }
         }
+    }
+}
+
+fn get_super_page(cell: Address) -> Address {
+    cell.align_down(BYTES_IN_PAGE)
+}
+
+pub struct RCSweepMatureLOS {
+    _counter: LazySweepingJobsCounter,
+}
+
+impl RCSweepMatureLOS {
+    pub fn new(counter: LazySweepingJobsCounter) -> Self {
+        Self { _counter: counter }
+    }
+    fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
+        let lxr = mmtk
+            .plan
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+            .unwrap();
+        let los = mmtk.plan.common().get_los();
+        let is_emergency_gc = lxr.current_pause() == Some(Pause::FullTraceFast);
+        los.sweep_rc_mature_objects(mmtk, &|o| {
+            !(!los.is_marked(o) && (is_emergency_gc || los.rc.count(o) != 0))
+        });
     }
 }
 
