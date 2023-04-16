@@ -2,6 +2,7 @@ use super::cm::LXRConcurrentTraceObjects;
 use super::cm::LXRStopTheWorldProcessEdges;
 use super::SurvivalRatioPredictorLocal;
 use super::LXR;
+use crate::plan::lxr::emergency::LXREmergencyMarkTrace;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
 use crate::scheduler::gc_work::EdgeOf;
@@ -621,13 +622,18 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .scheduler()
                     .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
-            if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
-            {
+            if self.current_pause == Pause::FinalMark {
                 if !root_edges.is_empty() {
                     worker.add_work(
                         WorkBucketStage::Closure,
                         LXRStopTheWorldProcessEdges::new(root_edges, !self.cld_roots, mmtk),
                     )
+                }
+            } else if self.current_pause == Pause::FullTraceFast {
+                if !root_edges.is_empty() {
+                    let mut trace = LXREmergencyMarkTrace::new(root_edges, true, mmtk);
+                    trace.cld_roots = self.cld_roots;
+                    worker.add_work(WorkBucketStage::Closure, trace);
                 }
             } else if !self.cld_roots {
                 self.lxr().curr_roots.read().unwrap().push(roots);
@@ -856,6 +862,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        if lxr.current_pause() == Some(Pause::FullTraceFast) {
+            return;
+        }
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
             || lxr.previous_pause() == Some(Pause::FullTraceFast);

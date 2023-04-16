@@ -1,4 +1,4 @@
-use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
+use super::gc_work::{LXREmergencyWeakRefWorkContext, LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
@@ -815,18 +815,27 @@ impl<VM: VMBinding> LXR<VM> {
     ) {
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
-        // Before start yielding, wrap all the roots from the previous GC with work-packets.
-        self.process_prev_roots(scheduler);
+        // Before start yielding, drop all the dec buffers
+        self.drop_prev_roots();
         scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
+        // Reset RC table
+        super::emergency::schedule_first_pass_preparation_tasks(scheduler);
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+        // reset mark for second pass
+        super::emergency::schedule_second_pass_preparation_tasks(scheduler);
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
+        scheduler.schedule_ref_proc_work::<LXREmergencyWeakRefWorkContext<VM>>(self);
+    }
+
+    fn drop_prev_roots(&self) {
+        let mut prev_roots = self.prev_roots.write().unwrap();
+        *prev_roots = Default::default();
     }
 
     fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {

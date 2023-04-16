@@ -199,6 +199,13 @@ impl<VM: VMBinding> RefCountHelper<VM> {
             self.mark_straddle_object_with_size(o, size);
         }
     }
+
+    pub fn mark_potential_straddle_object(&self, o: ObjectReference) {
+        let size = o.get_size::<VM>();
+        if size > Line::BYTES {
+            self.mark_straddle_object_with_size(o, size);
+        }
+    }
 }
 
 impl<VM: VMBinding> Clone for RefCountHelper<VM> {

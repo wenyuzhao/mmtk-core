@@ -1,5 +1,6 @@
 mod barrier;
 pub(super) mod cm;
+mod emergency;
 mod gc_work;
 pub(super) mod global;
 mod mature_evac;

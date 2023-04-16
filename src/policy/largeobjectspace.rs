@@ -370,6 +370,40 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    pub fn zero_rc_bits(&self) {
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        me.mark_state = 1;
+        if self.pr.common().contiguous {
+            unimplemented!()
+        } else {
+            let mut chunk = self.pr.common().get_head_discontiguous_region();
+            while !chunk.is_zero() {
+                let bytes = self.common().vm_map().get_contiguous_region_size(chunk);
+                crate::util::rc::RC_TABLE
+                    .bzero_metadata(chunk, bytes);
+                chunk = self.common().vm_map().get_next_contiguous_region(chunk);
+            }
+        }
+    }
+
+    pub fn zero_mark_bits(&self) {
+        let me = unsafe { &mut *(self as *const Self as *mut Self) };
+        me.mark_state = 1;
+        if self.pr.common().contiguous {
+            unimplemented!()
+        } else {
+            let mut chunk = self.pr.common().get_head_discontiguous_region();
+            while !chunk.is_zero() {
+                let bytes = self.common().vm_map().get_contiguous_region_size(chunk);
+                VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
+                    .as_spec()
+                    .extract_side_spec()
+                    .bzero_metadata(chunk, bytes);
+                chunk = self.common().vm_map().get_next_contiguous_region(chunk);
+            }
+        }
+    }
+
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
