@@ -409,12 +409,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
+        debug_assert_ne!(pause, Pause::FullTraceDefrag);
+        // Select mature evacuation set
         if pause == Pause::InitialMark {
             // Emergency gc packet selection is in `plan::lxr::emergency`.
             self.schedule_defrag_selection_packets(pause);
         }
-        debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        // Tracing GC preparation work
+        // Initialize mark state for tracing
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -424,18 +425,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 unimplemented!("cyclic mark bits is not supported at the moment");
             }
         }
-        self.block_allocation
-            .reset_block_mark_for_mutator_reused_blocks();
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark || pause == Pause::FinalMark
-        {
+        // Release nursery blocks
+        if pause != Pause::RefCount {
             // Reset worker TLABs.
             // The block of the current worker TLAB may be selected as part of the mature evacuation set.
             // So the copied mature objects might be copied into defrag blocks, and get copied out again.
             crate::scheduler::worker::reset_workers::<VM>();
             // Release young blocks to reduce to-space overflow
-            self.block_allocation.sweep_nursery_blocks(&self.scheduler);
+            self.block_allocation
+                .sweep_nursery_blocks(&self.scheduler, pause);
             self.flush_page_resource();
         }
+        self.block_allocation
+            .reset_block_mark_for_mutator_reused_blocks();
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
@@ -446,7 +448,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn release_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        self.block_allocation.sweep_nursery_blocks(&self.scheduler);
+        self.block_allocation
+            .sweep_nursery_blocks(&self.scheduler, pause);
         self.block_allocation.sweep_mutator_reused_blocks(pause);
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();

@@ -7,13 +7,14 @@ use crate::{
     plan::{immix::Pause, lxr::LXR},
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
+        constants::LOG_BYTES_IN_PAGE,
         heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK},
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,
     },
     vm::{Collection, ObjectModel, VMBinding},
-    LazySweepingJobsCounter, MMTK,
+    LazySweepingJobsCounter, Plan, MMTK,
 };
 
 use super::{
@@ -45,9 +46,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let is_emergency_gc = lxr.current_pause().unwrap() == Pause::FullTraceFast;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
-            let chunk_defarg_percent = if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+            let chunk_defarg_percent = if is_emergency_gc {
                 crate::args().chunk_defarg_percent << 1
             } else {
                 crate::args().chunk_defarg_percent
@@ -58,6 +60,12 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         };
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
+            // Emergency: We've already marked all the live objects.
+            // If the block is already dead, directly release the block (and clear the defrag state).
+            if is_emergency_gc && block.get_state() != BlockState::Unallocated && block.rc_dead() {
+                lxr.immix_space.release_block(block, false, true, false);
+                continue;
+            }
             // Skip unallocated blocks.
             if MatureEvacuationSet::skip_block(block) {
                 continue;
@@ -112,7 +120,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             lxr.immix_space
                 .evac_set
                 .select_mature_evacuation_candidates(
-                    &lxr.immix_space,
+                    lxr,
                     lxr.current_pause().unwrap(),
                     mmtk.plan.get_total_pages(),
                 )
@@ -366,6 +374,7 @@ impl MatureEvacuationSet {
         }
         while let Some(block) = defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
+                // This block has been eagerly released (probably be reused again). Skip it.
                 continue;
             }
             block.clear_rc_table::<VM>();
@@ -443,17 +452,19 @@ impl MatureEvacuationSet {
 
     pub fn select_mature_evacuation_candidates<VM: VMBinding>(
         &self,
-        space: &ImmixSpace<VM>,
+        lxr: &LXR<VM>,
         _pause: Pause,
         _total_pages: usize,
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         // Select mature defrag blocks
-        // let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
-        //     + self.defrag_headroom_pages()
-        //     - VM::VMActivePlan::global().get_pages_reserved();
-        // let defrag_bytes = available_clean_pages_for_defrag << 12;
-        let max_copy_bytes = space.defrag_headroom_pages() << 12;
+        let available_clean_pages_for_defrag =
+            if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+                lxr.get_total_pages() - lxr.get_used_pages()
+            } else {
+                lxr.immix_space.defrag_headroom_pages()
+            };
+        let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
         self.select_blocks_in_fragmented_chunks(
@@ -463,13 +474,13 @@ impl MatureEvacuationSet {
         );
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
-        // let count2 = selected_blocks.len() - count1;
         gc_log!([2]
             " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
             copy_bytes,
             selected_blocks.len(),
             count1,
         );
+        lxr.dump_heap_usage();
         self.num_defrag_blocks
             .store(selected_blocks.len(), Ordering::SeqCst);
         let mut defrag_blocks = self.defrag_blocks.lock().unwrap();

@@ -1022,10 +1022,9 @@ impl<VM: VMBinding> LXR<VM> {
         &self.common.base.options
     }
 
-    fn dump_heap_usage(&self) {
+    pub fn dump_heap_usage(&self) {
         gc_log!([3]
-            "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
-            crate::GC_EPOCH.load(Ordering::SeqCst),
+            " - reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
             self.get_reserved_pages() / 256,
             self.immix_space.reserved_pages() / 256,
             self.los().reserved_pages() / 256,

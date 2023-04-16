@@ -116,13 +116,17 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
-    pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>) {
+    pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
         const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
         let space = self.space();
         // Sweep nursery blocks
         self.nursery_blocks.visit_slice(|blocks| {
             let total_nursery_blocks = blocks.len();
-            let stw_limit = usize::min(total_nursery_blocks, MAX_STW_SWEEP_BLOCKS);
+            let stw_limit = if pause == Pause::FullTraceFast {
+                total_nursery_blocks
+            } else {
+                usize::min(total_nursery_blocks, MAX_STW_SWEEP_BLOCKS)
+            };
             // 1. STW release a limited number of blocks
             for b in &blocks[0..stw_limit] {
                 let block = b.load(Ordering::Relaxed);
