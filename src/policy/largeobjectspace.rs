@@ -1,5 +1,6 @@
 use atomic::Ordering;
 
+use crate::plan::immix::Pause;
 use crate::plan::lxr::RemSet;
 use crate::plan::ObjectQueue;
 use crate::plan::VectorObjectQueue;
@@ -379,8 +380,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             let mut chunk = self.pr.common().get_head_discontiguous_region();
             while !chunk.is_zero() {
                 let bytes = self.common().vm_map().get_contiguous_region_size(chunk);
-                crate::util::rc::RC_TABLE
-                    .bzero_metadata(chunk, bytes);
+                crate::util::rc::RC_TABLE.bzero_metadata(chunk, bytes);
                 chunk = self.common().vm_map().get_next_contiguous_region(chunk);
             }
         }
@@ -517,10 +517,15 @@ impl RCSweepMatureLOS {
         Self { _counter: counter }
     }
     fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
+        let lxr = mmtk
+            .plan
+            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+            .unwrap();
         let los = mmtk.plan.common().get_los();
         let mature_objects = los.rc_mature_objects.lock();
+        let is_emergency_gc = lxr.current_pause() == Some(Pause::FullTraceFast);
         for o in mature_objects.iter() {
-            if !los.is_marked(*o) && los.rc.count(*o) != 0 {
+            if !los.is_marked(*o) && (is_emergency_gc || los.rc.count(*o) != 0) {
                 crate::stat(|s| {
                     s.dead_mature_objects += 1;
                     s.dead_mature_volume += o.get_size::<VM>();
