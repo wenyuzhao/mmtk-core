@@ -59,10 +59,21 @@ impl<VM: VMBinding> GCWork<VM> for LXREmergencyResetImmixRCTable {
 
 pub fn schedule_second_pass_preparation_tasks<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>) {
     scheduler.work_buckets[WorkBucketStage::PrepareForSecondClosure].bulk_add(vec![
+        Box::new(LXREmergencyCollectionSetSelection),
         Box::new(LXREmergencyResetImmixMarkTable),
         Box::new(LXREmergencyResetLOSMarkTable),
         Box::new(LXREmergencyClearCLDReclaimedMarks),
     ]);
+}
+
+struct LXREmergencyCollectionSetSelection;
+
+impl<VM: VMBinding> GCWork<VM> for LXREmergencyCollectionSetSelection {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        lxr.immix_space
+            .schedule_defrag_selection_packets(Pause::FullTraceFast);
+    }
 }
 
 struct LXREmergencyResetMarkTableForChunk(pub(super) Chunk);

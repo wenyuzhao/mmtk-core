@@ -32,9 +32,9 @@ impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     }
 }
 
-pub(super) static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) struct SelectDefragBlocksInChunk {
+struct SelectDefragBlocksInChunk {
     pub chunk: Chunk,
     #[allow(unused)]
     pub defrag_threshold: usize,
@@ -353,25 +353,18 @@ pub(super) struct MatureEvacuationSet {
     blocks_in_fragmented_chunks: SegQueue<Vec<(Block, usize)>>,
     blocks_in_fragmented_chunks_size: AtomicUsize,
     defrag_blocks: Mutex<Vec<Block>>,
-    last_defrag_blocks: Mutex<Vec<Block>>,
     num_defrag_blocks: AtomicUsize,
 }
 
 impl MatureEvacuationSet {
-    pub fn update_last_defrag_blocks(&mut self) {
-        let mut last_defrag_blocks = self.last_defrag_blocks.lock().unwrap();
-        let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
-        debug_assert!(last_defrag_blocks.is_empty());
-        std::mem::swap::<Vec<Block>>(&mut defrag_blocks, &mut last_defrag_blocks);
-    }
-
+    /// Release all the mature defrag source blocks
     pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        let mut last_defrag_blocks: Vec<Block> =
-            std::mem::take(&mut *self.last_defrag_blocks.lock().unwrap());
-        if last_defrag_blocks.is_empty() {
+        let mut defrag_blocks: Vec<Block> =
+            std::mem::take(&mut *self.defrag_blocks.lock().unwrap());
+        if defrag_blocks.is_empty() {
             return;
         }
-        while let Some(block) = last_defrag_blocks.pop() {
+        while let Some(block) = defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
                 continue;
             }
@@ -391,7 +384,7 @@ impl MatureEvacuationSet {
         });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+        space.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(tasks);
     }
 
     fn skip_block(b: Block) -> bool {

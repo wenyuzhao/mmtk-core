@@ -377,13 +377,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        self.evac_set.schedule_defrag_selection_packets(self)
+    pub fn schedule_defrag_selection_packets(&self, _pause: Pause) {
+        self.evac_set.schedule_defrag_selection_packets(self);
     }
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
-            self.schedule_defrag_selection_packets(pause);
+            // self.schedule_defrag_selection_packets(pause);
         }
         self.block_allocation.notify_mutator_phase_end();
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
@@ -409,8 +409,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
-            self.evac_set.update_last_defrag_blocks();
+        if pause == Pause::InitialMark {
+            // Emergency gc packet selection is in `plan::lxr::emergency`.
+            self.schedule_defrag_selection_packets(pause);
         }
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         // Tracing GC preparation work
@@ -425,7 +426,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         self.block_allocation
             .reset_block_mark_for_mutator_reused_blocks();
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        if pause == Pause::FullTraceFast || pause == Pause::InitialMark || pause == Pause::FinalMark
+        {
+            // Reset worker TLABs.
+            // The block of the current worker TLAB may be selected as part of the mature evacuation set.
+            // So the copied mature objects might be copied into defrag blocks, and get copied out again.
+            crate::scheduler::worker::reset_workers::<VM>();
             // Release young blocks to reduce to-space overflow
             self.block_allocation.sweep_nursery_blocks(&self.scheduler);
             self.flush_page_resource();
