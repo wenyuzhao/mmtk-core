@@ -482,30 +482,52 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    pub fn sweep_rc_mature_objects(&self, is_live: &impl Fn(ObjectReference) -> bool) {
-        let mature_objects = self.rc_mature_objects.lock();
+    fn update_stat_for_dead_mature_object(&self, o: ObjectReference) {
+        crate::stat(|s| {
+            s.dead_mature_objects += 1;
+            s.dead_mature_volume += o.get_size::<VM>();
+            s.dead_mature_los_objects += 1;
+            s.dead_mature_los_volume += o.get_size::<VM>();
+
+            s.dead_mature_tracing_objects += 1;
+            s.dead_mature_tracing_volume += o.get_size::<VM>();
+            s.dead_mature_tracing_los_objects += 1;
+            s.dead_mature_tracing_los_volume += o.get_size::<VM>();
+
+            if self.rc.is_stuck(o) {
+                s.dead_mature_tracing_stuck_objects += 1;
+                s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
+                s.dead_mature_tracing_stuck_los_objects += 1;
+                s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
+            }
+        });
+    }
+
+    pub fn sweep_rc_mature_objects(
+        &self,
+        lazy_free: bool,
+        is_live: &impl Fn(ObjectReference) -> bool,
+    ) {
+        let mut mature_objects = self.rc_mature_objects.lock();
+        let mut dead = vec![];
         for o in mature_objects.iter() {
             if !is_live(*o) {
-                crate::stat(|s| {
-                    s.dead_mature_objects += 1;
-                    s.dead_mature_volume += o.get_size::<VM>();
-                    s.dead_mature_los_objects += 1;
-                    s.dead_mature_los_volume += o.get_size::<VM>();
-
-                    s.dead_mature_tracing_objects += 1;
-                    s.dead_mature_tracing_volume += o.get_size::<VM>();
-                    s.dead_mature_tracing_los_objects += 1;
-                    s.dead_mature_tracing_los_volume += o.get_size::<VM>();
-
-                    if self.rc.is_stuck(*o) {
-                        s.dead_mature_tracing_stuck_objects += 1;
-                        s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
-                        s.dead_mature_tracing_stuck_los_objects += 1;
-                        s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
-                    }
-                });
+                self.update_stat_for_dead_mature_object(*o);
                 self.rc.set(*o, 0);
-                self.rc_free(*o);
+                if lazy_free {
+                    self.rc_free(*o);
+                } else {
+                    dead.push(*o);
+                }
+            }
+        }
+        if !lazy_free {
+            for o in dead {
+                let removed = mature_objects.remove(&o);
+                o.to_address::<VM>().unlog::<VM>();
+                if removed {
+                    self.release_object(o.to_address::<VM>());
+                }
             }
         }
     }
@@ -537,7 +559,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
             .unwrap();
         let los = mmtk.plan.common().get_los();
         let is_emergency_gc = lxr.current_pause() == Some(Pause::FullTraceFast);
-        los.sweep_rc_mature_objects(&|o| {
+        los.sweep_rc_mature_objects(true, &|o| {
             !(!los.is_marked(o) && (is_emergency_gc || los.rc.count(o) != 0))
         });
     }

@@ -457,10 +457,14 @@ impl MatureEvacuationSet {
         _total_pages: usize,
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
-        // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
         if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+            // Make sure LOS sweeping finishes before evac selectino begin
+            // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
             let los = lxr.common().get_los();
-            los.sweep_rc_mature_objects(&|o| lxr.rc.count(o) != 0);
+            los.sweep_rc_mature_objects(false, &|o| lxr.rc.count(o) != 0);
+            // Update weak processor and remove dead objects in it
+            // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
+            VM::VMCollection::update_weak_processor(true);
         }
         // Select mature defrag blocks
         let available_clean_pages_for_defrag =
