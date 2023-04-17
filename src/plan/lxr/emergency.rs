@@ -49,6 +49,7 @@ struct LXREmergencyResetImmixRCTable;
 impl<VM: VMBinding> GCWork<VM> for LXREmergencyResetImmixRCTable {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        lxr.dump_heap_usage();
         mmtk.scheduler.work_buckets[WorkBucketStage::ResetRC].bulk_add(
             lxr.immix_space
                 .chunk_map

@@ -741,6 +741,11 @@ impl<VM: VMBinding> LXR<VM> {
         if pause == Pause::RefCount {
             scheduler.work_buckets[WorkBucketStage::Prepare].set_as_disabled();
         }
+        if pause != Pause::FullTraceFast {
+            scheduler.work_buckets[WorkBucketStage::ResetRC].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::PrepareForSecondClosure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::ForwardClosure].set_as_disabled();
+        }
         if pause == Pause::RefCount || pause == Pause::InitialMark {
             scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
