@@ -465,7 +465,7 @@ impl MatureEvacuationSet {
         // Select mature defrag blocks
         let available_clean_pages_for_defrag =
             if lxr.current_pause().unwrap() == Pause::FullTraceFast {
-                lxr.get_total_pages() - lxr.get_used_pages()
+                lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
             } else {
                 lxr.immix_space.defrag_headroom_pages()
             };

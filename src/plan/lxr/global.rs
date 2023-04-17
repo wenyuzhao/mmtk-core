@@ -592,7 +592,7 @@ impl<VM: VMBinding> LXR<VM> {
             0
         };
         let total_pages = self.get_total_pages();
-        let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
+        let available_blocks = total_pages.saturating_sub(pages_after_gc) >> Block::LOG_PAGES;
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
         if !self.concurrent_marking_in_progress()
