@@ -234,6 +234,8 @@ impl<VM: VMBinding> GCWorker<VM> {
             #[cfg(feature = "tracing")]
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             work.do_work_with_stat(self, mmtk);
+            std::mem::drop(work);
+            flush_logs!();
         }
     }
 

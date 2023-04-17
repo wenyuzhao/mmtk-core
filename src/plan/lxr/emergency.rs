@@ -311,7 +311,6 @@ impl<VM: VMBinding> ObjectQueue for LXREmergencyWeakRefProcessEdges<VM> {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
         }
-        gc_log!([4] "scan weak {:?}", object);
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
@@ -442,7 +441,6 @@ impl<VM: VMBinding> ObjectQueue for LXREmergencyForwardTrace<VM> {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
         }
-        gc_log!([4] "scan fwd {:?}", object);
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {

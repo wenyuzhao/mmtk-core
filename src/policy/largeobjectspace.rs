@@ -395,7 +395,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     pub fn rc_free(&self, o: ObjectReference) {
         if o.to_address::<VM>().attempt_log::<VM>() {
-            // println!(" - add to rc_dead_objects {:?}", o);
             self.rc_dead_objects.push(o);
         }
     }
