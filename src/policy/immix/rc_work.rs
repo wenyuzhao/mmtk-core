@@ -457,6 +457,11 @@ impl MatureEvacuationSet {
         _total_pages: usize,
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
+        // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
+        if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+            let los = lxr.common().get_los();
+            los.sweep_rc_mature_objects(&|o| lxr.rc.count(o) != 0);
+        }
         // Select mature defrag blocks
         let available_clean_pages_for_defrag =
             if lxr.current_pause().unwrap() == Pause::FullTraceFast {

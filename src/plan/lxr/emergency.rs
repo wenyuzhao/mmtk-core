@@ -60,7 +60,7 @@ impl<VM: VMBinding> GCWork<VM> for LXREmergencyResetImmixRCTable {
 pub fn schedule_second_pass_preparation_tasks<VM: VMBinding>(scheduler: &GCWorkScheduler<VM>) {
     scheduler.work_buckets[WorkBucketStage::PrepareForSecondClosure].bulk_add(vec![
         Box::new(LXREmergencyBlockSweepingAndEvacuationSetSelection),
-        Box::new(LXRSweepMatureLOSAfterGCFirstTrace),
+        // Box::new(LXRSweepMatureLOSAfterGCFirstTrace),
         Box::new(LXREmergencyClearCLDReclaimedMarks),
     ]);
 }
@@ -75,18 +75,18 @@ impl<VM: VMBinding> GCWork<VM> for LXREmergencyBlockSweepingAndEvacuationSetSele
     }
 }
 
-struct LXRSweepMatureLOSAfterGCFirstTrace;
+// struct LXRSweepMatureLOSAfterGCFirstTrace;
 
-impl<VM: VMBinding> GCWork<VM> for LXRSweepMatureLOSAfterGCFirstTrace {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk
-            .plan
-            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
-            .unwrap();
-        let los = mmtk.plan.common().get_los();
-        los.sweep_rc_mature_objects(mmtk, &|o| lxr.rc.count(o) != 0);
-    }
-}
+// impl<VM: VMBinding> GCWork<VM> for LXRSweepMatureLOSAfterGCFirstTrace {
+//     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+//         let lxr = mmtk
+//             .plan
+//             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+//             .unwrap();
+//         let los = mmtk.plan.common().get_los();
+//         los.sweep_rc_mature_objects(&|o| lxr.rc.count(o) != 0);
+//     }
+// }
 
 struct LXREmergencyResetMarkTableForChunk(pub(super) Chunk);
 
