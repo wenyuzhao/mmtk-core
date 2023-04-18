@@ -595,16 +595,17 @@ impl<VM: VMBinding> LXR<VM> {
             0
         };
         let total_pages = self.get_total_pages();
-        let available_blocks = total_pages.saturating_sub(pages_after_gc) >> Block::LOG_PAGES;
+        let stop_pages = total_pages * crate::args().rc_stop_percent / 100;
+        let available_pages = total_pages.saturating_sub(pages_after_gc);
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
         if !self.concurrent_marking_in_progress()
             && garbage * 100 >= crate::args().trace_threshold as usize * total_pages
-            || available_blocks < crate::args().concurrent_marking_stop_blocks
+            || available_pages < stop_pages
         {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
-            if available_blocks < crate::args().concurrent_marking_stop_blocks {
+            if available_pages < stop_pages {
                 self.next_gc_may_perform_emergency_collection
                     .store(true, Ordering::SeqCst);
             }
