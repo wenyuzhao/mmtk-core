@@ -1,4 +1,4 @@
-use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
+use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext, ReleaseLOSNursery};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
@@ -307,6 +307,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         });
         if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
             self.common.los.is_end_of_satb_or_full_gc = true;
+            // release nursery memory before mature evacuation
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                .add(ReleaseLOSNursery);
         }
         self.common.prepare(
             tls,
@@ -598,7 +601,7 @@ impl<VM: VMBinding> LXR<VM> {
             0
         };
         let total_pages = self.get_total_pages();
-        let available_blocks = (total_pages - pages_after_gc) >> Block::LOG_PAGES;
+        let available_blocks = total_pages.saturating_sub(pages_after_gc) >> Block::LOG_PAGES;
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
         if !self.concurrent_marking_in_progress()
@@ -1019,10 +1022,9 @@ impl<VM: VMBinding> LXR<VM> {
         &self.common.base.options
     }
 
-    fn dump_heap_usage(&self) {
+    pub fn dump_heap_usage(&self) {
         gc_log!([3]
-            "GC({}) reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
-            crate::GC_EPOCH.load(Ordering::SeqCst),
+            " - reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
             self.get_reserved_pages() / 256,
             self.immix_space.reserved_pages() / 256,
             self.los().reserved_pages() / 256,

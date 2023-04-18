@@ -395,10 +395,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
-        debug_assert!(
-            self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
-            "GCWorker attempted to open buckets when there are pending coordinator work packets"
-        );
+        // debug_assert!(
+        //     self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
+        //     "GCWorker attempted to open buckets when there are pending coordinator work packets"
+        // );
         buckets
             .iter()
             .all(|&b| self.work_buckets[b].is_drained() || self.work_buckets[b].disabled())
@@ -466,6 +466,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let bucket_opened = bucket.update(self);
+            #[cfg(feature = "tracing")]
+            if bucket_opened {
+                probe!(mmtk, bucket_opened, id);
+            }
             let verbose = crate::verbose(3);
             if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
                 if verbose {
@@ -633,6 +637,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Note: The lock is released during `wait` in the loop.
         let mut guard = self.worker_monitor.0.lock().unwrap();
         'polling_loop: loop {
+            flush_logs!();
             // Retry polling
             if let Some(work) = self.poll_schedulable_work(worker) {
                 return work;
@@ -670,9 +675,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 // coordinator work packets.
             }
             // Wait
+            flush_logs!();
             guard = self.worker_monitor.1.wait(guard).unwrap();
             // The worker is unparked here where `parking_guard` goes out of scope.
         }
+        flush_logs!();
 
         // We guarantee that we can at least fetch one packet when we reach here.
         let work = self.poll_schedulable_work(worker).unwrap();

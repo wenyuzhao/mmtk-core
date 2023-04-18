@@ -717,7 +717,7 @@ options! {
     // XXX: This option is currently only supported on Linux.
     thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
     use_35bit_address_space:        bool                 [env_var: true, command_line: true]  [always_valid] = false,
-    verbose:                       usize                 [env_var: true, command_line: true] [|v: &usize| *v <= 3]  = 0,
+    verbose:                       usize                 [env_var: true, command_line: true] [|v: &usize| *v <= 10]  = 0,
     // Set the GC trigger. This defines the heap size and how MMTk triggers a GC.
     // Default to a fixed heap size of 0.5x physical memory.
     gc_trigger     :        GCTriggerSelector    [env_var: true, command_line: true] [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((crate::util::memory::get_system_total_memory() as f64 * 0.5f64) as usize)

@@ -13,6 +13,10 @@ use std::any::{type_name, Any};
 pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
 
 pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
+    fn get_type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     fn should_defer(&self) -> bool {
         false
     }

@@ -753,12 +753,16 @@ impl<VM: VMBinding> BasePlan<VM> {
     pub fn set_gc_status(&self, s: GcStatus) {
         let mut gc_status = self.gc_status.lock().unwrap();
         if *gc_status == GcStatus::NotInGC {
+            #[cfg(feature = "tracing")]
+            probe!(mmtk, gc_start);
             self.stacks_prepared.store(false, Ordering::SeqCst);
             // FIXME stats
             // self.stats.start_gc();
         }
         *gc_status = s;
         if *gc_status == GcStatus::NotInGC {
+            #[cfg(feature = "tracing")]
+            probe!(mmtk, gc_end);
             // FIXME stats
             if self.stats.get_gathering_stats() {
                 self.stats.end_gc();

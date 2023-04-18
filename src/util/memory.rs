@@ -201,7 +201,7 @@ fn wrap_libc_call<T: PartialEq + Debug>(f: &dyn Fn() -> T, expect: T) -> Result<
         Ok(())
     } else {
         if cfg!(feature = "sanity") {
-            eprintln!("unexpected libc call result: {:?} vs {:?}", ret, expect);
+            // eprintln!("unexpected libc call result: {:?} vs {:?}", ret, expect);
         }
         Err(std::io::Error::last_os_error())
     }

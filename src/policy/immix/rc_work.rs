@@ -7,13 +7,14 @@ use crate::{
     plan::{immix::Pause, lxr::LXR},
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
+        constants::LOG_BYTES_IN_PAGE,
         heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK},
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,
     },
     vm::{Collection, ObjectModel, VMBinding},
-    LazySweepingJobsCounter, MMTK,
+    LazySweepingJobsCounter, Plan, MMTK,
 };
 
 use super::{
@@ -32,9 +33,9 @@ impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     }
 }
 
-pub(super) static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) struct SelectDefragBlocksInChunk {
+struct SelectDefragBlocksInChunk {
     pub chunk: Chunk,
     #[allow(unused)]
     pub defrag_threshold: usize,
@@ -45,9 +46,10 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let is_emergency_gc = lxr.current_pause().unwrap() == Pause::FullTraceFast;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
-            let chunk_defarg_percent = if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+            let chunk_defarg_percent = if is_emergency_gc {
                 crate::args().chunk_defarg_percent << 1
             } else {
                 crate::args().chunk_defarg_percent
@@ -112,7 +114,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             lxr.immix_space
                 .evac_set
                 .select_mature_evacuation_candidates(
-                    &lxr.immix_space,
+                    lxr,
                     lxr.current_pause().unwrap(),
                     mmtk.plan.get_total_pages(),
                 )
@@ -353,26 +355,20 @@ pub(super) struct MatureEvacuationSet {
     blocks_in_fragmented_chunks: SegQueue<Vec<(Block, usize)>>,
     blocks_in_fragmented_chunks_size: AtomicUsize,
     defrag_blocks: Mutex<Vec<Block>>,
-    last_defrag_blocks: Mutex<Vec<Block>>,
     num_defrag_blocks: AtomicUsize,
 }
 
 impl MatureEvacuationSet {
-    pub fn update_last_defrag_blocks(&mut self) {
-        let mut last_defrag_blocks = self.last_defrag_blocks.lock().unwrap();
-        let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
-        debug_assert!(last_defrag_blocks.is_empty());
-        std::mem::swap::<Vec<Block>>(&mut defrag_blocks, &mut last_defrag_blocks);
-    }
-
+    /// Release all the mature defrag source blocks
     pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        let mut last_defrag_blocks: Vec<Block> =
-            std::mem::take(&mut *self.last_defrag_blocks.lock().unwrap());
-        if last_defrag_blocks.is_empty() {
+        let mut defrag_blocks: Vec<Block> =
+            std::mem::take(&mut *self.defrag_blocks.lock().unwrap());
+        if defrag_blocks.is_empty() {
             return;
         }
-        while let Some(block) = last_defrag_blocks.pop() {
+        while let Some(block) = defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
+                // This block has been eagerly released (probably be reused again). Skip it.
                 continue;
             }
             block.clear_rc_table::<VM>();
@@ -391,7 +387,7 @@ impl MatureEvacuationSet {
         });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        space.scheduler().work_buckets[WorkBucketStage::FinishConcurrentWork].bulk_add(tasks);
+        space.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(tasks);
     }
 
     fn skip_block(b: Block) -> bool {
@@ -450,17 +446,25 @@ impl MatureEvacuationSet {
 
     pub fn select_mature_evacuation_candidates<VM: VMBinding>(
         &self,
-        space: &ImmixSpace<VM>,
+        lxr: &LXR<VM>,
         _pause: Pause,
         _total_pages: usize,
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
+        if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+            // Make sure LOS sweeping finishes before evac selection begin
+            // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
+            let los = lxr.common().get_los();
+            los.release_rc_nursery_objects();
+        }
         // Select mature defrag blocks
-        // let available_clean_pages_for_defrag = VM::VMActivePlan::global().get_total_pages()
-        //     + self.defrag_headroom_pages()
-        //     - VM::VMActivePlan::global().get_pages_reserved();
-        // let defrag_bytes = available_clean_pages_for_defrag << 12;
-        let max_copy_bytes = space.defrag_headroom_pages() << 12;
+        let available_clean_pages_for_defrag =
+            if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+                lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
+            } else {
+                lxr.immix_space.defrag_headroom_pages()
+            };
+        let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
         self.select_blocks_in_fragmented_chunks(
@@ -470,13 +474,13 @@ impl MatureEvacuationSet {
         );
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
-        // let count2 = selected_blocks.len() - count1;
         gc_log!([2]
             " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
             copy_bytes,
             selected_blocks.len(),
             count1,
         );
+        lxr.dump_heap_usage();
         self.num_defrag_blocks
             .store(selected_blocks.len(), Ordering::SeqCst);
         let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
