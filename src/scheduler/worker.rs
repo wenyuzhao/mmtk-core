@@ -226,15 +226,23 @@ impl<VM: VMBinding> GCWorker<VM> {
         let lower_priority_for_concurrent_work = crate::args().lower_concurrent_worker_priority;
         assert!(!lower_priority_for_concurrent_work);
         loop {
-            #[cfg(feature = "tracing")]
-            probe!(mmtk, work_poll);
-            let mut work = self.poll();
-            #[cfg(feature = "tracing")]
-            let typename = work.get_type_name();
-            #[cfg(feature = "tracing")]
-            probe!(mmtk, work, typename.as_ptr(), typename.len());
-            work.do_work_with_stat(self, mmtk);
-            std::mem::drop(work);
+            let me = self as *mut Self as usize;
+            let mmtk = mmtk as *const MMTK<VM> as usize;
+            let x = std::panic::catch_unwind(|| {
+                let me = unsafe { &mut *(me as *mut Self) };
+                let mmtk = unsafe { &*(mmtk as *const MMTK<VM>) };
+                #[cfg(feature = "tracing")]
+                probe!(mmtk, work_poll);
+                let mut work = me.poll();
+                #[cfg(feature = "tracing")]
+                let typename = work.get_type_name();
+                #[cfg(feature = "tracing")]
+                probe!(mmtk, work, typename.as_ptr(), typename.len());
+                work.do_work_with_stat(me, mmtk);
+                std::mem::drop(work);
+            });
+            flush_logs!();
+            assert!(x.is_ok());
             flush_logs!();
         }
     }

@@ -241,8 +241,10 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
+        gc_log!([4] "trace {:?}", object);
         // Evacuate nursery objects
         if self.nursery.in_space(object) {
+            gc_log!([4] "trace n nursery {:?}", object);
             return self.nursery.trace_object::<Q>(
                 queue,
                 object,
@@ -252,6 +254,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         }
         // We may alloc large object into LOS as nursery objects. Trace them here.
         if self.common.get_los().in_space(object) {
+            gc_log!([4] "trace los nursery {:?}", object);
             return self.common.get_los().trace_object::<Q>(queue, object);
         }
         object
@@ -288,7 +291,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     }
 
     /// Get pages reserved for the collection by a generational plan. A generational plan should
-    /// add their own reservatioin with the value returned by this method.
+    /// add their own reservation with the value returned by this method.
     pub fn get_collection_reserved_pages(&self) -> usize {
         self.nursery.reserved_pages()
     }

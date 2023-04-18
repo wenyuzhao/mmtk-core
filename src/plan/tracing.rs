@@ -133,6 +133,7 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
         self.should_claim_and_scan_clds
     }
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
+        gc_log!([4] "visit edge {:?}", slot);
         #[cfg(debug_assertions)]
         {
             use crate::vm::edge_shape::Edge;

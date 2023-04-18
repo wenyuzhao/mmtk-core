@@ -92,6 +92,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
+        gc_log!([4] "alloc los {:?}", object);
         if self.rc_enabled {
             debug_assert!(alloc);
             // Add to object set
@@ -121,11 +122,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         );
 
         // If this object is freshly allocated, we do not set it as unlogged
-        // if !alloc && self.common.needs_log_bit {
-        //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-        // }
+        if !alloc && self.common.needs_log_bit {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+        }
         // TODO: Only mark during concurrent marking
-        self.test_and_mark(object, self.mark_state);
+        // self.test_and_mark(object, self.mark_state);
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit::<VM>(object);
         self.treadmill.add_to_treadmill(object, alloc);
@@ -263,6 +264,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
             self.pr.release_pages_and_reset_unlog_bits(start)
         } else {
+            gc_log!([4] "release los {:?}", start);
             self.pr.release_pages(start)
         }
     }
@@ -327,7 +329,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             return object;
         }
         let nursery_object = self.is_in_nursery(object);
-        trace!(
+        gc_log!([4]
             "LOS object {} {} a nursery object",
             object,
             if nursery_object { "is" } else { "is not" }
@@ -335,7 +337,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
             if self.test_and_mark(object, self.mark_state) {
-                trace!("LOS object {} is being marked now", object);
+                gc_log!([4]"LOS object {} is being marked now", object);
                 self.treadmill.copy(object, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.

@@ -28,6 +28,9 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
     }
 
     fn is_live(&self, object: ObjectReference) -> bool {
+        if !(!self.is_from_space() || object_forwarding::is_forwarded::<VM>(object)) {
+            // eprintln!("dead {:?}", object);
+        }
         !self.is_from_space() || object_forwarding::is_forwarded::<VM>(object)
     }
 
@@ -54,6 +57,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
     fn is_sane(&self) -> bool {
         !self.is_from_space()
     }
+
     fn initialize_object_metadata(&self, _object: ObjectReference, _bytes: usize, _alloc: bool) {
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit::<VM>(_object);
@@ -148,7 +152,6 @@ impl<VM: VMBinding> CopySpace<VM> {
         );
         let metadata = policy_args.metadata();
         let common = CommonSpace::new(policy_args);
-
         CopySpace {
             pr: if is_discontiguous {
                 MonotonePageResource::new_discontiguous(vm_map, metadata)
@@ -179,7 +182,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             self.reset_alloc_bit();
             self.pr.reset();
         }
-        // self.common.metadata.reset();
+        self.pr.common().metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
     }
 
