@@ -1,4 +1,6 @@
-use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext, ReleaseLOSNursery, LXREmergencyWeakRefWorkContext};
+use super::gc_work::{
+    LXREmergencyWeakRefWorkContext, LXRGCWorkContext, LXRWeakRefWorkContext, ReleaseLOSNursery,
+};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
