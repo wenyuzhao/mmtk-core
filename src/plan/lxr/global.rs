@@ -1,4 +1,4 @@
-use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
+use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext, ReleaseLOSNursery};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
@@ -306,6 +306,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         });
         if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
             self.common.los.is_end_of_satb_or_full_gc = true;
+            // release nursery memory before mature evacuation
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                .add(ReleaseLOSNursery);
         }
         self.common.prepare(
             tls,
