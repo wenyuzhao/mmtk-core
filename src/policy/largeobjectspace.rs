@@ -526,7 +526,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if !lazy_free {
             for o in dead {
                 let removed = mature_objects.remove(&o);
-                o.to_address::<VM>().unlog::<VM>();
+                o.to_address::<VM>().unlog_field::<VM>();
                 if removed {
                     self.release_object(o.to_address::<VM>());
                 }
