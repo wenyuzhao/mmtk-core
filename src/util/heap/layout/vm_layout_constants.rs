@@ -133,7 +133,7 @@ impl VMLayoutConstants {
             heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
             heap_end: chunk_align_up(unsafe { Address::from_usize(heap_end) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
-            max_chunks: end >> LOG_BYTES_IN_CHUNK,
+            max_chunks: (end - start) >> LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
             space_shift_64: 0,
             space_mask_64: 0,

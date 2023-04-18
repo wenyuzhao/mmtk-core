@@ -625,7 +625,7 @@ impl ObjectReference {
 
     /// Is the object live, determined by the policy?
     pub fn is_live(self) -> bool {
-        if self.0 == 0 {
+        if self.is_null() {
             false
         } else {
             unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_live(self)
@@ -633,20 +633,32 @@ impl ObjectReference {
     }
 
     pub fn is_movable(self) -> bool {
+        if self.is_null() {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_movable()
     }
 
     /// Get forwarding pointer if the object is forwarded.
     pub fn get_forwarded_object(self) -> Option<Self> {
+        if self.is_null() {
+            return None;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
     pub fn is_in_any_space(self) -> bool {
+        if self.is_null() {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_in_space(self)
     }
 
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
+        if self.is_null() {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_sane()
     }
 

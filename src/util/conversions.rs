@@ -39,11 +39,11 @@ pub fn bytes_to_chunks_up(bytes: usize) -> usize {
 }
 
 pub fn address_to_chunk_index(addr: Address) -> usize {
-    addr >> LOG_BYTES_IN_CHUNK
+    (addr - VM_LAYOUT_CONSTANTS.heap_start) >> LOG_BYTES_IN_CHUNK
 }
 
 pub fn chunk_index_to_address(chunk: usize) -> Address {
-    unsafe { Address::from_usize(chunk << LOG_BYTES_IN_CHUNK) }
+    VM_LAYOUT_CONSTANTS.heap_start + (chunk << LOG_BYTES_IN_CHUNK)
 }
 
 pub const fn raw_align_up(val: usize, align: usize) -> usize {

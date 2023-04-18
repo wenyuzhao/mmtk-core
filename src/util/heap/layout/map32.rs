@@ -12,10 +12,6 @@ use crate::util::Address;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-const SMALL_CHUNK_SPACE_BOUNDARY: usize = 30 << 30;
-
-// const LARGE_CH
-
 pub struct Map32 {
     prev_link: Vec<i32>,
     next_link: Vec<i32>,
@@ -42,8 +38,8 @@ pub struct Map32 {
 impl Map32 {
     pub fn new() -> Self {
         Map32 {
-            prev_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
-            next_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
+            prev_link: vec![-1; VM_LAYOUT_CONSTANTS.max_chunks()],
+            next_link: vec![-1; VM_LAYOUT_CONSTANTS.max_chunks()],
             chunk_space: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
             region_map: IntArrayFreeList::new(
                 VM_LAYOUT_CONSTANTS.max_chunks(),
@@ -158,7 +154,6 @@ impl VMMap for Map32 {
                 r
             }
         };
-        debug_assert!(chunk != 0);
         if chunk == -1 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
             gc_log!([1]
@@ -176,19 +171,22 @@ impl VMMap for Map32 {
         let rtn: Address = conversions::chunk_index_to_address(chunk as _);
         self.insert(rtn, chunks << LOG_BYTES_IN_CHUNK, descriptor);
         if head.is_zero() {
-            debug_assert!(self.next_link[chunk as usize] == 0);
+            debug_assert!(self.next_link[chunk as usize] == -1);
         } else {
             self_mut.next_link[chunk as usize] = head.chunk_index() as _;
             self_mut.prev_link[head.chunk_index()] = chunk;
         }
-        debug_assert!(self.prev_link[chunk as usize] == 0);
+        debug_assert!(self.prev_link[chunk as usize] == -1);
         rtn
     }
 
     fn get_next_contiguous_region(&self, start: Address) -> Address {
+        if start.is_zero() {
+            return Address::ZERO;
+        }
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        if chunk == 0 || self.next_link[chunk] == 0 {
+        if self.next_link[chunk] == -1 {
             unsafe { Address::zero() }
         } else {
             let a = self.next_link[chunk];
@@ -224,11 +222,11 @@ impl VMMap for Map32 {
         debug_assert!(any_chunk == conversions::chunk_align_down(any_chunk));
         if !any_chunk.is_zero() {
             let chunk = any_chunk.chunk_index();
-            while self_mut.next_link[chunk] != 0 {
+            while self_mut.next_link[chunk] != -1 {
                 let x = self_mut.next_link[chunk];
                 self_mut.free_contiguous_chunks_no_lock(x);
             }
-            while self_mut.prev_link[chunk] != 0 {
+            while self_mut.prev_link[chunk] != -1 {
                 let x = self_mut.prev_link[chunk];
                 self_mut.free_contiguous_chunks_no_lock(x);
             }
@@ -270,8 +268,6 @@ impl VMMap for Map32 {
         let unavail_start_chunk = last_chunk + 1;
         let trailing_chunks = VM_LAYOUT_CONSTANTS.max_chunks() - unavail_start_chunk;
         let pages = (1 + last_chunk - first_chunk) * PAGES_IN_CHUNK;
-        // start_address=0xb0000000, first_chunk=704, last_chunk=703, unavail_start_chunk=704, trailing_chunks=320, pages=0
-        // startAddress=0x68000000 firstChunk=416 lastChunk=703 unavailStartChunk=704 trailingChunks=320 pages=294912
         self_mut.global_page_map.resize_freelist(pages, pages as _);
         // TODO: Clippy favors using iter().flatten() rather than iter() with if-let.
         // https://rust-lang.github.io/rust-clippy/master/index.html#manual_flatten
@@ -288,15 +284,6 @@ impl VMMap for Map32 {
                 fl_mut.resize_freelist(start_address);
             }
         }
-        // [
-        //  2: -1073741825
-        //  3: -1073741825
-        //  5: -2147482624
-        //  2048: -2147483648
-        //  2049: -2147482624
-        //  2050: 1024
-        //  2051: 1024
-        // ]
         /* set up the region map free list */
         self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
         for _ in first_chunk..=last_chunk {
@@ -413,14 +400,14 @@ impl Map32 {
         }
         let next = self.next_link[chunk as usize];
         let prev = self.prev_link[chunk as usize];
-        if next != 0 {
+        if next != -1 {
             self.prev_link[next as usize] = prev
         };
-        if prev != 0 {
+        if prev != -1 {
             self.next_link[prev as usize] = next
         };
-        self.prev_link[chunk as usize] = 0;
-        self.next_link[chunk as usize] = 0;
+        self.prev_link[chunk as usize] = -1;
+        self.next_link[chunk as usize] = -1;
         for offset in 0..chunks {
             let index = (chunk + offset) as usize;
             let chunk_start = conversions::chunk_index_to_address(index);
