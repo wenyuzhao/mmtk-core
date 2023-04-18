@@ -102,6 +102,12 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
                     return self.rc.count(object) > 0;
                 } else if ForwardingWord::is_forwarded::<VM>(object) {
                     let forwarded = ForwardingWord::read_forwarding_pointer::<VM>(object);
+                    debug_assert!(
+                        forwarded.to_raw_address().is_mapped(),
+                        "Invalid forwarded object: {:?} -> {:?}",
+                        object,
+                        forwarded
+                    );
                     return self.is_marked(forwarded) && self.rc.count(forwarded) > 0;
                 } else {
                     return false;
