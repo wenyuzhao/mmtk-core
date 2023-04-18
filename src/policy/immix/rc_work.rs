@@ -485,5 +485,11 @@ impl MatureEvacuationSet {
             .store(selected_blocks.len(), Ordering::SeqCst);
         let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
         *defrag_blocks = selected_blocks;
+        // cleanup
+        assert!(self.fragmented_blocks.is_empty());
+        assert!(self.blocks_in_fragmented_chunks.is_empty());
+        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
+        self.blocks_in_fragmented_chunks_size
+            .store(0, Ordering::SeqCst);
     }
 }
