@@ -12,6 +12,10 @@ use crate::util::Address;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+const NO_SPACE: u8 = 0;
+const SMALL_SPACE: u8 = 1;
+const LARGE_SPACE: u8 = 2;
+
 pub struct Map32 {
     prev_link: Vec<i32>,
     next_link: Vec<i32>,
@@ -40,7 +44,7 @@ impl Map32 {
         Map32 {
             prev_link: vec![-1; VM_LAYOUT_CONSTANTS.max_chunks()],
             next_link: vec![-1; VM_LAYOUT_CONSTANTS.max_chunks()],
-            chunk_space: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
+            chunk_space: vec![NO_SPACE; VM_LAYOUT_CONSTANTS.max_chunks()],
             region_map: IntArrayFreeList::new(
                 VM_LAYOUT_CONSTANTS.max_chunks(),
                 VM_LAYOUT_CONSTANTS.max_chunks() as _,
@@ -167,7 +171,7 @@ impl VMMap for Map32 {
         if large {
             self_mut.total_available_large_discontiguous_chunks -= chunks;
         }
-        self_mut.chunk_space[chunk as usize] = if large { 1 } else { 0 };
+        self_mut.chunk_space[chunk as usize] = if large { LARGE_SPACE } else { SMALL_SPACE };
         let rtn: Address = conversions::chunk_index_to_address(chunk as _);
         self.insert(rtn, chunks << LOG_BYTES_IN_CHUNK, descriptor);
         if head.is_zero() {
@@ -197,7 +201,7 @@ impl VMMap for Map32 {
     fn get_contiguous_region_chunks(&self, start: Address) -> usize {
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        if self.chunk_space[chunk as usize] == 0 {
+        if self.chunk_space[chunk as usize] == SMALL_SPACE {
             self.region_map.size(chunk as i32) as _
         } else {
             self.large_region_map.size(chunk as i32) as _
@@ -285,11 +289,15 @@ impl VMMap for Map32 {
             }
         }
         /* set up the region map free list */
-        self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        if first_chunk != 0 {
+            self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        }
         for _ in first_chunk..=last_chunk {
             self_mut.region_map.alloc_first_fit(1);
         }
-        self_mut.large_region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        if first_chunk != 0 {
+            self_mut.large_region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        }
         for _ in first_chunk..=last_chunk {
             self_mut.large_region_map.alloc_first_fit(1);
         }
@@ -388,13 +396,16 @@ impl Map32 {
 
     fn free_contiguous_chunks_no_lock(&mut self, chunk: i32) -> usize {
         let mut large = false;
-        let chunks = if self.chunk_space[chunk as usize] == 0 {
+        let chunks = if self.chunk_space[chunk as usize] == SMALL_SPACE {
             self.region_map.free(chunk, false)
         } else {
             large = true;
             self.large_region_map.free(chunk, false)
         };
         self.total_available_discontiguous_chunks += chunks as usize;
+        for c in chunk..chunk + chunks {
+            self.chunk_space[c as usize] = NO_SPACE;
+        }
         if large {
             self.total_available_large_discontiguous_chunks += chunks as usize;
         }
