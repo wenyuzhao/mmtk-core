@@ -388,9 +388,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
-            // self.schedule_defrag_selection_packets(pause);
-        }
         self.block_allocation.notify_mutator_phase_end();
         if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
             // Update mark_state
@@ -433,10 +430,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Release nursery blocks
         if pause != Pause::RefCount {
-            // Reset worker TLABs.
-            // The block of the current worker TLAB may be selected as part of the mature evacuation set.
-            // So the copied mature objects might be copied into defrag blocks, and get copied out again.
-            crate::scheduler::worker::reset_workers::<VM>();
+            if pause == Pause::FullTraceFast {
+                // Reset worker TLABs.
+                // The block of the current worker TLAB may be selected as part of the mature evacuation set.
+                // So the copied mature objects might be copied into defrag blocks, and get copied out again.
+                crate::scheduler::worker::reset_workers::<VM>();
+            }
             // Release young blocks to reduce to-space overflow
             self.block_allocation
                 .sweep_nursery_blocks(&self.scheduler, pause);

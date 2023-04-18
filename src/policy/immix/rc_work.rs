@@ -458,9 +458,10 @@ impl MatureEvacuationSet {
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
         if lxr.current_pause().unwrap() == Pause::FullTraceFast {
-            // Make sure LOS sweeping finishes before evac selectino begin
+            // Make sure LOS sweeping finishes before evac selection begin
             // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
             let los = lxr.common().get_los();
+            los.release_rc_nursery_objects();
             los.sweep_rc_mature_objects(false, &|o| lxr.rc.count(o) != 0);
             // Update weak processor and remove dead objects in it
             // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets

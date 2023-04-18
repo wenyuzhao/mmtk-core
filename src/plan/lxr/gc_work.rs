@@ -48,3 +48,13 @@ impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
         lxr.prepare(worker.tls)
     }
 }
+
+pub struct ReleaseLOSNursery;
+
+impl<VM: VMBinding> GCWork<VM> for ReleaseLOSNursery {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        lxr.los().release_rc_nursery_objects();
+        VM::VMCollection::update_weak_processor(true);
+    }
+}

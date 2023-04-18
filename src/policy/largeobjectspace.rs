@@ -268,6 +268,19 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    pub fn release_rc_nursery_objects(&self) {
+        debug_assert!(self.rc_enabled);
+        // promote nursery objects or release dead nursery
+        let mut mature_blocks = self.rc_mature_objects.lock();
+        while let Some(o) = self.rc_nursery_objects.pop() {
+            if self.rc.count(o) == 0 {
+                self.release_object(o.to_address::<VM>());
+            } else {
+                mature_blocks.insert(o);
+            }
+        }
+    }
+
     pub fn prepare(&mut self, full_heap: bool) {
         self.trace_in_progress = true;
         if full_heap {
@@ -285,15 +298,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn release(&mut self, full_heap: bool) {
         self.trace_in_progress = false;
         if self.rc_enabled {
-            // promote nursery objects or release dead nursery
-            let mut mature_blocks = self.rc_mature_objects.lock();
-            while let Some(o) = self.rc_nursery_objects.pop() {
-                if self.rc.count(o) == 0 {
-                    self.release_object(o.to_address::<VM>());
-                } else {
-                    mature_blocks.insert(o);
-                }
-            }
+            self.release_rc_nursery_objects();
             return;
         }
         self.sweep_large_pages(true);
