@@ -44,7 +44,7 @@ pub struct GenImmix<VM: VMBinding> {
     /// An immix space as the mature space.
     #[post_scan]
     #[trace(CopySemantics::Mature)]
-    pub immix: ImmixSpace<VM>,
+    pub immix_space: ImmixSpace<VM>,
     /// Whether the last GC was a defrag GC for the immix space.
     pub last_gc_was_defrag: AtomicBool,
     /// Whether the last GC was a full heap GC
@@ -80,7 +80,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
                 CopySemantics::Mature => CopySelector::ImmixHybrid(0),
                 _ => CopySelector::Unused,
             },
-            space_mapping: vec![(CopySelector::ImmixHybrid(0), &self.immix)],
+            space_mapping: vec![(CopySelector::ImmixHybrid(0), &self.immix_space)],
             constraints: &GENIMMIX_CONSTRAINTS,
         }
     }
@@ -101,7 +101,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
 
     fn get_spaces(&self) -> Vec<&dyn Space<Self::VM>> {
         let mut ret = self.gen.get_spaces();
-        ret.push(&self.immix);
+        ret.push(&self.immix_space);
         ret
     }
 
@@ -124,7 +124,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
                 GenImmix<VM>,
                 GenImmixMatureGCWorkContext<VM, TRACE_KIND_FAST>,
                 GenImmixMatureGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-            >(self, &self.immix, scheduler);
+            >(self, &self.immix_space, scheduler);
         }
     }
 
@@ -136,7 +136,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
         let full_heap = !self.gen.is_current_gc_nursery();
         self.gen.prepare(tls);
         if full_heap {
-            self.immix.prepare(full_heap, false);
+            self.immix_space.prepare(full_heap, false);
         }
     }
 
@@ -144,7 +144,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
         let full_heap = !self.gen.is_current_gc_nursery();
         self.gen.release(tls);
         if full_heap {
-            let did_defrag = self.immix.release(full_heap);
+            let did_defrag = self.immix_space.release(full_heap);
             self.last_gc_was_defrag.store(did_defrag, Ordering::Relaxed);
         } else {
             self.last_gc_was_defrag.store(false, Ordering::Relaxed);
@@ -159,11 +159,11 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        self.gen.get_collection_reserved_pages() + self.immix.defrag_headroom_pages()
+        self.gen.get_collection_reserved_pages() + self.immix_space.defrag_headroom_pages()
     }
 
     fn get_used_pages(&self) -> usize {
-        self.gen.get_used_pages() + self.immix.reserved_pages()
+        self.gen.get_used_pages() + self.immix_space.reserved_pages()
     }
 
     /// Return the number of pages available for allocation. Assuming all future allocations goes to nursery.
@@ -202,11 +202,11 @@ impl<VM: VMBinding> GenerationalPlan for GenImmix<VM> {
     }
 
     fn get_mature_physical_pages_available(&self) -> usize {
-        self.immix.available_physical_pages()
+        self.immix_space.available_physical_pages()
     }
 
     fn get_mature_reserved_pages(&self) -> usize {
-        self.immix.reserved_pages()
+        self.immix_space.reserved_pages()
     }
 
     fn force_full_heap_collection(&self) {
@@ -249,7 +249,7 @@ impl<VM: VMBinding> GenImmix<VM> {
 
         let genimmix = GenImmix {
             gen: CommonGenPlan::new(plan_args),
-            immix: immix_space,
+            immix_space,
             last_gc_was_defrag: AtomicBool::new(false),
             last_gc_was_full_heap: AtomicBool::new(false),
         };
@@ -263,7 +263,7 @@ impl<VM: VMBinding> GenImmix<VM> {
                 .gen
                 .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
             genimmix
-                .immix
+                .immix_space
                 .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
         }
 
