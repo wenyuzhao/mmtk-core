@@ -334,7 +334,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         args: crate::policy::space::PlanCreateSpaceArgs<VM>,
         space_args: ImmixSpaceArgs,
     ) -> Self {
-        #[cfg(feature = "immix_no_defrag")]
+        #[cfg(feature = "immix_non_moving")]
         info!(
             "Creating non-moving ImmixSpace: {}. Block size: 2^{}",
             args.name,
@@ -1350,13 +1350,6 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
                 unimplemented!("We cannot bulk zero unlogged bit.")
             }
         }
-        debug_assert!(!self.space.rc_enabled);
-        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-            side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
-        }
-        // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
-        // until the forwarding bits are also set, at which time we also write the forwarding
-        // pointer.
     }
 }
 
@@ -1391,14 +1384,14 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
             // Clear forwarding bits if necessary.
-            // if is_defrag_source {
-            //     if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-            //         // Clear on-the-side forwarding bits.
-            //         // NOTE: In theory, we only need to clear the forwarding bits of occupied lines of
-            //         // blocks that are defrag sources.
-            //         side.bzero_metadata(block.start(), Block::BYTES);
-            //     }
-            // }
+            if is_defrag_source {
+                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+                    // Clear on-the-side forwarding bits.
+                    // NOTE: In theory, we only need to clear the forwarding bits of occupied lines of
+                    // blocks that are defrag sources.
+                    side.bzero_metadata(block.start(), Block::BYTES);
+                }
+            }
             // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
             // until the forwarding bits are also set, at which time we also write the forwarding
             // pointer.

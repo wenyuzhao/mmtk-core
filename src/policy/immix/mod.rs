@@ -23,8 +23,8 @@ pub const MAX_IMMIX_OBJECT_SIZE: usize = {
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = crate::args::BLOCK_ONLY;
 
-/// Opportunistic copying
-pub const DEFRAG: bool = crate::args::DEFRAG;
+/// Do we allow Immix to do defragmentation?
+pub const DEFRAG: bool = crate::args::DEFRAG && !cfg!(feature = "immix_non_moving"); // defrag if we are allowed to move.
 
 /// Make every GC a defragment GC. (for debugging)
 pub const STRESS_DEFRAG: bool = false;
@@ -34,8 +34,7 @@ pub const STRESS_DEFRAG: bool = false;
 pub const DEFRAG_EVERY_BLOCK: bool = false;
 
 /// If Immix is used as a nursery space, do we prefer copy?
-/// If this is true, we copy nursery objects if possible.
-pub const PREFER_COPY_ON_NURSERY_GC: bool = !cfg!(feature = "immix_no_nursery_copy");
+pub const PREFER_COPY_ON_NURSERY_GC: bool = !cfg!(feature = "immix_non_moving"); // copy nursery objects if we are allowed to move.
 
 /// In some cases/settings, Immix may never move objects.
 /// Currently we only have two cases where we move objects: 1. defrag, 2. nursery copy.
