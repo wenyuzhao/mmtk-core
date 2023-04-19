@@ -121,11 +121,11 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         );
 
         // If this object is freshly allocated, we do not set it as unlogged
-        // if !alloc && self.common.needs_log_bit {
-        //     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-        // }
+        if !alloc && self.common.needs_log_bit {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+        }
         // TODO: Only mark during concurrent marking
-        self.test_and_mark(object, self.mark_state);
+        // self.test_and_mark(object, self.mark_state);
         #[cfg(feature = "global_alloc_bit")]
         crate::util::alloc_bit::set_alloc_bit::<VM>(object);
         self.treadmill.add_to_treadmill(object, alloc);

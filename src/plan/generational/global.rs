@@ -288,7 +288,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     }
 
     /// Get pages reserved for the collection by a generational plan. A generational plan should
-    /// add their own reservatioin with the value returned by this method.
+    /// add their own reservation with the value returned by this method.
     pub fn get_collection_reserved_pages(&self) -> usize {
         self.nursery.reserved_pages()
     }
