@@ -267,6 +267,19 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    pub fn release_rc_nursery_objects(&self) {
+        debug_assert!(self.rc_enabled);
+        // promote nursery objects or release dead nursery
+        let mut mature_blocks = self.rc_mature_objects.lock();
+        while let Some(o) = self.rc_nursery_objects.pop() {
+            if self.rc.count(o) == 0 {
+                self.release_object(o.to_address::<VM>());
+            } else {
+                mature_blocks.insert(o);
+            }
+        }
+    }
+
     pub fn prepare(&mut self, full_heap: bool) {
         self.trace_in_progress = true;
         if full_heap {
@@ -284,15 +297,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn release(&mut self, full_heap: bool) {
         self.trace_in_progress = false;
         if self.rc_enabled {
-            // promote nursery objects or release dead nursery
-            let mut mature_blocks = self.rc_mature_objects.lock();
-            while let Some(o) = self.rc_nursery_objects.pop() {
-                if self.rc.count(o) == 0 {
-                    self.release_object(o.to_address::<VM>());
-                } else {
-                    mature_blocks.insert(o);
-                }
-            }
+            self.release_rc_nursery_objects();
             return;
         }
         self.sweep_large_pages(true);
@@ -392,7 +397,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     pub fn rc_free(&self, o: ObjectReference) {
         if o.to_address::<VM>().attempt_log_field::<VM>() {
-            // println!(" - add to rc_dead_objects {:?}", o);
             self.rc_dead_objects.push(o);
         }
     }
@@ -479,6 +483,56 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
         }
     }
+
+    fn update_stat_for_dead_mature_object(&self, o: ObjectReference) {
+        crate::stat(|s| {
+            s.dead_mature_objects += 1;
+            s.dead_mature_volume += o.get_size::<VM>();
+            s.dead_mature_los_objects += 1;
+            s.dead_mature_los_volume += o.get_size::<VM>();
+
+            s.dead_mature_tracing_objects += 1;
+            s.dead_mature_tracing_volume += o.get_size::<VM>();
+            s.dead_mature_tracing_los_objects += 1;
+            s.dead_mature_tracing_los_volume += o.get_size::<VM>();
+
+            if self.rc.is_stuck(o) {
+                s.dead_mature_tracing_stuck_objects += 1;
+                s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
+                s.dead_mature_tracing_stuck_los_objects += 1;
+                s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
+            }
+        });
+    }
+
+    pub fn sweep_rc_mature_objects(
+        &self,
+        lazy_free: bool,
+        is_live: &impl Fn(ObjectReference) -> bool,
+    ) {
+        let mut mature_objects = self.rc_mature_objects.lock();
+        let mut dead = vec![];
+        for o in mature_objects.iter() {
+            if !is_live(*o) {
+                self.update_stat_for_dead_mature_object(*o);
+                self.rc.set(*o, 0);
+                if lazy_free {
+                    self.rc_free(*o);
+                } else {
+                    dead.push(*o);
+                }
+            }
+        }
+        if !lazy_free {
+            for o in dead {
+                let removed = mature_objects.remove(&o);
+                o.to_address::<VM>().unlog::<VM>();
+                if removed {
+                    self.release_object(o.to_address::<VM>());
+                }
+            }
+        }
+    }
 }
 
 fn get_super_page(cell: Address) -> Address {
@@ -493,34 +547,6 @@ impl RCSweepMatureLOS {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
         Self { _counter: counter }
     }
-    fn do_work_impl<VM: VMBinding>(&mut self, mmtk: &'static crate::MMTK<VM>) {
-        let los = mmtk.plan.common().get_los();
-        let mature_objects = los.rc_mature_objects.lock();
-        for o in mature_objects.iter() {
-            if !los.is_marked(*o) && los.rc.count(*o) != 0 {
-                crate::stat(|s| {
-                    s.dead_mature_objects += 1;
-                    s.dead_mature_volume += o.get_size::<VM>();
-                    s.dead_mature_los_objects += 1;
-                    s.dead_mature_los_volume += o.get_size::<VM>();
-
-                    s.dead_mature_tracing_objects += 1;
-                    s.dead_mature_tracing_volume += o.get_size::<VM>();
-                    s.dead_mature_tracing_los_objects += 1;
-                    s.dead_mature_tracing_los_volume += o.get_size::<VM>();
-
-                    if los.rc.is_stuck(*o) {
-                        s.dead_mature_tracing_stuck_objects += 1;
-                        s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
-                        s.dead_mature_tracing_stuck_los_objects += 1;
-                        s.dead_mature_tracing_stuck_los_volume += o.get_size::<VM>();
-                    }
-                });
-                los.rc.set(*o, 0);
-                los.rc_free(*o);
-            }
-        }
-    }
 }
 
 impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
@@ -529,7 +555,8 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        self.do_work_impl(mmtk)
+        let los = mmtk.plan.common().get_los();
+        los.sweep_rc_mature_objects(true, &|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
     }
 }
 

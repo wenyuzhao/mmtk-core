@@ -21,7 +21,8 @@ pub(crate) struct RuntimeArgs {
     pub(crate) max_mature_defrag_percent: usize,
     pub(crate) max_pause_millis: Option<usize>,
     pub(crate) max_young_evac_size: usize,
-    pub(crate) concurrent_marking_stop_blocks: usize,
+    /// Terminate CM or RC loop if the availabel heap after a RC pause is still small
+    pub(crate) rc_stop_percent: usize,
     pub(crate) max_survival_mb: usize,
     pub(crate) survival_predictor_harmonic_mean: bool,
     pub(crate) survival_predictor_weighted: bool,
@@ -61,7 +62,7 @@ impl Default for RuntimeArgs {
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
-            concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
+            rc_stop_percent: env_arg("RC_STOP_PERCENT").unwrap_or(5),
             max_survival_mb: if cfg!(feature = "lxr_fixed_young_size") {
                 usize::MAX
             } else {
