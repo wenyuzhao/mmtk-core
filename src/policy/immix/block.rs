@@ -630,7 +630,7 @@ impl Block {
         }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
-                space.release_block(*self, false, true, false);
+                space.release_block(*self, false, true, defrag);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {

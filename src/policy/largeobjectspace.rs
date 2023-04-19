@@ -287,12 +287,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             debug_assert!(self.treadmill.is_from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
+        self.num_pages_released_lazy.store(0, Ordering::Relaxed);
         if self.rc_enabled {
             return;
         }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
-        self.num_pages_released_lazy.store(0, Ordering::Relaxed);
     }
 
     pub fn release(&mut self, full_heap: bool) {

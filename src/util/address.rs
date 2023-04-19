@@ -15,6 +15,7 @@ use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::{ObjectModel, VMBinding};
 
 use super::constants::BYTES_IN_WORD;
+use super::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -625,7 +626,7 @@ impl ObjectReference {
 
     /// Is the object live, determined by the policy?
     pub fn is_live(self) -> bool {
-        if self.0 == 0 {
+        if self.is_null() {
             false
         } else {
             unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_live(self)
@@ -633,20 +634,38 @@ impl ObjectReference {
     }
 
     pub fn is_movable(self) -> bool {
+        if self.is_null() {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_movable()
     }
 
     /// Get forwarding pointer if the object is forwarded.
     pub fn get_forwarded_object(self) -> Option<Self> {
+        if self.is_null() {
+            return None;
+        }
+        debug_assert!({
+            let addr = self.to_raw_address();
+            addr >= VM_LAYOUT_CONSTANTS.heap_start && addr < VM_LAYOUT_CONSTANTS.heap_end
+        });
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
     pub fn is_in_any_space(self) -> bool {
+        let addr = self.to_raw_address();
+        if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_in_space(self)
     }
 
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
+        let addr = self.to_raw_address();
+        if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_sane()
     }
 
