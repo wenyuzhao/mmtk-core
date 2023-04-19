@@ -73,6 +73,11 @@ impl Map32 {
     }
 
     fn get_large_chunk_reserve_boundary() -> Address {
+        if let Some(small_chunk_space_size) = VM_LAYOUT_CONSTANTS.small_chunk_space_size {
+            let small_chunk_space_end =
+                (VM_LAYOUT_CONSTANTS.heap_start + small_chunk_space_size).align_up(BYTES_IN_CHUNK);
+            return small_chunk_space_end;
+        }
         const LARGE_CHUNK_RESERVE_RATIO: f64 = 1f64 / 32f64;
         const MIN_LARGE_CHUNK_RESERVE: usize = 512 << 20;
         let virtual_space_size = VM_LAYOUT_CONSTANTS.heap_end - VM_LAYOUT_CONSTANTS.heap_start;
@@ -138,32 +143,21 @@ impl VMMap for Map32 {
         let (_sync, self_mut) = self.mut_self_with_sync();
         let mut large = false;
         let chunk = if !Self::is_large_chunk_allocation(chunks) {
-            let r = self_mut.region_map.alloc(chunks as _);
-            if r == -1 {
-                large = true;
-                self_mut.large_region_map.alloc(chunks as _)
-            } else {
-                r
-            }
+            self_mut.region_map.alloc(chunks as _)
         } else {
             if crate::verbose(3) {
                 gc_log!("Alloc {} large chunks", chunks);
             }
             large = true;
-            let r = self_mut.large_region_map.alloc(chunks as _);
-            if r == -1 {
-                large = false;
-                self_mut.region_map.alloc(chunks as _)
-            } else {
-                r
-            }
+            self_mut.large_region_map.alloc(chunks as _)
         };
         if chunk == -1 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
             gc_log!([1]
-                "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
+                "WARNING: Failed to allocate {} chunks. total-free-chunks={} total-free-large-chunks={}",
                 chunks,
-                self.total_available_discontiguous_chunks
+                self.total_available_discontiguous_chunks,
+                self.total_available_large_discontiguous_chunks,
             );
             return unsafe { Address::zero() };
         }

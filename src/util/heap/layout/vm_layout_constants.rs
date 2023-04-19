@@ -45,6 +45,7 @@ pub struct VMLayoutConstants {
     pub space_shift_64: usize,
     pub space_mask_64: usize,
     pub space_size_64: usize,
+    pub small_chunk_space_size: Option<usize>,
 }
 
 impl VMLayoutConstants {
@@ -79,6 +80,7 @@ impl VMLayoutConstants {
     pub const fn new_32bit() -> Self {
         unimplemented!()
     }
+
     pub fn new_64bit() -> Self {
         Self {
             log_address_space: 47,
@@ -92,52 +94,63 @@ impl VMLayoutConstants {
             space_shift_64: 41,
             space_mask_64: ((1 << 4) - 1) << 41,
             space_size_64: 1 << 41,
+            small_chunk_space_size: None,
         }
     }
+
     pub fn new_64bit_with_pointer_compression(heap_size: usize) -> Self {
         assert!(
             heap_size <= (32usize << 30),
             "Heap size is larger than 32 GB"
         );
-        let mut start: usize = 0x4000_0000;
-        let mut end: usize = match start + heap_size {
-            end if end <= (4usize << 30) => 4usize << 30,
-            end if end <= (32usize << 30) => 32usize << 30,
-            _ => 0x4000_0000 + (32usize << 30) - BYTES_IN_CHUNK,
-        };
-        // A workaround to avoid address conflict with the OpenJDK
-        // MetaSpace, which may start from 0x8_0000_0000
-        if end > 0x8_0000_0000 {
-            start = 0x200_0000_0000;
-            end = start + 0x8_0000_0000 - BYTES_IN_CHUNK;
-            // Non-zero based compressed pointer space
-            // Protect the first page as we will never access it.
-            // The base address of compressed heap is set to one page before the heap start, so that NULL can be encoded nonambigous.
-            crate::util::memory::mmap_noreserve(unsafe { Address::from_usize(start - 4096) }, 4096)
-                .unwrap();
-            crate::util::memory::mprotect(unsafe { Address::from_usize(start - 4096) }, 4096)
-                .unwrap();
-        }
 
-        let heap_end = if cfg!(feature = "virt_constraint") {
-            usize::min(
-                end,
-                (start + heap_size - 1 + BYTES_IN_CHUNK) & !(BYTES_IN_CHUNK - 1),
-            )
-        } else {
-            end
+        let rounded_heap_size = (heap_size + (BYTES_IN_CHUNK - 1)) & !(BYTES_IN_CHUNK - 1);
+        let mut start: usize = 0x4000_0000; // block lowest 1G
+        let (end, mut small_chunk_space_size) = match rounded_heap_size {
+            // heap <= 2G; virtual = 3G; max-small-space=2G
+            heap if heap <= 2 << 30 => {
+                let end = 4usize << 30;
+                let small_space = usize::min(heap * 3 / 2, 2 << 30);
+                (end, small_space)
+            }
+            // heap <= 29G; virtual = 31G; max-small-space=29G;
+            heap if heap <= 29 << 30 => {
+                let end = 32usize << 30;
+                let small_space = usize::min(heap * 3 / 2, 29 << 30);
+                (end, small_space)
+            }
+            // heap > 29G; virtual = 32G - 1chunk; max-small-space=30G; start=0x200_0000_0000
+            heap => {
+                // A workaround to avoid address conflict with the OpenJDK
+                // MetaSpace, which may start from 0x8_0000_0000
+                start = 0x200_0000_0000;
+                let end = start + 0x8_0000_0000 - BYTES_IN_CHUNK;
+                let small_space = usize::min(heap * 3 / 2, 30 << 30);
+                (end, small_space)
+            }
         };
+        small_chunk_space_size =
+            (small_chunk_space_size + (BYTES_IN_CHUNK - 1)) & !(BYTES_IN_CHUNK - 1);
+
+        gc_log!(
+            "heap={} start=0x{:x} end=0x{:x} small_chunk_space_size={}",
+            heap_size,
+            start,
+            end,
+            small_chunk_space_size
+        );
 
         Self {
             log_address_space: 35,
             heap_start: chunk_align_down(unsafe { Address::from_usize(start) }),
-            heap_end: chunk_align_up(unsafe { Address::from_usize(heap_end) }),
+            heap_end: chunk_align_up(unsafe { Address::from_usize(end) }),
             vm_space_size: chunk_align_up(unsafe { Address::from_usize(0x800_0000) }).as_usize(),
             max_chunks: (end - start) >> LOG_BYTES_IN_CHUNK,
             log_space_extent: 31,
             space_shift_64: 0,
             space_mask_64: 0,
             space_size_64: 0,
+            small_chunk_space_size: Some(small_chunk_space_size),
         }
     }
 
