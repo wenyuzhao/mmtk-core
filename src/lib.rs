@@ -46,6 +46,8 @@ extern crate downcast_rs;
 #[cfg(feature = "tracing")]
 #[macro_use]
 extern crate probe;
+// #[macro_use]
+// extern crate static_assertions;
 
 #[macro_use]
 mod gc_log;

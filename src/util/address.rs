@@ -694,12 +694,12 @@ impl ObjectReference {
     pub fn class_is_valid<VM: VMBinding>(self) -> bool {
         let klass = self.class_pointer::<VM>();
         let v = klass.as_usize();
-        if -1 == unsafe { libc::msync((v >> 12 << 12) as *mut libc::c_void, 4096, 0) } {
-            println!("Unmapped klass {:?} object {:?}", klass, self);
-            return false;
-        }
+        // if -1 == unsafe { libc::msync((v >> 12 << 12) as *mut libc::c_void, 4096, 0) } {
+        //     println!("Unmapped klass {:?} object {:?}", klass, self);
+        //     return false;
+        // }
         let valid = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
-            klass.is_aligned_to(8)
+            klass.is_aligned_to(8) && v >= 0x10000_0000 && v <= 0x20000_0000
         } else {
             ((klass.as_usize() & 0xff000_00000000) == 0x7000_00000000) && klass.is_aligned_to(8)
         };

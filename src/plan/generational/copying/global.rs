@@ -86,11 +86,8 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         if is_full_heap {
-            println!("Full GC");
-            unimplemented!();
             scheduler.schedule_common_work::<GenCopyGCWorkContext<VM>>(self);
         } else {
-            println!("Nursery GC");
             scheduler.schedule_common_work_no_refs::<GenCopyNurseryGCWorkContext<VM>>(self);
         }
     }

@@ -281,7 +281,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+    fn object_probable_write_slow(&mut self, obj: ObjectReference) {
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
             if !e.to_address().is_mapped() {
                 return;

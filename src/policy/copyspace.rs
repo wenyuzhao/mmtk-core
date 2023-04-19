@@ -179,7 +179,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             self.reset_alloc_bit();
             self.pr.reset();
         }
-        // self.common.metadata.reset();
+        self.pr.common().metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
     }
 
