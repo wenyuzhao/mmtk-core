@@ -92,7 +92,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
-        gc_log!([4] "alloc los {:?}", object);
         if self.rc_enabled {
             debug_assert!(alloc);
             // Add to object set
@@ -264,7 +263,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
             self.pr.release_pages_and_reset_unlog_bits(start)
         } else {
-            gc_log!([4] "release los {:?}", start);
             self.pr.release_pages(start)
         }
     }
@@ -329,7 +327,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             return object;
         }
         let nursery_object = self.is_in_nursery(object);
-        gc_log!([4]
+        trace!(
             "LOS object {} {} a nursery object",
             object,
             if nursery_object { "is" } else { "is not" }
@@ -337,7 +335,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
             if self.test_and_mark(object, self.mark_state) {
-                gc_log!([4]"LOS object {} is being marked now", object);
+                trace!("LOS object {} is being marked now", object);
                 self.treadmill.copy(object, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.

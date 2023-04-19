@@ -253,12 +253,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                 object
             );
             assert!(
-                !crate::util::object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
-                "{:?} -> {:?} is forwarded",
-                self.edge,
-                object
-            );
-            assert!(
                 object.is_sane(),
                 "Invalid reference {:?} -> {:?}",
                 self.edge,

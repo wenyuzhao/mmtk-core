@@ -5,7 +5,6 @@ use crate::plan::PlanTraceObject;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
 use crate::util::*;
-use crate::vm::edge_shape::Edge;
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::VMBinding;
 use crate::MMTK;
@@ -76,15 +75,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
         _slot: VM::VMEdge,
         _target: ObjectReference,
     ) {
-        // gc_log!([4] "b {:?}", src.range::<VM>());
-        // src.iterate_fields::<VM, _>(
-        //     address::CLDScanPolicy::Follow,
-        //     address::RefScanPolicy::Follow,
-        //     |x| {
-        //         gc_log!([4] " - b {:?}.{:?} -> {:?}", src, x.to_address(), x.load());
-        //     },
-        // );
-        // flush_logs!();
         // enqueue the object
         self.modbuf.push(src);
         self.modbuf.is_full().then(|| self.flush_modbuf());
@@ -94,11 +84,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
         // Only enqueue array slices in mature spaces
         if !self.plan.is_address_in_nursery(dst.start()) {
             // enqueue
-            // gc_log!([4] "ba {:?}", dst);
-            // for x in dst.iter_edges() {
-            //     gc_log!([4] " - ba {:?} -> {:?}", x.to_address(), x.load());
-            // }
-            // flush_logs!();
             self.region_modbuf.push(dst);
             self.region_modbuf
                 .is_full()
@@ -108,15 +93,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
         if !self.plan.is_object_in_nursery(obj) {
-            // gc_log!([4] "b2 {:?}", obj.range::<VM>());
-            // obj.iterate_fields::<VM, _>(
-            //     address::CLDScanPolicy::Follow,
-            //     address::RefScanPolicy::Follow,
-            //     |x| {
-            //         gc_log!([4] " - b2 {:?}.{:?} -> {:?}", obj, x.to_address(), x.load());
-            //     },
-            // );
-            // flush_logs!();
             self.modbuf.push(obj);
             self.modbuf.is_full().then(|| self.flush_modbuf());
         }

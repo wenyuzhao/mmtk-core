@@ -43,7 +43,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         let object = slot.load();
         let new_object = self.trace_object(object);
         debug_assert!(!self.plan.is_object_in_nursery(new_object));
-        gc_log!([4] "e {:?}: {:?} => {:?}", slot.to_address(), object, new_object);
         slot.store(new_object);
     }
 

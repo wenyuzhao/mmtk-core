@@ -241,10 +241,8 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        gc_log!([4] "trace {:?}", object);
         // Evacuate nursery objects
         if self.nursery.in_space(object) {
-            gc_log!([4] "trace n nursery {:?}", object);
             return self.nursery.trace_object::<Q>(
                 queue,
                 object,
@@ -254,7 +252,6 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         }
         // We may alloc large object into LOS as nursery objects. Trace them here.
         if self.common.get_los().in_space(object) {
-            gc_log!([4] "trace los nursery {:?}", object);
             return self.common.get_los().trace_object::<Q>(queue, object);
         }
         object
