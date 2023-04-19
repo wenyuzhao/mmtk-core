@@ -85,7 +85,7 @@ impl SurvivalRatioPredictor {
                 (curr * curr + prev * prev) / (curr + prev)
             }
         } else {
-            (curr + prev) / 2f64
+            (curr * 3f64 + prev) / 4f64
         };
         let ratio = f64::min(ratio, 1.0);
         crate::add_survival_ratio(curr, prev);
@@ -150,11 +150,7 @@ impl MatureLivePredictor {
         let prev = self.live_pages.load(Ordering::Relaxed);
         let curr = live_pages as f64;
         let weight = 3f64;
-        let next = if curr > prev {
-            (curr + prev * weight) / (weight + 1f64)
-        } else {
-            (weight * curr + prev) / (weight + 1f64)
-        };
+        let next = (weight * curr + prev) / (weight + 1f64);
         // println!("predict {}", next);
         // crate::add_mature_reclaim(live_pages, prev);
         self.live_pages.store(next, Ordering::Relaxed);

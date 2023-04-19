@@ -578,25 +578,32 @@ impl<VM: VMBinding> LXR<VM> {
             *gc_selection_done = true;
             cvar.notify_one();
         };
-        let pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst).saturating_sub(
-            self.immix_space
-                .num_clean_blocks_released_lazy
-                .load(Ordering::SeqCst)
-                << Block::LOG_PAGES,
-        );
+        let released_los_pages = self.los().num_pages_released_lazy.load(Ordering::SeqCst);
+        let pages_after_gc = HEAP_AFTER_GC
+            .load(Ordering::SeqCst)
+            .saturating_sub(
+                self.immix_space
+                    .num_clean_blocks_released_lazy
+                    .load(Ordering::SeqCst)
+                    << Block::LOG_PAGES,
+            )
+            .saturating_sub(released_los_pages);
         if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
             let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
             gc_log!([3] " - predicted live mature pages: {}", live_mature_pages)
         }
         let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
-        let garbage = if pages_after_gc > live_mature_pages {
-            pages_after_gc - live_mature_pages
-        } else {
-            0
-        };
+        let garbage = pages_after_gc.saturating_sub(live_mature_pages);
         let total_pages = self.get_total_pages();
         let stop_pages = total_pages * crate::args().rc_stop_percent / 100;
         let available_pages = total_pages.saturating_sub(pages_after_gc);
+        gc_log!(
+            " - total_pages={} stop_pages={} pages_after_gc={} available_pages={}",
+            total_pages,
+            stop_pages,
+            pages_after_gc,
+            available_pages
+        );
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
         if !self.concurrent_marking_in_progress()
