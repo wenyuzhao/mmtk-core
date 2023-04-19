@@ -668,9 +668,13 @@ pub trait ProcessEdgesWork:
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 
     #[cfg(feature = "sanity")]
-    fn cache_roots_for_sanity_gc(&mut self, roots: Vec<EdgeOf<Self>>) {
+    fn cache_roots_for_sanity_gc(&mut self, _roots: Vec<EdgeOf<Self>>) {
         assert!(self.roots);
-        self.mmtk().sanity_checker.lock().unwrap().add_roots(roots);
+        self.mmtk()
+            .sanity_checker
+            .lock()
+            .unwrap()
+            .add_root_edges(self.edges.clone());
     }
 
     /// Start the a scan work packet. If SCAN_OBJECTS_IMMEDIATELY, the work packet will be executed immediately, in this method.
@@ -727,7 +731,6 @@ pub trait ProcessEdgesWork:
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
-        trace!("ProcessEdgesWork");
         self.set_worker(worker);
         #[cfg(feature = "sanity")]
         let roots = if self.roots {
@@ -884,6 +887,16 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         should_claim_and_scan_clds: bool,
     ) {
         let tls = worker.tls;
+
+        #[cfg(feature = "sanity")]
+        {
+            if self.roots() {
+                mmtk.sanity_checker
+                    .lock()
+                    .unwrap()
+                    .add_root_nodes(buffer.to_vec());
+            }
+        }
 
         // If this is a root packet, the objects in this packet will have not been traced, yet.
         //
