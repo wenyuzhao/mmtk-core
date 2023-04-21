@@ -50,6 +50,7 @@ extern crate probe;
 #[macro_use]
 mod gc_log;
 mod mmtk;
+mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
 use std::{
     collections::HashMap,

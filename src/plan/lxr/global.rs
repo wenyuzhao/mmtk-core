@@ -1047,5 +1047,6 @@ impl<VM: VMBinding> LXR<VM> {
                 (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
             },
         );
+        crate::rust_mem_counter::dump();
     }
 }
