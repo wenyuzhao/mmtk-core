@@ -760,7 +760,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         if self.concurrent_marking_in_progress {
-            immix.mark(o);
+            let marked = immix.mark(o);
+            if cfg!(feature = "lxr_satb_live_bytes_counter") && marked {
+                crate::record_live_bytes(o.get_size::<VM>());
+            }
         }
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);

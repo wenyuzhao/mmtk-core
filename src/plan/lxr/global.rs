@@ -322,6 +322,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .add(FlushMatureEvacRemsets);
         }
         self.immix_space.prepare_rc(pause);
+        if pause == Pause::FinalMark {
+            self.dump_heap_usage();
+        }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -445,6 +448,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "object_size_distribution") {
             if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
                 crate::dump_and_reset_obj_dist("Static", &mut crate::OBJ_COUNT.lock().unwrap());
+            }
+        }
+        if cfg!(feature = "lxr_satb_live_bytes_counter") {
+            if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+                crate::report_and_reset_live_bytes();
             }
         }
     }
