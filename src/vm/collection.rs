@@ -39,7 +39,7 @@ pub trait Collection<VM: VMBinding> {
     ///
     /// Arguments:
     /// * `tls`: The thread pointer for the GC controller/coordinator.
-    fn resume_mutators(tls: VMWorkerThread, lxr: bool, current_gc_should_unload_classes: bool);
+    fn resume_mutators(tls: VMWorkerThread);
 
     /// Block the current thread for GC. This is called when an allocation request cannot be fulfilled and a GC
     /// is needed. MMTk calls this method to inform the VM that the current thread needs to be blocked as a GC
@@ -138,4 +138,6 @@ pub trait Collection<VM: VMBinding> {
     /// Arguments:
     /// * `tls_worker`: The thread pointer for the worker thread performing this call.
     fn post_forwarding(_tls: VMWorkerThread) {}
+
+    fn unload_vm_resources() {}
 }
