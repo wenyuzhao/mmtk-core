@@ -267,10 +267,11 @@ pub struct EndOfGC;
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!("End of GC");
-        if mmtk.get_plan().current_gc_should_perform_class_unloading() {
+        let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
+        if perform_class_unloading {
             gc_log!([3] " - class unloading");
-            <VM as VMBinding>::VMCollection::unload_vm_resources();
         }
+        <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)
             .elapsed()

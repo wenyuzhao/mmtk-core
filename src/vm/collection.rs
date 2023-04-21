@@ -101,9 +101,6 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The thread pointer for the current GC thread.
     fn schedule_finalization(_tls: VMWorkerThread) {}
 
-    /// Inform the VM to do its VM-specific release work at the end of a GC.
-    fn vm_release() {}
-
     /// Delegate to the VM binding for reference processing.
     fn process_soft_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {}
     fn process_weak_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {} // FIXME: Add an appropriate factory/callback parameter.
@@ -139,5 +136,6 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls_worker`: The thread pointer for the worker thread performing this call.
     fn post_forwarding(_tls: VMWorkerThread) {}
 
-    fn unload_vm_resources() {}
+    /// Inform the VM to do its VM-specific release work at the end of a GC.
+    fn vm_release(_do_unloading: bool) {}
 }
