@@ -50,7 +50,8 @@ impl Default for RuntimeArgs {
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
             nursery_blocks: env_arg("NURSERY_BLOCKS").or(
                 if cfg!(feature = "lxr_fixed_young_size") {
-                    Some(327680)
+                    const BLOCKS_IN_GB: usize = (1 << 30) >> Block::LOG_BYTES;
+                    Some(4 * BLOCKS_IN_GB) // 4 G
                 } else {
                     None
                 },
