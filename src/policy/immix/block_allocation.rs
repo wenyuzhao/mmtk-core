@@ -20,6 +20,9 @@ struct BlockCache {
 
 impl BlockCache {
     fn new() -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::BLOCK_ALLOC_BUFFER_COUNTER.add(32768);
+        }
         Self {
             cursor: AtomicUsize::new(0),
             buffer: RwLock::new((0..32768).map(|_| Atomic::new(Block::ZERO)).collect()),
@@ -40,6 +43,10 @@ impl BlockCache {
             std::mem::drop(buffer);
             let mut buffer = self.buffer.write().unwrap();
             if i >= buffer.len() {
+                if cfg!(feature = "rust_mem_counter") {
+                    crate::rust_mem_counter::BLOCK_ALLOC_BUFFER_COUNTER.sub(buffer.len());
+                    crate::rust_mem_counter::BLOCK_ALLOC_BUFFER_COUNTER.add(i << 1);
+                }
                 buffer.resize_with(i << 1, || Atomic::new(Block::ZERO));
             }
             buffer[i].store(block, Ordering::Relaxed);

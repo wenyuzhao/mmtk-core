@@ -78,6 +78,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     pub fn new_objects(objects: Vec<ObjectReference>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::INC_BUFFER_COUNTER.add(objects.len());
+        }
         let lxr = GCWorker::<VM>::current()
             .mmtk
             .get_plan()
@@ -101,6 +104,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     pub fn new(incs: Vec<VM::VMEdge>, lxr: &'static LXR<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::INC_BUFFER_COUNTER.add(incs.len());
+        }
         Self {
             incs,
             new_incs: VectorQueue::default(),
@@ -557,6 +563,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.current_pause = self.lxr().current_pause().unwrap();
         self.concurrent_marking_in_progress = self.lxr().concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
+        let count = if cfg!(feature = "rust_mem_counter") {
+            self.incs.len() + self.root_objects.as_ref().map(|x| x.len()).unwrap_or(0)
+        } else {
+            0
+        };
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
@@ -640,13 +651,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             depth += 1;
             incs.clear();
             self.new_incs.swap(&mut incs);
+            let c = incs.len();
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::INC_BUFFER_COUNTER.add(c);
+            }
             self.process_incs::<EDGE_KIND_NURSERY>(
                 AddressBuffer::Ref(&mut incs),
                 copy_context,
                 depth,
             );
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(c);
+            }
         }
         self.survival_ratio_predictor_local.sync();
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
+        }
     }
 }
 
@@ -671,6 +692,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(decs.len());
+        }
         Self {
             decs: Some(decs),
             decs_arc: None,
@@ -684,6 +708,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     pub fn new_arc(decs: Arc<Vec<ObjectReference>>, counter: LazySweepingJobsCounter) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(decs.len());
+        }
         Self {
             decs: None,
             decs_arc: Some(decs),
@@ -863,6 +890,12 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
             || lxr.previous_pause() == Some(Pause::FullTraceFast);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
+        let count = if cfg!(feature = "rust_mem_counter") {
+            self.decs.as_ref().map(|x| x.len()).unwrap_or(0)
+                + self.decs_arc.as_ref().map(|x| x.len()).unwrap_or(0)
+        } else {
+            0
+        };
         if let Some(decs) = std::mem::take(&mut self.decs) {
             self.process_decs(&decs, lxr);
         } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
@@ -872,9 +905,19 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         while !self.new_decs.is_empty() {
             decs.clear();
             self.new_decs.swap(&mut decs);
+            let c = decs.len();
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(c);
+            }
             self.process_decs(&decs, lxr);
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(c);
+            }
         }
         self.flush();
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(count);
+        }
     }
 }
 

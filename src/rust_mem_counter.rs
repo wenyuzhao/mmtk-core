@@ -43,6 +43,52 @@ static PEAK_RSS: AtomicUsize = AtomicUsize::new(0);
 static VIRT: AtomicUsize = AtomicUsize::new(0);
 static PEAK_VIRT: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) struct BufferSizeCounter {
+    name: &'static str,
+    entry_size: usize,
+    entries: AtomicUsize,
+    max_entries: AtomicUsize,
+}
+
+impl BufferSizeCounter {
+    const fn new(name: &'static str, entry_size: usize) -> Self {
+        Self {
+            name,
+            entry_size,
+            entries: AtomicUsize::new(0),
+            max_entries: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn add(&self, entries: usize) {
+        let entries = entries + self.entries.fetch_add(entries, Ordering::SeqCst);
+        self.max_entries.fetch_max(entries, Ordering::SeqCst);
+    }
+
+    pub fn sub(&self, entries: usize) {
+        self.entries.fetch_sub(entries, Ordering::SeqCst);
+    }
+
+    fn report(&self) {
+        gc_log!(
+            " - peak {}: {} bytes",
+            self.name,
+            self.max_entries.load(Ordering::SeqCst) * self.entry_size
+        );
+    }
+}
+
+pub(crate) static INC_BUFFER_COUNTER: BufferSizeCounter =
+    BufferSizeCounter::new("inc buffer size", 8);
+pub(crate) static DEC_BUFFER_COUNTER: BufferSizeCounter =
+    BufferSizeCounter::new("dec buffer size", 8);
+pub(crate) static SATB_BUFFER_COUNTER: BufferSizeCounter =
+    BufferSizeCounter::new("satb buffer size", 8);
+pub(crate) static MATURE_EVAC_REMSET_COUNTER: BufferSizeCounter =
+    BufferSizeCounter::new("mature evac remset buffer size", 16);
+pub(crate) static BLOCK_ALLOC_BUFFER_COUNTER: BufferSizeCounter =
+    BufferSizeCounter::new("block alloc buffer size", 8);
+
 pub fn dump() {
     if cfg!(feature = "rust_mem_counter") {
         update_rss();
@@ -68,6 +114,11 @@ pub fn dump() {
                 PEAK_VIRT.load(Ordering::SeqCst),
             );
         }
+        INC_BUFFER_COUNTER.report();
+        DEC_BUFFER_COUNTER.report();
+        SATB_BUFFER_COUNTER.report();
+        MATURE_EVAC_REMSET_COUNTER.report();
+        BLOCK_ALLOC_BUFFER_COUNTER.report();
     }
 }
 
