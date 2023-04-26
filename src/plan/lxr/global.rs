@@ -24,7 +24,7 @@ use crate::util::analysis::GcHookWork;
 use crate::util::constants::*;
 use crate::util::copy::*;
 use crate::util::heap::layout::vm_layout_constants::*;
-use crate::util::heap::VMRequest;
+use crate::util::heap::{PageResource, VMRequest};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
@@ -1034,18 +1034,24 @@ impl<VM: VMBinding> LXR<VM> {
 
     pub fn dump_heap_usage(&self) {
         gc_log!([3]
-            " - reserved={}M (ix-{}M, los-{}M) collection_reserve={}M defrag_headroom={}M ix_avail={}M vmmap_avail={}M",
+            " - reserved={}M (ix-{}M, los-{}M) collection_reserve={}M ix_avail={}M vmmap_avail={}M",
             self.get_reserved_pages() / 256,
             self.immix_space.reserved_pages() / 256,
             self.los().reserved_pages() / 256,
             self.get_collection_reserved_pages() / 256,
-            self.immix_space.defrag_headroom_pages() / 256,
             self.immix_space.pr.available_pages() / 256,
             if self.immix_space.common().contiguous {
                 0
             } else {
                 (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)) / 256
             },
+        );
+        gc_log!(
+            " - ix-used-size: {}M, ix-virt-size: {}M, los-used-size: {}M,  los-virt-size: {}M",
+            self.immix_space.pr.reserved_pages() * 4 / 1024,
+            self.immix_space.pr.total_chunks.load(Ordering::SeqCst) * 4,
+            self.los().pr.reserved_pages() * 4 / 1024,
+            self.los().pr.total_chunks.load(Ordering::SeqCst) * 4,
         );
         crate::rust_mem_counter::dump();
     }

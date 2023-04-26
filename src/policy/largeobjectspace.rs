@@ -35,7 +35,7 @@ const LOS_BIT_MASK: u8 = 0b11;
 /// to one Treadmill space.
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pr: FreeListPageResource<VM>,
+    pub(crate) pr: FreeListPageResource<VM>,
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill,

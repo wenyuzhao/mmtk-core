@@ -562,7 +562,11 @@ fn record_live_bytes(size: usize) {
 
 fn report_and_reset_live_bytes() {
     assert!(cfg!(feature = "lxr_satb_live_bytes_counter"));
-    gc_log!(" - live size: {} bytes", LIVE_BYTES.load(Ordering::SeqCst));
+    gc_log!(
+        " - live size: {} bytes ({}M)",
+        LIVE_BYTES.load(Ordering::SeqCst),
+        LIVE_BYTES.load(Ordering::SeqCst) >> 20
+    );
     LIVE_BYTES.store(0, Ordering::SeqCst);
 }
 

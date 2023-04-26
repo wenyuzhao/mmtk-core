@@ -71,9 +71,10 @@ impl BufferSizeCounter {
 
     fn report(&self) {
         gc_log!(
-            " - peak {}: {} bytes",
+            " - {}: {}M peak={}M",
             self.name,
-            self.max_entries.load(Ordering::SeqCst) * self.entry_size
+            self.entries.load(Ordering::SeqCst) * self.entry_size >> 20,
+            self.max_entries.load(Ordering::SeqCst) * self.entry_size >> 20,
         );
     }
 }
@@ -93,25 +94,25 @@ pub fn dump() {
     if cfg!(feature = "rust_mem_counter") {
         update_rss();
         gc_log!(
-            " - rust heap: {} bytes, peak = {} bytes",
-            GLOBAL.live_size.load(Ordering::SeqCst),
-            GLOBAL.max_live_size.load(Ordering::SeqCst),
+            " - rust heap: {}M, peak = {}M",
+            GLOBAL.live_size.load(Ordering::SeqCst) >> 20,
+            GLOBAL.max_live_size.load(Ordering::SeqCst) >> 20,
         );
         gc_log!(
-            " - mmap: {} bytes, peak = {} bytes",
-            MMAP_SIZE.load(Ordering::SeqCst),
-            PEAK_MMAP_SIZE.load(Ordering::SeqCst),
+            " - mmap: {}M, peak = {}M",
+            MMAP_SIZE.load(Ordering::SeqCst) >> 20,
+            PEAK_MMAP_SIZE.load(Ordering::SeqCst) >> 20,
         );
         if RSS.load(Ordering::SeqCst) != 0 {
             gc_log!(
-                " - VmRss: {} bytes, peak = {} bytes",
-                RSS.load(Ordering::SeqCst),
-                PEAK_RSS.load(Ordering::SeqCst),
+                " - VmRss: {}M, peak = {}M",
+                RSS.load(Ordering::SeqCst) >> 20,
+                PEAK_RSS.load(Ordering::SeqCst) >> 20,
             );
             gc_log!(
-                " - VmSize: {} bytes, peak = {} bytes",
-                VIRT.load(Ordering::SeqCst),
-                PEAK_VIRT.load(Ordering::SeqCst),
+                " - VmSize: {}M, peak = {}M",
+                VIRT.load(Ordering::SeqCst) >> 20,
+                PEAK_VIRT.load(Ordering::SeqCst) >> 20,
             );
         }
         INC_BUFFER_COUNTER.report();

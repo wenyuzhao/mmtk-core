@@ -314,7 +314,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     pool: ChunkPool<B>,
     chunk_queue: SegQueue<Chunk>,
     sync: Mutex<()>,
-    total_chunks: AtomicUsize,
+    pub(crate) total_chunks: AtomicUsize,
     _p: PhantomData<B>,
 }
 
