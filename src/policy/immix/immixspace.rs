@@ -1056,9 +1056,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
-        block.dec_dead_bytes_sloppy(
-            (Line::steps_between(&start, &end).unwrap() as u32) << Line::LOG_BYTES,
-        );
+        let num_lines = Line::steps_between(&start, &end).unwrap();
+        block.dec_dead_bytes_sloppy((num_lines as u32) << Line::LOG_BYTES);
+        if cfg!(feature = "rust_mem_counter") && !copy {
+            crate::rust_mem_counter::record_mutator_recycled_lines(num_lines);
+        }
         if self
             .block_allocation
             .concurrent_marking_in_progress_or_final_mark()
