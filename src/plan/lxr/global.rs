@@ -272,7 +272,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.immix_space.block_allocation.nursery_blocks(),
             self.immix_space.block_allocation.nursery_blocks() / 32,
         );
-        self.dump_heap_usage();
         match pause {
             Pause::FullTraceFast => self
                 .schedule_emergency_full_heap_collection::<RCImmixCollectRootEdges<VM>>(scheduler),
@@ -322,9 +321,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .add(FlushMatureEvacRemsets);
         }
         self.immix_space.prepare_rc(pause);
-        if pause == Pause::FinalMark {
-            self.dump_heap_usage();
-        }
+        // if pause == Pause::FinalMark {
+        //     self.dump_heap_usage(false);
+        // }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -373,6 +372,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
         // self.immix_space.flush_page_resource();
+        self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
 
@@ -444,7 +444,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.avail_pages_at_end_of_last_gc
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
-        self.dump_heap_usage();
+        self.dump_heap_usage(false);
         if cfg!(feature = "object_size_distribution") {
             if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
                 crate::dump_and_reset_obj_dist("Static", &mut crate::OBJ_COUNT.lock().unwrap());
@@ -1032,7 +1032,7 @@ impl<VM: VMBinding> LXR<VM> {
         &self.common.base.options
     }
 
-    pub fn dump_heap_usage(&self) {
+    pub fn dump_heap_usage(&self, gc_start: bool) {
         gc_log!([3]
             " - reserved={}M (ix-{}M, los-{}M) collection_reserve={}M ix_avail={}M vmmap_avail={}M",
             self.get_reserved_pages() / 256,
@@ -1053,6 +1053,6 @@ impl<VM: VMBinding> LXR<VM> {
             self.los().pr.reserved_pages() * 4 / 1024,
             self.los().pr.total_chunks.load(Ordering::SeqCst) * 4,
         );
-        crate::rust_mem_counter::dump();
+        crate::rust_mem_counter::dump(gc_start);
     }
 }
