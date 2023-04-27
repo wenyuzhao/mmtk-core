@@ -150,12 +150,12 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn calc_bin(live_blocks: u8) -> u8 {
-        assert_eq!(Self::BLOCKS_IN_CHUNK, 128);
+        assert!(Self::BLOCKS_IN_CHUNK >= 8);
         match live_blocks {
-            x if x >= 128 => 0,
-            x if x >= 96 => 1,
-            x if x >= 64 => 2,
-            x if x >= 32 => 3,
+            x if x >= Self::BLOCKS_IN_CHUNK as u8 => 0, // chunk is full
+            x if x >= ((3 * Self::BLOCKS_IN_CHUNK) >> 2) as u8 => 1, // chunk is 75% full
+            x if x >= (Self::BLOCKS_IN_CHUNK >> 1) as u8 => 2, // chunk is 50% full
+            x if x >= (Self::BLOCKS_IN_CHUNK >> 2) as u8 => 3, // chunk is 25% full
             _ => 4,
         }
     }
