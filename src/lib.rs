@@ -52,6 +52,7 @@ extern crate probe;
 #[macro_use]
 mod gc_log;
 mod mmtk;
+mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
 use std::{
     collections::HashMap,
@@ -552,6 +553,23 @@ fn record_obj(size: usize) {
             x.1 += size;
         })
         .or_insert((1, size));
+}
+
+static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+fn record_live_bytes(size: usize) {
+    assert!(cfg!(feature = "lxr_satb_live_bytes_counter"));
+    LIVE_BYTES.fetch_add(size, Ordering::SeqCst);
+}
+
+fn report_and_reset_live_bytes() {
+    assert!(cfg!(feature = "lxr_satb_live_bytes_counter"));
+    gc_log!(
+        " - live size: {} bytes ({}M)",
+        LIVE_BYTES.load(Ordering::SeqCst),
+        LIVE_BYTES.load(Ordering::SeqCst) >> 20
+    );
+    LIVE_BYTES.store(0, Ordering::SeqCst);
 }
 
 pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, usize)>) {

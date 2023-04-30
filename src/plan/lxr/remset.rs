@@ -55,6 +55,9 @@ impl<VM: VMBinding> RemSet<VM> {
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
                 let remset = std::mem::take(self.gc_buffer(id));
+                if cfg!(feature = "rust_mem_counter") {
+                    crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
+                }
                 mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
             }
         }
@@ -64,6 +67,9 @@ impl<VM: VMBinding> RemSet<VM> {
     fn flush(&self, id: usize, space: &ImmixSpace<VM>) {
         if self.gc_buffer(id).len() > 0 {
             let remset = std::mem::take(self.gc_buffer(id));
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
+            }
             let w = EvacuateMatureObjects::new(remset);
             space.mature_evac_remsets.lock().unwrap().push(Box::new(w));
         }
@@ -90,6 +96,9 @@ impl<VM: VMBinding> RemSet<VM> {
         space: &ImmixSpace<VM>,
         validity_state: u8,
     ) {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.add(1);
+        }
         let id = crate::gc_worker_id().unwrap();
         self.gc_buffer(id)
             .push(RemSetEntry::encode::<VM>(e, validity_state, o));

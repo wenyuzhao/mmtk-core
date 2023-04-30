@@ -480,7 +480,7 @@ impl MatureEvacuationSet {
             selected_blocks.len(),
             count1,
         );
-        lxr.dump_heap_usage();
+        // lxr.dump_heap_usage(false);
         self.num_defrag_blocks
             .store(selected_blocks.len(), Ordering::SeqCst);
         let mut defrag_blocks = self.defrag_blocks.lock().unwrap();

@@ -35,7 +35,7 @@ const LOS_BIT_MASK: u8 = 0b11;
 /// to one Treadmill space.
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pr: FreeListPageResource<VM>,
+    pub(crate) pr: FreeListPageResource<VM>,
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill,
@@ -102,6 +102,9 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 object.to_address::<VM>(),
                 (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
             );
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::record_mutator_allocated_large_object(bytes);
+            }
             return;
         }
         let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(

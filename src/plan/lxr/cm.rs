@@ -29,6 +29,9 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
+        }
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -42,6 +45,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     pub fn new_arc(objects: Arc<Vec<ObjectReference>>, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
+        }
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -152,6 +158,9 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             if cfg!(feature = "object_size_distribution") {
                 crate::record_obj(object.get_size::<VM>());
             }
+            if cfg!(feature = "lxr_satb_live_bytes_counter") {
+                crate::record_live_bytes(object.get_size::<VM>());
+            }
             for (e, t, validity) in cached_children {
                 if t.is_null() || self.rc.count(t) == 0 {
                     continue;
@@ -205,6 +214,12 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        let count = if cfg!(feature = "rust_mem_counter") {
+            self.objects.as_ref().map(|x| x.len()).unwrap_or(0)
+                + self.objects_arc.as_ref().map(|x| x.len()).unwrap_or(0)
+        } else {
+            0
+        };
         if let Some(objects) = self.objects.take() {
             self.process_objects(&objects)
         } else if let Some(objects) = self.objects_arc.take() {
@@ -214,6 +229,9 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         self.flush();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(count);
+        }
     }
 }
 
@@ -297,6 +315,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         refs: Vec<ObjectReference>,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+        }
         let mut me = Self::new(edges, false, mmtk);
         me.remset_recorded_edges = true;
         me.refs = refs;
@@ -310,6 +331,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+        }
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -403,6 +427,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 self.process_edge(self.edges[i])
             }
         }
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
+        }
         self.flush();
         if self.roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
@@ -483,6 +510,9 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
         }
+        if cfg!(feature = "lxr_satb_live_bytes_counter") {
+            crate::record_live_bytes(object.get_size::<VM>());
+        }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
@@ -518,6 +548,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+        }
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -574,6 +607,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         for i in 0..self.edges.len() {
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
+        }
         self.flush();
     }
 
@@ -586,6 +622,9 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
+        }
+        if cfg!(feature = "lxr_satb_live_bytes_counter") {
+            crate::record_live_bytes(object.get_size::<VM>());
         }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
             self.next_edges.push(e);
