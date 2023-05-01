@@ -289,6 +289,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
         self.semantics.object_reference_clone_pre(obj);
     }
 
+    fn object_probable_write(&mut self, obj: ObjectReference) {
+        self.semantics.object_probable_write_slow(obj);
+    }
+
     fn object_reference_write_pre(
         &mut self,
         src: ObjectReference,
