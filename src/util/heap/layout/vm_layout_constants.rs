@@ -110,7 +110,7 @@ impl VMLayoutConstants {
             // heap <= 2G; virtual = 3G; max-small-space=2G; min-small-space=1.5G
             heap if heap <= 2 << 30 => {
                 let end = 4usize << 30;
-                let small_space = usize::min(usize::max(heap * 3 / 2, (1 << 30) / 2 * 3), 2 << 30);
+                let small_space = 2 << 30;
                 (end, small_space)
             }
             // heap <= 29G; virtual = 31G; max-small-space=29G;
