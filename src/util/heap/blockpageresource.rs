@@ -12,7 +12,7 @@ use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
@@ -105,7 +105,10 @@ impl Iterator for ChunkListIterator {
 }
 
 struct ChunkPool<B: Region> {
+    fast_alloc_buffer: Vec<Atomic<Address>>,
+    fast_alloc_cursor: AtomicUsize,
     bins: [RwLock<ChunkList>; 5],
+    alloc_lock: Mutex<()>,
     bin_update_lock: Mutex<()>,
     _p: PhantomData<B>,
 }
@@ -118,9 +121,13 @@ impl<B: Region> ChunkPool<B> {
     const CHUNK_BIN: SideMetadataSpec = crate::util::metadata::side_metadata::spec_defs::CHUNK_BIN;
     const CHUNK_LIVE_BLOCKS: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::CHUNK_LIVE_BLOCKS;
+    // const CHUNK_ALLOC_CURSOR: SideMetadataSpec =
+    //     crate::util::metadata::side_metadata::spec_defs::CHUNK_ALLOC_CURSOR;
 
     fn new_compressed_pointers() -> Self {
         Self {
+            fast_alloc_buffer: (0..16).map(|_| Atomic::new(Address::ZERO)).collect(),
+            fast_alloc_cursor: AtomicUsize::new(16),
             bins: [
                 Default::default(),
                 Default::default(),
@@ -128,6 +135,7 @@ impl<B: Region> ChunkPool<B> {
                 Default::default(),
                 Default::default(),
             ],
+            alloc_lock: Mutex::default(),
             bin_update_lock: Mutex::default(),
             _p: PhantomData,
         }
@@ -191,7 +199,7 @@ impl<B: Region> ChunkPool<B> {
         false
     }
 
-    fn alloc_block(&self) -> Option<B> {
+    fn alloc_block_sync(&self, alloc_chunk: &impl Fn() -> Option<Chunk>) -> Option<B> {
         for bin in self.bins.iter().skip(1) {
             let bin = bin.read().unwrap();
             for c in bin.iter() {
@@ -231,10 +239,85 @@ impl<B: Region> ChunkPool<B> {
                 }
             }
         }
-        None
+        let chunk = alloc_chunk()?;
+        Some(self.alloc_block_from_new_chunk(chunk))
+    }
+
+    fn alloc_block_fast(&self) -> Option<B> {
+        let mut v = [Address::ZERO; 16];
+        for i in 0..16 {
+            v[i] = self.fast_alloc_buffer[i].load(Ordering::SeqCst);
+        }
+        let i = self
+            .fast_alloc_cursor
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |i| {
+                if i < self.fast_alloc_buffer.len() {
+                    Some(i + 1)
+                } else {
+                    None
+                }
+            })
+            .ok()?;
+        // B::BPR_ALLOC_TABLE
+        //     .unwrap()
+        //     .store_atomic(data_addr, Order, Ordering::SeqCst)
+        let a = v[i];
+        // self.fast_alloc_buffer[i].store(Address::ZERO, Ordering::SeqCst);
+        // println!("{:?}", i);
+        if a.is_zero() {
+            // unreachable!("[{}]", i);
+            return None;
+        }
+        if unsafe { B::BPR_ALLOC_TABLE.unwrap().load::<u8>(a) } == 0 {
+            unreachable!("X")
+        }
+        Some(B::from_aligned_address(a))
+    }
+
+    fn alloc_block(&self, alloc_chunk: &impl Fn() -> Option<Chunk>) -> Option<B> {
+        if let Some(b) = self.alloc_block_fast() {
+            return Some(b);
+        }
+        let _sync = self.alloc_lock.lock().unwrap();
+        // println!("alloc_block ");
+        if let Some(b) = self.alloc_block_fast() {
+            return Some(b);
+        }
+        assert_eq!(
+            self.fast_alloc_cursor.load(Ordering::SeqCst),
+            self.fast_alloc_buffer.len()
+        );
+        let mut count = 0;
+        let result = self.alloc_block_sync(alloc_chunk)?;
+
+        // for i in 0..self.fast_alloc_buffer.len() {
+        //     let b = self.alloc_block_sync().unwrap();
+        //     self.fast_alloc_buffer[i].store(b.start(), Ordering::SeqCst);
+        // }
+        // self.fast_alloc_cursor.store(0, Ordering::SeqCst);
+        for i in (0..self.fast_alloc_buffer.len()).rev() {
+            let b = self.alloc_block_sync(alloc_chunk);
+            if let Some(b) = b {
+                assert!(!b.start().is_zero(), "{}", i);
+                self.fast_alloc_buffer[i].store(b.start(), Ordering::SeqCst);
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        let c = self.fast_alloc_cursor.load(Ordering::SeqCst);
+        assert!(c >= count);
+        for i in (c - count)..self.fast_alloc_buffer.len() {
+            let c = self.fast_alloc_buffer[i].load(Ordering::SeqCst);
+            assert!(!c.is_zero(), "{} count={}", i, count);
+        }
+        println!("REFILL {:?}", c - count);
+        self.fast_alloc_cursor.fetch_sub(count, Ordering::SeqCst);
+        Some(result)
     }
 
     fn alloc_block_from_new_chunk(&self, chunk: Chunk) -> B {
+        // let _xsync = self.alloc_lock.lock().unwrap();
         for i in 0..Self::BLOCKS_IN_CHUNK {
             let b = chunk.start() + (i << Block::LOG_BYTES);
             B::BPR_ALLOC_TABLE
@@ -285,6 +368,7 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn free_block(&self, block: B, single_thread: bool) -> Option<Chunk> {
+        let _sync = self.alloc_lock.lock().unwrap();
         if single_thread {
             let me = unsafe { &mut *(self as *const Self as *mut Self) };
             return me.free_block_fast(block);
@@ -442,18 +526,18 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    fn allocate_block_fast(
-        &self,
-        reserved_pages: usize,
-        required_pages: usize,
-        tls: VMThread,
-    ) -> Option<(B, bool)> {
-        if let Some(block) = self.pool.alloc_block() {
-            self.commit_pages(reserved_pages, required_pages, tls);
-            return Some((block, false));
-        }
-        None
-    }
+    // fn allocate_block_fast(
+    //     &self,
+    //     reserved_pages: usize,
+    //     required_pages: usize,
+    //     tls: VMThread,
+    // ) -> Option<(B, bool)> {
+    //     if let Some(block) = self.pool.alloc_block() {
+    //         self.commit_pages(reserved_pages, required_pages, tls);
+    //         return Some((block, false));
+    //     }
+    //     None
+    // }
 
     fn allocate_block(
         &self,
@@ -462,18 +546,22 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         required_pages: usize,
         tls: VMThread,
     ) -> Option<(B, bool)> {
-        if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
-            return Some(result);
-        }
-        let _sync = self.sync.lock().unwrap();
-        if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
-            return Some(result);
-        }
-        if let Some(chunk) = self.alloc_chunk(space, tls) {
-            let block = self.pool.alloc_block_from_new_chunk(chunk);
+        if let Some(block) = self.pool.alloc_block(&|| self.alloc_chunk(space, tls)) {
             self.commit_pages(reserved_pages, required_pages, tls);
-            return Some((block, true));
+            return Some((block, false));
         }
+        // if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
+        //     return Some(result);
+        // }
+        // let _sync = self.sync.lock().unwrap();
+        // if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
+        //     return Some(result);
+        // }
+        // if let Some(chunk) = self.alloc_chunk(space, tls) {
+        //     let block = self.pool.alloc_block_from_new_chunk(chunk);
+        //     self.commit_pages(reserved_pages, required_pages, tls);
+        //     return Some((block, true));
+        // }
         None
     }
 
