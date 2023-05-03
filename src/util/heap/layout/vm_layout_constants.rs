@@ -107,10 +107,10 @@ impl VMLayoutConstants {
         let rounded_heap_size = (heap_size + (BYTES_IN_CHUNK - 1)) & !(BYTES_IN_CHUNK - 1);
         let mut start: usize = 0x4000_0000; // block lowest 1G
         let (end, mut small_chunk_space_size) = match rounded_heap_size {
-            // heap <= 2G; virtual = 3G; max-small-space=2G
+            // heap <= 2G; virtual = 3G; max-small-space=2G; min-small-space=1.5G
             heap if heap <= 2 << 30 => {
                 let end = 4usize << 30;
-                let small_space = usize::min(heap * 3 / 2, 2 << 30);
+                let small_space = usize::min(usize::max(heap * 3 / 2, (1 << 30) / 2 * 3), 2 << 30);
                 (end, small_space)
             }
             // heap <= 29G; virtual = 31G; max-small-space=29G;
