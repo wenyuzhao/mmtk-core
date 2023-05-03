@@ -105,7 +105,7 @@ impl Iterator for ChunkListIterator {
 }
 
 struct ChunkPool<B: Region> {
-    fast_alloc_buffer: Vec<Atomic<Address>>,
+    fast_alloc_buffer: RwLock<Vec<Atomic<Address>>>,
     fast_alloc_cursor: AtomicUsize,
     bins: [RwLock<ChunkList>; 5],
     alloc_lock: Mutex<()>,
@@ -114,6 +114,8 @@ struct ChunkPool<B: Region> {
 }
 
 impl<B: Region> ChunkPool<B> {
+    const FAST_ALLOC_BUFFER_SIZE: usize = 16;
+
     const MAX_CHUNKS: usize = 1 << (35 - LOG_BYTES_IN_CHUNK);
     const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
     const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
@@ -126,8 +128,12 @@ impl<B: Region> ChunkPool<B> {
 
     fn new_compressed_pointers() -> Self {
         Self {
-            fast_alloc_buffer: (0..16).map(|_| Atomic::new(Address::ZERO)).collect(),
-            fast_alloc_cursor: AtomicUsize::new(16),
+            fast_alloc_buffer: RwLock::new(
+                (0..Self::FAST_ALLOC_BUFFER_SIZE)
+                    .map(|_| Atomic::new(Address::ZERO))
+                    .collect(),
+            ),
+            fast_alloc_cursor: AtomicUsize::new(Self::FAST_ALLOC_BUFFER_SIZE),
             bins: [
                 Default::default(),
                 Default::default(),
@@ -244,14 +250,11 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn alloc_block_fast(&self) -> Option<B> {
-        let mut v = [Address::ZERO; 16];
-        for i in 0..16 {
-            v[i] = self.fast_alloc_buffer[i].load(Ordering::SeqCst);
-        }
+        let fast_alloc_buffer = self.fast_alloc_buffer.read().unwrap();
         let i = self
             .fast_alloc_cursor
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |i| {
-                if i < self.fast_alloc_buffer.len() {
+                if i < fast_alloc_buffer.len() {
                     Some(i + 1)
                 } else {
                     None
@@ -261,7 +264,7 @@ impl<B: Region> ChunkPool<B> {
         // B::BPR_ALLOC_TABLE
         //     .unwrap()
         //     .store_atomic(data_addr, Order, Ordering::SeqCst)
-        let a = v[i];
+        let a = fast_alloc_buffer[i].load(Ordering::Relaxed);
         // self.fast_alloc_buffer[i].store(Address::ZERO, Ordering::SeqCst);
         // println!("{:?}", i);
         if a.is_zero() {
@@ -283,9 +286,10 @@ impl<B: Region> ChunkPool<B> {
         if let Some(b) = self.alloc_block_fast() {
             return Some(b);
         }
+        let fast_alloc_buffer = self.fast_alloc_buffer.write().unwrap();
         assert_eq!(
             self.fast_alloc_cursor.load(Ordering::SeqCst),
-            self.fast_alloc_buffer.len()
+            fast_alloc_buffer.len()
         );
         let mut count = 0;
         let result = self.alloc_block_sync(alloc_chunk)?;
@@ -295,11 +299,11 @@ impl<B: Region> ChunkPool<B> {
         //     self.fast_alloc_buffer[i].store(b.start(), Ordering::SeqCst);
         // }
         // self.fast_alloc_cursor.store(0, Ordering::SeqCst);
-        for i in (0..self.fast_alloc_buffer.len()).rev() {
+        for i in (0..fast_alloc_buffer.len()).rev() {
             let b = self.alloc_block_sync(alloc_chunk);
             if let Some(b) = b {
                 assert!(!b.start().is_zero(), "{}", i);
-                self.fast_alloc_buffer[i].store(b.start(), Ordering::SeqCst);
+                fast_alloc_buffer[i].store(b.start(), Ordering::SeqCst);
                 count += 1;
             } else {
                 break;
@@ -307,11 +311,10 @@ impl<B: Region> ChunkPool<B> {
         }
         let c = self.fast_alloc_cursor.load(Ordering::SeqCst);
         assert!(c >= count);
-        for i in (c - count)..self.fast_alloc_buffer.len() {
-            let c = self.fast_alloc_buffer[i].load(Ordering::SeqCst);
+        for i in (c - count)..fast_alloc_buffer.len() {
+            let c = fast_alloc_buffer[i].load(Ordering::SeqCst);
             assert!(!c.is_zero(), "{} count={}", i, count);
         }
-        println!("REFILL {:?}", c - count);
         self.fast_alloc_cursor.fetch_sub(count, Ordering::SeqCst);
         Some(result)
     }
