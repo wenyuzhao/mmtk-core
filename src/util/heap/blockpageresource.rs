@@ -113,7 +113,7 @@ struct ChunkPool<B: Region> {
 }
 
 impl<B: Region> ChunkPool<B> {
-    const FAST_ALLOC_BUFFER_SIZE: usize = 16;
+    const FAST_ALLOC_BUFFER_SIZE: usize = 8;
 
     const MAX_CHUNKS: usize = 1 << (35 - LOG_BYTES_IN_CHUNK);
     const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
@@ -201,6 +201,49 @@ impl<B: Region> ChunkPool<B> {
         false
     }
 
+    fn alloc_block(&self) -> Option<B> {
+        for bin in self.bins.iter().skip(1) {
+            let bin = bin.read().unwrap();
+            for c in bin.iter() {
+                for i in 0..Self::BLOCKS_IN_CHUNK {
+                    let b = c.start() + (i << Block::LOG_BYTES);
+                    if unsafe { B::BPR_ALLOC_TABLE.unwrap().load::<u8>(b) } != 0 {
+                        continue;
+                    }
+                    if B::BPR_ALLOC_TABLE
+                        .unwrap()
+                        .fetch_or_atomic::<u8>(b, 1, Ordering::SeqCst)
+                        == 0
+                    {
+                        let result = Self::CHUNK_LIVE_BLOCKS.fetch_update_atomic::<u8, _>(
+                            c.start(),
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                            |x| {
+                                if x == 0 {
+                                    None
+                                } else {
+                                    Some(x + 1)
+                                }
+                            },
+                        );
+                        if let Ok(old_live_blocks) = result {
+                            if Self::cross_boundary(true, old_live_blocks + 1) {
+                                std::mem::drop(bin);
+                                self.move_chunk(c);
+                            }
+                        } else {
+                            // skip this entire chunk as this chunk may be freed
+                            break;
+                        }
+                        return Some(B::from_aligned_address(b));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn alloc_block_sync(&self, alloc_chunk: &impl Fn() -> Option<Chunk>) -> Option<B> {
         for bin in self.bins.iter().skip(1) {
             let bin = bin.read().unwrap();
@@ -261,7 +304,7 @@ impl<B: Region> ChunkPool<B> {
         Some(B::from_aligned_address(a))
     }
 
-    fn alloc_block(&self, alloc_chunk: &impl Fn() -> Option<Chunk>) -> Option<B> {
+    fn alloc_block2(&self, alloc_chunk: &impl Fn() -> Option<Chunk>) -> Option<B> {
         let fast_alloc_buffer = self.fast_alloc_buffer.read().unwrap();
         if let Some(b) = self.alloc_block_fast(&fast_alloc_buffer) {
             return Some(b);
@@ -286,12 +329,6 @@ impl<B: Region> ChunkPool<B> {
             } else {
                 break;
             }
-        }
-        let c = self.fast_alloc_cursor.load(Ordering::Relaxed);
-        debug_assert!(c >= count);
-        for i in (c - count)..fast_alloc_buffer.len() {
-            let c = fast_alloc_buffer[i].load(Ordering::Relaxed);
-            debug_assert!(!c.is_zero(), "{} count={}", i, count);
         }
         self.fast_alloc_cursor.fetch_sub(count, Ordering::Relaxed);
         Some(result)
@@ -505,6 +542,19 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
+    fn allocate_block_fast(
+        &self,
+        reserved_pages: usize,
+        required_pages: usize,
+        tls: VMThread,
+    ) -> Option<(B, bool)> {
+        if let Some(block) = self.pool.alloc_block() {
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Some((block, false));
+        }
+        None
+    }
+
     fn allocate_block(
         &self,
         space: &dyn Space<VM>,
@@ -512,9 +562,24 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         required_pages: usize,
         tls: VMThread,
     ) -> Option<(B, bool)> {
-        if let Some(block) = self.pool.alloc_block(&|| self.alloc_chunk(space, tls)) {
+        if cfg!(features = "bpr_fast_buf") {
+            if let Some(block) = self.pool.alloc_block2(&|| self.alloc_chunk(space, tls)) {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                return Some((block, false));
+            }
+            return None;
+        }
+        if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
+            return Some(result);
+        }
+        let _sync = self.sync.lock().unwrap();
+        if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
+            return Some(result);
+        }
+        if let Some(chunk) = self.alloc_chunk(space, tls) {
+            let block = self.pool.alloc_block_from_new_chunk(chunk);
             self.commit_pages(reserved_pages, required_pages, tls);
-            return Some((block, false));
+            return Some((block, true));
         }
         None
     }
