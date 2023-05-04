@@ -40,7 +40,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     mutator_recycled_blocks: Box<Vec<Block>>,
-    mutator_recycled_lines: usize,
+    pending_recycled_blocks: Box<Vec<Block>>,
     retry: bool,
 }
 
@@ -52,6 +52,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_limit = Address::ZERO;
         self.request_for_large = false;
         self.line = None;
+        self.pending_recycled_blocks.clear();
     }
 
     fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
@@ -180,7 +181,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             mutator_recycled_blocks: Box::new(vec![]),
-            mutator_recycled_lines: 0,
+            pending_recycled_blocks: Box::new(vec![]),
             retry: false,
         }
     }
@@ -265,6 +266,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
         if crate::args().no_mutator_line_recycling && !self.copy {
+            return false;
+        }
+        if cfg!(feature = "lxr_bulk_reusable_block_alloc") {
+            if self.pending_recycled_blocks.is_empty() {
+                for _ in 0..8 {
+                    if let Some(b) = self.immix_space().get_reusable_block(self.copy) {
+                        self.pending_recycled_blocks.push(b);
+                    }
+                }
+            }
+            if let Some(b) = self.pending_recycled_blocks.pop() {
+                self.line = Some(b.start_line());
+                return true;
+            }
             return false;
         }
         match self.immix_space().get_reusable_block(self.copy) {

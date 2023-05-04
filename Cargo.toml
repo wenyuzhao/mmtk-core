@@ -127,6 +127,8 @@ lxr_total_promoted_size_counter = []
 lxr_fixed_young_size = []
 lxr_satb_live_bytes_counter = []
 rust_mem_counter = []
+lxr_bulk_reusable_block_alloc = []
+bpr_seg_queue = []
 
 bpr_unprioritized = []
 bpr_freelist = []

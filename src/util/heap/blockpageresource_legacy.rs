@@ -13,6 +13,7 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
+use crossbeam::queue::SegQueue;
 use spin::RwLock;
 use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
@@ -316,6 +317,7 @@ pub struct BlockPool<B: Region> {
     global_freed_blocks: RwLock<Vec<BlockQueue<B>>>,
     /// Thread-local block queues
     worker_local_freed_blocks: Vec<BlockQueue<B>>,
+    queue: SegQueue<B>,
     /// Total number of blocks in the whole BlockQueue
     count: AtomicUsize,
 }
@@ -324,6 +326,7 @@ impl<B: Region> BlockPool<B> {
     /// Create a BlockQueue
     pub fn new(num_workers: usize) -> Self {
         Self {
+            queue: SegQueue::default(),
             head_global_freed_blocks: RwLock::new(None),
             global_freed_blocks: RwLock::new(vec![]),
             worker_local_freed_blocks: (0..num_workers).map(|_| BlockQueue::new()).collect(),
@@ -339,6 +342,10 @@ impl<B: Region> BlockPool<B> {
 
     /// Push a block to the thread-local queue
     pub fn push(&self, block: B) {
+        if cfg!(feature = "bpr_seg_queue") {
+            self.queue.push(block);
+            return;
+        }
         self.count.fetch_add(1, Ordering::SeqCst);
         let id = crate::scheduler::current_worker_ordinal().unwrap();
         let failed = unsafe {
@@ -360,6 +367,9 @@ impl<B: Region> BlockPool<B> {
     pub fn pop(&self) -> Option<B> {
         if self.len() == 0 {
             return None;
+        }
+        if cfg!(feature = "bpr_seg_queue") {
+            return self.queue.pop();
         }
         let head_global_freed_blocks = self.head_global_freed_blocks.upgradeable_read();
         if let Some(block) = head_global_freed_blocks.as_ref().and_then(|q| q.pop()) {
@@ -410,6 +420,9 @@ impl<B: Region> BlockPool<B> {
 
     /// Get total number of blocks in the whole BlockQueue
     pub fn len(&self) -> usize {
+        if cfg!(feature = "bpr_seg_queue") {
+            return self.queue.len();
+        }
         self.count.load(Ordering::SeqCst)
     }
 
