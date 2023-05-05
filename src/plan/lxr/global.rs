@@ -1072,7 +1072,6 @@ impl<VM: VMBinding> LXR<VM> {
         // 2023-05-06T00:00:00-07:00
         // 2023-05-06T07:00:00Z
         let date230506 = std::time::SystemTime::UNIX_EPOCH + hours(467599);
-        println!("{:?}", humantime::format_rfc3339(date230506).to_string());
         let new_value: usize = if t < date230506 {
             (1 << 30) >> Block::LOG_BYTES // 1 G
         } else if t < date230506 + hours(12) {
