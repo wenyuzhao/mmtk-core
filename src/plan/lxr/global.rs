@@ -38,7 +38,6 @@ use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use atomic::{Atomic, Ordering};
-use chrono::Timelike;
 use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
@@ -1068,30 +1067,26 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn update_fixed_alloc_trigger(&mut self) {
         assert!(cfg!(feature = "fixed_alloc_trigger_based_on_system_time"));
-        use chrono::{Datelike, Local};
-        let local = Local::now();
-        assert_eq!(local.month(), 5);
-        let (day, time) = (local.day(), local.time());
-        let new_value: usize = if day <= 5 {
+        let t = std::time::SystemTime::now();
+        let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
+        // 2023-05-06T00:00:00-07:00
+        // 2023-05-06T07:00:00Z
+        let date230506 = std::time::SystemTime::UNIX_EPOCH + hours(467599);
+        println!("{:?}", humantime::format_rfc3339(date230506).to_string());
+        let new_value: usize = if t < date230506 {
             (1 << 30) >> Block::LOG_BYTES // 1 G
-        } else if day < 6 {
-            if time.hour() < 12 {
-                (512 << 20) >> Block::LOG_BYTES // 512M
-            } else {
-                (256 << 20) >> Block::LOG_BYTES // 256M
-            }
-        } else if day < 7 {
-            if time.hour() < 12 {
-                (128 << 20) >> Block::LOG_BYTES // 128M
-            } else {
-                (64 << 20) >> Block::LOG_BYTES // 64M
-            }
+        } else if t < date230506 + hours(12) {
+            (512 << 20) >> Block::LOG_BYTES // 512M
+        } else if t < date230506 + hours(24) {
+            (256 << 20) >> Block::LOG_BYTES // 256M
+        } else if t < date230506 + hours(36) {
+            (128 << 20) >> Block::LOG_BYTES // 128M
+        } else if t < date230506 + hours(48) {
+            (64 << 20) >> Block::LOG_BYTES // 64M
+        } else if t < date230506 + hours(60) {
+            (2 << 30) >> Block::LOG_BYTES // 2G
         } else {
-            if time.hour() < 12 {
-                (2 << 30) >> Block::LOG_BYTES // 2G
-            } else {
-                (4 << 30) >> Block::LOG_BYTES // 4G
-            }
+            (4 << 30) >> Block::LOG_BYTES // 4G
         };
         if new_value != self.nursery_blocks.unwrap() {
             gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
