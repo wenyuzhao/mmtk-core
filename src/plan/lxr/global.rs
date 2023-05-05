@@ -1067,25 +1067,19 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn update_fixed_alloc_trigger(&mut self) {
         assert!(cfg!(feature = "fixed_alloc_trigger_based_on_system_time"));
-        let t = std::time::SystemTime::now();
         let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
-        // 2023-05-06T00:00:00-07:00
-        // 2023-05-06T07:00:00Z
-        let date230506 = std::time::SystemTime::UNIX_EPOCH + hours(467599);
-        let new_value: usize = if t < date230506 {
-            (1 << 30) >> Block::LOG_BYTES // 1 G
-        } else if t < date230506 + hours(12) {
-            (512 << 20) >> Block::LOG_BYTES // 512M
-        } else if t < date230506 + hours(24) {
-            (256 << 20) >> Block::LOG_BYTES // 256M
-        } else if t < date230506 + hours(36) {
-            (128 << 20) >> Block::LOG_BYTES // 128M
-        } else if t < date230506 + hours(48) {
-            (64 << 20) >> Block::LOG_BYTES // 64M
-        } else if t < date230506 + hours(60) {
-            (2 << 30) >> Block::LOG_BYTES // 2G
-        } else {
-            (4 << 30) >> Block::LOG_BYTES // 4G
+        // 2023-05-05T00:00:00-07:00
+        // 2023-05-05T07:00:00Z
+        let date230505 = std::time::SystemTime::UNIX_EPOCH + hours(467575);
+        let d = SystemTime::now().duration_since(date230505).unwrap();
+        let hrs = (d.as_secs() / 3600) % 24;
+        let new_value: usize = match hrs {
+            _ if hrs < 4 => (2 << 30) >> Block::LOG_BYTES,    // 2G
+            _ if hrs < 8 => (1 << 30) >> Block::LOG_BYTES,    // 1G
+            _ if hrs < 12 => (512 << 20) >> Block::LOG_BYTES, // 512M
+            _ if hrs < 16 => (256 << 20) >> Block::LOG_BYTES, // 256M
+            _ if hrs < 20 => (128 << 20) >> Block::LOG_BYTES, // 128M
+            _ => (64 << 20) >> Block::LOG_BYTES,              // 64M
         };
         if new_value != self.nursery_blocks.unwrap() {
             gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
