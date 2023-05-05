@@ -45,6 +45,7 @@ itertools = "0.10.5"
 sys-info = "0.9"
 regex = "1.7.0"
 probe = { version = "0.3", optional = true }
+chrono = "0.4.24"
 # static_assertions = "1.1.0"
 
 [dev-dependencies]
@@ -127,6 +128,8 @@ lxr_total_promoted_size_counter = []
 lxr_fixed_young_size = []
 lxr_satb_live_bytes_counter = []
 rust_mem_counter = []
+
+fixed_alloc_trigger_based_on_system_time = []
 
 bpr_unprioritized = []
 bpr_freelist = []

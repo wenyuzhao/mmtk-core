@@ -38,6 +38,7 @@ use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use atomic::{Atomic, Ordering};
+use chrono::Timelike;
 use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
@@ -340,6 +341,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             pause == Pause::FullTraceFast || pause == Pause::FinalMark,
         );
         self.immix_space.release_rc(pause);
+        self.update_fixed_alloc_trigger();
         // swap roots
         let mut prev_roots = self.prev_roots.write().unwrap();
         let mut curr_roots = self.curr_roots.write().unwrap();
@@ -563,6 +565,8 @@ impl<VM: VMBinding> LXR<VM> {
             rc: RefCountHelper::NEW,
             gc_cause: Atomic::new(GCCause::Unknown),
         });
+
+        lxr.update_fixed_alloc_trigger();
 
         lxr.gc_init(&options);
 
@@ -1060,5 +1064,38 @@ impl<VM: VMBinding> LXR<VM> {
             self.los().pr.total_chunks.load(Ordering::SeqCst) * 4,
         );
         crate::rust_mem_counter::dump(gc_start);
+    }
+
+    fn update_fixed_alloc_trigger(&mut self) {
+        assert!(cfg!(feature = "fixed_alloc_trigger_based_on_system_time"));
+        use chrono::{Datelike, Local};
+        let local = Local::now();
+        assert_eq!(local.month(), 5);
+        let (day, time) = (local.day(), local.time());
+        let new_value: usize = if day <= 5 {
+            (1 << 30) >> Block::LOG_BYTES // 1 G
+        } else if day < 6 {
+            if time.hour() < 12 {
+                (512 << 20) >> Block::LOG_BYTES // 512M
+            } else {
+                (256 << 20) >> Block::LOG_BYTES // 256M
+            }
+        } else if day < 7 {
+            if time.hour() < 12 {
+                (128 << 20) >> Block::LOG_BYTES // 128M
+            } else {
+                (64 << 20) >> Block::LOG_BYTES // 64M
+            }
+        } else {
+            if time.hour() < 12 {
+                (2 << 30) >> Block::LOG_BYTES // 2G
+            } else {
+                (4 << 30) >> Block::LOG_BYTES // 4G
+            }
+        };
+        if new_value != self.nursery_blocks.unwrap() {
+            gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
+            self.nursery_blocks = Some(new_value);
+        }
     }
 }
