@@ -5,10 +5,7 @@ use std::{
 
 use atomic::Ordering;
 
-use crate::{
-    policy::immix::line::Line,
-    util::{constants::LOG_BYTES_IN_PAGE, linear_scan::Region},
-};
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 
 struct SystemAllocatorWithCounter {
     live_size: AtomicUsize,
@@ -93,7 +90,7 @@ pub(crate) static MATURE_EVAC_REMSET_COUNTER: BufferSizeCounter =
 pub(crate) static BLOCK_ALLOC_BUFFER_COUNTER: BufferSizeCounter =
     BufferSizeCounter::new("block alloc buffer size", 8);
 
-pub fn dump(gc_start: bool) {
+pub fn dump(_gc_start: bool) {
     if cfg!(feature = "rust_mem_counter") {
         update_rss();
         gc_log!(
@@ -123,9 +120,6 @@ pub fn dump(gc_start: bool) {
         SATB_BUFFER_COUNTER.report();
         MATURE_EVAC_REMSET_COUNTER.report();
         BLOCK_ALLOC_BUFFER_COUNTER.report();
-        if gc_start {
-            dump_and_reset_mutator_alloc_counters();
-        }
     }
 }
 
@@ -157,32 +151,4 @@ pub fn update_rss() {
             _ => {}
         }
     }
-}
-
-static MUTATOR_RECYCLED_LINES: AtomicUsize = AtomicUsize::new(0);
-
-pub fn record_mutator_recycled_lines(count: usize) {
-    if cfg!(feature = "rust_mem_counter") {
-        MUTATOR_RECYCLED_LINES.fetch_add(count, Ordering::SeqCst);
-    }
-}
-
-static MUTATOR_ALLOC_LOS_SIZE: AtomicUsize = AtomicUsize::new(0);
-
-pub fn record_mutator_allocated_large_object(size: usize) {
-    if cfg!(feature = "rust_mem_counter") {
-        MUTATOR_ALLOC_LOS_SIZE.fetch_add(size, Ordering::SeqCst);
-    }
-}
-
-fn dump_and_reset_mutator_alloc_counters() {
-    let count = MUTATOR_RECYCLED_LINES.load(Ordering::SeqCst);
-    gc_log!(
-        " - mutator recycled lines: {}M",
-        count << Line::LOG_BYTES >> 20
-    );
-    MUTATOR_RECYCLED_LINES.store(0, Ordering::SeqCst);
-    let bytes = MUTATOR_ALLOC_LOS_SIZE.load(Ordering::SeqCst);
-    gc_log!(" - mutator alloc large objects: {}M", bytes >> 20);
-    MUTATOR_ALLOC_LOS_SIZE.store(0, Ordering::SeqCst);
 }

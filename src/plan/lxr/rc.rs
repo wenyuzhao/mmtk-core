@@ -138,9 +138,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 s.promoted_copy_volume += o.get_size::<VM>();
             }
         });
-        #[cfg(feature = "lxr_total_promoted_size_counter")]
+        #[cfg(feature = "lxr_srv_ratio_counter")]
         self.survival_ratio_predictor_local
-            .record_total_promotion(o.get_size::<VM>());
+            .record_total_promotion(o.get_size::<VM>(), los);
         if !los {
             let in_nursery_block = Block::containing::<VM>(o).get_state() == BlockState::Nursery;
             if !copied && in_nursery_block {

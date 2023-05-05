@@ -729,6 +729,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
         self.lines_consumed
             .fetch_add(Block::LINES, Ordering::SeqCst);
+
+        #[cfg(feature = "lxr_srv_ratio_counter")]
+        if !copy {
+            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+                .ix_clean_alloc_vol
+                .fetch_add(Block::BYTES, Ordering::SeqCst);
+        }
         Some(block)
     }
 
@@ -1191,9 +1198,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let num_lines = Line::steps_between(&start, &end).unwrap();
         block.dec_dead_bytes_sloppy((num_lines as u32) << Line::LOG_BYTES);
-        if cfg!(feature = "rust_mem_counter") && !copy {
-            crate::rust_mem_counter::record_mutator_recycled_lines(num_lines);
-        }
+        #[cfg(feature = "lxr_srv_ratio_counter")]
+        crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+            .reused_alloc_vol
+            .fetch_add(num_lines << Line::LOG_BYTES, Ordering::SeqCst);
         if self
             .block_allocation
             .concurrent_marking_in_progress_or_final_mark()
