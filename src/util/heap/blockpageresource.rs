@@ -315,7 +315,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     chunk_queue: SegQueue<Chunk>,
     sync: Mutex<()>,
     pub(crate) total_chunks: AtomicUsize,
-    queue: SegQueue<B>,
+    unordered_block_queue: SegQueue<B>,
     _p: PhantomData<B>,
 }
 
@@ -384,7 +384,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
-            queue: SegQueue::new(),
+            unordered_block_queue: SegQueue::new(),
             _p: PhantomData,
         }
     }
@@ -403,7 +403,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
-            queue: SegQueue::new(),
+            unordered_block_queue: SegQueue::new(),
             _p: PhantomData,
         }
     }
@@ -452,7 +452,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         tls: VMThread,
     ) -> Option<(B, bool)> {
         let block = if cfg!(feature = "bpr_seg_queue") {
-            self.queue.pop()
+            self.unordered_block_queue.pop()
         } else {
             self.pool.alloc_block()
         };
@@ -481,7 +481,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let block = if cfg!(feature = "bpr_seg_queue") {
                 for i in 1usize..ChunkPool::<B>::BLOCKS_IN_CHUNK {
                     let b = B::from_aligned_address(chunk.start() + (i << Block::LOG_BYTES));
-                    self.queue.push(b);
+                    self.unordered_block_queue.push(b);
                 }
                 B::from_aligned_address(chunk.start())
             } else {
@@ -497,7 +497,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
         if cfg!(feature = "bpr_seg_queue") {
-            self.queue.push(block);
+            self.unordered_block_queue.push(block);
         } else {
             if let Some(chunk) = self.pool.free_block(block, single_thread) {
                 self.free_chunk(chunk)
