@@ -2,7 +2,7 @@ use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
 use crate::util::constants::*;
-use crate::util::heap::blockpageresource_legacy::BlockPool;
+use crate::util::heap::blockpageresource_legacy::{BlockPool, BULK_SIZE};
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
@@ -784,6 +784,10 @@ impl ReusableBlockPool {
     /// Pop a block out of the list.
     pub fn pop(&self) -> Option<Block> {
         self.queue.pop()
+    }
+
+    pub fn bulk_pop(&self) -> Option<[Block; BULK_SIZE]> {
+        self.queue.pop_bulk()
     }
 
     /// Clear the list.

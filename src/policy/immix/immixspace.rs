@@ -30,6 +30,7 @@ use crate::{
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
+use std::cell::UnsafeCell;
 use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -738,7 +739,30 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             return None;
         }
         loop {
-            if let Some(block) = self.reusable_blocks.pop() {
+            let pop_result = if cfg!(feature = "bpr_block_ops_high_granularity") {
+                use crate::util::heap::blockpageresource_legacy::BULK_SIZE;
+                thread_local! {
+                    static BLOCKS: UnsafeCell<([Block; BULK_SIZE], usize)> = UnsafeCell::new(([Block::from_aligned_address(Address::ZERO); BULK_SIZE], BULK_SIZE));
+                }
+                BLOCKS.with(|blocks| {
+                    let (blocks, i) = unsafe { &mut *blocks.get() };
+                    if *i == blocks.len() {
+                        let new_blocks = self.reusable_blocks.bulk_pop()?;
+                        *blocks = new_blocks;
+                        *i = 0;
+                    }
+                    for j in *i..blocks.len() {
+                        if !blocks[j].is_zero() {
+                            *i = j + 1;
+                            return Some(blocks[j]);
+                        }
+                    }
+                    None
+                })
+            } else {
+                self.reusable_blocks.pop()
+            };
+            if let Some(block) = pop_result {
                 // Skip blocks that should be evacuated.
                 if copy && block.is_defrag_source() {
                     continue;

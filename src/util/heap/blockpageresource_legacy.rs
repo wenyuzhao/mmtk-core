@@ -305,6 +305,8 @@ impl<B: Region> BlockQueue<B> {
     }
 }
 
+pub const BULK_SIZE: usize = 8;
+
 /// A block queue which contains a global pool and a set of thread-local queues.
 ///
 /// Mutator or collector threads always allocate blocks by poping from the global pool。
@@ -318,6 +320,8 @@ pub struct BlockPool<B: Region> {
     /// Thread-local block queues
     worker_local_freed_blocks: Vec<BlockQueue<B>>,
     queue: SegQueue<B>,
+    queue2: SegQueue<[B; BULK_SIZE]>,
+    worker_local_freed_blocks2: Vec<([B; BULK_SIZE], usize)>,
     /// Total number of blocks in the whole BlockQueue
     count: AtomicUsize,
 }
@@ -327,9 +331,13 @@ impl<B: Region> BlockPool<B> {
     pub fn new(num_workers: usize) -> Self {
         Self {
             queue: SegQueue::default(),
+            queue2: SegQueue::default(),
             head_global_freed_blocks: RwLock::new(None),
             global_freed_blocks: RwLock::new(vec![]),
             worker_local_freed_blocks: (0..num_workers).map(|_| BlockQueue::new()).collect(),
+            worker_local_freed_blocks2: (0..num_workers)
+                .map(|_| ([B::from_aligned_address(Address::ZERO); BULK_SIZE], 0))
+                .collect(),
             count: AtomicUsize::new(0),
         }
     }
@@ -343,7 +351,24 @@ impl<B: Region> BlockPool<B> {
     /// Push a block to the thread-local queue
     pub fn push(&self, block: B) {
         if cfg!(feature = "bpr_seg_queue") {
-            self.queue.push(block);
+            if cfg!(feature = "bpr_block_ops_high_granularity") {
+                let id = crate::scheduler::current_worker_ordinal().unwrap();
+                let (q, i) = unsafe {
+                    &mut *(&self.worker_local_freed_blocks2[id] as *const ([B; BULK_SIZE], usize)
+                        as *mut ([B; BULK_SIZE], usize))
+                };
+                q[*i] = block;
+                *i += 1;
+                if *i == q.len() {
+                    // flush
+                    let mut q2 = [B::from_aligned_address(Address::ZERO); BULK_SIZE];
+                    std::mem::swap(q, &mut q2);
+                    self.queue2.push(q2);
+                    *i = 0;
+                }
+            } else {
+                self.queue.push(block);
+            }
             return;
         }
         self.count.fetch_add(1, Ordering::SeqCst);
@@ -363,12 +388,18 @@ impl<B: Region> BlockPool<B> {
         }
     }
 
+    pub fn pop_bulk(&self) -> Option<[B; BULK_SIZE]> {
+        assert!(cfg!(feature = "bpr_block_ops_high_granularity"));
+        return self.queue2.pop();
+    }
+
     /// Pop a block from the global pool
     pub fn pop(&self) -> Option<B> {
         if self.len() == 0 {
             return None;
         }
         if cfg!(feature = "bpr_seg_queue") {
+            assert!(!cfg!(feature = "bpr_block_ops_high_granularity"));
             return self.queue.pop();
         }
         let head_global_freed_blocks = self.head_global_freed_blocks.upgradeable_read();
@@ -406,11 +437,24 @@ impl<B: Region> BlockPool<B> {
                 self.global_freed_blocks.write().push(queue)
             }
         }
+        if cfg!(feature = "bpr_block_ops_high_granularity") {
+            let (q, i) = unsafe {
+                &mut *(&self.worker_local_freed_blocks2[id] as *const ([B; BULK_SIZE], usize)
+                    as *mut ([B; BULK_SIZE], usize))
+            };
+            if *i == 0 {
+                return;
+            }
+            let mut q2 = [B::from_aligned_address(Address::ZERO); BULK_SIZE];
+            std::mem::swap(q, &mut q2);
+            self.queue2.push(q2);
+            *i = 0;
+        }
     }
 
     /// Flush all thread-local queues to the global pool
     pub fn flush_all(&self) {
-        if self.len() == 0 {
+        if !cfg!(feature = "bpr_block_ops_high_granularity") && self.len() == 0 {
             return;
         }
         for i in 0..self.worker_local_freed_blocks.len() {
@@ -421,7 +465,11 @@ impl<B: Region> BlockPool<B> {
     /// Get total number of blocks in the whole BlockQueue
     pub fn len(&self) -> usize {
         if cfg!(feature = "bpr_seg_queue") {
-            return self.queue.len();
+            if cfg!(feature = "bpr_block_ops_high_granularity") {
+                return self.queue2.len() << 3;
+            } else {
+                return self.queue.len();
+            }
         }
         self.count.load(Ordering::SeqCst)
     }

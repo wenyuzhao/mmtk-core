@@ -129,7 +129,7 @@ lxr_satb_live_bytes_counter = []
 rust_mem_counter = []
 lxr_bulk_reusable_block_alloc = []
 bpr_seg_queue = []
-bpr_fast_buf = []
+bpr_block_ops_high_granularity = []
 
 bpr_unprioritized = []
 bpr_freelist = []
