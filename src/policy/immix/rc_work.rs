@@ -65,14 +65,16 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 continue;
             }
             // This is a block in a fragmented chunk?
-            let live_blocks_in_chunk = lxr
-                .immix_space
-                .pr
-                .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
-            if live_blocks_in_chunk < threshold {
-                let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
-                blocks_in_fragmented_chunks.push((block, dead_blocks));
-                continue;
+            if !cfg!(feature = "bpr_seg_queue") {
+                let live_blocks_in_chunk = lxr
+                    .immix_space
+                    .pr
+                    .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
+                if live_blocks_in_chunk < threshold {
+                    let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
+                    blocks_in_fragmented_chunks.push((block, dead_blocks));
+                    continue;
+                }
             }
             // This is a fragmented block?
             let score = if crate::args::HOLE_COUNTING {
@@ -101,14 +103,16 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             .fragmented_blocks
             .push(fragmented_blocks);
         // Flush to global blocks_in_fragmented_chunks
-        lxr.immix_space
-            .evac_set
-            .blocks_in_fragmented_chunks_size
-            .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
-        lxr.immix_space
-            .evac_set
-            .blocks_in_fragmented_chunks
-            .push(blocks_in_fragmented_chunks);
+        if blocks_in_fragmented_chunks.len() != 0 {
+            lxr.immix_space
+                .evac_set
+                .blocks_in_fragmented_chunks_size
+                .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
+            lxr.immix_space
+                .evac_set
+                .blocks_in_fragmented_chunks
+                .push(blocks_in_fragmented_chunks);
+        }
 
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             lxr.immix_space
@@ -467,11 +471,13 @@ impl MatureEvacuationSet {
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
-        self.select_blocks_in_fragmented_chunks(
-            &mut selected_blocks,
-            &mut copy_bytes,
-            max_copy_bytes,
-        );
+        if !cfg!(feature = "bpr_seg_queue") {
+            self.select_blocks_in_fragmented_chunks(
+                &mut selected_blocks,
+                &mut copy_bytes,
+                max_copy_bytes,
+            );
+        }
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         gc_log!([2]
