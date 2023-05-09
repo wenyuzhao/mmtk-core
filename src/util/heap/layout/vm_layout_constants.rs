@@ -14,7 +14,7 @@ use crate::util::conversions::{chunk_align_down, chunk_align_up};
  * this determines the growth factor of the large contiguous spaces
  * that we provide.
  */
-pub const LOG_BYTES_IN_CHUNK: usize = 22;
+pub const LOG_BYTES_IN_CHUNK: usize = if cfg!(feature = "chunk_32m") { 25 } else { 22 };
 
 /** Coarsest unit of address space allocation. */
 pub const BYTES_IN_CHUNK: usize = 1 << LOG_BYTES_IN_CHUNK;

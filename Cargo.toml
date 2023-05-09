@@ -75,6 +75,11 @@ field_barrier_validation = []
 force_zeroing = []
 no_map_fixed_noreplace = []
 
+ss_los_16m = []
+ss_tlab_2m = []
+ss_tlab_4k = []
+chunk_32m = []
+
 # IX Features
 ix_block_only = []
 ix_no_defrag = []
