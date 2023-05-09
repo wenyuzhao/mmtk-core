@@ -76,8 +76,16 @@ force_zeroing = []
 no_map_fixed_noreplace = []
 
 ss_los_16m = []
-ss_tlab_2m = []
 ss_tlab_4k = []
+ss_tlab_8k = []
+ss_tlab_16k = []
+ss_tlab_32k = []
+ss_tlab_64k = []
+ss_tlab_128k = []
+ss_tlab_256k = []
+ss_tlab_512k = []
+ss_tlab_1m = []
+ss_tlab_2m = []
 chunk_32m = []
 
 # IX Features
