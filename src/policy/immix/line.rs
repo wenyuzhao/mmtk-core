@@ -268,6 +268,17 @@ impl UintType for Uint<128> {
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Eq, PartialEq)]
+pub struct UInt256([u8; 256 / 8]);
+
+impl UintType for Uint<256> {
+    type Type = UInt256;
+    fn is_zero(v: Self::Type) -> bool {
+        v == UInt256([0; 256 / 8])
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct UInt512([u8; 512 / 8]);
 
 impl UintType for Uint<512> {
