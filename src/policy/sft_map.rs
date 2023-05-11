@@ -163,7 +163,7 @@ mod space_map {
         }
 
         fn addr_to_index(addr: Address) -> usize {
-            addr.and(Self::ADDRESS_MASK) >> VM_LAYOUT_CONSTANTS.log_space_extent
+            1 + ((addr - VM_LAYOUT_CONSTANTS.heap_start) >> VM_LAYOUT_CONSTANTS.log_space_extent)
         }
 
         fn index_to_space_start(i: usize) -> Address {

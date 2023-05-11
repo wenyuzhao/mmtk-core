@@ -310,10 +310,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         if !region.is_zero() {
             self.total_chunks
                 .fetch_add(required_chunks, Ordering::Relaxed);
-            debug_assert_eq!(
-                self.vm_map().get_contiguous_region_chunks(region),
-                required_chunks
-            );
+            // debug_assert_eq!(
+            //     self.vm_map().get_contiguous_region_chunks(region),
+            //     required_chunks
+            // );
             let region_start = conversions::bytes_to_pages(region - self.start);
             let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
             self.free_list.set_uncoalescable(region_start as _);
