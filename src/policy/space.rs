@@ -168,14 +168,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// Ensure this space is marked as mapped -- used when the space is already
     /// mapped (e.g. for a vm image which is externally mmapped.)
     fn ensure_mapped(&self) {
-        if self
-            .get_page_resource()
-            .common()
-            .metadata
-            .try_map_metadata_space(self.common().start, self.common().extent)
-            .is_err()
+        if let Err(_mmap_error) = crate::mmtk::MMAPPER
+            .ensure_mapped(self.common().start, self.common().extent >> 12)
+            .and(
+                self.get_page_resource()
+                    .common()
+                    .metadata
+                    .try_map_metadata_space(self.common().start, self.common().extent),
+            )
         {
-            // TODO(Javad): handle meta space allocation failure
             panic!("failed to mmap meta memory");
         }
 

@@ -149,7 +149,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         let metadata = policy_args.metadata();
         let common = CommonSpace::new(policy_args);
 
-        CopySpace {
+        let space = CopySpace {
             pr: if is_discontiguous {
                 MonotonePageResource::new_discontiguous(vm_map, metadata)
             } else {
@@ -157,7 +157,14 @@ impl<VM: VMBinding> CopySpace<VM> {
             },
             common,
             from_space: AtomicBool::new(from_space),
+        };
+
+        if !is_discontiguous {
+            gc_log!([1] "Eager map {}", space.name());
+            space.ensure_mapped();
         }
+
+        space
     }
 
     pub fn prepare(&self, from_space: bool) {

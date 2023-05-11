@@ -236,10 +236,10 @@ impl Map64 {
     }
 
     fn space_index(addr: Address) -> Option<usize> {
-        if addr > VM_LAYOUT_CONSTANTS.heap_end {
+        if addr > VM_LAYOUT_CONSTANTS.heap_end || addr < VM_LAYOUT_CONSTANTS.heap_start {
             return None;
         }
-        Some(addr >> VM_LAYOUT_CONSTANTS.space_shift_64)
+        Some((addr - VM_LAYOUT_CONSTANTS.heap_start) >> VM_LAYOUT_CONSTANTS.space_shift_64)
     }
 
     fn is_space_start(base: Address) -> bool {

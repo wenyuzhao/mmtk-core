@@ -1,9 +1,8 @@
 use super::layout::vm_layout_constants::{BYTES_IN_CHUNK, PAGES_IN_CHUNK};
 use crate::policy::space::{required_chunks, Space};
 use crate::util::address::Address;
-use crate::util::constants::LOG_BYTES_IN_PAGE;
+use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::SideMetadataContext;
-use crate::util::{conversions::*, memory};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::util::alloc::embedded_meta_data::*;
@@ -159,19 +158,19 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             self.commit_pages(reserved_pages, required_pages, tls);
 
             if new_chunk {
-                let new_chunks_start = rtn.align_up(BYTES_IN_CHUNK);
-                if let Err(mmap_error) = crate::mmtk::MMAPPER
-                    .ensure_mapped(
-                        new_chunks_start,
-                        growed_chunks << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize),
-                    )
-                    .and(self.common().metadata.try_map_metadata_space(
-                        new_chunks_start,
-                        growed_chunks << LOG_BYTES_IN_CHUNK,
-                    ))
-                {
-                    memory::handle_mmap_error::<VM>(mmap_error, tls);
-                }
+                // let new_chunks_start = rtn.align_up(BYTES_IN_CHUNK);
+                // if let Err(mmap_error) = crate::mmtk::MMAPPER
+                //     .ensure_mapped(
+                //         new_chunks_start,
+                //         growed_chunks << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize),
+                //     )
+                //     .and(self.common().metadata.try_map_metadata_space(
+                //         new_chunks_start,
+                //         growed_chunks << LOG_BYTES_IN_CHUNK,
+                //     ))
+                // {
+                //     memory::handle_mmap_error::<VM>(mmap_error, tls);
+                // }
                 space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, true);
             }
             Result::Ok(PRAllocResult {

@@ -39,7 +39,7 @@ impl SpaceDescriptor {
             let space_index = if start > VM_LAYOUT_CONSTANTS.heap_end {
                 ::std::usize::MAX
             } else {
-                start >> VM_LAYOUT_CONSTANTS.space_shift_64
+                (start - VM_LAYOUT_CONSTANTS.heap_start) >> VM_LAYOUT_CONSTANTS.space_shift_64
             };
             return SpaceDescriptor(
                 space_index << INDEX_SHIFT
@@ -102,8 +102,8 @@ impl SpaceDescriptor {
             let exponent = (descriptor & EXPONENT_MASK) >> EXPONENT_SHIFT;
             unsafe { Address::from_usize(mantissa << (BASE_EXPONENT + exponent)) }
         } else {
-            use crate::util::heap::layout::heap_parameters;
-            unsafe { Address::from_usize(self.get_index() << heap_parameters::LOG_SPACE_SIZE_64) }
+            VM_LAYOUT_CONSTANTS.heap_start
+                + (self.get_index() << VM_LAYOUT_CONSTANTS.log_space_extent)
         }
     }
 
