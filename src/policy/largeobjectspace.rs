@@ -21,15 +21,68 @@ use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
+#[cfg(feature = "los_spin_lock")]
 use spin::Mutex;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
+#[cfg(not(feature = "los_spin_lock"))]
+use std::sync::Mutex;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
 const MARK_BIT: u8 = 0b01;
 const NURSERY_BIT: u8 = 0b10;
 const LOS_BIT_MASK: u8 = 0b11;
+
+pub(super) struct ObjectCache {
+    cursor: AtomicUsize,
+    buffer: std::sync::RwLock<Vec<atomic::Atomic<ObjectReference>>>,
+}
+
+impl Default for ObjectCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ObjectCache {
+    fn new() -> Self {
+        Self {
+            cursor: AtomicUsize::new(0),
+            buffer: std::sync::RwLock::new(
+                (0..32768)
+                    .map(|_| atomic::Atomic::new(ObjectReference::NULL))
+                    .collect(),
+            ),
+        }
+    }
+
+    pub fn push(&self, o: ObjectReference) {
+        let i = self.cursor.fetch_add(1, Ordering::SeqCst);
+        let buffer = self.buffer.read().unwrap();
+        if i < buffer.len() {
+            buffer[i].store(o, Ordering::SeqCst);
+        } else {
+            // resize
+            std::mem::drop(buffer);
+            let mut buffer = self.buffer.write().unwrap();
+            if i >= buffer.len() {
+                buffer.resize_with(i << 1, || atomic::Atomic::new(ObjectReference::NULL));
+            }
+            buffer[i].store(o, Ordering::Relaxed);
+        }
+    }
+
+    fn visit_slice(&self, mut f: impl FnMut(&[atomic::Atomic<ObjectReference>])) {
+        let count = self.cursor.load(Ordering::SeqCst);
+        let blocks = self.buffer.read().unwrap();
+        f(&blocks[0..count])
+    }
+
+    fn reset(&self) {
+        self.cursor.store(0, Ordering::SeqCst);
+    }
+}
 
 /// This type implements a policy for large objects. Each instance corresponds
 /// to one Treadmill space.
@@ -40,7 +93,10 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     in_nursery_gc: bool,
     treadmill: TreadMill,
     trace_in_progress: bool,
+    #[cfg(feature = "los_nursery_seg_queue")]
     rc_nursery_objects: SegQueue<ObjectReference>,
+    #[cfg(not(feature = "los_nursery_seg_queue"))]
+    rc_nursery_objects: ObjectCache,
     rc_mature_objects: Mutex<HashSet<ObjectReference>>,
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
@@ -274,13 +330,31 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn release_rc_nursery_objects(&self) {
         debug_assert!(self.rc_enabled);
         // promote nursery objects or release dead nursery
+        #[cfg(feature = "los_spin_lock")]
         let mut mature_blocks = self.rc_mature_objects.lock();
+        #[cfg(not(feature = "los_spin_lock"))]
+        let mut mature_blocks = self.rc_mature_objects.lock().unwrap();
+        #[cfg(feature = "los_nursery_seg_queue")]
         while let Some(o) = self.rc_nursery_objects.pop() {
             if self.rc.count(o) == 0 {
                 self.release_object(o.to_address::<VM>());
             } else {
                 mature_blocks.insert(o);
             }
+        }
+        #[cfg(not(feature = "los_nursery_seg_queue"))]
+        {
+            self.rc_nursery_objects.visit_slice(|objs| {
+                for o in objs {
+                    let o = o.load(Ordering::Relaxed);
+                    if self.rc.count(o) == 0 {
+                        self.release_object(o.to_address::<VM>());
+                    } else {
+                        mature_blocks.insert(o);
+                    }
+                }
+            });
+            self.rc_nursery_objects.reset();
         }
     }
 
@@ -514,7 +588,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         lazy_free: bool,
         is_live: &impl Fn(ObjectReference) -> bool,
     ) {
+        #[cfg(feature = "los_spin_lock")]
         let mut mature_objects = self.rc_mature_objects.lock();
+        #[cfg(not(feature = "los_spin_lock"))]
+        let mut mature_objects = self.rc_mature_objects.lock().unwrap();
         let mut dead = vec![];
         for o in mature_objects.iter() {
             if !is_live(*o) {
@@ -575,7 +652,10 @@ impl RCReleaseMatureLOS {
 
     fn do_work_impl<VM: VMBinding>(&self, mmtk: &'static crate::MMTK<VM>) {
         let los = mmtk.plan.common().get_los();
+        #[cfg(feature = "los_spin_lock")]
         let mut mature_objects = los.rc_mature_objects.lock();
+        #[cfg(not(feature = "los_spin_lock"))]
+        let mut mature_objects = los.rc_mature_objects.lock().unwrap();
         let mut total_released_pages = 0;
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);

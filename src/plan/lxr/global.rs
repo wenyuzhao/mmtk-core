@@ -1066,6 +1066,9 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn update_fixed_alloc_trigger(&mut self) {
+        if !cfg!(feature = "fixed_alloc_trigger_based_on_system_time") {
+            return;
+        }
         assert!(cfg!(feature = "fixed_alloc_trigger_based_on_system_time"));
         let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
         // 2023-05-05T00:00:00-07:00

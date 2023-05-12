@@ -147,6 +147,10 @@ fixed_alloc_trigger_based_on_system_time = []
 bpr_unprioritized = []
 bpr_freelist = []
 freelist_best_fit_alloc = []
+bpr_seg_queue = []
+bpr_spin_lock = []
+los_spin_lock = []
+los_nursery_seg_queue = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
