@@ -207,6 +207,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_reference_types", *options.no_reference_types);
     dump_feature!("workers", *options.threads);
     dump_feature!("address_space", VMLayoutConstants::get_address_space());
+    dump_feature!("bpr_spin_lock");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 

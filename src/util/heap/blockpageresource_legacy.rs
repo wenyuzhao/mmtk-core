@@ -13,7 +13,6 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
-use crossbeam::queue::SegQueue;
 #[cfg(feature = "bpr_spin_lock")]
 use spin::RwLock;
 use std::cell::UnsafeCell;
@@ -314,13 +313,10 @@ impl<B: Region> BlockQueue<B> {
 ///
 /// Collector threads free blocks to their thread-local queues, and then flush to the global pools before GC ends.
 pub struct BlockPool<B: Region> {
-    /// First global BlockArray for fast allocation
-    // head_global_freed_blocks: RwLock<Option<BlockQueue<B>>>,
-    /// A list of BlockArray that is flushed to the global pool
+    /// A list of global BlockArray for allocation
     global_freed_blocks: RwLock<(Option<BlockQueue<B>>, Vec<BlockQueue<B>>)>,
     /// Thread-local block queues
     worker_local_freed_blocks: Vec<BlockQueue<B>>,
-    queue: SegQueue<B>,
     /// Total number of blocks in the whole BlockQueue
     count: AtomicUsize,
 }
@@ -329,8 +325,6 @@ impl<B: Region> BlockPool<B> {
     /// Create a BlockQueue
     pub fn new(num_workers: usize) -> Self {
         Self {
-            queue: SegQueue::default(),
-            // head_global_freed_blocks: RwLock::new(None),
             global_freed_blocks: RwLock::new((None, vec![])),
             worker_local_freed_blocks: (0..num_workers).map(|_| BlockQueue::new()).collect(),
             count: AtomicUsize::new(0),
@@ -348,10 +342,6 @@ impl<B: Region> BlockPool<B> {
 
     /// Push a block to the thread-local queue
     pub fn push(&self, block: B) {
-        if cfg!(feature = "bpr_seg_queue") {
-            self.queue.push(block);
-            return;
-        }
         self.count.fetch_add(1, Ordering::SeqCst);
         let id = crate::scheduler::current_worker_ordinal().unwrap();
         let failed = unsafe {
@@ -376,9 +366,6 @@ impl<B: Region> BlockPool<B> {
     pub fn pop(&self) -> Option<B> {
         if self.len() == 0 {
             return None;
-        }
-        if cfg!(feature = "bpr_seg_queue") {
-            return self.queue.pop();
         }
         #[cfg(feature = "bpr_spin_lock")]
         let free_blocks = self.global_freed_blocks.upgradeable_read();
@@ -441,21 +428,23 @@ impl<B: Region> BlockPool<B> {
 
     /// Get total number of blocks in the whole BlockQueue
     pub fn len(&self) -> usize {
-        if cfg!(feature = "bpr_seg_queue") {
-            return self.queue.len();
-        }
         self.count.load(Ordering::SeqCst)
     }
 
-    #[cfg(feature = "bpr_spin_lock")]
     /// Iterate all the blocks in the BlockQueue
-    pub fn iterate_blocks(&self, _f: &mut impl FnMut(B)) {
-        unimplemented!()
-    }
-
-    #[cfg(not(feature = "bpr_spin_lock"))]
-    /// Iterate all the blocks in the BlockQueue
-    pub fn iterate_blocks(&self, _f: &mut impl FnMut(B)) {
-        unimplemented!()
+    pub fn iterate_blocks(&self, f: &mut impl FnMut(B)) {
+        #[cfg(feature = "bpr_spin_lock")]
+        let free_blocks = self.global_freed_blocks.read();
+        #[cfg(not(feature = "bpr_spin_lock"))]
+        let free_blocks = self.global_freed_blocks.read().unwrap();
+        for array in &free_blocks.0 {
+            array.iterate_blocks(f)
+        }
+        for array in &free_blocks.1 {
+            array.iterate_blocks(f);
+        }
+        for array in &self.worker_local_freed_blocks {
+            array.iterate_blocks(f);
+        }
     }
 }
