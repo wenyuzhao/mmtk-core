@@ -148,7 +148,11 @@ bpr_unprioritized = []
 bpr_freelist = []
 freelist_best_fit_alloc = []
 bpr_spin_lock = []
-
+bpr_seg_queue2=[]
+bpr_flpr = []
+bpr_list = []
+bpr_list_sync = []
+bpr_list_lock_free = []
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
 perf_counter = ["pfm"]

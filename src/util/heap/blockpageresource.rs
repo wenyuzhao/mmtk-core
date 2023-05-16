@@ -12,7 +12,7 @@ use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
@@ -107,6 +107,7 @@ impl Iterator for ChunkListIterator {
 struct ChunkPool<B: Region> {
     bins: [RwLock<ChunkList>; 5],
     bin_update_lock: Mutex<()>,
+    alloc_lock: Mutex<()>,
     _p: PhantomData<B>,
 }
 
@@ -129,6 +130,7 @@ impl<B: Region> ChunkPool<B> {
                 Default::default(),
             ],
             bin_update_lock: Mutex::default(),
+            alloc_lock: Mutex::default(),
             _p: PhantomData,
         }
     }
@@ -192,6 +194,8 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn alloc_block(&self) -> Option<B> {
+        #[cfg(feature = "bpr_alloc_lock")]
+        let _guard = self.alloc_lock.lock().unwrap();
         for bin in self.bins.iter().skip(1) {
             let bin = bin.read().unwrap();
             for c in bin.iter() {
@@ -235,6 +239,8 @@ impl<B: Region> ChunkPool<B> {
     }
 
     fn alloc_block_from_new_chunk(&self, chunk: Chunk) -> B {
+        #[cfg(feature = "bpr_alloc_lock")]
+        let _guard = self.alloc_lock.lock().unwrap();
         for i in 0..Self::BLOCKS_IN_CHUNK {
             let b = chunk.start() + (i << Block::LOG_BYTES);
             B::BPR_ALLOC_TABLE
@@ -308,6 +314,155 @@ impl<B: Region> ChunkPool<B> {
     }
 }
 
+pub struct BlockList<B: Region> {
+    head: Mutex<Address>,
+    cursor: AtomicUsize,
+    chunk: RwLock<Address>,
+    _p: PhantomData<B>,
+}
+
+impl<B: Region> BlockList<B> {
+    const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
+    const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
+
+    fn new() -> Self {
+        Self {
+            head: Mutex::new(Address::ZERO),
+            cursor: AtomicUsize::new(usize::MAX),
+            chunk: RwLock::new(Address::ZERO),
+            _p: PhantomData,
+        }
+    }
+
+    fn alloc(&self) -> Option<B> {
+        assert!(!cfg!(feature = "bpr_list_sync"));
+        if !cfg!(feature = "bpr_list_sync")
+            && self.cursor.load(Ordering::Relaxed) < Self::BLOCKS_IN_CHUNK
+        {
+            let chunk = *self.chunk.read().unwrap();
+            let result = self
+                .cursor
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |i| {
+                    if i < Self::BLOCKS_IN_CHUNK {
+                        Some(i + 1)
+                    } else {
+                        None
+                    }
+                });
+            if let Ok(i) = result {
+                let a = chunk + (i << B::LOG_BYTES);
+                return Some(B::from_aligned_address(a));
+            }
+            std::mem::drop(chunk);
+        }
+        let mut head = self.head.lock().unwrap();
+        if head.is_zero() {
+            None
+        } else {
+            let a = *head;
+            *head = unsafe { a.load() };
+            Some(B::from_aligned_address(a))
+        }
+    }
+
+    fn free(&self, b: B) {
+        let mut head = self.head.lock().unwrap();
+        unsafe {
+            b.start().store::<Address>(*head);
+        }
+        *head = b.start();
+    }
+
+    fn add_chunk(&self, c: Chunk) -> B {
+        if cfg!(feature = "bpr_list_sync") {
+            unimplemented!();
+        }
+        let mut chunk = self.chunk.write().unwrap();
+        *chunk = c.start();
+        self.cursor.store(1, Ordering::SeqCst);
+        B::from_aligned_address(c.start())
+    }
+}
+
+pub struct BlockList2<B: Region> {
+    head: Atomic<Address>,
+    _p: PhantomData<B>,
+}
+
+impl<B: Region> BlockList2<B> {
+    const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
+    const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
+
+    fn new() -> Self {
+        Self {
+            head: Atomic::new(Address::ZERO),
+            _p: PhantomData,
+        }
+    }
+
+    fn alloc(&self) -> Option<B> {
+        loop {
+            std::hint::spin_loop();
+            let top = self.head.load(Ordering::Relaxed);
+            if top.is_zero() {
+                return None;
+            }
+            let new_top = unsafe { top.load::<Address>() };
+            if self
+                .head
+                .compare_exchange(top, new_top, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Some(B::from_aligned_address(top));
+            }
+        }
+    }
+
+    fn free(&self, b: B) {
+        loop {
+            std::hint::spin_loop();
+            let old_top = self.head.load(Ordering::Relaxed);
+            unsafe {
+                b.start().store(old_top);
+            }
+            if self
+                .head
+                .compare_exchange(old_top, b.start(), Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+
+    fn add_chunk(&self, c: Chunk) -> B {
+        let tail = c.start() + B::BYTES;
+        let mut prev = Address::ZERO;
+        let mut head = c.start() + B::BYTES;
+        while head < c.end() {
+            unsafe { head.store(prev) };
+            prev = head;
+            head = head + B::BYTES;
+        }
+        let head = head - B::BYTES;
+        loop {
+            std::hint::spin_loop();
+            let old_top = self.head.load(Ordering::Relaxed);
+            unsafe {
+                tail.store(old_top);
+            }
+            if self
+                .head
+                .compare_exchange(old_top, head, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+        }
+        B::from_aligned_address(c.start())
+    }
+}
+
 /// A fast PageResource for fixed-size block allocation only.
 pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     flpr: FreeListPageResource<VM>,
@@ -315,6 +470,11 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     chunk_queue: SegQueue<Chunk>,
     sync: Mutex<()>,
     pub(crate) total_chunks: AtomicUsize,
+    queue: SegQueue<B>,
+    #[cfg(feature = "bpr_list_lock_free")]
+    block_list: BlockList2<B>,
+    #[cfg(not(feature = "bpr_list_lock_free"))]
+    block_list: BlockList<B>,
     _p: PhantomData<B>,
 }
 
@@ -334,6 +494,48 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         required_pages: usize,
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
+        #[cfg(feature = "bpr_list_sync")]
+        {
+            let mut head_slot = self.block_list.head.lock().unwrap();
+            if !head_slot.is_zero() {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                let a = *head_slot;
+                *head_slot = unsafe { a.load() };
+                return Ok(PRAllocResult {
+                    start: a,
+                    pages: required_pages,
+                    new_chunk: false,
+                });
+            }
+            if let Some(c) = self.alloc_chunk(space, tls) {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                let tail = c.start() + B::BYTES;
+                let mut prev = Address::ZERO;
+                let mut head = c.start() + B::BYTES;
+                while head < c.end() {
+                    unsafe { head.store(prev) };
+                    prev = head;
+                    head = head + B::BYTES;
+                }
+                let head = head - B::BYTES;
+                unsafe {
+                    tail.store::<Address>(*head_slot);
+                }
+                *head_slot = head;
+                return Ok(PRAllocResult {
+                    start: c.start(),
+                    pages: required_pages,
+                    new_chunk: false,
+                });
+            } else {
+                return Err(PRAllocFail);
+            }
+        }
+        if cfg!(feature = "bpr_flpr") {
+            return self
+                .flpr
+                .alloc_pages(space, reserved_pages, required_pages, tls);
+        }
         if let Some((block, new_chunk)) =
             self.allocate_block(space, reserved_pages, required_pages, tls)
         {
@@ -383,6 +585,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
+            queue: SegQueue::new(),
+            #[cfg(feature = "bpr_list_lock_free")]
+            block_list: BlockList2::new(),
+            #[cfg(not(feature = "bpr_list_lock_free"))]
+            block_list: BlockList::new(),
             _p: PhantomData,
         }
     }
@@ -401,6 +608,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
+            queue: SegQueue::new(),
+            #[cfg(feature = "bpr_list_lock_free")]
+            block_list: BlockList2::new(),
+            #[cfg(not(feature = "bpr_list_lock_free"))]
+            block_list: BlockList::new(),
             _p: PhantomData,
         }
     }
@@ -448,6 +660,19 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         required_pages: usize,
         tls: VMThread,
     ) -> Option<(B, bool)> {
+        if cfg!(feature = "bpr_list") {
+            if let Some(b) = self.block_list.alloc() {
+                self.commit_pages(reserved_pages, required_pages, tls);
+                return Some((b, false));
+            }
+            return None;
+        }
+        #[cfg(feature = "bpr_seg_queue2")]
+        if let Some(block) = self.queue.pop() {
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Some((block, false));
+        }
+        #[cfg(not(feature = "bpr_seg_queue2"))]
         if let Some(block) = self.pool.alloc_block() {
             self.commit_pages(reserved_pages, required_pages, tls);
             return Some((block, false));
@@ -469,8 +694,27 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Some(result) = self.allocate_block_fast(reserved_pages, required_pages, tls) {
             return Some(result);
         }
+        if cfg!(feature = "bpr_list") {
+            if let Some(chunk) = self.alloc_chunk(space, tls) {
+                let block = self.block_list.add_chunk(chunk);
+                self.commit_pages(reserved_pages, required_pages, tls);
+                return Some((block, true));
+            }
+            return None;
+        }
+        #[cfg(not(feature = "bpr_seg_queue2"))]
         if let Some(chunk) = self.alloc_chunk(space, tls) {
             let block = self.pool.alloc_block_from_new_chunk(chunk);
+            self.commit_pages(reserved_pages, required_pages, tls);
+            return Some((block, true));
+        }
+        #[cfg(feature = "bpr_seg_queue2")]
+        if let Some(chunk) = self.alloc_chunk(space, tls) {
+            for i in 1usize..16 {
+                let b = B::from_aligned_address(chunk.start() + (i << Block::LOG_BYTES));
+                self.queue.push(b);
+            }
+            let block = B::from_aligned_address(chunk.start());
             self.commit_pages(reserved_pages, required_pages, tls);
             return Some((block, true));
         }
@@ -478,8 +722,22 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn release_block(&self, block: B, single_thread: bool) {
+        if cfg!(feature = "bpr_list") {
+            let pages = 1 << Self::LOG_PAGES;
+            self.common().accounting.release(pages as _);
+            self.block_list.free(block);
+            return;
+        }
+        #[cfg(feature = "bpr_flpr")]
+        {
+            self.flpr.release_pages(block.start());
+            return;
+        }
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
+        #[cfg(feature = "bpr_seg_queue2")]
+        self.queue.push(block);
+        #[cfg(not(feature = "bpr_seg_queue2"))]
         if let Some(chunk) = self.pool.free_block(block, single_thread) {
             self.free_chunk(chunk)
         }
@@ -488,7 +746,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     pub fn flush_all(&self) {}
 
     pub(crate) fn get_live_blocks_in_chunk(&self, chunk: Chunk) -> usize {
-        ChunkPool::<B>::get_live_blocks(chunk) as _
+        #[cfg(feature = "bpr_list")]
+        return 0;
+        #[cfg(feature = "bpr_seg_queue2")]
+        return 0;
+        #[cfg(not(feature = "bpr_seg_queue2"))]
+        return ChunkPool::<B>::get_live_blocks(chunk) as _;
     }
 
     pub fn available_pages(&self) -> usize {

@@ -467,11 +467,13 @@ impl MatureEvacuationSet {
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
-        self.select_blocks_in_fragmented_chunks(
-            &mut selected_blocks,
-            &mut copy_bytes,
-            max_copy_bytes,
-        );
+        if cfg!(not(feature = "bpr_seg_queue2")) {
+            self.select_blocks_in_fragmented_chunks(
+                &mut selected_blocks,
+                &mut copy_bytes,
+                max_copy_bytes,
+            );
+        }
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         gc_log!([2]
