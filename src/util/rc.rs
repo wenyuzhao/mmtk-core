@@ -40,6 +40,11 @@ pub const RC_LOCK_BIT_SPEC: MetadataSpec = MetadataSpec::OnSide(RC_LOCK_BITS);
 
 static INC_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(0);
 
+static TOTAL_INCS: AtomicUsize = AtomicUsize::new(0);
+static ROOT_INCS: AtomicUsize = AtomicUsize::new(0);
+static MATURE_INCS: AtomicUsize = AtomicUsize::new(0);
+static NURSERY_INCS: AtomicUsize = AtomicUsize::new(0);
+
 #[repr(transparent)]
 #[derive(Debug, Copy)]
 pub struct RefCountHelper<VM: VMBinding>(PhantomData<VM>);
@@ -51,13 +56,37 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         INC_BUFFER_SIZE.load(Ordering::Relaxed)
     }
 
-    pub fn increase_inc_buffer_size(&self, delta: usize) {
-        INC_BUFFER_SIZE.store(
-            INC_BUFFER_SIZE
-                .load(Ordering::Relaxed)
-                .saturating_add(delta),
-            Ordering::Relaxed,
+    pub fn reset_and_report_inc_counters(&self) {
+        gc_log!([3] " - INCS: total={} roots={} barrier={} rec={}",
+            TOTAL_INCS.load(Ordering::Relaxed),
+            ROOT_INCS.load(Ordering::Relaxed),
+            MATURE_INCS.load(Ordering::Relaxed),
+            NURSERY_INCS.load(Ordering::Relaxed),
         );
+        TOTAL_INCS.store(0, Ordering::Relaxed);
+        ROOT_INCS.store(0, Ordering::Relaxed);
+        MATURE_INCS.store(0, Ordering::Relaxed);
+        NURSERY_INCS.store(0, Ordering::Relaxed);
+    }
+
+    pub fn flush_inc_counters(&self, total: usize, roots: usize, mature: usize, nursery: usize) {
+        TOTAL_INCS.fetch_add(total, Ordering::Relaxed);
+        ROOT_INCS.fetch_add(roots, Ordering::Relaxed);
+        MATURE_INCS.fetch_add(mature, Ordering::Relaxed);
+        NURSERY_INCS.fetch_add(nursery, Ordering::Relaxed);
+    }
+
+    pub fn increase_inc_buffer_size(&self, delta: usize) {
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            INC_BUFFER_SIZE.fetch_add(delta, Ordering::Relaxed);
+        } else {
+            INC_BUFFER_SIZE.store(
+                INC_BUFFER_SIZE
+                    .load(Ordering::Relaxed)
+                    .saturating_add(delta),
+                Ordering::Relaxed,
+            );
+        }
     }
 
     pub fn reset_inc_buffer_size(&self) {

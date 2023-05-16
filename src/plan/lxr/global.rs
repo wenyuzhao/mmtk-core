@@ -346,7 +346,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn release(&mut self, tls: VMWorkerThread) {
         let new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
-        gc_log!([3] " - updated survival ratio: {:.5}", new_ratio);
         let pause = self.current_pause().unwrap();
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
@@ -368,6 +367,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.current_pause().unwrap() == Pause::FullTraceDefrag,
             Ordering::Relaxed,
         );
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.rc.reset_and_report_inc_counters();
+        }
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
