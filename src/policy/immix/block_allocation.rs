@@ -1,6 +1,7 @@
 use super::block::BlockState;
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
+use crate::scheduler::WorkBucketStage;
 use crate::{
     plan::lxr::LXR,
     policy::space::Space,
@@ -96,7 +97,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.space = Some(space);
     }
 
-    pub fn reset_block_mark_for_mutator_reused_blocks(&self) {
+    pub fn reset_block_mark_for_mutator_reused_blocks(&self, pause: Pause) {
+        if pause == Pause::RefCount || pause == Pause::InitialMark {
+            return;
+        }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
         self.reused_blocks.visit_slice(|blocks| {
@@ -107,26 +111,47 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         });
     }
 
-    pub fn sweep_mutator_reused_blocks(&self, pause: Pause) {
-        if pause != Pause::FullTraceFast && pause != Pause::FinalMark {
-            // SATB sweep has problem scanning mutator recycled blocks.
-            // Remaing the block state as "reusing" and reset them here.
-            self.reused_blocks.visit_slice(|blocks| {
-                for b in blocks {
-                    let b = b.load(Ordering::Relaxed);
-                    self.space().add_to_possibly_dead_mature_blocks(b, false);
-                }
-            });
+    pub fn sweep_mutator_reused_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
+        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+            self.reused_blocks.reset();
+            return;
         }
+        const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
+        self.reused_blocks.visit_slice(|blocks| {
+            let total_blocks = blocks.len();
+            let stw_limit = usize::min(total_blocks, MAX_STW_SWEEP_BLOCKS);
+            // 1. STW release a limited number of blocks
+            for b in &blocks[0..stw_limit] {
+                let block = b.load(Ordering::Relaxed);
+                self.space()
+                    .add_to_possibly_dead_mature_blocks(block, false);
+            }
+            // 2. Release remaining blocks concurrently after the pause
+            if total_blocks > stw_limit {
+                let packets = blocks[stw_limit..total_blocks]
+                    .chunks(1024)
+                    .map(|c| {
+                        let blocks: Vec<Block> =
+                            c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+                        Box::new(RCLazySweepMutatorReusedBlocks::new(blocks)) as Box<dyn GCWork<VM>>
+                    })
+                    .collect();
+                scheduler.postpone_all_prioritized(packets);
+            }
+        });
         self.reused_blocks.reset();
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
     pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
+        const PARALLEL_STW_SWEEPING: bool = false;
+        const MAX_STW_SWEEP_BLOCKS: usize = (1usize << 22) >> Block::LOG_BYTES; // 4M
         let space = self.space();
         // Sweep nursery blocks
         self.nursery_blocks.visit_slice(|blocks| {
+            if PARALLEL_STW_SWEEPING {
+                return self.parallel_sweep_all_nursery_blocks(scheduler, blocks);
+            }
             let total_nursery_blocks = blocks.len();
             let stw_limit = if pause == Pause::FullTraceFast {
                 total_nursery_blocks
@@ -153,6 +178,22 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         });
         self.nursery_blocks.reset();
+    }
+
+    fn parallel_sweep_all_nursery_blocks(
+        &self,
+        scheduler: &GCWorkScheduler<VM>,
+        blocks: &[Atomic<Block>],
+    ) {
+        let total_nursery_blocks = blocks.len();
+        let packets = blocks[..total_nursery_blocks]
+            .chunks(1024)
+            .map(|c| {
+                let blocks: Vec<Block> = c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+                Box::new(RCSTWSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
+            })
+            .collect();
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
     }
 
     /// Notify a GC pahse has started
@@ -194,6 +235,29 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 }
 
+pub struct RCLazySweepMutatorReusedBlocks {
+    blocks: Vec<Block>,
+    _counter: LazySweepingJobsCounter,
+}
+
+impl RCLazySweepMutatorReusedBlocks {
+    pub fn new(blocks: Vec<Block>) -> Self {
+        Self {
+            blocks,
+            _counter: LazySweepingJobsCounter::new_decs(),
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCLazySweepMutatorReusedBlocks {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        for block in &self.blocks {
+            space.add_to_possibly_dead_mature_blocks(*block, false);
+        }
+    }
+}
+
 pub struct RCLazySweepNurseryBlocks {
     blocks: Vec<Block>,
     _counter: LazySweepingJobsCounter,
@@ -220,5 +284,28 @@ impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
         space
             .num_clean_blocks_released_lazy
             .fetch_add(released_blocks, Ordering::SeqCst);
+    }
+}
+
+pub struct RCSTWSweepNurseryBlocks {
+    blocks: Vec<Block>,
+    _counter: LazySweepingJobsCounter,
+}
+
+impl RCSTWSweepNurseryBlocks {
+    pub fn new(blocks: Vec<Block>) -> Self {
+        Self {
+            blocks,
+            _counter: LazySweepingJobsCounter::new_decs(),
+        }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for RCSTWSweepNurseryBlocks {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        for block in &self.blocks {
+            block.rc_sweep_nursery(space, false);
+        }
     }
 }

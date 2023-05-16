@@ -172,7 +172,6 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
                 self.flush_decs_and_satb();
             }
         }
-        self.lxr.rc.increase_inc_buffer_size(1);
         self.incs.push(edge);
         if self.incs.is_full() {
             self.flush_incs();
@@ -206,6 +205,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
+            self.lxr.rc.increase_inc_buffer_size(incs.len());
             self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
                 _,
                 EDGE_KIND_MATURE,

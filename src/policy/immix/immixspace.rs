@@ -501,7 +501,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.flush_page_resource();
         }
         self.block_allocation
-            .reset_block_mark_for_mutator_reused_blocks();
+            .reset_block_mark_for_mutator_reused_blocks(pause);
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
@@ -514,7 +514,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation
             .sweep_nursery_blocks(&self.scheduler, pause);
-        self.block_allocation.sweep_mutator_reused_blocks(pause);
+        self.block_allocation
+            .sweep_mutator_reused_blocks(&self.scheduler, pause);
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {

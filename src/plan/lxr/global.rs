@@ -53,6 +53,9 @@ static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static SURVIVAL_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 
+static RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(0);
+static MAX_RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(128);
+
 use mmtk_macros::PlanTraceObject;
 
 #[derive(Debug, Clone, Copy)]
@@ -281,6 +284,20 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
         }
+        if cfg!(feature = "lxr_fixed_satb_trigger") {
+            let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
+            let date230505 = std::time::SystemTime::UNIX_EPOCH + hours(467575);
+            let d = SystemTime::now().duration_since(date230505).unwrap();
+            let hrs = (d.as_secs() / 3600) % 24;
+            let new_value: usize = match hrs {
+                _ if hrs < 12 => 128,
+                _ => 512,
+            };
+            if new_value != MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) {
+                gc_log!([1] "===>>> Update SATB Trigger: {:?} <<<===", new_value);
+                MAX_RC_PAUSES_BEFORE_SATB.store(new_value, Ordering::Relaxed);
+            }
+        }
 
         // Analysis routine that is ran. It is generally recommended to take advantage
         // of the scheduling system we have in place for more performance
@@ -329,7 +346,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn release(&mut self, tls: VMWorkerThread) {
         let new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
-        gc_log!([3] " - updated survival ratio: {}", new_ratio);
         let pause = self.current_pause().unwrap();
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
@@ -351,6 +367,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.current_pause().unwrap() == Pause::FullTraceDefrag,
             Ordering::Relaxed,
         );
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.rc.reset_and_report_inc_counters();
+        }
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -673,7 +692,12 @@ impl<VM: VMBinding> LXR<VM> {
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
-        if emergency || self.base().is_user_triggered_collection() {
+        if emergency
+            || self.base().is_user_triggered_collection()
+            || self
+                .next_gc_may_perform_emergency_collection
+                .load(Ordering::Relaxed)
+        {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
                 Pause::FinalMark
             } else {
@@ -688,16 +712,22 @@ impl<VM: VMBinding> LXR<VM> {
             return Pause::FinalMark;
         }
         // Should trigger CM?
+        if cfg!(feature = "lxr_fixed_satb_trigger") {
+            if RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) + 1
+                >= MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed)
+                && !concurrent_marking_in_progress
+            {
+                return Pause::InitialMark;
+            } else {
+                return Pause::RefCount;
+            }
+        }
         if self
             .next_gc_may_perform_cycle_collection
             .load(Ordering::Relaxed)
             && !concurrent_marking_in_progress
         {
-            return if self.concurrent_marking_enabled()
-                && !self
-                    .next_gc_may_perform_emergency_collection
-                    .load(Ordering::Relaxed)
-            {
+            return if self.concurrent_marking_enabled() {
                 Pause::InitialMark
             } else {
                 Pause::FullTraceFast
@@ -789,6 +819,9 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if cfg!(feature = "lxr_fixed_satb_trigger") {
+            RC_PAUSES_BEFORE_SATB.fetch_add(1, Ordering::Relaxed);
+        }
         self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
         #[allow(clippy::collapsible_if)]
         if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
@@ -821,6 +854,9 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if cfg!(feature = "lxr_fixed_satb_trigger") {
+            RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
+        }
         self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
         if self.concurrent_marking_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
@@ -841,6 +877,9 @@ impl<VM: VMBinding> LXR<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
+        if cfg!(feature = "lxr_fixed_satb_trigger") {
+            RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
+        }
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
