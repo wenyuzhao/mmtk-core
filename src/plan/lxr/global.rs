@@ -274,7 +274,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             pause,
             self.rc.inc_buffer_size(),
             self.immix_space.block_allocation.nursery_blocks(),
-            self.immix_space.block_allocation.nursery_blocks() / 32,
+            self.immix_space.block_allocation.nursery_blocks() >> Block::LOG_BYTES,
         );
         match pause {
             Pause::FullTraceFast => self
@@ -345,7 +345,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        let new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
+        let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
