@@ -106,13 +106,13 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
-            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
-                // Size larger than a line: do large allocation
-                self.overflow_alloc(size, align, offset)
-            } else {
-                // Size smaller than a line: fit into holes
-                self.alloc_slow_hot(size, align, offset)
-            }
+            // if self.copy && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+            //     // Size larger than a line: do large allocation
+            //     self.overflow_alloc(size, align, offset)
+            // } else {
+            // Size smaller than a line: fit into holes
+            self.alloc_slow_inline(size, align, offset)
+            // }
         } else {
             // Simple bump allocation.
             fill_alignment_gap::<VM>(self.cursor, result);
@@ -211,11 +211,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// Bump allocate small objects into recyclable lines (i.e. holes).
     fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_hot", self.tls);
-        if self.acquire_recyclable_lines(size, align, offset) {
-            self.alloc(size, align, offset)
-        } else {
-            self.alloc_slow_inline(size, align, offset)
-        }
+        // if self.copy && self.acquire_recyclable_lines(size, align, offset) {
+        //     self.alloc(size, align, offset)
+        // } else {
+        self.alloc_slow_inline(size, align, offset)
+        // }
     }
 
     /// Search for recyclable lines.
@@ -264,7 +264,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
-        if crate::args().no_mutator_line_recycling && !self.copy {
+        if !self.copy {
             return false;
         }
         match self.immix_space().get_reusable_block(self.copy) {

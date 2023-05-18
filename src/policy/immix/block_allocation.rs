@@ -205,28 +205,28 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub(super) fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
-        if self.space().in_defrag() {
-            self.space().defrag.notify_new_clean_block(copy);
-        }
-        if cm_enabled && !super::BLOCK_ONLY && !self.space().rc_enabled {
-            let current_state = self.space().line_mark_state.load(Ordering::Acquire);
-            for line in block.lines() {
-                line.mark(current_state);
-            }
-        }
+        // if cm_enabled && !super::BLOCK_ONLY && !self.space().rc_enabled {
+        //     let current_state = self.space().line_mark_state.load(Ordering::Acquire);
+        //     for line in block.lines() {
+        //         line.mark(current_state);
+        //     }
+        // }
         // Initialize unlog table
-        if self.space().rc_enabled && copy {
-            block.initialize_field_unlog_table_as_unlogged::<VM>();
-        }
+        // if self.space().rc_enabled && copy {
+        //     block.initialize_field_unlog_table_as_unlogged::<VM>();
+        // }
         // Initialize mark table
-        if self.space().rc_enabled {
-            if self.concurrent_marking_in_progress_or_final_mark() {
-                block.initialize_mark_table_as_marked::<VM>();
-            } else {
-                // TODO: Performance? Is this necessary?
-                block.clear_mark_table::<VM>();
-            }
-        }
+        // if self.space().rc_enabled {
+        //     if copy {
+        //         block.initialize_field_unlog_table_as_unlogged::<VM>();
+        //     }
+        //     if self.concurrent_marking_in_progress_or_final_mark() {
+        //         block.initialize_mark_table_as_marked::<VM>();
+        //     } else {
+        //         // TODO: Performance? Is this necessary?
+        //         block.clear_mark_table::<VM>();
+        //     }
+        // }
         // println!("Alloc {:?} {}", block, copy);
         block.init(copy, false, self.space());
         if self.space().common().zeroed && !copy && cfg!(feature = "force_zeroing") {

@@ -722,14 +722,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.notify_new_clean_block(copy);
         }
         let block = Block::from_aligned_address(block_address);
-        if !copy && self.rc_enabled {
-            self.block_allocation.nursery_blocks.push(block);
-        }
+        // if !copy && self.rc_enabled {
+        //     self.block_allocation.nursery_blocks.push(block);
+        // }
         self.block_allocation
             .initialize_new_clean_block(block, copy, self.cm_enabled);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
-        self.lines_consumed
-            .fetch_add(Block::LINES, Ordering::SeqCst);
+        // self.lines_consumed
+        //     .fetch_add(Block::LINES, Ordering::SeqCst);
 
         #[cfg(feature = "lxr_srv_ratio_counter")]
         if !copy {

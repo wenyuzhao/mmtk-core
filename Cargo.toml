@@ -57,7 +57,7 @@ built = { version = "0.5.1", features = ["git2"] }
 
 [features]
 # default = ["sanity"]
-default = ["perf_counter"]
+default = ["perf_counter", "bpr_list_sync"]
 # default = []
 nontemporal = []
 satb_timer = []
@@ -150,10 +150,10 @@ bpr_unprioritized = []
 bpr_freelist = []
 freelist_best_fit_alloc = []
 bpr_spin_lock = []
-bpr_seg_queue2=[]
+bpr_seg_queue2 = []
 bpr_flpr = []
 bpr_list = []
-bpr_list_sync = []
+bpr_list_sync = ["bpr_list"]
 bpr_list_lock_free = []
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

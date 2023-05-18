@@ -352,32 +352,32 @@ impl Block {
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
         // }
-        if space.rc_enabled {
-            if !reuse {
-                self.clear_in_place_promoted();
-                debug_assert_eq!(self.get_state(), BlockState::Unallocated);
-            }
-            if !copy && reuse {
-                self.set_state(BlockState::Reusing);
-                debug_assert!(!self.is_defrag_source());
-            } else if copy {
-                if reuse {
-                    debug_assert!(!self.is_defrag_source());
-                }
-                self.set_state(BlockState::Unmarked);
-                self.set_as_defrag_source(false);
-            } else {
-                self.set_state(BlockState::Nursery);
-                self.set_as_defrag_source(false);
-            }
+        // if space.rc_enabled {
+        //     if !reuse {
+        //         self.clear_in_place_promoted();
+        //         debug_assert_eq!(self.get_state(), BlockState::Unallocated);
+        //     }
+        //     if !copy && reuse {
+        //         self.set_state(BlockState::Reusing);
+        //         debug_assert!(!self.is_defrag_source());
+        //     } else if copy {
+        //         if reuse {
+        //             debug_assert!(!self.is_defrag_source());
+        //         }
+        //         self.set_state(BlockState::Unmarked);
+        //         self.set_as_defrag_source(false);
+        //     } else {
+        //         self.set_state(BlockState::Nursery);
+        //         self.set_as_defrag_source(false);
+        //     }
+        // } else {
+        self.set_state(if copy {
+            BlockState::Marked
         } else {
-            self.set_state(if copy {
-                BlockState::Marked
-            } else {
-                BlockState::Unmarked
-            });
-            Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
-        }
+            BlockState::Unmarked
+        });
+        Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        // }
     }
 
     /// Deinitalize a block before releasing.
