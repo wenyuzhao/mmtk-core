@@ -8,7 +8,7 @@ use crate::{
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
         constants::LOG_BYTES_IN_PAGE,
-        heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK},
+        heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, PageResource},
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,
@@ -59,20 +59,24 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             threshold.max(1)
         };
         // Iterate over all blocks in this chunk
+        let has_chunk_frag_info = lxr.immix_space.pr.has_chunk_fragmentation_info();
         for block in self.chunk.iter_region::<Block>() {
             // Skip unallocated blocks.
             if MatureEvacuationSet::skip_block(block) {
                 continue;
             }
             // This is a block in a fragmented chunk?
-            let live_blocks_in_chunk = lxr
-                .immix_space
-                .pr
-                .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
-            if live_blocks_in_chunk < threshold {
-                let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
-                blocks_in_fragmented_chunks.push((block, dead_blocks));
-                continue;
+            if has_chunk_frag_info {
+                let live_blocks_in_chunk = lxr
+                    .immix_space
+                    .pr
+                    .get_live_pages_in_chunk(Chunk::from_unaligned_address(block.start()))
+                    >> Block::LOG_PAGES;
+                if live_blocks_in_chunk < threshold {
+                    let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
+                    blocks_in_fragmented_chunks.push((block, dead_blocks));
+                    continue;
+                }
             }
             // This is a fragmented block?
             let score = if crate::args::HOLE_COUNTING {
@@ -92,23 +96,27 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             }
         }
         // Flush to global fragmented_blocks
-        lxr.immix_space
-            .evac_set
-            .fragmented_blocks_size
-            .fetch_add(fragmented_blocks.len(), Ordering::SeqCst);
-        lxr.immix_space
-            .evac_set
-            .fragmented_blocks
-            .push(fragmented_blocks);
+        if !fragmented_blocks.is_empty() {
+            lxr.immix_space
+                .evac_set
+                .fragmented_blocks_size
+                .fetch_add(fragmented_blocks.len(), Ordering::SeqCst);
+            lxr.immix_space
+                .evac_set
+                .fragmented_blocks
+                .push(fragmented_blocks);
+        }
         // Flush to global blocks_in_fragmented_chunks
-        lxr.immix_space
-            .evac_set
-            .blocks_in_fragmented_chunks_size
-            .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
-        lxr.immix_space
-            .evac_set
-            .blocks_in_fragmented_chunks
-            .push(blocks_in_fragmented_chunks);
+        if !blocks_in_fragmented_chunks.is_empty() {
+            lxr.immix_space
+                .evac_set
+                .blocks_in_fragmented_chunks_size
+                .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
+            lxr.immix_space
+                .evac_set
+                .blocks_in_fragmented_chunks
+                .push(blocks_in_fragmented_chunks);
+        }
 
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             lxr.immix_space
@@ -467,11 +475,13 @@ impl MatureEvacuationSet {
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
-        self.select_blocks_in_fragmented_chunks(
-            &mut selected_blocks,
-            &mut copy_bytes,
-            max_copy_bytes,
-        );
+        if lxr.immix_space.pr.has_chunk_fragmentation_info() {
+            self.select_blocks_in_fragmented_chunks(
+                &mut selected_blocks,
+                &mut copy_bytes,
+                max_copy_bytes,
+            );
+        }
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         gc_log!([2]
