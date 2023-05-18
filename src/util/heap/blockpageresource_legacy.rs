@@ -13,10 +13,13 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
+#[cfg(feature = "bpr_spin_lock")]
 use spin::RwLock;
 use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
+#[cfg(not(feature = "bpr_spin_lock"))]
+use std::sync::RwLock;
 
 const UNINITIALIZED_WATER_MARK: i32 = -1;
 const LOCAL_BUFFER_SIZE: usize = 128;
@@ -310,10 +313,8 @@ impl<B: Region> BlockQueue<B> {
 ///
 /// Collector threads free blocks to their thread-local queues, and then flush to the global pools before GC ends.
 pub struct BlockPool<B: Region> {
-    /// First global BlockArray for fast allocation
-    head_global_freed_blocks: RwLock<Option<BlockQueue<B>>>,
-    /// A list of BlockArray that is flushed to the global pool
-    global_freed_blocks: RwLock<Vec<BlockQueue<B>>>,
+    /// A list of global BlockArray for allocation
+    global_freed_blocks: RwLock<(Option<BlockQueue<B>>, Vec<BlockQueue<B>>)>,
     /// Thread-local block queues
     worker_local_freed_blocks: Vec<BlockQueue<B>>,
     /// Total number of blocks in the whole BlockQueue
@@ -324,8 +325,7 @@ impl<B: Region> BlockPool<B> {
     /// Create a BlockQueue
     pub fn new(num_workers: usize) -> Self {
         Self {
-            head_global_freed_blocks: RwLock::new(None),
-            global_freed_blocks: RwLock::new(vec![]),
+            global_freed_blocks: RwLock::new((None, vec![])),
             worker_local_freed_blocks: (0..num_workers).map(|_| BlockQueue::new()).collect(),
             count: AtomicUsize::new(0),
         }
@@ -334,7 +334,10 @@ impl<B: Region> BlockPool<B> {
     /// Add a BlockArray to the global pool
     fn add_global_array(&self, array: BlockQueue<B>) {
         self.count.fetch_add(array.len(), Ordering::SeqCst);
-        self.global_freed_blocks.write().push(array);
+        #[cfg(feature = "bpr_spin_lock")]
+        self.global_freed_blocks.write().1.push(array);
+        #[cfg(not(feature = "bpr_spin_lock"))]
+        self.global_freed_blocks.write().unwrap().1.push(array);
     }
 
     /// Push a block to the thread-local queue
@@ -352,7 +355,10 @@ impl<B: Region> BlockPool<B> {
             debug_assert!(result.is_ok());
             let old_queue = self.worker_local_freed_blocks[id].replace(queue);
             assert!(!old_queue.is_empty());
-            self.global_freed_blocks.write().push(old_queue);
+            #[cfg(feature = "bpr_spin_lock")]
+            self.global_freed_blocks.write().1.push(old_queue);
+            #[cfg(not(feature = "bpr_spin_lock"))]
+            self.global_freed_blocks.write().unwrap().1.push(old_queue);
         }
     }
 
@@ -361,27 +367,36 @@ impl<B: Region> BlockPool<B> {
         if self.len() == 0 {
             return None;
         }
-        let head_global_freed_blocks = self.head_global_freed_blocks.upgradeable_read();
-        if let Some(block) = head_global_freed_blocks.as_ref().and_then(|q| q.pop()) {
+        #[cfg(feature = "bpr_spin_lock")]
+        let free_blocks = self.global_freed_blocks.upgradeable_read();
+        #[cfg(not(feature = "bpr_spin_lock"))]
+        let free_blocks = self.global_freed_blocks.read().unwrap();
+        if let Some(block) = free_blocks.0.as_ref().and_then(|q| q.pop()) {
             self.count.fetch_sub(1, Ordering::SeqCst);
             Some(block)
         } else {
-            let mut global_freed_blocks = self.global_freed_blocks.write();
+            #[cfg(feature = "bpr_spin_lock")]
+            let mut free_blocks = free_blocks.upgrade();
+            #[cfg(not(feature = "bpr_spin_lock"))]
+            let mut free_blocks = {
+                std::mem::drop(free_blocks);
+                self.global_freed_blocks.write().unwrap()
+            };
             // Retry fast-alloc
-            if let Some(block) = head_global_freed_blocks.as_ref().and_then(|q| q.pop()) {
+            if let Some(block) = free_blocks.0.as_ref().and_then(|q| q.pop()) {
                 self.count.fetch_sub(1, Ordering::SeqCst);
                 return Some(block);
             }
             // Get a new list of blocks for allocation
-            let blocks = global_freed_blocks.pop()?;
+            let blocks = free_blocks.1.pop()?;
             let block = blocks.pop().unwrap();
             if !blocks.is_empty() {
-                let mut head_global_freed_blocks = head_global_freed_blocks.upgrade();
-                debug_assert!(head_global_freed_blocks
+                debug_assert!(free_blocks
+                    .0
                     .as_ref()
                     .map(|blocks| blocks.is_empty())
                     .unwrap_or(true));
-                *head_global_freed_blocks = Some(blocks);
+                free_blocks.0 = Some(blocks);
             }
             self.count.fetch_sub(1, Ordering::SeqCst);
             Some(block)
@@ -393,7 +408,10 @@ impl<B: Region> BlockPool<B> {
         if !self.worker_local_freed_blocks[id].is_empty() {
             let queue = self.worker_local_freed_blocks[id].replace(BlockQueue::new());
             if !queue.is_empty() {
-                self.global_freed_blocks.write().push(queue)
+                #[cfg(feature = "bpr_spin_lock")]
+                self.global_freed_blocks.write().1.push(queue);
+                #[cfg(not(feature = "bpr_spin_lock"))]
+                self.global_freed_blocks.write().unwrap().1.push(queue);
             }
         }
     }
@@ -415,10 +433,14 @@ impl<B: Region> BlockPool<B> {
 
     /// Iterate all the blocks in the BlockQueue
     pub fn iterate_blocks(&self, f: &mut impl FnMut(B)) {
-        for array in &*self.head_global_freed_blocks.read() {
+        #[cfg(feature = "bpr_spin_lock")]
+        let free_blocks = self.global_freed_blocks.read();
+        #[cfg(not(feature = "bpr_spin_lock"))]
+        let free_blocks = self.global_freed_blocks.read().unwrap();
+        for array in &free_blocks.0 {
             array.iterate_blocks(f)
         }
-        for array in &*self.global_freed_blocks.read() {
+        for array in &free_blocks.1 {
             array.iterate_blocks(f);
         }
         for array in &self.worker_local_freed_blocks {

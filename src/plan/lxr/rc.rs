@@ -43,6 +43,10 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     pub cld_roots: bool,
     pub weak_cld_roots: bool,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
+    total_incs: usize,
+    mature_incs: usize,
+    nursery_incs: usize,
+    root_incs: usize,
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
@@ -74,6 +78,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: None,
+            total_incs: 0,
+            mature_incs: 0,
+            nursery_incs: 0,
+            root_incs: 0,
         }
     }
 
@@ -100,6 +108,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: Some(objects),
+            total_incs: 0,
+            mature_incs: 0,
+            nursery_incs: 0,
+            root_incs: 0,
         }
     }
 
@@ -121,6 +133,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             weak_cld_roots: false,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: None,
+            total_incs: 0,
+            mature_incs: 0,
+            nursery_incs: 0,
+            root_incs: 0,
         }
     }
 
@@ -447,6 +463,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 return None;
             }
         };
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.total_incs += 1;
+            if K == EDGE_KIND_MATURE {
+                self.mature_incs += 1;
+            } else if K == EDGE_KIND_ROOT {
+                self.root_incs += 1;
+            } else {
+                self.nursery_incs += 1;
+            }
+        }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         o.verify::<VM>();
         let new = if !crate::args::RC_NURSERY_EVACUATION {
@@ -608,6 +634,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 assert_eq!(KIND, EDGE_KIND_NURSERY);
                 self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
             } else if let Some(objects) = self.root_objects.take() {
+                if cfg!(feature = "lxr_precise_incs_counter") {
+                    self.total_incs += objects.len();
+                    self.root_incs += objects.len();
+                }
                 for o in objects {
                     self.process_object::<KIND>(o, copy_context);
                 }
@@ -667,6 +697,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.survival_ratio_predictor_local.sync();
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
+        }
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.rc.flush_inc_counters(
+                self.total_incs,
+                self.root_incs,
+                self.mature_incs,
+                self.nursery_incs,
+            );
         }
     }
 }

@@ -145,8 +145,11 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             debug!("update cursor = {}", tmp);
 
             /* In a contiguous space we can bump along into the next chunk, so preserve the currentChunk invariant */
-            if self.common().contiguous && chunk_align_down(sync.cursor) != sync.current_chunk {
-                let new_current_chunk = chunk_align_down(sync.cursor);
+            let mut new_current_chunk = chunk_align_down(sync.cursor);
+            if new_current_chunk == sync.cursor {
+                new_current_chunk = new_current_chunk - BYTES_IN_CHUNK;
+            }
+            if self.common().contiguous && new_current_chunk != sync.current_chunk {
                 if sync.current_chunk.is_zero() {
                     growed_chunks = 1
                         + ((new_current_chunk - sync.contiguous_start_chunk) >> LOG_BYTES_IN_CHUNK);
