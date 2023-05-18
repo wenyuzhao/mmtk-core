@@ -240,7 +240,15 @@ impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for LockFreeListBlockAlloc<B> {
         return None;
     }
 
-    fn free(&self, _bpr: &BlockPageResource<VM, B>, b: B, _single_thread: bool) {
+    fn free(&self, _bpr: &BlockPageResource<VM, B>, b: B, single_thread: bool) {
+        if single_thread {
+            let old_top = self.head.load(Ordering::Relaxed);
+            unsafe {
+                b.start().store(old_top);
+            }
+            self.head.store(b.start(), Ordering::Relaxed);
+            return;
+        }
         loop {
             std::hint::spin_loop();
             let old_top = self.head.load(Ordering::Relaxed);
