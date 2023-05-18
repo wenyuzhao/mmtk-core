@@ -592,6 +592,8 @@ pub enum RootKind {
     //   * At the end of SATB. All young and mature roots must be provided for pointer updating.
     Young,
     // This is a weak root that is newly created in the previous mutator phase.
+    // Same as young roots, decrements on these pointers can be skipped.
+    // If possible, increment can happen only once.
     Weak,
 }
 

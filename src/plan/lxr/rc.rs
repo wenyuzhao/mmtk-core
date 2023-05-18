@@ -657,7 +657,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if let Some(roots) = roots {
             if self.lxr().concurrent_marking_enabled()
                 && self.current_pause == Pause::InitialMark
-                && !self.weak_cld_roots
+                && self.root_kind != Some(RootKind::Weak)
             {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
                     for r in &roots {
@@ -674,7 +674,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
-                if !root_edges.is_empty() && !self.weak_cld_roots {
+                if !root_edges.is_empty() && self.root_kind != Some(RootKind::Weak) {
                     worker.add_work(
                         WorkBucketStage::Closure,
                         LXRStopTheWorldProcessEdges::new(root_edges, !is_young_or_weak_root, mmtk),
