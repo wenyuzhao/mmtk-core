@@ -17,10 +17,12 @@ use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
+type BlockAllocImpl<B> = BulkBlockAlloc<B>;
+
 /// A fast PageResource for fixed-size block allocation only.
 pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     flpr: FreeListPageResource<VM>,
-    block_alloc: LockFreeListBlockAlloc<B>,
+    block_alloc: BlockAllocImpl<B>,
     chunk_queue: SegQueue<Chunk>,
     sync: Mutex<()>,
     pub(crate) total_chunks: AtomicUsize,
@@ -79,7 +81,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         Self::append_local_metadata(&mut metadata);
         Self {
             flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map, metadata),
-            block_alloc: <LockFreeListBlockAlloc<B> as BlockAlloc<VM, B>>::new(),
+            block_alloc: <BlockAllocImpl<B> as BlockAlloc<VM, B>>::new(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
@@ -97,7 +99,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         Self::append_local_metadata(&mut metadata);
         Self {
             flpr: FreeListPageResource::new_discontiguous(vm_map, metadata),
-            block_alloc: <LockFreeListBlockAlloc<B> as BlockAlloc<VM, B>>::new(),
+            block_alloc: <BlockAllocImpl<B> as BlockAlloc<VM, B>>::new(),
             sync: Mutex::default(),
             chunk_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
@@ -217,6 +219,109 @@ impl<B: Region> LockFreeListBlockAlloc<B> {
 }
 
 impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for LockFreeListBlockAlloc<B> {
+    fn new() -> Self {
+        Self {
+            head: Atomic::new(Address::ZERO),
+            cursor: Atomic::new((0, Self::BLOCKS_IN_CHUNK as _)),
+            _p: PhantomData,
+        }
+    }
+
+    fn alloc(&self, bpr: &BlockPageResource<VM, B>, space: &dyn Space<VM>) -> Option<(B, bool)> {
+        if let Some(b) = self.alloc_fast() {
+            return Some((b, false));
+        }
+        let _sync = bpr.sync.lock().unwrap();
+        if let Some(b) = self.alloc_fast() {
+            return Some((b, false));
+        }
+        if let Some(chunk) = bpr.alloc_chunk(space) {
+            let block = self.add_chunk(chunk);
+            return Some((block, true));
+        }
+        return None;
+    }
+
+    fn free(&self, _bpr: &BlockPageResource<VM, B>, b: B, single_thread: bool) {
+        if single_thread {
+            let old_top = self.head.load(Ordering::Relaxed);
+            unsafe {
+                b.start().store(old_top);
+            }
+            self.head.store(b.start(), Ordering::Relaxed);
+            return;
+        }
+        loop {
+            std::hint::spin_loop();
+            let old_top = self.head.load(Ordering::Relaxed);
+            unsafe {
+                b.start().store(old_top);
+            }
+            if self
+                .head
+                .compare_exchange(old_top, b.start(), Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+}
+
+struct BulkBlockAlloc<B: Region> {
+    cursor: Atomic<(u32, u32)>,
+    head: Atomic<Address>,
+    _p: PhantomData<B>,
+}
+
+impl<B: Region> BulkBlockAlloc<B> {
+    const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
+    const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
+
+    fn alloc_fast(&self) -> Option<B> {
+        // 1. bump the cursor
+        if self.cursor.load(Ordering::Relaxed).1 < Self::BLOCKS_IN_CHUNK as u32 {
+            let result =
+                self.cursor
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |(c, b)| {
+                        if b <= Self::BLOCKS_IN_CHUNK as u32 {
+                            Some((c, b + 1))
+                        } else {
+                            None
+                        }
+                    });
+            if let Ok((c, b)) = result {
+                let c = crate::util::conversions::chunk_index_to_address(c as usize);
+                return Some(B::from_aligned_address(c + ((b as usize) << B::LOG_BYTES)));
+            }
+        }
+        // 2. pop from list
+        loop {
+            std::hint::spin_loop();
+            let top = self.head.load(Ordering::Relaxed);
+            if top.is_zero() {
+                return None;
+            }
+            let new_top = unsafe { top.load::<Address>() };
+            if self
+                .head
+                .compare_exchange(top, new_top, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Some(B::from_aligned_address(top));
+            }
+        }
+    }
+
+    fn add_chunk(&self, c: Chunk) -> B {
+        let new_cursor = c.start() + B::BYTES;
+        let chunk_index = new_cursor.chunk_index() as u32;
+        self.cursor.store((chunk_index, 1), Ordering::Relaxed);
+        B::from_aligned_address(c.start())
+    }
+}
+
+impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for BulkBlockAlloc<B> {
     fn new() -> Self {
         Self {
             head: Atomic::new(Address::ZERO),
