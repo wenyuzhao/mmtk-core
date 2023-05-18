@@ -1,4 +1,3 @@
-use super::chunk_map::Chunk;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::{FreeListPageResource, PageResource};
 use crate::policy::space::Space;
@@ -200,10 +199,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     pub fn flush_all(&self) {
         self.block_queue.flush_all()
         // TODO: For 32-bit space, we may want to free some contiguous chunks.
-    }
-
-    pub(crate) fn get_live_blocks_in_chunk(&self, _chunk: Chunk) -> usize {
-        usize::MAX
     }
 }
 
