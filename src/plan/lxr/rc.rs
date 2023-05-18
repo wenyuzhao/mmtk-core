@@ -5,6 +5,7 @@ use super::LXR;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
 use crate::scheduler::gc_work::EdgeOf;
+use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
@@ -40,8 +41,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     root_objects: Option<Vec<ObjectReference>>,
     depth: usize,
     rc: RefCountHelper<VM>,
-    pub cld_roots: bool,
-    pub weak_cld_roots: bool,
+    pub root_kind: Option<RootKind>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
     total_incs: usize,
     mature_incs: usize,
@@ -74,8 +74,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             slice: Some(slice),
             depth: 1,
             rc: RefCountHelper::NEW,
-            cld_roots: false,
-            weak_cld_roots: false,
+            root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: None,
             total_incs: 0,
@@ -104,8 +103,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
-            cld_roots: false,
-            weak_cld_roots: false,
+            root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: Some(objects),
             total_incs: 0,
@@ -129,8 +127,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
-            cld_roots: false,
-            weak_cld_roots: false,
+            root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: None,
             total_incs: 0,
@@ -480,7 +477,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             self.process_inc_and_evacuate(o, cc, depth)
         };
-        if K != EDGE_KIND_ROOT || self.cld_roots {
+        // Put this into remset if this is a young or weak root
+        if K != EDGE_KIND_ROOT
+            || self
+                .root_kind
+                .map(|r| r.is_young_or_weak())
+                .unwrap_or_default()
+        {
             self.record_mature_evac_remset(e, o, false);
         }
         if new != o {
@@ -647,6 +650,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context, self.depth)
             }
         };
+        let is_young_or_weak_root = self
+            .root_kind
+            .map(|r| r.is_young_or_weak())
+            .unwrap_or_default();
         if let Some(roots) = roots {
             if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
@@ -667,10 +674,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 if !root_edges.is_empty() {
                     worker.add_work(
                         WorkBucketStage::Closure,
-                        LXRStopTheWorldProcessEdges::new(root_edges, !self.cld_roots, mmtk),
+                        LXRStopTheWorldProcessEdges::new(root_edges, !is_young_or_weak_root, mmtk),
                     )
                 }
-            } else if !self.cld_roots {
+            } else if !is_young_or_weak_root {
                 self.lxr().curr_roots.read().unwrap().push(roots);
             }
         }
@@ -985,10 +992,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
-            if self.cld_roots {
-                w.cld_roots = true;
-                w.weak_cld_roots = self.weak_cld_roots;
-            }
+            w.root_kind = self.root_kind;
             GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }

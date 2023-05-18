@@ -577,6 +577,28 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanVMSpecificRoots<E> {
     }
 }
 
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum RootKind {
+    Strong,
+    // This is a young **strong** root that is newly created in the previous mutator phase.
+    // For LXR, these roots should
+    //   * Be swept only after SATB.
+    //   * Do RC increments to keep them alive until the and of SATB
+    //   * Skip RC decrements, and should be swept only after SATB.
+    //   * At the start of SATB. All young and mature roots must be provided for marking.
+    //   * If they're created during SATB, mark them and keep them alive.
+    //   * At the end of SATB. All young and mature roots must be provided for pointer updating.
+    Young,
+    // This is a weak root that is newly created in the previous mutator phase.
+    Weak,
+}
+
+impl RootKind {
+    pub fn is_young_or_weak(&self) -> bool {
+        *self == Self::Young || *self == Self::Weak
+    }
+}
+
 pub struct ProcessEdgesBase<VM: VMBinding> {
     pub edges: Vec<VM::VMEdge>,
     pub nodes: VectorObjectQueue,
@@ -585,8 +607,7 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     // Because a copying gc will dereference this pointer at least once for every object copy.
     worker: *mut GCWorker<VM>,
     pub roots: bool,
-    pub cld_roots: bool,
-    pub weak_cld_roots: bool,
+    pub root_kind: Option<RootKind>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
@@ -608,8 +629,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             mmtk,
             worker: std::ptr::null_mut(),
             roots,
-            cld_roots: false,
-            weak_cld_roots: false,
+            root_kind: if roots { Some(RootKind::Strong) } else { None },
         }
     }
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
@@ -800,22 +820,9 @@ impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkRootsWorkFactory<E> {
 }
 
 impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsWorkFactory<E> {
-    fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            if E::RC_ROOTS {
-                WorkBucketStage::RCProcessIncs
-            } else {
-                WorkBucketStage::Closure
-            },
-            E::new(edges, true, self.mmtk),
-        );
-    }
-
-    fn create_process_edge_roots_work_for_cld_roots(&mut self, edges: Vec<EdgeOf<E>>, weak: bool) {
+    fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>, kind: RootKind) {
         let mut w = E::new(edges, true, self.mmtk);
-        w.cld_roots = true;
-        w.weak_cld_roots = weak;
+        w.root_kind = Some(kind);
         crate::memory_manager::add_work_packet(
             self.mmtk,
             if E::RC_ROOTS {
@@ -827,11 +834,10 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
         );
     }
 
-    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
+    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>, kind: RootKind) {
         if let Some(_lxr) = self.mmtk.plan.downcast_ref::<LXR<E::VM>>() {
             let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT>::new_objects(nodes);
-            w.cld_roots = true;
-            w.weak_cld_roots = false;
+            w.root_kind = Some(kind);
             crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::RCProcessIncs, w);
         } else {
             let process_edges_work = E::new(vec![], true, self.mmtk);

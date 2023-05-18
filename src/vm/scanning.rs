@@ -1,4 +1,5 @@
 use crate::plan::Mutator;
+use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::GCWorker;
 use crate::util::Address;
 use crate::util::ObjectReference;
@@ -114,11 +115,7 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     ///
     /// Arguments:
     /// * `edges`: A vector of edges.
-    fn create_process_edge_roots_work(&mut self, edges: Vec<ES>);
-
-    fn create_process_edge_roots_work_for_cld_roots(&mut self, _edges: Vec<ES>, _weak: bool) {
-        unimplemented!()
-    }
+    fn create_process_edge_roots_work(&mut self, edges: Vec<ES>, kind: RootKind);
 
     /// Create work packets to handle nodes pointed by root edges.
     ///
@@ -131,7 +128,7 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     ///
     /// Arguments:
     /// * `nodes`: A vector of references to objects pointed by root edges.
-    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>);
+    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>, kind: RootKind);
 }
 
 /// VM-specific methods for scanning roots/objects.

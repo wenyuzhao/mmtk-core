@@ -26,7 +26,7 @@ mod controller;
 pub use controller::GCController;
 
 pub(crate) mod gc_work;
-pub use gc_work::ProcessEdgesWork;
+pub use gc_work::{ProcessEdgesWork, RootKind};
 // TODO: We shouldn't need to expose ScanStackRoot. However, OpenJDK uses it.
 // We should do some refactoring related to Scanning::SCAN_MUTATORS_IN_SAFEPOINT
 // to make sure this type is not exposed to the bindings.
