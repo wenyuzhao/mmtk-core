@@ -144,6 +144,7 @@ rust_mem_counter = []
 lxr_fixed_satb_trigger = []
 lxr_precise_incs_counter = []
 transparent_hugepage = []
+lxr_no_mutator_overflow_alloc = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
