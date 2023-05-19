@@ -210,7 +210,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("bpr_spin_lock");
     dump_feature!("lxr_no_nursery_evac");
     dump_feature!("transparent_hugepage");
-    dump_feature!("lxr_no_mutator_overflow_alloc");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
