@@ -675,10 +675,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
             {
                 if !root_edges.is_empty() && self.root_kind != Some(RootKind::Weak) {
-                    worker.add_work(
-                        WorkBucketStage::Closure,
-                        LXRStopTheWorldProcessEdges::new(root_edges, !is_young_or_weak_root, mmtk),
-                    )
+                    let mut w = LXRStopTheWorldProcessEdges::new(root_edges, true, mmtk);
+                    w.root_kind = self.root_kind;
+                    worker.add_work(WorkBucketStage::Closure, w)
                 }
             } else if !is_young_or_weak_root {
                 self.lxr().curr_roots.read().unwrap().push(roots);

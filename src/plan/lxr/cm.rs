@@ -307,6 +307,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     next_edges: VectorQueue<EdgeOf<Self>>,
     remset_recorded_edges: bool,
     refs: Vec<ObjectReference>,
+    should_record_forwarded_roots: bool,
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
@@ -344,6 +345,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             next_edges: VectorQueue::new(),
             remset_recorded_edges: false,
             refs: vec![],
+            should_record_forwarded_roots: false,
         }
     }
 
@@ -403,15 +405,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.push(new_object)
         }
         new_object
     }
 
     fn process_edges(&mut self) {
+        self.should_record_forwarded_roots = self.roots
+            && !self
+                .root_kind
+                .map(|r| r.is_young_or_weak())
+                .unwrap_or_default();
         self.pause = self.lxr.current_pause().unwrap();
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
         if self.pause == Pause::FullTraceFast {
@@ -431,7 +438,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
         }
         self.flush();
-        if self.roots {
+        if self.should_record_forwarded_roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
         }
@@ -475,7 +482,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.push(x)
         }
         x
