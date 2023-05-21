@@ -208,6 +208,8 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("workers", *options.threads);
     dump_feature!("address_space", VMLayoutConstants::get_address_space());
     dump_feature!("bpr_spin_lock");
+    dump_feature!("lxr_no_nursery_evac");
+    dump_feature!("transparent_hugepage");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
