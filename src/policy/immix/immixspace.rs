@@ -20,6 +20,7 @@ use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::rc::RefCountHelper;
+use crate::util::VMMutatorThread;
 use crate::util::{Address, ObjectReference};
 use crate::{
     plan::ObjectQueue,
@@ -710,6 +711,70 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         });
         self.pr.release_block(block, single_thread);
+    }
+
+    pub fn thread_local_block_alloc_wrapper(
+        &self,
+        copy: bool,
+        tls: VMThread,
+        mut alloc: impl FnMut() -> Option<Block>,
+    ) -> Option<Block> {
+        let is_mutator = !copy;
+        let should_poll =
+            is_mutator && VM::VMActivePlan::global().should_trigger_gc_when_heap_is_full();
+        let allow_gc = should_poll && VM::VMActivePlan::global().is_initialized();
+        let pr = self.get_page_resource();
+        let pages_reserved = pr.reserve_pages(Block::PAGES);
+        if should_poll && self.get_gc_trigger().poll(false, Some(self.as_space())) {
+            assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
+            // Clear the request, and inform GC trigger about the pending allocation.
+            pr.clear_request(pages_reserved);
+            self.get_gc_trigger()
+                .policy
+                .on_pending_allocation(pages_reserved);
+
+            VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
+            None
+        } else {
+            if let Some(block) = alloc() {
+                self.pr.notify_block_alloc(block, tls);
+                return Some(block);
+            }
+            assert!(
+                allow_gc,
+                "Physical allocation failed when GC is not allowed!"
+            );
+            let gc_performed = self.get_gc_trigger().poll(true, Some(self.as_space()));
+            debug_assert!(gc_performed, "GC not performed when forced.");
+            // Clear the request, and inform GC trigger about the pending allocation.
+            pr.clear_request(pages_reserved);
+            self.get_gc_trigger()
+                .policy
+                .on_pending_allocation(pages_reserved);
+
+            VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
+            None
+        }
+    }
+
+    pub fn init_clean_block(&self, block: Block, copy: bool) {
+        if !self.rc_enabled {
+            self.defrag.notify_new_clean_block(copy);
+        }
+        if !copy && self.rc_enabled {
+            self.block_allocation.nursery_blocks.push(block);
+        }
+        self.block_allocation
+            .initialize_new_clean_block(block, copy, self.cm_enabled);
+        self.chunk_map.set(block.chunk(), ChunkState::Allocated);
+        self.lines_consumed
+            .fetch_add(Block::LINES, Ordering::SeqCst);
+        #[cfg(feature = "lxr_srv_ratio_counter")]
+        if !copy {
+            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+                .ix_clean_alloc_vol
+                .fetch_add(Block::BYTES, Ordering::SeqCst);
+        }
     }
 
     /// Allocate a clean block.

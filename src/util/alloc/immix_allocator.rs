@@ -9,11 +9,14 @@ use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::alloc::allocator::get_maximum_aligned_size;
 use crate::util::alloc::Allocator;
+use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::VMThread;
 use crate::util::Address;
 use crate::vm::*;
 use crate::MMTK;
+
+const THREAD_LOCAL_BLOCK_ALLOC: bool = true;
 
 /// Immix allocator
 #[repr(C)]
@@ -42,6 +45,8 @@ pub struct ImmixAllocator<VM: VMBinding> {
     mutator_recycled_blocks: Box<Vec<Block>>,
     mutator_recycled_lines: usize,
     retry: bool,
+    alloc_chunk_cursor: usize,
+    alloc_chunk: Option<Chunk>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -52,6 +57,55 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_limit = Address::ZERO;
         self.request_for_large = false;
         self.line = None;
+        if let Some(c) = self.alloc_chunk {
+            self.immix_space().pr.push_local_alloc_chunk(c);
+        }
+        self.alloc_chunk = None;
+        self.alloc_chunk_cursor = 0;
+    }
+
+    fn get_clean_block_impl(&mut self) -> Option<Block> {
+        if !THREAD_LOCAL_BLOCK_ALLOC {
+            return self.immix_space().get_clean_block(self.tls, self.copy);
+        }
+        loop {
+            const BLOCKS_IN_CHUNK: usize = 1 << (Chunk::LOG_BYTES - Block::LOG_BYTES);
+            if self.alloc_chunk.is_none() || self.alloc_chunk_cursor >= BLOCKS_IN_CHUNK {
+                if let Some(c) = self.alloc_chunk {
+                    self.immix_space().pr.push_local_alloc_chunk(c);
+                }
+                self.alloc_chunk = Some(
+                    self.immix_space()
+                        .pr
+                        .pop_local_alloc_chunk(self.immix_space())?,
+                );
+                self.alloc_chunk_cursor = 0;
+                continue;
+            }
+            let base = self.alloc_chunk.unwrap().start();
+            let mut c = self.alloc_chunk_cursor;
+            let alloced_state = if self.copy {
+                BlockState::Unmarked
+            } else {
+                BlockState::Nursery
+            };
+            while c < BLOCKS_IN_CHUNK {
+                let b = Block::from_aligned_address(base + (c << Block::LOG_BYTES));
+                if b.get_state() == BlockState::Unallocated {
+                    b.set_state(alloced_state);
+                    self.immix_space().init_clean_block(b, self.copy);
+                    self.alloc_chunk_cursor = c;
+                    return Some(b);
+                }
+                c += 1;
+            }
+            self.alloc_chunk_cursor = c;
+        }
+    }
+
+    fn get_clean_block(&mut self) -> Option<Block> {
+        self.immix_space()
+            .thread_local_block_alloc_wrapper(self.copy, self.tls, || self.get_clean_block_impl())
     }
 
     fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
@@ -184,6 +238,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             mutator_recycled_blocks: Box::new(vec![]),
             mutator_recycled_lines: 0,
             retry: false,
+            alloc_chunk: None,
+            alloc_chunk_cursor: 0,
         }
     }
 
@@ -282,7 +338,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     // Get a clean block from ImmixSpace.
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: isize) -> Address {
-        match self.immix_space().get_clean_block(self.tls, self.copy) {
+        match self.get_clean_block() {
             None => Address::ZERO,
             Some(block) => {
                 trace!(

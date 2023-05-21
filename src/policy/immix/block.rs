@@ -103,8 +103,7 @@ impl Region for Block {
     #[cfg(feature = "immix_smaller_block")]
     const LOG_BYTES: usize = 13;
 
-    const BPR_ALLOC_TABLE: Option<SideMetadataSpec> =
-        Some(crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS);
+    const BPR_ALLOC_TABLE: Option<SideMetadataSpec> = None;
 
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
@@ -270,6 +269,22 @@ impl Block {
             })
             .map(|x| (x as u8).into())
             .map_err(|x| (x as u8).into())
+    }
+
+    pub fn attempt_alloc(&self, copy: bool) -> bool {
+        let new_state = if copy {
+            BlockState::Unmarked
+        } else {
+            BlockState::Nursery
+        };
+        self.fetch_update_state(|s| {
+            if s == BlockState::Unallocated {
+                Some(new_state)
+            } else {
+                None
+            }
+        })
+        .is_ok()
     }
 
     pub fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
