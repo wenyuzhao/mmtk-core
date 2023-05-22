@@ -52,6 +52,9 @@ impl Default for RuntimeArgs {
                 if cfg!(feature = "lxr_fixed_young_size") {
                     const BLOCKS_IN_MB: usize = (1 << 20) >> Block::LOG_BYTES;
                     Some(128 * BLOCKS_IN_MB) // 128 M
+                } else if cfg!(feature = "lxr_fixed_young_size_8g") {
+                    const BLOCKS_IN_GB: usize = (1 << 30) >> Block::LOG_BYTES;
+                    Some(8 * BLOCKS_IN_GB) // 8 G
                 } else {
                     None
                 },
@@ -64,7 +67,9 @@ impl Default for RuntimeArgs {
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
             rc_stop_percent: env_arg("RC_STOP_PERCENT").unwrap_or(5),
-            max_survival_mb: if cfg!(feature = "lxr_fixed_young_size") {
+            max_survival_mb: if cfg!(feature = "lxr_fixed_young_size")
+                || cfg!(feature = "lxr_fixed_young_size_8g")
+            {
                 usize::MAX
             } else {
                 env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128)
@@ -210,6 +215,9 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("bpr_spin_lock");
     dump_feature!("lxr_no_nursery_evac");
     dump_feature!("transparent_hugepage");
+    dump_feature!("lxr_fixed_young_size");
+    dump_feature!("lxr_fixed_young_size_8g");
+    dump_feature!("lxr_no_lazy_young_sweeping");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
