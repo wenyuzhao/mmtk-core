@@ -143,6 +143,7 @@ lxr_satb_live_bytes_counter = []
 rust_mem_counter = []
 lxr_fixed_satb_trigger = []
 lxr_precise_incs_counter = []
+transparent_hugepage = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

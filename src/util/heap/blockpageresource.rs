@@ -172,14 +172,32 @@ struct LockFreeListBlockAlloc<B: Region> {
 impl<B: Region> LockFreeListBlockAlloc<B> {
     const LOG_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - B::LOG_BYTES;
     const BLOCKS_IN_CHUNK: usize = 1 << Self::LOG_BLOCKS_IN_CHUNK;
+    const SYNC: bool = false;
 
     fn alloc_fast(&self) -> Option<B> {
+        if Self::SYNC {
+            // 1. bump the cursor
+            let (c, b) = self.cursor.load(Ordering::Relaxed);
+            if b < Self::BLOCKS_IN_CHUNK as u32 {
+                self.cursor.store((c, b + 1), Ordering::Relaxed);
+                let c = crate::util::conversions::chunk_index_to_address(c as usize);
+                return Some(B::from_aligned_address(c + ((b as usize) << B::LOG_BYTES)));
+            }
+            // 2. pop from list
+            let top = self.head.load(Ordering::Relaxed);
+            if top.is_zero() {
+                return None;
+            }
+            let new_top = unsafe { top.load::<Address>() };
+            self.head.store(new_top, Ordering::Relaxed);
+            return Some(B::from_aligned_address(top));
+        }
         // 1. bump the cursor
         if self.cursor.load(Ordering::Relaxed).1 < Self::BLOCKS_IN_CHUNK as u32 {
             let result =
                 self.cursor
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |(c, b)| {
-                        if b <= Self::BLOCKS_IN_CHUNK as u32 {
+                        if b < Self::BLOCKS_IN_CHUNK as u32 {
                             Some((c, b + 1))
                         } else {
                             None
@@ -226,8 +244,10 @@ impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for LockFreeListBlockAlloc<B> {
     }
 
     fn alloc(&self, bpr: &BlockPageResource<VM, B>, space: &dyn Space<VM>) -> Option<(B, bool)> {
-        if let Some(b) = self.alloc_fast() {
-            return Some((b, false));
+        if !Self::SYNC {
+            if let Some(b) = self.alloc_fast() {
+                return Some((b, false));
+            }
         }
         let _sync = bpr.sync.lock().unwrap();
         if let Some(b) = self.alloc_fast() {
@@ -240,7 +260,7 @@ impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for LockFreeListBlockAlloc<B> {
         return None;
     }
 
-    fn free(&self, _bpr: &BlockPageResource<VM, B>, b: B, single_thread: bool) {
+    fn free(&self, bpr: &BlockPageResource<VM, B>, b: B, single_thread: bool) {
         if single_thread {
             let old_top = self.head.load(Ordering::Relaxed);
             unsafe {
@@ -249,12 +269,17 @@ impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for LockFreeListBlockAlloc<B> {
             self.head.store(b.start(), Ordering::Relaxed);
             return;
         }
+        if Self::SYNC {
+            let _sync = bpr.sync.lock().unwrap();
+            let old_top = self.head.load(Ordering::Relaxed);
+            unsafe { b.start().store(old_top) };
+            self.head.store(b.start(), Ordering::Relaxed);
+            return;
+        }
         loop {
             std::hint::spin_loop();
             let old_top = self.head.load(Ordering::Relaxed);
-            unsafe {
-                b.start().store(old_top);
-            }
+            unsafe { b.start().store(old_top) };
             if self
                 .head
                 .compare_exchange(old_top, b.start(), Ordering::Relaxed, Ordering::Relaxed)

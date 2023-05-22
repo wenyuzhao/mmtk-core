@@ -113,6 +113,9 @@ fn mmap_fixed(start: Address, size: usize, prot: libc::c_int, flags: libc::c_int
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
         ptr,
     );
+    if cfg!(feature = "transparent_hugepage") {
+        let _ = unsafe { libc::madvise(start.to_mut_ptr(), size, libc::MADV_HUGEPAGE) };
+    }
     if result.is_ok() {
         crate::rust_mem_counter::record_mmap(size);
     }
