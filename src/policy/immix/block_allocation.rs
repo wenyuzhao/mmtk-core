@@ -145,12 +145,14 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Reset allocated_block_buffer and free nursery blocks.
     pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
         const PARALLEL_STW_SWEEPING: bool = false;
-        let max_stw_sweep_blocks: usize =
-            if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
-                usize::MAX
-            } else {
-                (num_cpus::get() << 23) >> Block::LOG_BYTES // 2M for each core
-            };
+        let max_stw_sweep_blocks: usize = if cfg!(feature = "lxr_no_lazy_young_sweeping")
+            || pause == Pause::FinalMark
+            || pause == Pause::FullTraceFast
+        {
+            usize::MAX
+        } else {
+            (num_cpus::get() << 23) >> Block::LOG_BYTES // 2M for each core
+        };
         let space = self.space();
         // Sweep nursery blocks
         self.nursery_blocks.visit_slice(|blocks| {
