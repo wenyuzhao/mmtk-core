@@ -26,6 +26,9 @@ pub struct Defrag {
 }
 
 impl Defrag {
+    #[cfg(feature = "ix_live_size_based_defrag")]
+    pub const NUM_BINS: usize = Block::LINES + 1;
+    #[cfg(not(feature = "ix_live_size_based_defrag"))]
     pub const NUM_BINS: usize = (Block::LINES >> 1) + 1;
     const DEFRAG_LINE_REUSE_RATIO: f32 = 0.99;
     const MIN_SPILL_THRESHOLD: usize = 2;
@@ -194,6 +197,7 @@ impl Defrag {
         }
         // println!("threshold: {}", threshold);
         debug_assert!(threshold >= Self::MIN_SPILL_THRESHOLD);
+        gc_log!([2] "defrag_spill_threshold {}", threshold);
         self.defrag_spill_threshold
             .store(threshold, Ordering::Release);
     }

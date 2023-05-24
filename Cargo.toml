@@ -147,6 +147,7 @@ lxr_precise_incs_counter = []
 transparent_hugepage = []
 lxr_no_lazy_young_sweeping = []
 ix_always_defrag = []
+ix_live_size_based_defrag = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
