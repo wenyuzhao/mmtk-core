@@ -14,7 +14,7 @@ pub mod space_descriptor;
 mod vmrequest;
 
 pub use self::accounting::PageAccounting;
-pub use self::blockpageresource2::BlockPageResource;
+pub use self::blockpageresource2::{BlockPageResource, SuperBlock};
 pub use self::freelistpageresource::FreeListPageResource;
 pub use self::heap_meta::HeapMeta;
 pub use self::monotonepageresource::MonotonePageResource;

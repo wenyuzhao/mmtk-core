@@ -92,8 +92,8 @@ define_side_metadata_specs!(
     LOS_PAGE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_PAGE as usize),
     // Mark chunks (any plan that uses the chunk map should include this spec in their local sidemetadata specs)
     CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
-    CHUNK_IS_REUSABLE   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
-    CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
+    SB_IS_REUSABLE   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
+    SB_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
     // Mark blocks by (native mimalloc) marksweep
     MS_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
     // Next block in list for native mimalloc
