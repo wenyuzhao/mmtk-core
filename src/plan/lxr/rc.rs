@@ -63,7 +63,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.lxr
     }
 
-    pub fn new_array_slice(slice: VM::VMMemorySlice, lxr: &'static LXR<VM>) -> Self {
+    fn __default(lxr: &'static LXR<VM>) -> Self {
         Self {
             incs: vec![],
             new_incs: VectorQueue::default(),
@@ -71,7 +71,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
-            slice: Some(slice),
+            slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
             root_kind: None,
@@ -81,6 +81,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             mature_incs: 0,
             nursery_incs: 0,
             root_incs: 0,
+        }
+    }
+
+    fn new_array_slice(slice: VM::VMMemorySlice, lxr: &'static LXR<VM>) -> Self {
+        Self {
+            slice: Some(slice),
+            ..Self::__default(lxr)
         }
     }
 
@@ -94,22 +101,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             .downcast_ref::<LXR<VM>>()
             .unwrap();
         Self {
-            incs: vec![],
-            new_incs: VectorQueue::default(),
-            lxr,
-            current_pause: Pause::RefCount,
-            concurrent_marking_in_progress: false,
-            no_evac: false,
-            slice: None,
-            depth: 1,
-            rc: RefCountHelper::NEW,
-            root_kind: None,
-            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             root_objects: Some(objects),
-            total_incs: 0,
-            mature_incs: 0,
-            nursery_incs: 0,
-            root_incs: 0,
+            ..Self::__default(lxr)
         }
     }
 
@@ -119,21 +112,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         Self {
             incs,
-            new_incs: VectorQueue::default(),
-            lxr,
-            current_pause: Pause::RefCount,
-            concurrent_marking_in_progress: false,
-            no_evac: false,
-            slice: None,
-            depth: 1,
-            rc: RefCountHelper::NEW,
-            root_kind: None,
-            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            root_objects: None,
-            total_incs: 0,
-            mature_incs: 0,
-            nursery_incs: 0,
-            root_incs: 0,
+            ..Self::__default(lxr)
         }
     }
 
