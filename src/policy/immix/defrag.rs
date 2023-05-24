@@ -26,6 +26,9 @@ pub struct Defrag {
 }
 
 impl Defrag {
+    #[cfg(feature = "ix_live_size_based_defrag")]
+    pub const NUM_BINS: usize = Block::LINES + 1;
+    #[cfg(not(feature = "ix_live_size_based_defrag"))]
     pub const NUM_BINS: usize = (Block::LINES >> 1) + 1;
     const DEFRAG_LINE_REUSE_RATIO: f32 = 0.99;
     const MIN_SPILL_THRESHOLD: usize = 2;
@@ -58,7 +61,7 @@ impl Defrag {
         concurrent_marking_enabled: bool,
         rc_enabled: bool,
     ) {
-        let in_defrag = super::DEFRAG
+        let mut in_defrag = super::DEFRAG
             && (emergency_collection
                 || (collection_attempts > 1)
                 || !exhausted_reusable_space
@@ -66,6 +69,9 @@ impl Defrag {
                 || (collect_whole_heap && user_triggered && full_heap_system_gc))
             && !rc_enabled
             && !concurrent_marking_enabled;
+        if cfg!(feature = "ix_always_defrag") {
+            in_defrag = true;
+        }
         // println!("Defrag: {}", in_defrag);
         self.in_defrag_collection
             .store(in_defrag, Ordering::Release)
@@ -191,6 +197,7 @@ impl Defrag {
         }
         // println!("threshold: {}", threshold);
         debug_assert!(threshold >= Self::MIN_SPILL_THRESHOLD);
+        gc_log!([2] "defrag_spill_threshold {}", threshold);
         self.defrag_spill_threshold
             .store(threshold, Ordering::Release);
     }
