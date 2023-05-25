@@ -221,6 +221,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_fixed_young_size");
     dump_feature!("lxr_fixed_young_size_8g");
     dump_feature!("lxr_no_lazy_young_sweeping");
+    dump_feature!("lxr_no_chunk_defrag");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
