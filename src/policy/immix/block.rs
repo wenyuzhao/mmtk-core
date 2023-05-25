@@ -391,7 +391,7 @@ impl Block {
             } else {
                 BlockState::Unmarked
             });
-            if !reuse {
+            if !reuse || cfg!(feature = "ix_no_defrag_fix") {
                 Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
             }
         }

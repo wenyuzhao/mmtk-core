@@ -30,6 +30,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) min_reuse_lines: usize,
     pub(crate) no_recursive_dec: bool,
     pub(crate) chunk_defarg_percent: usize,
+    pub(crate) transparent_hugepage: bool,
 }
 
 impl Default for RuntimeArgs {
@@ -84,6 +85,9 @@ impl Default for RuntimeArgs {
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
             no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
             chunk_defarg_percent: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
+            transparent_hugepage: env_bool_arg("TRANSPARENT_HUGEPAGE")
+                .or(env_bool_arg("HUGEPAGE"))
+                .unwrap_or(true),
         }
     }
 }
@@ -214,7 +218,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("address_space", VMLayoutConstants::get_address_space());
     dump_feature!("bpr_spin_lock");
     dump_feature!("lxr_no_nursery_evac");
-    dump_feature!("transparent_hugepage");
     dump_feature!("lxr_fixed_young_size");
     dump_feature!("lxr_fixed_young_size_8g");
     dump_feature!("lxr_no_lazy_young_sweeping");
