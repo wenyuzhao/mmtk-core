@@ -93,7 +93,7 @@ define_side_metadata_specs!(
     // Mark chunks (any plan that uses the chunk map should include this spec in their local sidemetadata specs)
     CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_BIN   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
-    CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
+    CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_PREV   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_NEXT   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     IX_BLOCK_ALLOC_BITS   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
