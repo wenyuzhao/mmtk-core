@@ -8,6 +8,7 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::side_metadata::spec_defs::CHUNK_LIVE_BLOCKS;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
@@ -44,6 +45,7 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
         if let Some((block, new_chunk)) = self.block_alloc.alloc(self, space) {
+            CHUNK_LIVE_BLOCKS.fetch_add_atomic(Chunk::align(block.start()), 1u16, Ordering::SeqCst);
             self.commit_pages(reserved_pages, required_pages, tls);
             Ok(PRAllocResult {
                 start: block.start(),
@@ -59,13 +61,25 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         debug_assert!(self.common().contiguous);
         self.flpr.get_available_physical_pages()
     }
+
+    fn has_chunk_fragmentation_info(&self) -> bool {
+        !cfg!(feature = "lxr_no_chunk_defrag")
+    }
+
+    fn get_live_pages_in_chunk(&self, c: Chunk) -> usize {
+        (CHUNK_LIVE_BLOCKS.load_atomic::<u16>(c.start(), Ordering::Relaxed) as usize)
+            << Self::LOG_PAGES
+    }
 }
 
 impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     /// Block granularity in pages
     const LOG_PAGES: usize = B::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
+    const BLOCKS_IN_CHUNK: usize = 1 << (Chunk::LOG_BYTES - B::LOG_BYTES);
 
-    fn append_local_metadata(_metadata: &mut SideMetadataContext) {}
+    fn append_local_metadata(metadata: &mut SideMetadataContext) {
+        metadata.local.push(CHUNK_LIVE_BLOCKS);
+    }
 
     pub fn new_contiguous(
         log_pages: usize,
@@ -130,6 +144,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
+        CHUNK_LIVE_BLOCKS.store_atomic(start, 0u16, Ordering::SeqCst);
         Some(Chunk::from_aligned_address(start))
     }
 
@@ -143,6 +158,10 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn release_block(&self, block: B, single_thread: bool) {
+        let blocks =
+            CHUNK_LIVE_BLOCKS.fetch_sub_atomic(Chunk::align(block.start()), 1u16, Ordering::SeqCst)
+                - 1;
+        assert!(blocks <= Self::BLOCKS_IN_CHUNK as u16);
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
         self.block_alloc.free(self, block, single_thread);
