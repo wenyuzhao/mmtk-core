@@ -496,8 +496,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 crate::scheduler::worker::reset_workers::<VM>();
             }
             // Release young blocks to reduce to-space overflow
-            self.block_allocation
-                .sweep_nursery_blocks(&self.scheduler, pause);
+            // self.block_allocation
+            //     .sweep_nursery_blocks(&self.scheduler, pause);
             self.flush_page_resource();
         }
         self.block_allocation
