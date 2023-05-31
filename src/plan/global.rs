@@ -374,6 +374,10 @@ pub trait Plan: 'static + Sync + Downcast {
         true
     }
 
+    fn requires_weak_root_scanning(&self) -> bool {
+        self.generational().is_some()
+    }
+
     /// An object is firstly reached by a sanity GC. So the object is reachable
     /// in the current GC, and all the GC work has been done for the object (such as
     /// tracing and releasing). A plan can implement this to

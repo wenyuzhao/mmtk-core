@@ -496,8 +496,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 crate::scheduler::worker::reset_workers::<VM>();
             }
             // Release young blocks to reduce to-space overflow
-            self.block_allocation
-                .sweep_nursery_blocks(&self.scheduler, pause);
+            // self.block_allocation
+            //     .sweep_nursery_blocks(&self.scheduler, pause);
             self.flush_page_resource();
         }
         self.block_allocation
@@ -620,12 +620,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.initial_mark_pause = false;
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-
-        if did_defrag {
-            let count = DEFRAG_BLOCKS.load(Ordering::Relaxed);
-            gc_log!([2] "defrag blocks {}", count)
-        }
-        DEFRAG_BLOCKS.store(0, Ordering::Relaxed);
 
         did_defrag
     }
@@ -1341,8 +1335,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 }
 
-static DEFRAG_BLOCKS: AtomicUsize = AtomicUsize::new(0);
-
 /// A work packet to prepare each block for a major GC.
 /// Performs the action on a range of chunks.
 pub struct PrepareBlockState<VM: VMBinding> {
@@ -1376,7 +1368,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         // Clear object mark table for this chunk
         self.reset_object_mark();
-        let mut count = 0;
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
             let state = block.get_state();
@@ -1411,13 +1402,11 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                     // blocks that are defrag sources.
                     side.bzero_metadata(block.start(), Block::BYTES);
                 }
-                count += 1;
             }
             // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
             // until the forwarding bits are also set, at which time we also write the forwarding
             // pointer.
         }
-        DEFRAG_BLOCKS.fetch_add(count, Ordering::Relaxed);
     }
 }
 

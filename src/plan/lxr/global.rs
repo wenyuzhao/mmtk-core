@@ -350,6 +350,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
         );
+        let perform_class_unloading = self.current_gc_should_perform_class_unloading();
+        if perform_class_unloading {
+            gc_log!([3] " - class unloading");
+        }
+        <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         self.common.los.is_end_of_satb_or_full_gc = false;
         self.common.release(
             tls,
@@ -535,6 +540,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn current_gc_should_perform_class_unloading(&self) -> bool {
         let pause = self.current_pause().unwrap();
         pause == Pause::FinalMark || pause == Pause::FullTraceFast
+    }
+
+    fn requires_weak_root_scanning(&self) -> bool {
+        // Collect weak roots and keep them alive across RC pauses.
+        true
     }
 }
 
