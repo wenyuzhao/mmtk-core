@@ -543,6 +543,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let pause = self.current_pause().unwrap();
         pause == Pause::FinalMark || pause == Pause::FullTraceFast
     }
+
+    fn requires_weak_root_scanning(&self) -> bool {
+        // Collect weak roots and keep them alive across RC pauses.
+        true
+    }
 }
 
 impl<VM: VMBinding> LXR<VM> {
