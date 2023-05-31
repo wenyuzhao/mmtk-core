@@ -111,7 +111,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         self.count(o) == MAX_REF_COUNT
     }
 
-    pub fn pin(&self, o: ObjectReference) -> Result<u8, u8> {
+    pub fn stick(&self, o: ObjectReference) -> Result<u8, u8> {
         self.fetch_update(o, |x| {
             debug_assert!(x <= MAX_REF_COUNT);
             if x == MAX_REF_COUNT {

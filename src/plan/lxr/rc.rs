@@ -300,16 +300,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    fn inc(&self, o: ObjectReference, pin: bool) -> bool {
-        if pin {
-            self.rc.pin(o) == Ok(0)
+    fn inc(&self, o: ObjectReference, stick: bool) -> bool {
+        if stick {
+            self.rc.stick(o) == Ok(0)
         } else {
             self.rc.inc(o) == Ok(0)
         }
     }
 
-    fn process_inc(&mut self, o: ObjectReference, depth: usize, pin: bool) -> ObjectReference {
-        if self.inc(o, pin) {
+    fn process_inc(&mut self, o: ObjectReference, depth: usize, stick: bool) -> ObjectReference {
+        if self.inc(o, stick) {
             self.promote(o, false, self.lxr().los().in_space(o), depth);
         }
         o
@@ -340,7 +340,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         o: ObjectReference,
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
-        pin: bool,
+        stick: bool,
     ) -> ObjectReference {
         o.verify::<VM>();
         crate::stat(|s| {
@@ -350,21 +350,21 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let los = self.lxr().los().in_space(o);
         if self.dont_evacuate(o, los) {
-            if self.inc(o, pin) {
+            if self.inc(o, stick) {
                 self.promote(o, false, los, depth);
             }
             return o;
         }
         if object_forwarding::is_forwarded::<VM>(o) {
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            self.inc(new, pin);
+            self.inc(new, stick);
             return new;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
             let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-            self.inc(new, pin);
+            self.inc(new, stick);
             new
         } else {
             let is_nursery = self.rc.count(o) == 0;
@@ -383,13 +383,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                             Ordering::Relaxed,
                         );
                     }
-                    self.inc(new, pin);
+                    self.inc(new, stick);
                     self.promote(new, true, false, depth);
                     new
                 } else {
                     gc_log!([1] "to-space overflow");
                     // Object is not moved.
-                    let promoted = self.inc(o, pin);
+                    let promoted = self.inc(o, stick);
                     object_forwarding::clear_forwarding_bits::<VM>(o);
                     if promoted {
                         self.promote(o, false, los, depth);
@@ -400,7 +400,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 }
             } else {
                 // Object is not moved.
-                let promoted = self.inc(o, pin);
+                let promoted = self.inc(o, stick);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 if promoted {
                     self.promote(o, false, los, depth);
@@ -444,7 +444,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         e: VM::VMEdge,
         cc: &mut GCWorkerCopyContext<VM>,
         depth: usize,
-        pin: bool,
+        stick: bool,
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
@@ -466,9 +466,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         o.verify::<VM>();
         let new = if !crate::args::RC_NURSERY_EVACUATION {
-            self.process_inc(o, depth, pin)
+            self.process_inc(o, depth, stick)
         } else {
-            self.process_inc_and_evacuate(o, cc, depth, pin)
+            self.process_inc_and_evacuate(o, cc, depth, stick)
         };
         // Put this into remset if this is a young or weak root
         if K != EDGE_KIND_ROOT
@@ -507,13 +507,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         mut incs: AddressBuffer<'_, VM::VMEdge>,
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
-        pin: bool,
+        stick: bool,
     ) -> Option<Vec<ObjectReference>> {
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
             for e in &mut *incs {
-                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth, pin) {
+                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth, stick) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
@@ -531,7 +531,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         } else {
             for e in &mut *incs {
-                self.process_edge::<K>(*e, copy_context, depth, pin);
+                self.process_edge::<K>(*e, copy_context, depth, stick);
             }
             None
         }
@@ -542,10 +542,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         slice: VM::VMMemorySlice,
         copy_context: &mut GCWorkerCopyContext<VM>,
         depth: usize,
-        pin: bool,
+        stick: bool,
     ) -> Option<Vec<ObjectReference>> {
         for e in slice.iter_edges() {
-            self.process_edge::<K>(e, copy_context, depth, pin);
+            self.process_edge::<K>(e, copy_context, depth, stick);
         }
         None
     }
