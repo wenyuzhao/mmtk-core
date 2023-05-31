@@ -27,8 +27,10 @@ impl Region for SuperBlock {
         20
     } else if cfg!(feature = "ix_sb_2m") {
         21
-    } else {
+    } else if cfg!(feature = "ix_sb_4m") {
         22
+    } else {
+        21
     };
 
     fn from_aligned_address(address: Address) -> Self {
