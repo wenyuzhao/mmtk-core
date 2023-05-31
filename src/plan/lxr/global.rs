@@ -322,12 +322,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }
         });
         if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
-            // self.common.los.is_end_of_satb_or_full_gc = true;
-            // // release nursery memory before mature evacuation
-            // self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            //     .add(ReleaseLOSNursery);
-            VM::VMCollection::update_weak_processor(true);
             self.common.los.is_end_of_satb_or_full_gc = true;
+            // release nursery memory before mature evacuation
+            self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                .add(ReleaseLOSNursery);
         }
         self.common.prepare(
             tls,
@@ -879,7 +877,7 @@ impl<VM: VMBinding> LXR<VM> {
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
-        // scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
@@ -896,7 +894,7 @@ impl<VM: VMBinding> LXR<VM> {
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
-        // scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
