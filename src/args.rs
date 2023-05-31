@@ -192,6 +192,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     if *options.verbose == 0 {
         return;
     }
+    eprintln!("JVM Process ID: {}", std::process::id());
     eprintln!("-------------------- Immix Args --------------------");
 
     dump_feature!("barrier", format!("{:?}", active_barrier));

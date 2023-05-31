@@ -25,6 +25,8 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     next_objects: VectorQueue<ObjectReference>,
     klass: Address,
     rc: RefCountHelper<VM>,
+    cached_children_fast: [(VM::VMEdge, ObjectReference, u8); 32],
+    cached_children: Vec<(VM::VMEdge, ObjectReference, u8)>,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -41,6 +43,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_objects: VectorQueue::default(),
             rc: RefCountHelper::NEW,
             klass: Address::ZERO,
+            cached_children_fast: [(
+                VM::VMEdge::from_address(Address::ZERO),
+                ObjectReference::NULL,
+                0,
+            ); 32],
+            cached_children: vec![],
         }
     }
 
@@ -57,6 +65,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_objects: VectorQueue::default(),
             rc: RefCountHelper::NEW,
             klass: Address::ZERO,
+            cached_children_fast: [(
+                VM::VMEdge::from_address(Address::ZERO),
+                ObjectReference::NULL,
+                0,
+            ); 32],
+            cached_children: vec![],
         }
     }
 
@@ -121,6 +135,54 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             self.trace_object(*o);
         }
     }
+
+    fn process_edge_after_obj_scan(
+        &mut self,
+        object: ObjectReference,
+        e: VM::VMEdge,
+        t: ObjectReference,
+        validity: u8,
+        should_check_remset: bool,
+    ) {
+        if t.is_null() || self.rc.count(t) == 0 {
+            return;
+        }
+        if cfg!(feature = "sanity") {
+            assert!(
+                t.to_address::<VM>().is_mapped(),
+                "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
+                object,
+                e,
+                t
+            );
+        }
+        if crate::args::RC_MATURE_EVACUATION
+            && (should_check_remset || !e.to_address().is_mapped())
+            && self.plan.in_defrag(t)
+        {
+            self.plan.immix_space.remset.record_with_validity_state(
+                e,
+                t,
+                &self.plan.immix_space,
+                validity,
+            );
+        }
+        if !self.plan.is_marked(t) {
+            if cfg!(any(feature = "sanity", debug_assertions)) {
+                assert!(
+                    t.to_address::<VM>().is_mapped(),
+                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                    object,
+                    e,
+                    t
+                );
+            }
+            self.next_objects.push(t);
+            if self.next_objects.is_full() {
+                self.flush();
+            }
+        }
+    }
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
@@ -136,7 +198,8 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             return;
         }
         let should_check_remset = !self.plan.in_defrag(object);
-        let mut cached_children: Vec<(VM::VMEdge, ObjectReference, u8)> = vec![];
+        let mut cached_children_fast_cursor = 0usize;
+        self.cached_children.clear();
         object.iterate_fields_with_klass::<VM, _>(
             CLDScanPolicy::Claim,
             RefScanPolicy::Discover,
@@ -151,7 +214,12 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                     .immix_space
                     .remset
                     .get_currrent_validity_state(e, &self.plan.immix_space);
-                cached_children.push((e, t, validity));
+                if cached_children_fast_cursor < self.cached_children_fast.len() {
+                    self.cached_children_fast[cached_children_fast_cursor] = (e, t, validity);
+                    cached_children_fast_cursor += 1;
+                } else {
+                    self.cached_children.push((e, t, validity));
+                }
             },
         );
         if self.rc.count(object) != 0 {
@@ -161,45 +229,13 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             if cfg!(feature = "lxr_satb_live_bytes_counter") {
                 crate::record_live_bytes(object.get_size::<VM>());
             }
-            for (e, t, validity) in cached_children {
-                if t.is_null() || self.rc.count(t) == 0 {
-                    continue;
-                }
-                if cfg!(feature = "sanity") {
-                    assert!(
-                        t.to_address::<VM>().is_mapped(),
-                        "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
-                        object,
-                        e,
-                        t
-                    );
-                }
-                if crate::args::RC_MATURE_EVACUATION
-                    && (should_check_remset || !e.to_address().is_mapped())
-                    && self.plan.in_defrag(t)
-                {
-                    self.plan.immix_space.remset.record_with_validity_state(
-                        e,
-                        t,
-                        &self.plan.immix_space,
-                        validity,
-                    );
-                }
-                if !self.plan.is_marked(t) {
-                    if cfg!(any(feature = "sanity", debug_assertions)) {
-                        assert!(
-                            t.to_address::<VM>().is_mapped(),
-                            "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                            object,
-                            e,
-                            t
-                        );
-                    }
-                    self.next_objects.push(t);
-                    if self.next_objects.is_full() {
-                        self.flush();
-                    }
-                }
+            for i in 0..cached_children_fast_cursor {
+                let (e, t, validity) = self.cached_children_fast[i];
+                self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
+            }
+            for i in 0..self.cached_children.len() {
+                let (e, t, validity) = self.cached_children[i];
+                self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
             }
         }
     }
@@ -307,6 +343,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     next_edges: VectorQueue<EdgeOf<Self>>,
     remset_recorded_edges: bool,
     refs: Vec<ObjectReference>,
+    should_record_forwarded_roots: bool,
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
@@ -344,6 +381,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             next_edges: VectorQueue::new(),
             remset_recorded_edges: false,
             refs: vec![],
+            should_record_forwarded_roots: false,
         }
     }
 
@@ -403,15 +441,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.push(new_object)
         }
         new_object
     }
 
     fn process_edges(&mut self) {
+        self.should_record_forwarded_roots = self.roots
+            && !self
+                .root_kind
+                .map(|r| r.is_young_or_weak())
+                .unwrap_or_default();
         self.pause = self.lxr.current_pause().unwrap();
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
         if self.pause == Pause::FullTraceFast {
@@ -431,7 +474,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
         }
         self.flush();
-        if self.roots {
+        if self.should_record_forwarded_roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
         }
@@ -475,7 +518,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.push(x)
         }
         x

@@ -269,10 +269,12 @@ pub struct EndOfGC {
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
-        if perform_class_unloading {
-            gc_log!([3] " - class unloading");
+        if mmtk.plan.downcast_ref::<LXR<VM>>().is_none() {
+            if perform_class_unloading {
+                gc_log!([3] " - class unloading");
+            }
+            <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         }
-        <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)
             .elapsed()
@@ -580,16 +582,47 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanVMSpecificRoots<E> {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum RootKind {
     Strong,
-    // This is a young **strong** root that is newly created in the previous mutator phase.
-    // For LXR, these roots should
-    //   * Be swept only after SATB.
-    //   * Do RC increments to keep them alive until the and of SATB
-    //   * Skip RC decrements, and should be swept only after SATB.
-    //   * At the start of SATB. All young and mature roots must be provided for marking.
-    //   * If they're created during SATB, mark them and keep them alive.
-    //   * At the end of SATB. All young and mature roots must be provided for pointer updating.
+    /// This is a young **strong** root that is newly created in the previous mutator phase.
+    /// If we guarantee that a type of root pointers will never dead before a full-heap trace, we can only scan newly created ones in nursery / RC pauses.
+    ///
+    /// e.g. For LXR, the embeded pointers in code objects is immutable, and is reclaimed only during class unloading. So it is safe to skip decs,
+    /// and do inc once for each of these roots, just to keep them alive before marking ends.
+    ///
+    /// For LXR,
+    /// #### RC Pause
+    ///   * Only collect young root pointers with RC=0
+    ///   * Do RC increments (preferably once) to keep them alive until the end of SATB or Full GC
+    ///   * During SATB: mark them and keep them alive.
+    /// #### Initial Mark Pause
+    ///   * Both young amd mature roots are required for marking
+    /// #### Final Mark Pause
+    ///   * Both young amd mature roots are required for pointer updating
+    /// #### Full GC
+    ///   * Both young amd mature roots are required for marking and pointer updating
     Young,
     // This is a weak root that is newly created in the previous mutator phase.
+    // Same as young roots, decrements on these pointers can be skipped.
+    // If possible, increment can happen only once.
+    /// This is a **weak** root pointer. which means that
+    ///   1. It should never be marked directly through this root pointer. But can be transitively reachable by other strong roots.
+    ///   2. The reference must be kept alive until the end of a full-heap trace.
+    ///
+    /// e.g. For LXR, the strong table roots are weak pointers that is purged only at the end of a full-heap trace.
+    /// So it is safe to skip decs, and do inc once for each of these roots, just to keep them alive before marking ends.
+    ///
+    /// For LXR,
+    /// #### RC Pause
+    ///   * Only collect young weak root pointers with RC=0
+    ///   * Do RC increments (preferably once) to keep them alive until the end of SATB or Full GC
+    ///   * During SATB: mark them and keep them alive.
+    /// #### Initial Mark Pause
+    ///   * Don't send these pointers to the mark queue
+    /// #### Final Mark Pause
+    ///   * Either skip pointer updating and do a batch update after the GC (e.g. `StringTable::oops_do(&cl)`)
+    ///   * Or, update these pointers, but don't do marking on them.
+    /// #### Full GC
+    ///   * Either skip pointer updating and do a batch update after the GC (e.g. `StringTable::oops_do(&cl)`)
+    ///   * Or, update these pointers, but don't do marking on them.
     Weak,
 }
 

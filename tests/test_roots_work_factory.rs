@@ -43,7 +43,7 @@ struct MockFactory {
 }
 
 impl RootsWorkFactory<Address> for MockFactory {
-    fn create_process_edge_roots_work(&mut self, edges: Vec<Address>, _: RootKind) {
+    fn create_process_edge_roots_work(&mut self, edges: Vec<Address>, _kind: RootKind) {
         assert_eq!(edges, EDGES);
         match self.round {
             1 => {
@@ -67,7 +67,7 @@ impl RootsWorkFactory<Address> for MockFactory {
         }
     }
 
-    fn create_process_node_roots_work(&mut self, _nodes: Vec<ObjectReference>, _: RootKind) {
+    fn create_process_node_roots_work(&mut self, _nodes: Vec<ObjectReference>, _kind: RootKind) {
         unimplemented!();
     }
 }
