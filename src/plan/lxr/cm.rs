@@ -25,6 +25,8 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     next_objects: VectorQueue<ObjectReference>,
     klass: Address,
     rc: RefCountHelper<VM>,
+    cached_children_fast: [(VM::VMEdge, ObjectReference, u8); 32],
+    cached_children: Vec<(VM::VMEdge, ObjectReference, u8)>,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -41,6 +43,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_objects: VectorQueue::default(),
             rc: RefCountHelper::NEW,
             klass: Address::ZERO,
+            cached_children_fast: [(
+                VM::VMEdge::from_address(Address::ZERO),
+                ObjectReference::NULL,
+                0,
+            ); 32],
+            cached_children: vec![],
         }
     }
 
@@ -57,6 +65,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_objects: VectorQueue::default(),
             rc: RefCountHelper::NEW,
             klass: Address::ZERO,
+            cached_children_fast: [(
+                VM::VMEdge::from_address(Address::ZERO),
+                ObjectReference::NULL,
+                0,
+            ); 32],
+            cached_children: vec![],
         }
     }
 
@@ -121,6 +135,54 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             self.trace_object(*o);
         }
     }
+
+    fn process_edge_after_obj_scan(
+        &mut self,
+        object: ObjectReference,
+        e: VM::VMEdge,
+        t: ObjectReference,
+        validity: u8,
+        should_check_remset: bool,
+    ) {
+        if t.is_null() || self.rc.count(t) == 0 {
+            return;
+        }
+        if cfg!(feature = "sanity") {
+            assert!(
+                t.to_address::<VM>().is_mapped(),
+                "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
+                object,
+                e,
+                t
+            );
+        }
+        if crate::args::RC_MATURE_EVACUATION
+            && (should_check_remset || !e.to_address().is_mapped())
+            && self.plan.in_defrag(t)
+        {
+            self.plan.immix_space.remset.record_with_validity_state(
+                e,
+                t,
+                &self.plan.immix_space,
+                validity,
+            );
+        }
+        if !self.plan.is_marked(t) {
+            if cfg!(any(feature = "sanity", debug_assertions)) {
+                assert!(
+                    t.to_address::<VM>().is_mapped(),
+                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                    object,
+                    e,
+                    t
+                );
+            }
+            self.next_objects.push(t);
+            if self.next_objects.is_full() {
+                self.flush();
+            }
+        }
+    }
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
@@ -136,13 +198,8 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             return;
         }
         let should_check_remset = !self.plan.in_defrag(object);
-        let mut cached_children: Vec<(VM::VMEdge, ObjectReference, u8)> = vec![];
-        let mut cached_children_fast: [(VM::VMEdge, ObjectReference, u8); 8] = [(
-            VM::VMEdge::from_address(Address::ZERO),
-            ObjectReference::NULL,
-            0,
-        ); 8];
         let mut cached_children_fast_cursor = 0usize;
+        self.cached_children.clear();
         object.iterate_fields_with_klass::<VM, _>(
             CLDScanPolicy::Claim,
             RefScanPolicy::Discover,
@@ -157,11 +214,11 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                     .immix_space
                     .remset
                     .get_currrent_validity_state(e, &self.plan.immix_space);
-                if cached_children_fast_cursor < cached_children_fast.len() {
-                    cached_children_fast[cached_children_fast_cursor] = (e, t, validity);
+                if cached_children_fast_cursor < self.cached_children_fast.len() {
+                    self.cached_children_fast[cached_children_fast_cursor] = (e, t, validity);
                     cached_children_fast_cursor += 1;
                 } else {
-                    cached_children.push((e, t, validity));
+                    self.cached_children.push((e, t, validity));
                 }
             },
         );
@@ -172,52 +229,13 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             if cfg!(feature = "lxr_satb_live_bytes_counter") {
                 crate::record_live_bytes(object.get_size::<VM>());
             }
-            let mut process_edge = |e: VM::VMEdge, t: ObjectReference, validity: u8| {
-                if t.is_null() || self.rc.count(t) == 0 {
-                    return;
-                }
-                if cfg!(feature = "sanity") {
-                    assert!(
-                        t.to_address::<VM>().is_mapped(),
-                        "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
-                        object,
-                        e,
-                        t
-                    );
-                }
-                if crate::args::RC_MATURE_EVACUATION
-                    && (should_check_remset || !e.to_address().is_mapped())
-                    && self.plan.in_defrag(t)
-                {
-                    self.plan.immix_space.remset.record_with_validity_state(
-                        e,
-                        t,
-                        &self.plan.immix_space,
-                        validity,
-                    );
-                }
-                if !self.plan.is_marked(t) {
-                    if cfg!(any(feature = "sanity", debug_assertions)) {
-                        assert!(
-                            t.to_address::<VM>().is_mapped(),
-                            "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                            object,
-                            e,
-                            t
-                        );
-                    }
-                    self.next_objects.push(t);
-                    if self.next_objects.is_full() {
-                        self.flush();
-                    }
-                }
-            };
             for i in 0..cached_children_fast_cursor {
-                let (e, t, validity) = cached_children_fast[i];
-                process_edge(e, t, validity);
+                let (e, t, validity) = self.cached_children_fast[i];
+                self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
             }
-            for (e, t, validity) in cached_children {
-                process_edge(e, t, validity);
+            for i in 0..self.cached_children.len() {
+                let (e, t, validity) = self.cached_children[i];
+                self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
             }
         }
     }

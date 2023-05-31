@@ -22,8 +22,7 @@ impl MockScanning {
     }
 
     fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<Address>) {
-        factory
-            .create_process_edge_roots_work(self.roots.clone(), mmtk::scheduler::RootKind::Strong);
+        factory.create_process_edge_roots_work(self.roots.clone(), RootKind::Strong);
     }
 }
 
