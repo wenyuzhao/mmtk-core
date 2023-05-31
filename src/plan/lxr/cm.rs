@@ -137,6 +137,12 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
         }
         let should_check_remset = !self.plan.in_defrag(object);
         let mut cached_children: Vec<(VM::VMEdge, ObjectReference, u8)> = vec![];
+        let mut cached_children_fast: [(VM::VMEdge, ObjectReference, u8); 8] = [(
+            VM::VMEdge::from_address(Address::ZERO),
+            ObjectReference::NULL,
+            0,
+        ); 8];
+        let mut cached_children_fast_cursor = 0usize;
         object.iterate_fields_with_klass::<VM, _>(
             CLDScanPolicy::Claim,
             RefScanPolicy::Discover,
@@ -151,7 +157,12 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                     .immix_space
                     .remset
                     .get_currrent_validity_state(e, &self.plan.immix_space);
-                cached_children.push((e, t, validity));
+                if cached_children_fast_cursor < cached_children_fast.len() {
+                    cached_children_fast[cached_children_fast_cursor] = (e, t, validity);
+                    cached_children_fast_cursor += 1;
+                } else {
+                    cached_children.push((e, t, validity));
+                }
             },
         );
         if self.rc.count(object) != 0 {
@@ -161,9 +172,9 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             if cfg!(feature = "lxr_satb_live_bytes_counter") {
                 crate::record_live_bytes(object.get_size::<VM>());
             }
-            for (e, t, validity) in cached_children {
+            let mut process_edge = |e: VM::VMEdge, t: ObjectReference, validity: u8| {
                 if t.is_null() || self.rc.count(t) == 0 {
-                    continue;
+                    return;
                 }
                 if cfg!(feature = "sanity") {
                     assert!(
@@ -200,6 +211,13 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                         self.flush();
                     }
                 }
+            };
+            for i in 0..cached_children_fast_cursor {
+                let (e, t, validity) = cached_children_fast[i];
+                process_edge(e, t, validity);
+            }
+            for (e, t, validity) in cached_children {
+                process_edge(e, t, validity);
             }
         }
     }
