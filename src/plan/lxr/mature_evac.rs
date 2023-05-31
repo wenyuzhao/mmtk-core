@@ -92,6 +92,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if lxr.rc.count(o) != 0 && Block::in_defrag_block::<VM>(o) {
             return true;
         }
+        // See `ProcessIncs::record_mature_evac_remset` in lxr/rc.rs
+        if lxr.rc.is_stuck(o) && !lxr.is_marked(o) {
+            return true;
+        }
         false
         // Maybe a forwarded nursery or mature object from inc processing.
         // if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {

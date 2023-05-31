@@ -153,12 +153,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.scan_nursery_object(o, los, !copied, depth);
     }
 
-    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference, force: bool) {
+    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference) {
         if !(crate::args::RC_MATURE_EVACUATION
             && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
         {
             return;
         }
+        // RC-Stuck objects in StringTable or WeakProcessor can become strongly reachable from a young object.
+        // Mark this object under such case.
+        // TODO: DO this for weak roots only
+        let force = self.rc.is_stuck(o) && !self.lxr().is_marked(o);
         if force || (!self.lxr().address_in_defrag(e.to_address()) && self.lxr().in_defrag(o)) {
             self.lxr()
                 .immix_space
@@ -277,7 +281,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                         }
                     } else {
                         super::record_edge_for_validation(edge, target);
-                        self.record_mature_evac_remset(edge, target, false);
+                        self.record_mature_evac_remset(edge, target);
                     }
                 } else {
                     super::record_edge_for_validation(edge, target);
@@ -473,7 +477,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 .map(|r| r.is_young_or_weak())
                 .unwrap_or_default()
         {
-            self.record_mature_evac_remset(e, o, false);
+            self.record_mature_evac_remset(e, o);
         }
         if new != o {
             // println!(
