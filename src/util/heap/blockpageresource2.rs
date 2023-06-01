@@ -75,6 +75,14 @@ impl SuperBlock {
         SB_USED_BLOCKS.load_atomic::<u16>(self.start(), Ordering::Relaxed) as _
     }
 
+    pub fn is_locked(&self, copy: bool) -> bool {
+        if !copy {
+            SB_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) != u32::MAX
+        } else {
+            SB_COPY_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) != u32::MAX
+        }
+    }
+
     pub fn try_lock(&self, owner: u32, copy: bool) -> Result<SuperBlockLockGuard, ()> {
         let f = |o| {
             if o != owner {
@@ -318,6 +326,46 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
     }
+    fn alloc_or_steal_super_block_in_address_order_fast(
+        &self,
+        owner: u32,
+        copy: bool,
+        all_chunks: &[Chunk],
+    ) -> Option<SuperBlockLockGuard> {
+        const LOG_SUPER_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - SuperBlock::LOG_BYTES;
+        let max_super_blocks = all_chunks.len() << LOG_SUPER_BLOCKS_IN_CHUNK;
+        let start = self.super_block_alloc_cursor.load(Ordering::Relaxed);
+        let mut i = start;
+        while i < max_super_blocks {
+            let c = all_chunks[i >> LOG_SUPER_BLOCKS_IN_CHUNK];
+            let index_within_chunk = i & ((1 << LOG_SUPER_BLOCKS_IN_CHUNK) - 1);
+            let sb = c
+                .iter_region::<SuperBlock>()
+                .nth(index_within_chunk)
+                .unwrap();
+            if sb.used_blocks() == SuperBlock::BLOCKS || sb.is_locked(copy) {
+                i += 1;
+                continue;
+            }
+            if let Ok(guard) = sb.steal_and_lock(owner, copy) {
+                self.super_block_alloc_cursor.store(i, Ordering::Relaxed);
+                let _ = self.super_block_alloc_cursor.fetch_update(
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                    |cursor| {
+                        if cursor < start {
+                            None
+                        } else {
+                            Some(cursor.max(i))
+                        }
+                    },
+                );
+                return Some(guard);
+            }
+            i += 1;
+        }
+        None
+    }
 
     pub fn alloc_or_steal_super_block_in_address_order(
         &self,
@@ -325,41 +373,32 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
         owner: u32,
         copy: bool,
     ) -> Option<SuperBlockLockGuard> {
-        // let _guard = self.sync.lock().unwrap();
-        let 
-        self.super_block_alloc_cursor.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |i| {
-
-        });
-        let cursor = self.super_block_alloc_cursor.load(Ordering::Relaxed);
-        for (i, c) in self
-            .all_chunks
-            .read()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .skip(cursor)
+        const LOG_SUPER_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - SuperBlock::LOG_BYTES;
+        let all_chunks = self.all_chunks.read().unwrap();
+        if let Some(sb) =
+            self.alloc_or_steal_super_block_in_address_order_fast(owner, copy, &all_chunks)
         {
-            for sb in c.iter_region::<SuperBlock>() {
-                if sb.used_blocks() == SuperBlock::BLOCKS {
-                    continue;
-                }
-                if let Ok(guard) = sb.steal_and_lock(owner, copy) {
-                    self.super_block_alloc_cursor.store(i, Ordering::Relaxed);
-                    return Some(guard);
-                }
-            }
+            return Some(sb);
         }
-        self.super_block_alloc_cursor
-            .store(self.all_chunks.read().unwrap().len(), Ordering::Relaxed);
         // allocate a new chunk
+        std::mem::drop(all_chunks);
+        let mut all_chunks = self.all_chunks.write().unwrap();
+        if let Some(sb) =
+            self.alloc_or_steal_super_block_in_address_order_fast(owner, copy, &all_chunks)
+        {
+            return Some(sb);
+        }
         let c = self.alloc_chunk(space)?;
         for sb in c.iter_region::<SuperBlock>() {
             sb.init();
         }
         let first_sb = c.iter_region::<SuperBlock>().next().unwrap();
-        println!("alloc {:?}", c);
         let guard = first_sb.steal_and_lock(owner, copy).unwrap();
-        self.all_chunks.write().unwrap().push(c);
+        self.super_block_alloc_cursor.store(
+            (all_chunks.len() << LOG_SUPER_BLOCKS_IN_CHUNK) + 1,
+            Ordering::Relaxed,
+        );
+        all_chunks.push(c);
         Some(guard)
     }
 
@@ -368,7 +407,8 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
     }
 
     pub fn flush_all(&self) {
-        let _guard = self.sync.lock().unwrap();
+        // let _guard = self.sync.lock().unwrap();
+        let _all_chunks = self.all_chunks.write().unwrap();
         self.super_block_alloc_cursor.store(0, Ordering::Relaxed);
     }
 

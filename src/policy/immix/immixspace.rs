@@ -403,7 +403,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Flush the thread-local queues in BlockPageResource
     pub fn flush_page_resource(&self) {
         self.reusable_blocks.flush_all();
-        #[cfg(target_pointer_width = "64")]
         self.pr.flush_all()
     }
 

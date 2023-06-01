@@ -397,7 +397,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
-        // self.immix_space.flush_page_resource();
+        self.immix_space.pr.flush_all();
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
