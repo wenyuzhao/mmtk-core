@@ -8,15 +8,18 @@ use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::spec_defs::{SB_IS_REUSABLE, SB_LIVE_BLOCKS};
+use crate::util::metadata::side_metadata::spec_defs::{
+    SB_COPY_OWNER, SB_IS_REUSABLE, SB_OWNER, SB_USED_BLOCKS,
+};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
@@ -47,6 +50,106 @@ impl SuperBlock {
     /// Chunk constant with zero address
     // FIXME: We use this as an empty value. What if we actually use the first chunk?
     pub const ZERO: Self = Self(Address::ZERO);
+    pub const LOG_BLOCKS: usize = Self::LOG_BYTES - crate::policy::immix::block::Block::LOG_BYTES;
+    pub const BLOCKS: usize = 1 << Self::LOG_BLOCKS;
+
+    // pub fn owner(&self) -> u32 {
+    //     SB_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed)
+    // }
+
+    fn init(&self) {
+        SB_OWNER.store_atomic::<u32>(self.start(), 0, Ordering::SeqCst);
+        SB_COPY_OWNER.store_atomic::<u32>(self.start(), 0, Ordering::SeqCst);
+        SB_USED_BLOCKS.store_atomic::<u16>(self.start(), 0, Ordering::SeqCst);
+    }
+
+    pub fn inc_used_blocks(&self) {
+        SB_USED_BLOCKS.fetch_add_atomic::<u16>(self.start(), 1, Ordering::Relaxed);
+    }
+
+    pub fn dec_used_blocks(&self) {
+        SB_USED_BLOCKS.fetch_sub_atomic::<u16>(self.start(), 1, Ordering::Relaxed);
+    }
+
+    pub fn used_blocks(&self) -> usize {
+        SB_USED_BLOCKS.load_atomic::<u16>(self.start(), Ordering::Relaxed) as _
+    }
+
+    pub fn try_lock(&self, owner: u32, copy: bool) -> Result<SuperBlockLockGuard, ()> {
+        let f = |o| {
+            if o != owner {
+                None
+            } else {
+                Some(u32::MAX)
+            }
+        };
+        let result = if !copy {
+            SB_OWNER.fetch_update_atomic::<u32, _>(
+                self.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                f,
+            )
+        } else {
+            SB_COPY_OWNER.fetch_update_atomic::<u32, _>(
+                self.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                f,
+            )
+        };
+        if result.is_ok() {
+            Ok(SuperBlockLockGuard {
+                super_block: *self,
+                owner,
+                copy,
+            })
+        } else {
+            Err(())
+        }
+    }
+
+    fn unlock(&self, owner: u32, copy: bool) {
+        if !copy {
+            SB_OWNER.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst);
+        } else {
+            SB_COPY_OWNER.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst);
+        }
+    }
+
+    pub fn steal_and_lock(&self, stealer: u32, copy: bool) -> Result<SuperBlockLockGuard, ()> {
+        let f = |o| {
+            if o == stealer || o == u32::MAX {
+                None
+            } else {
+                Some(u32::MAX)
+            }
+        };
+        let result = if !copy {
+            SB_OWNER.fetch_update_atomic::<u32, _>(
+                self.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                f,
+            )
+        } else {
+            SB_COPY_OWNER.fetch_update_atomic::<u32, _>(
+                self.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                f,
+            )
+        };
+        if result.is_ok() {
+            Ok(SuperBlockLockGuard {
+                super_block: *self,
+                owner: stealer,
+                copy,
+            })
+        } else {
+            Err(())
+        }
+    }
 
     /// Get an iterator for regions within this chunk.
     pub fn iter_region<R: Region>(&self) -> RegionIterator<R> {
@@ -60,6 +163,29 @@ impl SuperBlock {
         let end = R::from_aligned_address(self.end());
         RegionIterator::<R>::new(start, end)
     }
+
+    pub fn blocks(&self) -> RegionIterator<crate::policy::immix::block::Block> {
+        self.iter_region()
+    }
+}
+
+pub struct SuperBlockLockGuard {
+    super_block: SuperBlock,
+    owner: u32,
+    copy: bool,
+}
+
+impl Deref for SuperBlockLockGuard {
+    type Target = SuperBlock;
+    fn deref(&self) -> &Self::Target {
+        &self.super_block
+    }
+}
+
+impl Drop for SuperBlockLockGuard {
+    fn drop(&mut self) {
+        self.super_block.unlock(self.owner, self.copy)
+    }
 }
 
 /// A fast PageResource for fixed-size block allocation only.
@@ -67,6 +193,8 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     flpr: FreeListPageResource<VM>,
     sb_queue: SegQueue<SuperBlock>,
     sync: Mutex<()>,
+    super_block_alloc_cursor: AtomicUsize,
+    all_chunks: RwLock<Vec<Chunk>>,
     pub(crate) total_chunks: AtomicUsize,
     _p: PhantomData<B>,
 }
@@ -101,8 +229,10 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
     const LOG_PAGES: usize = B::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
 
     fn append_local_metadata(metadata: &mut SideMetadataContext) {
-        metadata.local.push(SB_LIVE_BLOCKS);
         metadata.local.push(SB_IS_REUSABLE);
+        metadata.local.push(SB_OWNER);
+        metadata.local.push(SB_COPY_OWNER);
+        metadata.local.push(SB_USED_BLOCKS);
     }
 
     pub fn new_contiguous(
@@ -120,6 +250,8 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
             sync: Mutex::default(),
             sb_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
+            super_block_alloc_cursor: AtomicUsize::new(0),
+            all_chunks: RwLock::default(),
             _p: PhantomData,
         }
     }
@@ -137,6 +269,8 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
             sync: Mutex::default(),
             sb_queue: SegQueue::new(),
             total_chunks: AtomicUsize::new(0),
+            super_block_alloc_cursor: AtomicUsize::new(0),
+            all_chunks: RwLock::default(),
             _p: PhantomData,
         }
     }
@@ -163,74 +297,80 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
         }
         space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
-        Some(Chunk::from_aligned_address(start))
+        let chunk = Chunk::from_aligned_address(start);
+        Some(chunk)
     }
 
-    fn free_chunk(&self, chunk: Chunk) {
-        self.total_chunks.fetch_sub(1, Ordering::SeqCst);
-        if self.common().contiguous {
-            unreachable!();
-        } else {
-            self.common().release_discontiguous_chunks(chunk.start());
-        }
+    fn free_chunk(&self, _chunk: Chunk) {
+        unreachable!();
     }
 
     pub fn notify_block_alloc(&self, b: B, tls: VMThread) {
         let sb = SuperBlock::from_unaligned_address(b.start());
-        SB_LIVE_BLOCKS.fetch_add_atomic::<u16>(sb.start(), 1, Ordering::Relaxed);
+        sb.inc_used_blocks();
         let pages = 1 << Self::LOG_PAGES;
         self.commit_pages(pages, pages, tls);
     }
 
     pub fn notify_block_dealloc(&self, b: B) {
         let sb = SuperBlock::from_unaligned_address(b.start());
-        let _live_blocks =
-            SB_LIVE_BLOCKS.fetch_sub_atomic::<u16>(sb.start(), 1, Ordering::Relaxed) - 1;
+        sb.dec_used_blocks();
         let pages = 1 << Self::LOG_PAGES;
         self.common().accounting.release(pages as _);
-        // if (live_blocks as usize) <= (Self::BLOCKS_IN_CHUNK * 3 / 4) {
-        if SB_IS_REUSABLE.load_atomic::<u8>(sb.start(), Ordering::Relaxed) == 0 {
-            let result = SB_IS_REUSABLE.fetch_update_atomic::<u8, _>(
-                sb.start(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |x| {
-                    if x == 0 {
-                        Some(1)
-                    } else {
-                        None
-                    }
-                },
-            );
-            if result.is_ok() {
-                self.sb_queue.push(sb);
+    }
+
+    pub fn alloc_or_steal_super_block_in_address_order(
+        &self,
+        space: &dyn Space<VM>,
+        owner: u32,
+        copy: bool,
+    ) -> Option<SuperBlockLockGuard> {
+        // let _guard = self.sync.lock().unwrap();
+        let 
+        self.super_block_alloc_cursor.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |i| {
+
+        });
+        let cursor = self.super_block_alloc_cursor.load(Ordering::Relaxed);
+        for (i, c) in self
+            .all_chunks
+            .read()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .skip(cursor)
+        {
+            for sb in c.iter_region::<SuperBlock>() {
+                if sb.used_blocks() == SuperBlock::BLOCKS {
+                    continue;
+                }
+                if let Ok(guard) = sb.steal_and_lock(owner, copy) {
+                    self.super_block_alloc_cursor.store(i, Ordering::Relaxed);
+                    return Some(guard);
+                }
             }
         }
-        // }
-    }
-
-    pub fn pop_local_alloc_super_block(&self, space: &dyn Space<VM>) -> Option<SuperBlock> {
-        if let Some(c) = self.sb_queue.pop() {
-            return Some(c);
-        }
+        self.super_block_alloc_cursor
+            .store(self.all_chunks.read().unwrap().len(), Ordering::Relaxed);
+        // allocate a new chunk
         let c = self.alloc_chunk(space)?;
-        for sb in c.iter_region::<SuperBlock>().skip(1) {
-            SB_IS_REUSABLE.load_atomic::<u8>(sb.start(), Ordering::Relaxed);
-            self.sb_queue.push(sb);
+        for sb in c.iter_region::<SuperBlock>() {
+            sb.init();
         }
-        Some(SuperBlock::from_aligned_address(c.start()))
-    }
-
-    pub fn push_local_alloc_super_block(&self, sb: SuperBlock) {
-        // self.chunk_queue.push(c);
-        SB_IS_REUSABLE.store_atomic(sb.start(), 0u8, Ordering::SeqCst);
+        let first_sb = c.iter_region::<SuperBlock>().next().unwrap();
+        println!("alloc {:?}", c);
+        let guard = first_sb.steal_and_lock(owner, copy).unwrap();
+        self.all_chunks.write().unwrap().push(c);
+        Some(guard)
     }
 
     pub fn release_block(&self, block: B, _single_thread: bool) {
         self.notify_block_dealloc(block);
     }
 
-    pub fn flush_all(&self) {}
+    pub fn flush_all(&self) {
+        let _guard = self.sync.lock().unwrap();
+        self.super_block_alloc_cursor.store(0, Ordering::Relaxed);
+    }
 
     pub fn available_pages(&self) -> usize {
         let total = self.total_chunks.load(Ordering::SeqCst)

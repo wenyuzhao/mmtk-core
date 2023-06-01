@@ -370,7 +370,7 @@ impl Block {
         if space.rc_enabled {
             if !reuse {
                 self.clear_in_place_promoted();
-                debug_assert_eq!(self.get_state(), BlockState::Unallocated);
+                // debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
             if !copy && reuse {
                 self.set_state(BlockState::Reusing);

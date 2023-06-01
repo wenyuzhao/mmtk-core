@@ -94,7 +94,10 @@ define_side_metadata_specs!(
     CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     SB_IS_REUSABLE   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
-    SB_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
+    SB_USED_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
+    SB_OWNER = (global: false, log_num_of_bits: 5, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
+    SB_COPY_OWNER = (global: false, log_num_of_bits: 5, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
+    // SB_AVAILABLE_REUSABLE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::SuperBlock::LOG_BYTES),
     // Mark blocks by (native mimalloc) marksweep
     MS_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),
     // Next block in list for native mimalloc

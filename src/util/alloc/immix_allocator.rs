@@ -1,3 +1,8 @@
+use std::collections::VecDeque;
+use std::sync::atomic::AtomicU32;
+
+use atomic::Ordering;
+
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use crate::plan::Plan;
 use crate::policy::immix::block::Block;
@@ -17,6 +22,7 @@ use crate::vm::*;
 use crate::MMTK;
 
 const THREAD_LOCAL_BLOCK_ALLOC: bool = true;
+static MUTATOR_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 /// Immix allocator
 #[repr(C)]
@@ -45,8 +51,9 @@ pub struct ImmixAllocator<VM: VMBinding> {
     mutator_recycled_blocks: Box<Vec<Block>>,
     mutator_recycled_lines: usize,
     retry: bool,
-    alloc_super_block_cursor: usize,
-    alloc_super_block: Option<SuperBlock>,
+    id: u32,
+    available_super_blocks: Box<VecDeque<SuperBlock>>,
+    retired_super_blocks: Box<Vec<SuperBlock>>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -57,51 +64,63 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_limit = Address::ZERO;
         self.request_for_large = false;
         self.line = None;
-        if let Some(c) = self.alloc_super_block {
-            self.immix_space().pr.push_local_alloc_super_block(c);
+        if !self.copy {
+            let mut sbs = vec![];
+            for sb in std::mem::take(&mut *self.retired_super_blocks) {
+                sbs.push(sb);
+            }
+            for sb in std::mem::take(&mut *self.available_super_blocks) {
+                sbs.push(sb);
+            }
+            sbs.sort_by_cached_key(|sb| sb.start().as_usize());
+            for sb in sbs {
+                self.available_super_blocks.push_back(sb);
+            }
+        } else {
+            self.available_super_blocks.clear();
+            self.retired_super_blocks.clear();
         }
-        self.alloc_super_block = None;
-        self.alloc_super_block_cursor = 0;
     }
 
     fn get_clean_block_impl(&mut self) -> Option<Block> {
         if !THREAD_LOCAL_BLOCK_ALLOC {
             return self.immix_space().get_clean_block(self.tls, self.copy);
         }
+        let alloced_state = if self.copy {
+            BlockState::Unmarked
+        } else {
+            BlockState::Nursery
+        };
         loop {
-            const BLOCKS_IN_SUPER_BLOCK: usize = 1 << (SuperBlock::LOG_BYTES - Block::LOG_BYTES);
-            if self.alloc_super_block.is_none()
-                || self.alloc_super_block_cursor >= BLOCKS_IN_SUPER_BLOCK
-            {
-                if let Some(c) = self.alloc_super_block {
-                    self.immix_space().pr.push_local_alloc_super_block(c);
-                }
-                self.alloc_super_block = Some(
-                    self.immix_space()
-                        .pr
-                        .pop_local_alloc_super_block(self.immix_space())?,
-                );
-                self.alloc_super_block_cursor = 0;
-                continue;
+            // Get more super block if the local cache is empty
+            if self.available_super_blocks.is_empty() {
+                let sb = self
+                    .space
+                    .pr
+                    .alloc_or_steal_super_block_in_address_order(self.space, self.id, self.copy)?;
+                self.available_super_blocks.push_back(*sb);
             }
-            let base = self.alloc_super_block.unwrap().start();
-            let mut c = self.alloc_super_block_cursor;
-            let alloced_state = if self.copy {
-                BlockState::Unmarked
-            } else {
-                BlockState::Nursery
-            };
-            while c < BLOCKS_IN_SUPER_BLOCK {
-                let b = Block::from_aligned_address(base + (c << Block::LOG_BYTES));
-                if b.get_state() == BlockState::Unallocated {
-                    b.set_state(alloced_state);
-                    self.immix_space().init_clean_block(b, self.copy);
-                    self.alloc_super_block_cursor = c;
-                    return Some(b);
+            // Alloc clean block
+            while let Some(sb) = self.available_super_blocks.front().cloned() {
+                let Ok(sb) = sb.try_lock(self.id, self.copy) else {
+                    // Already stolen. Remove this super block.
+                    self.available_super_blocks.pop_front();
+                    continue;
+                };
+                if sb.used_blocks() < SuperBlock::BLOCKS {
+                    for b in sb
+                        .blocks()
+                        .filter(|b| b.get_state() == BlockState::Unallocated)
+                    {
+                        b.set_state(alloced_state);
+                        self.immix_space().init_clean_block(b, self.copy);
+                        return Some(b);
+                    }
                 }
-                c += 1;
+                // no clean blocks. retire this super block.
+                self.available_super_blocks.pop_front();
+                self.retired_super_blocks.push(*sb);
             }
-            self.alloc_super_block_cursor = c;
         }
     }
 
@@ -240,8 +259,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             mutator_recycled_blocks: Box::new(vec![]),
             mutator_recycled_lines: 0,
             retry: false,
-            alloc_super_block: None,
-            alloc_super_block_cursor: 0,
+            id: MUTATOR_COUNTER.fetch_add(1, Ordering::SeqCst),
+            available_super_blocks: Box::new(VecDeque::new()),
+            retired_super_blocks: Box::new(vec![]),
         }
     }
 
