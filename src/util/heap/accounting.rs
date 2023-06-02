@@ -56,6 +56,13 @@ impl PageAccounting {
         debug_assert!(_prev_committed >= pages);
     }
 
+    pub fn release_relaxed(&self, pages: usize) {
+        let v = self.reserved.load(Ordering::Relaxed);
+        self.reserved.store(v - pages, Ordering::Relaxed);
+        let v = self.committed.load(Ordering::Relaxed);
+        self.committed.store(v - pages, Ordering::Relaxed);
+    }
+
     /// Set both reserved and committed pages to zero. This is only used when we completely clear a space.
     pub fn reset(&self) {
         self.reserved.store(0, Ordering::Relaxed);

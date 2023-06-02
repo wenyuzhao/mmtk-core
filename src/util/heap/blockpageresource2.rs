@@ -67,8 +67,16 @@ impl SuperBlock {
         SB_USED_BLOCKS.fetch_add_atomic::<u16>(self.start(), 1, Ordering::Relaxed);
     }
 
-    pub fn dec_used_blocks(&self) {
+    fn dec_used_blocks(&self) {
         SB_USED_BLOCKS.fetch_sub_atomic::<u16>(self.start(), 1, Ordering::Relaxed);
+    }
+
+    fn dec_used_blocks_relaxed(&self) {
+        SB_USED_BLOCKS.store_atomic::<u16>(
+            self.start(),
+            self.used_blocks() as u16 - 1,
+            Ordering::Relaxed,
+        );
     }
 
     pub fn used_blocks(&self) -> usize {
@@ -328,11 +336,16 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
         self.commit_pages(pages, pages, tls);
     }
 
-    pub fn notify_block_dealloc(&self, b: B) {
+    pub fn notify_block_dealloc(&self, b: B, single_thread: bool) {
         let sb = SuperBlock::from_unaligned_address(b.start());
-        sb.dec_used_blocks();
         let pages = 1 << Self::LOG_PAGES;
-        self.common().accounting.release(pages as _);
+        if single_thread {
+            sb.dec_used_blocks_relaxed();
+            self.common().accounting.release_relaxed(pages as _);
+        } else {
+            sb.dec_used_blocks();
+            self.common().accounting.release(pages as _);
+        }
     }
     fn alloc_or_steal_super_block_in_address_order_fast(
         &self,
@@ -410,8 +423,8 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
         Some(guard)
     }
 
-    pub fn release_block(&self, block: B, _single_thread: bool) {
-        self.notify_block_dealloc(block);
+    pub fn release_block(&self, block: B, single_thread: bool) {
+        self.notify_block_dealloc(block, single_thread);
     }
 
     pub fn flush_all(&self) {
