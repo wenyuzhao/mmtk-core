@@ -614,3 +614,9 @@ static VERBOSE: AtomicUsize = AtomicUsize::new(0);
 fn verbose(level: usize) -> bool {
     VERBOSE.load(Ordering::Relaxed) >= level
 }
+
+static MUTATOR_UPDATE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn update_mutators() {
+    crate::MUTATOR_UPDATE_COUNTER.fetch_add(1, Ordering::SeqCst);
+}

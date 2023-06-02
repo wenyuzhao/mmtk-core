@@ -75,11 +75,19 @@ impl SuperBlock {
         SB_USED_BLOCKS.load_atomic::<u16>(self.start(), Ordering::Relaxed) as _
     }
 
+    pub fn is_owned_by(&self, owner: u32, copy: bool) -> bool {
+        if !copy {
+            SB_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) == owner
+        } else {
+            SB_COPY_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) == owner
+        }
+    }
+
     pub fn is_locked(&self, copy: bool) -> bool {
         if !copy {
-            SB_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) != u32::MAX
+            SB_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) == u32::MAX
         } else {
-            SB_COPY_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) != u32::MAX
+            SB_COPY_OWNER.load_atomic::<u32>(self.start(), Ordering::Relaxed) == u32::MAX
         }
     }
 
@@ -408,6 +416,7 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
 
     pub fn flush_all(&self) {
         // let _guard = self.sync.lock().unwrap();
+        crate::update_mutators();
         let _all_chunks = self.all_chunks.write().unwrap();
         self.super_block_alloc_cursor.store(0, Ordering::Relaxed);
     }

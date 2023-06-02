@@ -397,6 +397,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+        crate::update_mutators();
         self.immix_space.pr.flush_all();
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
@@ -437,6 +438,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_end(&self) {
+        crate::update_mutators();
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
         // self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();

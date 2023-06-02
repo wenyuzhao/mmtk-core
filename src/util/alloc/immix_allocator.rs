@@ -54,9 +54,35 @@ pub struct ImmixAllocator<VM: VMBinding> {
     id: u32,
     available_super_blocks: Box<VecDeque<SuperBlock>>,
     retired_super_blocks: Box<Vec<SuperBlock>>,
+    update_counter: usize,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
+    fn update(&mut self) {
+        let mut sbs = vec![];
+        for sb in std::mem::take(&mut *self.retired_super_blocks) {
+            if sb.is_owned_by(self.id, self.copy) {
+                sbs.push(sb);
+            }
+        }
+        for sb in std::mem::take(&mut *self.available_super_blocks) {
+            if sb.is_owned_by(self.id, self.copy) {
+                sbs.push(sb);
+            }
+        }
+        for sb in sbs {
+            self.available_super_blocks.push_back(sb);
+        }
+    }
+    fn check_mutator_update_counter(&mut self) {
+        if self.copy || self.update_counter >= crate::MUTATOR_UPDATE_COUNTER.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        self.update_counter = crate::MUTATOR_UPDATE_COUNTER.load(Ordering::Relaxed);
+        self.update();
+    }
+
     pub fn reset(&mut self) {
         self.cursor = Address::ZERO;
         self.limit = Address::ZERO;
@@ -65,17 +91,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.request_for_large = false;
         self.line = None;
         if !self.copy {
-            let mut sbs = vec![];
-            for sb in std::mem::take(&mut *self.retired_super_blocks) {
-                sbs.push(sb);
-            }
-            for sb in std::mem::take(&mut *self.available_super_blocks) {
-                sbs.push(sb);
-            }
-            sbs.sort_by_cached_key(|sb| sb.start().as_usize());
-            for sb in sbs {
-                self.available_super_blocks.push_back(sb);
-            }
+            self.update();
         } else {
             self.available_super_blocks.clear();
             self.retired_super_blocks.clear();
@@ -118,13 +134,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     }
                 }
                 // no clean blocks. retire this super block.
-                self.available_super_blocks.pop_front();
+                let _ = self.available_super_blocks.pop_front();
                 self.retired_super_blocks.push(*sb);
             }
         }
     }
 
     fn get_clean_block(&mut self) -> Option<Block> {
+        self.check_mutator_update_counter();
         self.immix_space()
             .thread_local_block_alloc_wrapper(self.copy, self.tls, || self.get_clean_block_impl())
     }
@@ -262,6 +279,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             id: MUTATOR_COUNTER.fetch_add(1, Ordering::SeqCst),
             available_super_blocks: Box::new(VecDeque::new()),
             retired_super_blocks: Box::new(vec![]),
+            update_counter: crate::MUTATOR_UPDATE_COUNTER.load(Ordering::SeqCst),
         }
     }
 
