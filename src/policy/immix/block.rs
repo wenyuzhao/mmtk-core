@@ -628,7 +628,6 @@ impl Block {
             self.set_state(BlockState::Reusable {
                 unavailable_lines: 1 as _,
             });
-            space.reusable_blocks.push(*self);
             false
         } else {
             debug_assert!(self.rc_dead(), "{:?} has non-zero rc value", self);
@@ -694,7 +693,6 @@ impl Block {
             };
             if add_as_reusable {
                 debug_assert!(self.get_state().is_reusable());
-                space.reusable_blocks.push(*self);
             }
         }
         false

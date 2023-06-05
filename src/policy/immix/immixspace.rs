@@ -56,7 +56,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Defrag utilities
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
-    lines_consumed: AtomicUsize,
+    pub(crate) lines_consumed: AtomicUsize,
     /// Object mark state
     mark_state: u8,
     /// Work packet scheduler
@@ -806,6 +806,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Pop a reusable block from the reusable block list.
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
+        unreachable!();
         if super::BLOCK_ONLY {
             return None;
         }

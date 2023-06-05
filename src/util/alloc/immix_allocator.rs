@@ -48,17 +48,19 @@ pub struct ImmixAllocator<VM: VMBinding> {
     request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
-    mutator_recycled_blocks: Box<Vec<Block>>,
-    mutator_recycled_lines: usize,
     retry: bool,
     id: u32,
-    available_super_blocks: Box<VecDeque<SuperBlock>>,
+    available_super_blocks: Box<VecDeque<Option<SuperBlock>>>,
     retired_super_blocks: Box<Vec<SuperBlock>>,
+    clean_cursor: usize,
+    reuse_cursor: usize,
     update_counter: usize,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
     fn update(&mut self) {
+        self.clean_cursor = 0;
+        self.reuse_cursor = 0;
         let mut sbs = vec![];
         for sb in std::mem::take(&mut *self.retired_super_blocks) {
             if sb.is_owned_by(self.id, self.copy) {
@@ -66,12 +68,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             }
         }
         for sb in std::mem::take(&mut *self.available_super_blocks) {
-            if sb.is_owned_by(self.id, self.copy) {
-                sbs.push(sb);
+            if let Some(sb) = sb {
+                if sb.is_owned_by(self.id, self.copy) {
+                    sbs.push(sb);
+                }
             }
         }
         for sb in sbs {
-            self.available_super_blocks.push_back(sb);
+            self.available_super_blocks.push_back(Some(sb));
         }
     }
     fn check_mutator_update_counter(&mut self) {
@@ -90,12 +94,27 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_limit = Address::ZERO;
         self.request_for_large = false;
         self.line = None;
+        self.clean_cursor = 0;
+        self.reuse_cursor = 0;
         if !self.copy {
             self.update();
         } else {
             self.available_super_blocks.clear();
             self.retired_super_blocks.clear();
         }
+    }
+
+    fn retire_super_block_when_possible(&mut self) {
+        let bottom = self.clean_cursor.min(self.reuse_cursor);
+        assert!(bottom <= 1);
+        if bottom == 0 {
+            return;
+        }
+        if let Some(sb) = self.available_super_blocks.pop_front().unwrap() {
+            self.retired_super_blocks.push(sb);
+        }
+        self.reuse_cursor -= 1;
+        self.clean_cursor -= 1;
     }
 
     fn get_clean_block_impl(&mut self) -> Option<Block> {
@@ -108,19 +127,27 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             BlockState::Nursery
         };
         loop {
-            // Get more super block if the local cache is empty
-            if self.available_super_blocks.is_empty() {
+            // Get more super block if the cursor is reaching the local cache top
+            if self.clean_cursor >= self.available_super_blocks.len() {
                 let sb = self
                     .space
                     .pr
                     .alloc_or_steal_super_block_in_address_order(self.space, self.id, self.copy)?;
-                self.available_super_blocks.push_back(*sb);
+                self.available_super_blocks.push_back(Some(*sb));
             }
             // Alloc clean block
-            while let Some(sb) = self.available_super_blocks.front().cloned() {
+            while self.clean_cursor < self.available_super_blocks.len() {
+                let Some(sb) = self.available_super_blocks[self.clean_cursor] else {
+                    // Skip empty entry
+                    self.clean_cursor += 1;
+                    self.retire_super_block_when_possible();
+                    continue;
+                };
                 let Ok(sb) = sb.try_lock(self.id, self.copy) else {
-                    // Already stolen. Remove this super block.
-                    self.available_super_blocks.pop_front();
+                    // Already stolen. Clear and skip this entry.
+                    self.available_super_blocks[self.clean_cursor] = None;
+                    self.clean_cursor += 1;
+                    self.retire_super_block_when_possible();
                     continue;
                 };
                 if sb.used_blocks() < SuperBlock::BLOCKS {
@@ -133,9 +160,78 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         return Some(b);
                     }
                 }
-                // no clean blocks. retire this super block.
-                let _ = self.available_super_blocks.pop_front();
-                self.retired_super_blocks.push(*sb);
+                // No clean blocks. search next super block.
+                self.clean_cursor += 1;
+                self.retire_super_block_when_possible();
+            }
+        }
+    }
+
+    fn get_reusable_block_impl(&mut self) -> Option<Block> {
+        loop {
+            // Get more super block if the cursor is reaching the local cache top
+            if self.reuse_cursor >= self.available_super_blocks.len() {
+                //     let sb = self
+                //         .space
+                //         .pr
+                //         .alloc_or_steal_super_block_in_address_order(self.space, self.id, self.copy)?;
+                //     self.available_super_blocks.push_back(Some(*sb));
+                return None;
+            }
+            // Alloc reusable block
+            while self.reuse_cursor < self.available_super_blocks.len() {
+                let Some(sb) = self.available_super_blocks[self.reuse_cursor] else {
+                    // Skip empty entry
+                    self.reuse_cursor += 1;
+                    self.retire_super_block_when_possible();
+                    continue;
+                };
+                let Ok(sb) = sb.try_lock(self.id, self.copy) else {
+                    // Already stolen. Clear and skip this entry.
+                    self.available_super_blocks[self.reuse_cursor] = None;
+                    self.reuse_cursor += 1;
+                    self.retire_super_block_when_possible();
+                    continue;
+                };
+                // if sb.used_blocks() < SuperBlock::BLOCKS {
+                for b in sb
+                    .blocks()
+                    .filter(|b| matches!(b.get_state(), BlockState::Reusable { .. }))
+                {
+                    // Skip blocks that should be evacuated.
+                    if self.copy && b.is_defrag_source() {
+                        continue;
+                    }
+                    if self.immix_space().rc_enabled {
+                        if crate::args::RC_MATURE_EVACUATION && b.is_defrag_source() {
+                            continue;
+                        }
+                        // if !self.copy && !b.attempt_mutator_reuse() {
+                        //     continue;
+                        // }
+                        // if !self.copy {
+                        //     self.immix_space().block_allocation.reused_blocks.push(b);
+                        // }
+                    } else {
+                        // Get available lines. Do this before block.init which will reset block state.
+                        let lines_delta = match b.get_state() {
+                            BlockState::Reusable { unavailable_lines } => {
+                                Block::LINES - unavailable_lines as usize
+                            }
+                            BlockState::Unmarked => Block::LINES,
+                            _ => unreachable!("{:?} {:?}", b, b.get_state()),
+                        };
+                        self.immix_space()
+                            .lines_consumed
+                            .fetch_add(lines_delta, Ordering::SeqCst);
+                    }
+                    b.init(self.copy, true, self.immix_space());
+                    return Some(b);
+                }
+                // }
+                // No reuse blocks. search next super block.
+                self.reuse_cursor += 1;
+                self.retire_super_block_when_possible();
             }
         }
     }
@@ -273,12 +369,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
-            mutator_recycled_blocks: Box::new(vec![]),
-            mutator_recycled_lines: 0,
             retry: false,
             id: MUTATOR_COUNTER.fetch_add(1, Ordering::SeqCst),
-            available_super_blocks: Box::new(VecDeque::new()),
+            available_super_blocks: Box::new(Default::default()),
             retired_super_blocks: Box::new(vec![]),
+            clean_cursor: 0,
+            reuse_cursor: 0,
             update_counter: crate::MUTATOR_UPDATE_COUNTER.load(Ordering::SeqCst),
         }
     }
@@ -365,7 +461,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         if crate::args().no_mutator_line_recycling && !self.copy {
             return false;
         }
-        match self.immix_space().get_reusable_block(self.copy) {
+        match self.get_reusable_block_impl() {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.

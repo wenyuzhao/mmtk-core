@@ -394,6 +394,7 @@ impl<VM: VMBinding, B: Region + 'static> BlockPageResource<VM, B> {
         owner: u32,
         copy: bool,
     ) -> Option<SuperBlockLockGuard> {
+        // println!("alloc_or_steal_super_block_in_address_order");
         const LOG_SUPER_BLOCKS_IN_CHUNK: usize = Chunk::LOG_BYTES - SuperBlock::LOG_BYTES;
         let all_chunks = self.all_chunks.read().unwrap();
         if let Some(sb) =

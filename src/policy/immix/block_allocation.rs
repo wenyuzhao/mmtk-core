@@ -13,7 +13,7 @@ use atomic::{Atomic, Ordering};
 use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 
-pub(super) struct BlockCache {
+pub(crate) struct BlockCache {
     cursor: AtomicUsize,
     buffer: RwLock<Vec<Atomic<Block>>>,
 }
@@ -67,7 +67,7 @@ impl BlockCache {
 pub struct BlockAllocation<VM: VMBinding> {
     space: Option<&'static ImmixSpace<VM>>,
     pub(super) nursery_blocks: BlockCache,
-    pub(super) reused_blocks: BlockCache,
+    pub(crate) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
 }
 
