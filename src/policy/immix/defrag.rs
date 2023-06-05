@@ -149,7 +149,7 @@ impl Defrag {
             let bucket = block.get_holes();
             let unavailable_lines = match block.get_state() {
                 BlockState::Reusable { unavailable_lines } => unavailable_lines as usize,
-                s => unreachable!("{:?} {:?}", block, s),
+                _ => return,
             };
             let available_lines = Block::LINES - unavailable_lines;
             spill_avail_histograms[bucket] += available_lines;
