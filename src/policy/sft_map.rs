@@ -394,6 +394,9 @@ mod sparse_chunk_map {
 
     impl<'a> SFTMap for SFTSparseChunkMap<'a> {
         fn has_sft_entry(&self, addr: Address) -> bool {
+            if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+                return false;
+            }
             addr.chunk_index() < VM_LAYOUT_CONSTANTS.max_chunks()
         }
 

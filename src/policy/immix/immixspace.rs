@@ -1192,7 +1192,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if self.rc_enabled {
             self.rc_get_next_available_lines(copy, search_start)
         } else {
-            self.normal_get_next_available_lines(search_start)
+            self.normal_get_next_available_lines(copy, search_start)
         }
     }
 
@@ -1283,7 +1283,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[allow(clippy::assertions_on_constants)]
-    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
+    pub fn normal_get_next_available_lines(
+        &self,
+        copy: bool,
+        search_start: Line,
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
@@ -1320,12 +1324,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if end == block.end_line() {
                 return None;
             } else {
-                return self.normal_get_next_available_lines(end);
+                return self.normal_get_next_available_lines(copy, end);
             };
         }
-        // if self.common.needs_log_bit {
-        //     Line::clear_log_table::<VM>(start..end);
-        // }
+        if self.common.needs_log_bit {
+            if !copy {
+                Line::clear_field_unlog_table::<VM>(start..end);
+            } else {
+                Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
+            }
+        }
         Some((start, end))
     }
 
