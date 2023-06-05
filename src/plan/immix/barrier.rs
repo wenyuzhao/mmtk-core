@@ -35,10 +35,10 @@ pub struct ImmixFakeFieldBarrierSemantics<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
-    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+    pub(super) const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
-    const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
+    pub(super) const LOCK_BITS: SideMetadataSpec = RC_LOCK_BITS;
 
     #[allow(unused)]
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
@@ -203,7 +203,7 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
         }
     }
 
-    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+    fn object_probable_write_slow(&mut self, obj: ObjectReference) {
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
             self.enqueue_node(obj, e, None);
         })
