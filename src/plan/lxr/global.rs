@@ -290,8 +290,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             let d = SystemTime::now().duration_since(date230505).unwrap();
             let hrs = (d.as_secs() / 3600) % 24;
             let new_value: usize = match hrs {
-                _ if hrs < 12 => 128,
-                _ => 512,
+                _ if hrs < 12 => 32,
+                _ => 48,
             };
             if new_value != MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) {
                 gc_log!([1] "===>>> Update SATB Trigger: {:?} <<<===", new_value);
