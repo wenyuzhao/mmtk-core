@@ -290,8 +290,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             let d = SystemTime::now().duration_since(date230505).unwrap();
             let hrs = (d.as_secs() / 3600) % 24;
             let new_value: usize = match hrs {
-                _ if hrs < 12 => 32,
-                _ => 48,
+                _ if hrs < 12 => 128,
+                _ => 256,
             };
             if new_value != MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) {
                 gc_log!([1] "===>>> Update SATB Trigger: {:?} <<<===", new_value);
@@ -398,9 +398,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
+        let predicted_survival = (self.immix_space.block_allocation.nursery_mb() as f64
             * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize;
-        let survival = predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
+        let survival = predicted_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
         return survival + self.immix_space.defrag_headroom_pages();
     }
 
@@ -672,9 +672,11 @@ impl<VM: VMBinding> LXR<VM> {
         );
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
-        if !self.concurrent_marking_in_progress()
-            && garbage * 100 >= crate::args().trace_threshold as usize * total_pages
-            || available_pages < stop_pages
+        if !cfg!(feature = "lxr_fixed_satb_trigger")
+            && !self.concurrent_marking_in_progress()
+            && ((self.concurrent_marking_enabled()
+                && garbage * 100 >= crate::args().trace_threshold as usize * total_pages)
+                || available_pages < stop_pages)
         {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
@@ -747,7 +749,11 @@ impl<VM: VMBinding> LXR<VM> {
                 >= MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed)
                 && !concurrent_marking_in_progress
             {
-                return Pause::InitialMark;
+                return if self.concurrent_marking_enabled() {
+                    Pause::InitialMark
+                } else {
+                    Pause::FullTraceFast
+                };
             } else {
                 return Pause::RefCount;
             }
