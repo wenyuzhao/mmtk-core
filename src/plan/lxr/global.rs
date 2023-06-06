@@ -721,6 +721,7 @@ impl<VM: VMBinding> LXR<VM> {
             && concurrent_marking_in_progress
             && concurrent_marking_packets_drained
         {
+            gc_log!([3] "Finish SATB: Concurrent marking is done");
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
@@ -731,8 +732,18 @@ impl<VM: VMBinding> LXR<VM> {
                 .load(Ordering::Relaxed)
         {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
+                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={}",
+                    emergency,
+                    self.base().is_user_triggered_collection(),
+                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                );
                 Pause::FinalMark
             } else {
+                gc_log!([3] "Full GC: emergency={} user={} next_gc_may_perform_emergency_collection={}",
+                    emergency,
+                    self.base().is_user_triggered_collection(),
+                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                );
                 Pause::FullTraceFast
             };
         }
@@ -793,8 +804,14 @@ impl<VM: VMBinding> LXR<VM> {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
-            || self.is_emergency_collection()
-            || *self.base().options.full_heap_system_gc;
+            || self.is_emergency_collection();
+        if emergency_collection {
+            gc_log!([3] "cur_collection_attempts={} emergency_collection={} out_of_virtual_space={}",
+                self.base().cur_collection_attempts.load(Ordering::SeqCst),
+                self.base().emergency_collection.load(Ordering::Relaxed),
+                VM_MAP.out_of_virtual_space(),
+            );
+        }
 
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         let pause = if crate::args::LXR_RC_ONLY {
