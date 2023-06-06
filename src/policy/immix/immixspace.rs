@@ -1262,7 +1262,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 return self.normal_get_next_available_lines(copy, end);
             };
         }
-        if self.common.needs_log_bit {
+        if self.common.needs_log_bit && !crate::args::BARRIER_MEASUREMENT_NO_SLOW {
             if !copy {
                 Line::clear_field_unlog_table::<VM>(start..end);
             } else {
