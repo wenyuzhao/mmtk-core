@@ -357,7 +357,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         );
         let perform_class_unloading = self.current_gc_should_perform_class_unloading();
         if perform_class_unloading {
-            gc_log!([3] " - class unloading");
+            gc_log!([3] "    - class unloading");
         }
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]

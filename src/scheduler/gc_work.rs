@@ -271,7 +271,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
         if mmtk.plan.downcast_ref::<LXR<VM>>().is_none() {
             if perform_class_unloading {
-                gc_log!([3] " - class unloading");
+                gc_log!([3] "    - class unloading");
             }
             <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         }
