@@ -119,6 +119,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
         self.reused_blocks.visit_slice(|blocks| {
             let total_blocks = blocks.len();
+            gc_log!([3] "    - Process {}/{} mutator-reused blocks in the pause (single-thread)", total_blocks, total_blocks);
             let stw_limit = usize::min(total_blocks, MAX_STW_SWEEP_BLOCKS);
             // 1. STW release a limited number of blocks
             for b in &blocks[0..stw_limit] {
@@ -165,6 +166,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             } else {
                 usize::min(total_nursery_blocks, max_stw_sweep_blocks)
             };
+            gc_log!([3] "    - Process {}/{} young blocks in the pause (single-thread)", stw_limit, total_nursery_blocks);
             // 1. STW release a limited number of blocks
             for b in &blocks[0..stw_limit] {
                 let block = b.load(Ordering::Relaxed);
