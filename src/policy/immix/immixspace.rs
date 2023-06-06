@@ -511,11 +511,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_nursery_blocks start",
+            crate::gc_start_time_ms(),
+        );
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation
             .sweep_nursery_blocks(&self.scheduler, pause);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mutator_reused_blocks start",
+            crate::gc_start_time_ms(),
+        );
         self.block_allocation
             .sweep_mutator_reused_blocks(&self.scheduler, pause);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mutator_reused_blocks finish",
+            crate::gc_start_time_ms(),
+        );
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {

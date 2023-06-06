@@ -347,6 +347,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) update_weak_processor start",
+            crate::gc_start_time_ms(),
+        );
         VM::VMCollection::update_weak_processor(
             pause == Pause::RefCount || pause == Pause::InitialMark,
         );
@@ -354,11 +359,26 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if perform_class_unloading {
             gc_log!([3] " - class unloading");
         }
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) vm_release start",
+            crate::gc_start_time_ms(),
+        );
         <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         self.common.los.is_end_of_satb_or_full_gc = false;
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) los release start",
+            crate::gc_start_time_ms(),
+        );
         self.common.release(
             tls,
             pause == Pause::FullTraceFast || pause == Pause::FinalMark,
+        );
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) ix release start",
+            crate::gc_start_time_ms(),
         );
         self.immix_space.release_rc(pause);
         self.update_fixed_alloc_trigger();
