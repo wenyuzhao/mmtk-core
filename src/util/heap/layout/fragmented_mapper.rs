@@ -272,6 +272,7 @@ impl FragmentedMapper {
 
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
+    #[allow(cast_ref_to_mut)]
     unsafe fn mut_self(&self) -> &mut Self {
         &mut *(self as *const Self as *mut Self)
     }

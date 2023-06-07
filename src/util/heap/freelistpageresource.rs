@@ -103,6 +103,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
     ) -> Result<PRAllocResult, PRAllocFail> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
         let mut new_chunk = false;
@@ -273,6 +274,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         assert!(self.common.growable);
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
         let page_offset =
@@ -371,6 +373,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         // FIXME
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         self.common.accounting.release(pages as _);
         let freed = me.free_list.free(page_offset as _, true);
@@ -397,6 +400,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         // FIXME
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         self.common.accounting.release(pages as _);
         let freed = me.free_list.free(page_offset as _, true);

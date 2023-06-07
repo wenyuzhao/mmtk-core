@@ -494,7 +494,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     .elapsed()
                     .unwrap()
                     .as_nanos();
-                crate::COUNTERS.roots_nanos.fetch_add(t, Ordering::SeqCst);
+                crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
             }
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {

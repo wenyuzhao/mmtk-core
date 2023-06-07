@@ -222,8 +222,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         self.common()
             .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata);
         // Initialize the block queues in `reusable_blocks` and `pr`.
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.block_allocation.init(unsafe { &*(self as *const Self) })
+        self.block_allocation.init(self);
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")

@@ -249,14 +249,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             unreachable!();
         }
         if !crate::LazySweepingJobs::all_finished() {
-            crate::COUNTERS
+            crate::counters()
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
         let pause =
             self.select_collection_kind(self.base().gc_requester.is_concurrent_collection());
         if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
-            crate::COUNTERS
+            crate::counters()
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
@@ -442,7 +442,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                     .elapsed()
                     .unwrap()
                     .as_nanos();
-                crate::COUNTERS.satb_nanos.fetch_add(t, Ordering::SeqCst);
+                crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
@@ -453,7 +453,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .elapsed()
                 .unwrap()
                 .as_nanos();
-            crate::COUNTERS.satb_nanos.fetch_add(t, Ordering::SeqCst);
+            crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
     }
 
@@ -793,13 +793,13 @@ impl<VM: VMBinding> LXR<VM> {
         {
             let o = Ordering::SeqCst;
             if SURVIVAL_TRIGGERED.load(o) {
-                crate::COUNTERS.survival_triggerd.fetch_add(1, o);
+                crate::counters().survival_triggerd.fetch_add(1, o);
             } else if INCS_TRIGGERED.load(o) {
-                crate::COUNTERS.incs_triggerd.fetch_add(1, o);
+                crate::counters().incs_triggerd.fetch_add(1, o);
             } else if ALLOC_TRIGGERED.load(o) {
-                crate::COUNTERS.alloc_triggerd.fetch_add(1, o);
+                crate::counters().alloc_triggerd.fetch_add(1, o);
             } else {
-                crate::COUNTERS.overflow_triggerd.fetch_add(1, o);
+                crate::counters().overflow_triggerd.fetch_add(1, o);
             }
         }
         self.base().set_collection_kind::<Self>(self);
@@ -828,20 +828,22 @@ impl<VM: VMBinding> LXR<VM> {
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);
             if emergency_collection {
-                crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
+                crate::counters().emergency.fetch_add(1, Ordering::Relaxed);
             }
             pause
         };
         if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
-            crate::COUNTERS
+            crate::counters()
                 .cm_early_quit
                 .fetch_add(1, Ordering::Relaxed);
         }
         match pause {
-            Pause::RefCount => crate::COUNTERS.rc.fetch_add(1, Ordering::Relaxed),
-            Pause::InitialMark => crate::COUNTERS.initial_mark.fetch_add(1, Ordering::Relaxed),
-            Pause::FinalMark => crate::COUNTERS.final_mark.fetch_add(1, Ordering::Relaxed),
-            _ => crate::COUNTERS.full.fetch_add(1, Ordering::Relaxed),
+            Pause::RefCount => crate::counters().rc.fetch_add(1, Ordering::Relaxed),
+            Pause::InitialMark => crate::counters()
+                .initial_mark
+                .fetch_add(1, Ordering::Relaxed),
+            Pause::FinalMark => crate::counters().final_mark.fetch_add(1, Ordering::Relaxed),
+            _ => crate::counters().full.fetch_add(1, Ordering::Relaxed),
         };
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
@@ -1097,14 +1099,18 @@ impl<VM: VMBinding> LXR<VM> {
                 } else {
                     0
                 };
-                crate::COUNTERS.total_used_pages.store(
-                    crate::COUNTERS.total_used_pages.load(o) + x,
+                crate::counters().total_used_pages.store(
+                    crate::counters().total_used_pages.load(o) + x,
                     Ordering::Relaxed,
                 );
-                let min = crate::COUNTERS.min_used_pages.load(o);
-                crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
-                let max = crate::COUNTERS.max_used_pages.load(o);
-                crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
+                let min = crate::counters().min_used_pages.load(o);
+                crate::counters()
+                    .min_used_pages
+                    .store(usize::min(x, min), o);
+                let max = crate::counters().max_used_pages.load(o);
+                crate::counters()
+                    .max_used_pages
+                    .store(usize::max(x, max), o);
             }
             let pause = if lxr.current_pause().is_none() {
                 lxr.previous_pause().unwrap()

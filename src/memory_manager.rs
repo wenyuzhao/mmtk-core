@@ -36,7 +36,7 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
             .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::Relaxed))
             .unwrap()
             .as_nanos();
-        crate::COUNTERS.yield_nanos.fetch_add(t, Ordering::Relaxed);
+        crate::counters().yield_nanos.fetch_add(t, Ordering::Relaxed);
     }
 
     gc_log!([3]

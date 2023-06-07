@@ -307,18 +307,22 @@ const fn create_counters() -> Counters {
 
 fn reset_counters() {
     let mut new_counters = create_counters();
-    let global = unsafe { &mut *(&COUNTERS as *const Counters as *mut Counters) };
+    let global = unsafe { &mut COUNTERS };
     std::mem::swap(global, &mut new_counters);
 }
 
 fn stop_counters() {
     let retired_counters = unsafe { &mut RETIRED_COUNTERS };
-    let global = unsafe { &mut *(&COUNTERS as *const Counters as *mut Counters) };
+    let global = unsafe { &mut COUNTERS };
     std::mem::swap(global, retired_counters);
 }
 
 static mut RETIRED_COUNTERS: Counters = create_counters();
-static COUNTERS: Counters = create_counters();
+static mut COUNTERS: Counters = create_counters();
+
+fn counters() -> &'static Counters {
+    unsafe { &COUNTERS }
+}
 
 #[derive(Default)]
 struct GCStat {

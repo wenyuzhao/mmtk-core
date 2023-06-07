@@ -10,6 +10,7 @@ use crate::{
     LazySweepingJobsCounter, MMTK,
 };
 use atomic::{Atomic, Ordering};
+use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 
@@ -65,7 +66,7 @@ impl BlockCache {
 }
 
 pub struct BlockAllocation<VM: VMBinding> {
-    space: Option<&'static ImmixSpace<VM>>,
+    space: UnsafeCell<*const ImmixSpace<VM>>,
     pub(super) nursery_blocks: BlockCache,
     pub(super) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
@@ -74,7 +75,7 @@ pub struct BlockAllocation<VM: VMBinding> {
 impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn new() -> Self {
         Self {
-            space: None,
+            space: UnsafeCell::new(std::ptr::null()),
             nursery_blocks: BlockCache::new(),
             reused_blocks: BlockCache::new(),
             lxr: None,
@@ -82,7 +83,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     fn space(&self) -> &'static ImmixSpace<VM> {
-        self.space.unwrap()
+        unsafe { &**self.space.get() }
     }
 
     pub fn nursery_blocks(&self) -> usize {
@@ -93,8 +94,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.nursery_blocks() << Block::LOG_BYTES >> 20
     }
 
-    pub fn init(&mut self, space: &'static ImmixSpace<VM>) {
-        self.space = Some(space);
+    pub fn init(&self, space: &ImmixSpace<VM>) {
+        unsafe { *self.space.get() = space as *const ImmixSpace<VM> }
     }
 
     pub fn reset_block_mark_for_mutator_reused_blocks(&self, pause: Pause) {
