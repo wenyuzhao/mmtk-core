@@ -461,7 +461,8 @@ impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessWeakRefs");
-        <E::VM as VMBinding>::VMCollection::process_weak_refs::<E>(worker); // TODO: Pass a factory/callback to decide what work packet to create.
+        <<E::VM as VMBinding>::VMCollection as Collection<E::VM>>::process_weak_refs::<E>(worker);
+        // TODO: Pass a factory/callback to decide what work packet to create.
     }
 }
 

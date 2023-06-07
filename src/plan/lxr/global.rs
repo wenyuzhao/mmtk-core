@@ -13,7 +13,6 @@ use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::rc_work::UpdateWeakProcessor;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -348,14 +347,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
-        #[cfg(feature = "lxr_release_stage_timer")]
-        gc_log!([3]
-            "    - ({:.3}ms) update_weak_processor start",
-            crate::gc_start_time_ms(),
-        );
-        VM::VMCollection::update_weak_processor(
-            pause == Pause::RefCount || pause == Pause::InitialMark,
-        );
+        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+            #[cfg(feature = "lxr_release_stage_timer")]
+            gc_log!([3]
+                "    - ({:.3}ms) update_weak_processor start",
+                crate::gc_start_time_ms(),
+            );
+            VM::VMCollection::update_weak_processor(false);
+        }
         let perform_class_unloading = self.current_gc_should_perform_class_unloading();
         if perform_class_unloading {
             gc_log!([3] "    - class unloading");
@@ -923,7 +922,6 @@ impl<VM: VMBinding> LXR<VM> {
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
@@ -940,7 +938,6 @@ impl<VM: VMBinding> LXR<VM> {
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators

@@ -13,7 +13,7 @@ use crate::{
         rc::{self, RefCountHelper},
         ObjectReference,
     },
-    vm::{Collection, ObjectModel, VMBinding},
+    vm::{ObjectModel, VMBinding},
     LazySweepingJobsCounter, Plan, MMTK,
 };
 
@@ -127,14 +127,6 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                     mmtk.plan.get_total_pages(),
                 )
         }
-    }
-}
-
-pub struct UpdateWeakProcessor;
-
-impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        VM::VMCollection::update_weak_processor(true);
     }
 }
 
