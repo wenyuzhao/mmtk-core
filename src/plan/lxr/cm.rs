@@ -531,9 +531,14 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         }
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            debug_assert!(self.remset_recorded_edges);
-            // Don't do the store if the original is already overwritten
-            let _ = slot.compare_exchange(object, new_object, Ordering::SeqCst, Ordering::SeqCst);
+            if slot.to_address().is_mapped() {
+                debug_assert!(self.remset_recorded_edges);
+                // Don't do the store if the original is already overwritten
+                let _ =
+                    slot.compare_exchange(object, new_object, Ordering::SeqCst, Ordering::SeqCst);
+            } else {
+                slot.store(new_object);
+            }
         }
         super::record_edge_for_validation(slot, new_object);
     }
