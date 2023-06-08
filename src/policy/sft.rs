@@ -22,7 +22,7 @@ use std::marker::PhantomData;
 ///
 /// We use the SFT trait to simplify typing for Rust, so our table is a
 /// table of SFT rather than Space.
-pub trait SFT {
+pub trait SFT: Sync + 'static {
     /// The space name
     fn name(&self) -> &str;
 

@@ -51,6 +51,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let plan_mut: &mut C::PlanType =
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.prepare(worker.tls);
@@ -132,6 +133,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
 
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let plan_mut: &mut C::PlanType =
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.release(worker.tls);
@@ -271,7 +273,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
         if mmtk.plan.downcast_ref::<LXR<VM>>().is_none() {
             if perform_class_unloading {
-                gc_log!([3] " - class unloading");
+                gc_log!([3] "    - class unloading");
             }
             <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         }
@@ -321,6 +323,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
 
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let plan_mut: &mut dyn Plan<VM = VM> = unsafe { &mut *(&*mmtk.plan as *const _ as *mut _) };
         plan_mut.end_of_gc(worker.tls);
 
@@ -458,7 +461,8 @@ impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessWeakRefs");
-        <E::VM as VMBinding>::VMCollection::process_weak_refs::<E>(worker); // TODO: Pass a factory/callback to decide what work packet to create.
+        <<E::VM as VMBinding>::VMCollection as Collection<E::VM>>::process_weak_refs::<E>(worker);
+        // TODO: Pass a factory/callback to decide what work packet to create.
     }
 }
 

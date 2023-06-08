@@ -13,7 +13,7 @@ use crate::{
         rc::{self, RefCountHelper},
         ObjectReference,
     },
-    vm::{Collection, ObjectModel, VMBinding},
+    vm::{ObjectModel, VMBinding},
     LazySweepingJobsCounter, Plan, MMTK,
 };
 
@@ -127,14 +127,6 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                     mmtk.plan.get_total_pages(),
                 )
         }
-    }
-}
-
-pub struct UpdateWeakProcessor;
-
-impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        VM::VMCollection::update_weak_processor(true);
     }
 }
 
@@ -338,6 +330,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Clear unlog table on CM
             if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
                 block.initialize_field_unlog_table_as_unlogged::<VM>();
+                unreachable!();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {

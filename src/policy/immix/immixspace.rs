@@ -223,8 +223,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         self.common()
             .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata);
         // Initialize the block queues in `reusable_blocks` and `pr`.
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.block_allocation.init(unsafe { &*(self as *const Self) })
+        self.block_allocation.init(self);
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -511,11 +510,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_nursery_blocks start",
+            crate::gc_start_time_ms(),
+        );
         debug_assert_ne!(pause, Pause::FullTraceDefrag);
         self.block_allocation
             .sweep_nursery_blocks(&self.scheduler, pause);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mutator_reused_blocks start",
+            crate::gc_start_time_ms(),
+        );
         self.block_allocation
             .sweep_mutator_reused_blocks(&self.scheduler, pause);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mutator_reused_blocks finish",
+            crate::gc_start_time_ms(),
+        );
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
@@ -1327,7 +1341,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 return self.normal_get_next_available_lines(copy, end);
             };
         }
-        if self.common.needs_log_bit {
+        if self.common.needs_log_bit && !crate::args::BARRIER_MEASUREMENT_NO_SLOW {
             if !copy {
                 Line::clear_field_unlog_table::<VM>(start..end);
             } else {

@@ -145,13 +145,24 @@ impl SurvivalRatioPredictor {
     }
 }
 
-#[derive(Default)]
 pub struct SurvivalRatioPredictorLocal {
     copy_promote_vol: AtomicUsize,
     #[cfg(feature = "lxr_srv_ratio_counter")]
     total_promote_vol: AtomicUsize,
     #[cfg(feature = "lxr_srv_ratio_counter")]
     total_los_promote_vol: AtomicUsize,
+}
+
+impl Default for SurvivalRatioPredictorLocal {
+    fn default() -> Self {
+        Self {
+            copy_promote_vol: AtomicUsize::new(0),
+            #[cfg(feature = "lxr_srv_ratio_counter")]
+            total_promote_vol: AtomicUsize::new(0),
+            #[cfg(feature = "lxr_srv_ratio_counter")]
+            total_los_promote_vol: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl SurvivalRatioPredictorLocal {

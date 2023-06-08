@@ -13,7 +13,6 @@ use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::rc_work::UpdateWeakProcessor;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -249,14 +248,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             unreachable!();
         }
         if !crate::LazySweepingJobs::all_finished() {
-            crate::COUNTERS
+            crate::counters()
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
         let pause =
             self.select_collection_kind(self.base().gc_requester.is_concurrent_collection());
         if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
-            crate::COUNTERS
+            crate::counters()
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
@@ -291,7 +290,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             let hrs = (d.as_secs() / 3600) % 24;
             let new_value: usize = match hrs {
                 _ if hrs < 12 => 32,
-                _ => 48,
+                _ => 16,
             };
             if new_value != MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) {
                 gc_log!([1] "===>>> Update SATB Trigger: {:?} <<<===", new_value);
@@ -347,18 +346,38 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
-        VM::VMCollection::update_weak_processor(
-            pause == Pause::RefCount || pause == Pause::InitialMark,
-        );
+        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+            #[cfg(feature = "lxr_release_stage_timer")]
+            gc_log!([3]
+                "    - ({:.3}ms) update_weak_processor start",
+                crate::gc_start_time_ms(),
+            );
+            VM::VMCollection::update_weak_processor(false);
+        }
         let perform_class_unloading = self.current_gc_should_perform_class_unloading();
         if perform_class_unloading {
-            gc_log!([3] " - class unloading");
+            gc_log!([3] "    - class unloading");
         }
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) vm_release start",
+            crate::gc_start_time_ms(),
+        );
         <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         self.common.los.is_end_of_satb_or_full_gc = false;
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) los release start",
+            crate::gc_start_time_ms(),
+        );
         self.common.release(
             tls,
             pause == Pause::FullTraceFast || pause == Pause::FinalMark,
+        );
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) ix release start",
+            crate::gc_start_time_ms(),
         );
         self.immix_space.release_rc(pause);
         self.update_fixed_alloc_trigger();
@@ -378,9 +397,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        let predicated_survival = (self.immix_space.block_allocation.nursery_mb() as f64
+        let predicted_survival = (self.immix_space.block_allocation.nursery_mb() as f64
             * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize;
-        let survival = predicated_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
+        let survival = predicted_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
         return survival + self.immix_space.defrag_headroom_pages();
     }
 
@@ -422,7 +441,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                     .elapsed()
                     .unwrap()
                     .as_nanos();
-                crate::COUNTERS.satb_nanos.fetch_add(t, Ordering::SeqCst);
+                crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
@@ -433,7 +452,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .elapsed()
                 .unwrap()
                 .as_nanos();
-            crate::COUNTERS.satb_nanos.fetch_add(t, Ordering::SeqCst);
+            crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
     }
 
@@ -654,9 +673,11 @@ impl<VM: VMBinding> LXR<VM> {
         );
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
-        if !self.concurrent_marking_in_progress()
-            && garbage * 100 >= crate::args().trace_threshold as usize * total_pages
-            || available_pages < stop_pages
+        if !cfg!(feature = "lxr_fixed_satb_trigger")
+            && !self.concurrent_marking_in_progress()
+            && ((self.concurrent_marking_enabled()
+                && garbage * 100 >= crate::args().trace_threshold as usize * total_pages)
+                || available_pages < stop_pages)
         {
             self.next_gc_may_perform_cycle_collection
                 .store(true, Ordering::SeqCst);
@@ -701,6 +722,7 @@ impl<VM: VMBinding> LXR<VM> {
             && concurrent_marking_in_progress
             && concurrent_marking_packets_drained
         {
+            gc_log!([3] "Finish SATB: Concurrent marking is done");
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
@@ -711,8 +733,18 @@ impl<VM: VMBinding> LXR<VM> {
                 .load(Ordering::Relaxed)
         {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
+                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={}",
+                    emergency,
+                    self.base().is_user_triggered_collection(),
+                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                );
                 Pause::FinalMark
             } else {
+                gc_log!([3] "Full GC: emergency={} user={} next_gc_may_perform_emergency_collection={}",
+                    emergency,
+                    self.base().is_user_triggered_collection(),
+                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                );
                 Pause::FullTraceFast
             };
         }
@@ -729,7 +761,11 @@ impl<VM: VMBinding> LXR<VM> {
                 >= MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed)
                 && !concurrent_marking_in_progress
             {
-                return Pause::InitialMark;
+                return if self.concurrent_marking_enabled() {
+                    Pause::InitialMark
+                } else {
+                    Pause::FullTraceFast
+                };
             } else {
                 return Pause::RefCount;
             }
@@ -757,20 +793,26 @@ impl<VM: VMBinding> LXR<VM> {
         {
             let o = Ordering::SeqCst;
             if SURVIVAL_TRIGGERED.load(o) {
-                crate::COUNTERS.survival_triggerd.fetch_add(1, o);
+                crate::counters().survival_triggerd.fetch_add(1, o);
             } else if INCS_TRIGGERED.load(o) {
-                crate::COUNTERS.incs_triggerd.fetch_add(1, o);
+                crate::counters().incs_triggerd.fetch_add(1, o);
             } else if ALLOC_TRIGGERED.load(o) {
-                crate::COUNTERS.alloc_triggerd.fetch_add(1, o);
+                crate::counters().alloc_triggerd.fetch_add(1, o);
             } else {
-                crate::COUNTERS.overflow_triggerd.fetch_add(1, o);
+                crate::counters().overflow_triggerd.fetch_add(1, o);
             }
         }
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
         let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
-            || self.is_emergency_collection()
-            || *self.base().options.full_heap_system_gc;
+            || self.is_emergency_collection();
+        if emergency_collection {
+            gc_log!([3] "cur_collection_attempts={} emergency_collection={} out_of_virtual_space={}",
+                self.base().cur_collection_attempts.load(Ordering::SeqCst),
+                self.base().emergency_collection.load(Ordering::Relaxed),
+                VM_MAP.out_of_virtual_space(),
+            );
+        }
 
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         let pause = if crate::args::LXR_RC_ONLY {
@@ -786,20 +828,22 @@ impl<VM: VMBinding> LXR<VM> {
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);
             if emergency_collection {
-                crate::COUNTERS.emergency.fetch_add(1, Ordering::Relaxed);
+                crate::counters().emergency.fetch_add(1, Ordering::Relaxed);
             }
             pause
         };
         if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
-            crate::COUNTERS
+            crate::counters()
                 .cm_early_quit
                 .fetch_add(1, Ordering::Relaxed);
         }
         match pause {
-            Pause::RefCount => crate::COUNTERS.rc.fetch_add(1, Ordering::Relaxed),
-            Pause::InitialMark => crate::COUNTERS.initial_mark.fetch_add(1, Ordering::Relaxed),
-            Pause::FinalMark => crate::COUNTERS.final_mark.fetch_add(1, Ordering::Relaxed),
-            _ => crate::COUNTERS.full.fetch_add(1, Ordering::Relaxed),
+            Pause::RefCount => crate::counters().rc.fetch_add(1, Ordering::Relaxed),
+            Pause::InitialMark => crate::counters()
+                .initial_mark
+                .fetch_add(1, Ordering::Relaxed),
+            Pause::FinalMark => crate::counters().final_mark.fetch_add(1, Ordering::Relaxed),
+            _ => crate::counters().full.fetch_add(1, Ordering::Relaxed),
         };
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
@@ -879,7 +923,6 @@ impl<VM: VMBinding> LXR<VM> {
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
@@ -896,7 +939,6 @@ impl<VM: VMBinding> LXR<VM> {
         self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(UpdateWeakProcessor);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
         // Prepare global/collectors/mutators
@@ -1055,14 +1097,18 @@ impl<VM: VMBinding> LXR<VM> {
                 } else {
                     0
                 };
-                crate::COUNTERS.total_used_pages.store(
-                    crate::COUNTERS.total_used_pages.load(o) + x,
+                crate::counters().total_used_pages.store(
+                    crate::counters().total_used_pages.load(o) + x,
                     Ordering::Relaxed,
                 );
-                let min = crate::COUNTERS.min_used_pages.load(o);
-                crate::COUNTERS.min_used_pages.store(usize::min(x, min), o);
-                let max = crate::COUNTERS.max_used_pages.load(o);
-                crate::COUNTERS.max_used_pages.store(usize::max(x, max), o);
+                let min = crate::counters().min_used_pages.load(o);
+                crate::counters()
+                    .min_used_pages
+                    .store(usize::min(x, min), o);
+                let max = crate::counters().max_used_pages.load(o);
+                crate::counters()
+                    .max_used_pages
+                    .store(usize::max(x, max), o);
             }
             let pause = if lxr.current_pause().is_none() {
                 lxr.previous_pause().unwrap()

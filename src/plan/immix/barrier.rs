@@ -135,6 +135,9 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         edge: VM::VMEdge,
         _new: Option<ObjectReference>,
     ) {
+        if crate::args::BARRIER_MEASUREMENT_NO_SLOW {
+            return;
+        }
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
@@ -197,6 +200,9 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     fn load_reference(&mut self, o: ObjectReference) {
+        if crate::args::BARRIER_MEASUREMENT_NO_SLOW {
+            return;
+        }
         self.refs.push(o);
         if self.refs.is_full() {
             self.flush_weak_refs();

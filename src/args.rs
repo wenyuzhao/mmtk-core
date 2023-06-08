@@ -165,6 +165,7 @@ pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
 
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
+pub const BARRIER_MEASUREMENT_NO_SLOW: bool = cfg!(feature = "barrier_measurement_no_slow");
 pub const TAKERATE_MEASUREMENT: bool = false;
 pub const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 
@@ -223,6 +224,8 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_fixed_young_size_8g");
     dump_feature!("lxr_no_lazy_young_sweeping");
     dump_feature!("lxr_no_chunk_defrag");
+    dump_feature!("lxr_no_lazy");
+    dump_feature!("lxr_no_cm");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 

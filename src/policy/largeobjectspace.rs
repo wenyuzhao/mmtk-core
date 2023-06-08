@@ -343,7 +343,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 self.treadmill.copy(object, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
-                if !self.rc_enabled && self.common.needs_log_bit {
+                if !self.rc_enabled
+                    && self.common.needs_log_bit
+                    && !crate::args::BARRIER_MEASUREMENT_NO_SLOW
+                {
                     if self.common.needs_field_log_bit {
                         let step = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                             4

@@ -229,6 +229,10 @@ impl<VM: VMBinding> GCWorker<VM> {
             #[cfg(feature = "tracing")]
             probe!(mmtk, work_poll);
             let mut work = self.poll();
+            if crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst) && work.should_defer() {
+                mmtk.scheduler.postpone_dyn(work);
+                continue;
+            }
             #[cfg(feature = "tracing")]
             let typename = work.get_type_name();
             #[cfg(feature = "tracing")]

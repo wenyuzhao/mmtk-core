@@ -27,6 +27,7 @@ pub struct FastRCPrepare;
 impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        #[allow(cast_ref_to_mut)]
         let lxr = unsafe { &mut *(lxr as *const LXR<VM> as *mut LXR<VM>) };
         lxr.prepare(worker.tls)
     }
@@ -38,6 +39,5 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseLOSNursery {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         lxr.los().release_rc_nursery_objects();
-        VM::VMCollection::update_weak_processor(true);
     }
 }

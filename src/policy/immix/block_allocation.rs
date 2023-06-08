@@ -10,6 +10,7 @@ use crate::{
     LazySweepingJobsCounter, MMTK,
 };
 use atomic::{Atomic, Ordering};
+use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 
@@ -65,7 +66,7 @@ impl BlockCache {
 }
 
 pub struct BlockAllocation<VM: VMBinding> {
-    space: Option<&'static ImmixSpace<VM>>,
+    space: UnsafeCell<*const ImmixSpace<VM>>,
     pub(super) nursery_blocks: BlockCache,
     pub(crate) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
@@ -74,7 +75,7 @@ pub struct BlockAllocation<VM: VMBinding> {
 impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn new() -> Self {
         Self {
-            space: None,
+            space: UnsafeCell::new(std::ptr::null()),
             nursery_blocks: BlockCache::new(),
             reused_blocks: BlockCache::new(),
             lxr: None,
@@ -82,7 +83,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     fn space(&self) -> &'static ImmixSpace<VM> {
-        self.space.unwrap()
+        unsafe { &**self.space.get() }
     }
 
     pub fn nursery_blocks(&self) -> usize {
@@ -93,8 +94,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.nursery_blocks() << Block::LOG_BYTES >> 20
     }
 
-    pub fn init(&mut self, space: &'static ImmixSpace<VM>) {
-        self.space = Some(space);
+    pub fn init(&self, space: &ImmixSpace<VM>) {
+        unsafe { *self.space.get() = space as *const ImmixSpace<VM> }
     }
 
     pub fn reset_block_mark_for_mutator_reused_blocks(&self, pause: Pause) {
@@ -119,6 +120,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
         self.reused_blocks.visit_slice(|blocks| {
             let total_blocks = blocks.len();
+            #[cfg(feature = "lxr_release_stage_timer")]
+            gc_log!([3] "    - Process {}/{} mutator-reused blocks in the pause (single-thread)", total_blocks, total_blocks);
             let stw_limit = usize::min(total_blocks, MAX_STW_SWEEP_BLOCKS);
             // 1. STW release a limited number of blocks
             for b in &blocks[0..stw_limit] {
@@ -165,6 +168,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             } else {
                 usize::min(total_nursery_blocks, max_stw_sweep_blocks)
             };
+            #[cfg(feature = "lxr_release_stage_timer")]
+            gc_log!([3] "    - Process {}/{} young blocks in the pause (single-thread)", stw_limit, total_nursery_blocks);
             // 1. STW release a limited number of blocks
             for b in &blocks[0..stw_limit] {
                 let block = b.load(Ordering::Relaxed);
@@ -222,7 +227,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         }
         // Initialize unlog table
-        if (self.space().rc_enabled || crate::args::BARRIER_MEASUREMENT) && copy {
+        if (self.space().rc_enabled
+            || (crate::args::BARRIER_MEASUREMENT && !crate::args::BARRIER_MEASUREMENT_NO_SLOW))
+            && copy
+        {
             block.initialize_field_unlog_table_as_unlogged::<VM>();
         }
         // Initialize mark table
