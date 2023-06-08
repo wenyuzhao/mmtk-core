@@ -234,7 +234,7 @@ impl Address {
     /// # Safety
     /// This could throw a segment fault if the address is invalid
     pub unsafe fn load<T: Copy>(self) -> T {
-        *(self.0 as *mut T)
+        std::ptr::read_unaligned(self.0 as *const T)
     }
 
     /// stores a value of type T to the address
@@ -243,7 +243,7 @@ impl Address {
     pub unsafe fn store<T>(self, value: T) {
         // We use a ptr.write() operation as directly setting the pointer would drop the old value
         // which may result in unexpected behaviour
-        (self.0 as *mut T).write(value);
+        std::ptr::write_unaligned(self.0 as *mut T, value);
     }
 
     /// atomic operation: load
