@@ -63,7 +63,7 @@ impl Default for RuntimeArgs {
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
-            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
+            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(100),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
