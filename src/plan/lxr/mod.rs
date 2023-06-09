@@ -101,7 +101,7 @@ impl SurvivalRatioPredictor {
                 self.copy_promote_vol.load(Ordering::SeqCst),
             );
             gc_log!([2]
-                " - SRV: total={} ix={} los={}",
+                " - srv rate: total={} ix={} los={}",
                 srv_vol as f64 / alloc_vol as f64,
                 ix_srv_vol as f64 / ix_alloc_vol as f64,
                 los_srv_vol as f64 / los_alloc_vol as f64,

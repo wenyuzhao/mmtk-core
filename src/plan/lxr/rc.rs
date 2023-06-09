@@ -47,6 +47,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     mature_incs: usize,
     nursery_incs: usize,
     root_incs: usize,
+    los_incs: usize,
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
@@ -57,10 +58,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn worker(&self) -> &'static mut GCWorker<VM> {
         GCWorker::<VM>::current()
-    }
-
-    fn lxr(&self) -> &'static LXR<VM> {
-        self.lxr
     }
 
     fn __default(lxr: &'static LXR<VM>) -> Self {
@@ -81,6 +78,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             mature_incs: 0,
             nursery_incs: 0,
             root_incs: 0,
+            los_incs: 0,
         }
     }
 
@@ -121,7 +119,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
-            if self.lxr().los().in_space(o) {
+            if self.lxr.los().in_space(o) {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
             }
@@ -148,7 +146,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-            debug_assert!(self.lxr().is_marked(o));
+            debug_assert!(self.lxr.is_marked(o));
         }
         self.scan_nursery_object(o, los, !copied, depth);
     }
@@ -162,12 +160,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         // RC-Stuck objects in StringTable or WeakProcessor can become strongly reachable from a young object.
         // Mark this object under such case.
         // TODO: DO this for weak roots only
-        let force = self.rc.is_stuck(o) && !self.lxr().is_marked(o);
-        if force || (!self.lxr().address_in_defrag(e.to_address()) && self.lxr().in_defrag(o)) {
-            self.lxr()
+        let force = self.rc.is_stuck(o) && !self.lxr.is_marked(o);
+        if force || (!self.lxr.address_in_defrag(e.to_address()) && self.lxr.in_defrag(o)) {
+            self.lxr
                 .immix_space
                 .remset
-                .record(e, o, &self.lxr().immix_space);
+                .record(e, o, &self.lxr.immix_space);
         }
     }
 
@@ -310,7 +308,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn process_inc(&mut self, o: ObjectReference, depth: usize, stick: bool) -> ObjectReference {
         if self.inc(o, stick) {
-            self.promote(o, false, self.lxr().los().in_space(o), depth);
+            self.promote(o, false, self.lxr.los().in_space(o), depth);
         }
         o
     }
@@ -348,7 +346,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_volume += o.get_size::<VM>();
         });
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
-        let los = self.lxr().los().in_space(o);
+        let los = self.lxr.los().in_space(o);
         if self.dont_evacuate(o, los) {
             if self.inc(o, stick) {
                 self.promote(o, false, los, depth);
@@ -461,6 +459,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 self.root_incs += 1;
             } else {
                 self.nursery_incs += 1;
+            }
+            if self.lxr.los().address_in_space(e.to_address()) {
+                self.los_incs += 1;
             }
         }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
@@ -584,8 +585,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        self.current_pause = self.lxr().current_pause().unwrap();
-        self.concurrent_marking_in_progress = self.lxr().concurrent_marking_in_progress();
+        self.current_pause = self.lxr.current_pause().unwrap();
+        self.concurrent_marking_in_progress = self.lxr.concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
         let count = if cfg!(feature = "rust_mem_counter") {
             self.incs.len() + self.root_objects.as_ref().map(|x| x.len()).unwrap_or(0)
@@ -655,7 +656,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         };
         if let Some(roots) = roots {
-            if self.lxr().concurrent_marking_enabled()
+            if self.lxr.concurrent_marking_enabled()
                 && self.current_pause == Pause::InitialMark
                 && self.root_kind != Some(RootKind::Weak)
             {
@@ -680,7 +681,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     worker.add_work(WorkBucketStage::Closure, w)
                 }
             } else if !is_young_or_weak_root {
-                self.lxr().curr_roots.read().unwrap().push(roots);
+                self.lxr.curr_roots.read().unwrap().push(roots);
             }
         }
         // Process recursively generated buffer
@@ -714,6 +715,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 self.root_incs,
                 self.mature_incs,
                 self.nursery_incs,
+                self.los_incs,
             );
         }
     }

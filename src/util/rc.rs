@@ -44,6 +44,7 @@ static TOTAL_INCS: AtomicUsize = AtomicUsize::new(0);
 static ROOT_INCS: AtomicUsize = AtomicUsize::new(0);
 static MATURE_INCS: AtomicUsize = AtomicUsize::new(0);
 static NURSERY_INCS: AtomicUsize = AtomicUsize::new(0);
+static LOS_INCS: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(transparent)]
 #[derive(Debug, Copy)]
@@ -57,23 +58,33 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn reset_and_report_inc_counters(&self) {
-        gc_log!([3] " - INCS: total={} roots={} barrier={} rec={}",
+        gc_log!([3] " - INCS: total={} roots={} barrier={} rec={} los={}",
             TOTAL_INCS.load(Ordering::Relaxed),
             ROOT_INCS.load(Ordering::Relaxed),
             MATURE_INCS.load(Ordering::Relaxed),
             NURSERY_INCS.load(Ordering::Relaxed),
+            LOS_INCS.load(Ordering::Relaxed),
         );
         TOTAL_INCS.store(0, Ordering::Relaxed);
         ROOT_INCS.store(0, Ordering::Relaxed);
         MATURE_INCS.store(0, Ordering::Relaxed);
         NURSERY_INCS.store(0, Ordering::Relaxed);
+        LOS_INCS.store(0, Ordering::Relaxed);
     }
 
-    pub fn flush_inc_counters(&self, total: usize, roots: usize, mature: usize, nursery: usize) {
+    pub fn flush_inc_counters(
+        &self,
+        total: usize,
+        roots: usize,
+        mature: usize,
+        nursery: usize,
+        los: usize,
+    ) {
         TOTAL_INCS.fetch_add(total, Ordering::Relaxed);
         ROOT_INCS.fetch_add(roots, Ordering::Relaxed);
         MATURE_INCS.fetch_add(mature, Ordering::Relaxed);
         NURSERY_INCS.fetch_add(nursery, Ordering::Relaxed);
+        LOS_INCS.fetch_add(los, Ordering::Relaxed);
     }
 
     pub fn increase_inc_buffer_size(&self, delta: usize) {
