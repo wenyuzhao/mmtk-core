@@ -226,6 +226,13 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_no_chunk_defrag");
     dump_feature!("lxr_no_lazy");
     dump_feature!("lxr_no_cm");
+    dump_feature!("lxr_srv_ratio_counter");
+    dump_feature!("lxr_release_stage_timer");
+    dump_feature!("lxr_precise_incs_counter");
+    dump_feature!("lxr_fixed_satb_trigger");
+    dump_feature!("lxr_no_survival_trigger");
+    dump_feature!("no_map_fixed_noreplace");
+    dump_feature!("report_worker_sleep_events");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
