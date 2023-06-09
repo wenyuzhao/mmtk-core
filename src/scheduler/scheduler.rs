@@ -675,7 +675,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 // coordinator work packets.
             }
             // Wait
-            if cfg!(feature = "report_worker_sleep_events") {
+            if cfg!(feature = "report_worker_sleep_events")
+                && self.in_gc_pause.load(Ordering::Relaxed)
+            {
                 gc_log!([3]
                     "    - ({:.3}ms) worker#{} sleep",
                     crate::gc_start_time_ms(),
