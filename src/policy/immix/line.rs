@@ -4,7 +4,7 @@ use atomic::Ordering;
 
 use super::block::Block;
 use crate::plan::lxr::RemSet;
-use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
+use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD, LOG_MIN_OBJECT_SIZE};
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
 use crate::util::rc;
@@ -207,7 +207,7 @@ impl Line {
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
         let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        for i in (0..size).step_by(16) {
+        for i in (0..size).step_by(1 << LOG_MIN_OBJECT_SIZE) {
             mark_bit.store_atomic(start + i, 0u8, Ordering::SeqCst);
         }
     }
@@ -216,7 +216,7 @@ impl Line {
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
         let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        for i in (0..size).step_by(16) {
+        for i in (0..size).step_by(1 << LOG_MIN_OBJECT_SIZE) {
             mark_bit.store_atomic(start + i, 1u8, Ordering::SeqCst);
         }
     }
