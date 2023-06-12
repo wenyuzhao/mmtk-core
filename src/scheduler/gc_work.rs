@@ -213,33 +213,16 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
 
         trace!("stop_all_mutators start");
         mmtk.plan.base().prepare_for_stack_scanning();
-        const BULK_THREAD_SCAN: bool = true;
-        let mut mutators: Vec<VMMutatorThread> = vec![];
-        let mut n = 0;
         <E::VM as VMBinding>::VMCollection::stop_all_mutators(
             worker.tls,
             |mutator| {
                 mutator.flush();
-                mutator.prepare(worker.tls);
-                if BULK_THREAD_SCAN {
-                    mutators.push(mutator.get_tls());
-                } else {
-                    mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                        .add(ScanStackRoot::<E>(mutator));
-                }
-                n += 1;
+                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    .add(ScanStackRoot::<E>(mutator));
             },
             mmtk.get_plan()
                 .current_gc_should_prepare_for_class_unloading(),
         );
-        gc_log!([3] "Discovered {} mutators", n);
-        if BULK_THREAD_SCAN {
-            let n_workers: usize = mmtk.scheduler.worker_group.worker_count();
-            for ms in mutators.chunks((mutators.len() / n_workers / 2).max(1)) {
-                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                    .add(ScanMultipleStacks::<E>(ms.to_vec(), PhantomData));
-            }
-        }
         trace!("stop_all_mutators end");
         if crate::verbose(2) {
             crate::RESERVED_PAGES_AT_GC_START
@@ -579,21 +562,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanStackRoot<E> {
             );
             base.set_gc_status(GcStatus::GcProper);
         }
-    }
-}
-
-pub struct ScanMultipleStacks<Edges: ProcessEdgesWork>(Vec<VMMutatorThread>, PhantomData<Edges>);
-
-unsafe impl<Edges: ProcessEdgesWork> Send for ScanMultipleStacks<Edges> {}
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanMultipleStacks<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        let factory = ProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
-        <E::VM as VMBinding>::VMScanning::scan_multiple_thread_root(
-            worker.tls,
-            std::mem::take(&mut self.0),
-            factory,
-        );
     }
 }
 
