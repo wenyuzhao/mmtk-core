@@ -420,11 +420,17 @@ impl Address {
 
     pub fn unlog_field_relaxed<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
+        } else {
+            64
+        };
+        let a = self.align_down(heap_bytes_per_unlog_byte);
         unsafe {
             VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                 .as_spec()
                 .extract_side_spec()
-                .store(self, 0xffu8)
+                .store(a, 0xffu8)
         }
     }
 

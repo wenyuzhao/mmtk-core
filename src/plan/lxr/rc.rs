@@ -224,7 +224,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             }
-            o.to_address::<VM>().unlog_field::<VM>();
+            o.to_address::<VM>().unlog_field_relaxed::<VM>();
         } else if in_place_promotion && !is_val_array {
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                 12usize
