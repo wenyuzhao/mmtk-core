@@ -418,6 +418,16 @@ impl Address {
             .store_atomic(self, UNLOGGED_VALUE, Ordering::Relaxed)
     }
 
+    pub fn unlog_field_relaxed<VM: VMBinding>(self) {
+        debug_assert!(!self.is_zero());
+        unsafe {
+            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec()
+                .store(self, 0xffu8)
+        }
+    }
+
     pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
         debug_assert!(!self.is_zero());
         VM::VMObjectModel::address_to_ref(self)
@@ -682,17 +692,7 @@ impl ObjectReference {
         a..a + self.get_size::<VM>()
     }
 
-    pub fn log_start_address<VM: VMBinding>(self) {
-        debug_assert!(!self.is_null());
-        self.to_address::<VM>().unlog_field::<VM>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log_field::<VM>();
-    }
-
-    pub fn clear_start_address_log<VM: VMBinding>(self) {
-        debug_assert!(!self.is_null());
-        self.to_address::<VM>().log_field::<VM>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log_field::<VM>();
-    }
+    pub fn log_start_address<VM: VMBinding>(self) {}
 
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
         VM::VMObjectModel::get_class_pointer(self)
@@ -726,12 +726,7 @@ impl ObjectReference {
     }
 
     pub fn fix_start_address<VM: VMBinding>(self) -> Self {
-        let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
-        if !(a + BYTES_IN_WORD).is_field_logged::<VM>() {
-            (a + BYTES_IN_WORD).to_object_reference::<VM>()
-        } else {
-            a.to_object_reference::<VM>()
-        }
+        self
     }
 
     pub fn verify<VM: VMBinding>(self) {

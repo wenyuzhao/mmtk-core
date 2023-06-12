@@ -559,7 +559,7 @@ pub mod specs {
     // Forwarding bits: 2 bits per object, local
     define_vm_metadata_spec!(VMLocalForwardingBitsSpec, false, 1, LOG_MIN_OBJECT_SIZE);
     // Mark bit: 1 bit per object, local
-    define_vm_metadata_spec!(VMLocalMarkBitSpec, false, 0, LOG_MIN_OBJECT_SIZE + 1);
+    define_vm_metadata_spec!(VMLocalMarkBitSpec, false, 0, LOG_MIN_OBJECT_SIZE);
     // Pinning bit: 1 bit per object, local
     define_vm_metadata_spec!(VMLocalPinningBitSpec, false, 0, LOG_MIN_OBJECT_SIZE);
     // Mark&nursery bits for LOS: 2 bit per page, local
