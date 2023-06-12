@@ -213,11 +213,12 @@ impl Line {
     }
 
     pub(super) fn initialize_mark_table_as_marked<VM: VMBinding>(lines: Range<Line>) {
-        let start = lines.start.start();
-        let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
-        let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        for i in (0..size).step_by(1 << LOG_MIN_OBJECT_SIZE) {
-            mark_bit.store_atomic(start + i, 1u8, Ordering::SeqCst);
+        let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
+        let start: *mut u8 = address_to_meta_address(&meta, lines.start.start()).to_mut_ptr();
+        let limit: *mut u8 = address_to_meta_address(&meta, lines.end.start()).to_mut_ptr();
+        unsafe {
+            let bytes = limit.offset_from(start) as usize;
+            std::ptr::write_bytes(start, 0xffu8, bytes);
         }
     }
 }
