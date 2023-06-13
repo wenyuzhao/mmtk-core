@@ -199,7 +199,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn is_straddle_line(&self, line: Line) -> bool {
-        let v: u8 = RC_STRADDLE_LINES.load_atomic(line.start(), Ordering::Relaxed);
+        let v: u8 = unsafe { RC_STRADDLE_LINES.load::<u8>(line.start()) };
         v != 0
     }
 
@@ -215,7 +215,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         let end_line = Line::from(Line::align(o.to_address::<VM>() + size));
         let mut line = start_line;
         while line != end_line {
-            RC_STRADDLE_LINES.store_atomic(line.start(), 1u8, Ordering::Relaxed);
+            unsafe { RC_STRADDLE_LINES.store(line.start(), 1u8) };
             self.set_relaxed(line.start().to_object_reference::<VM>(), 1);
             line = line.next();
         }
@@ -235,9 +235,9 @@ impl<VM: VMBinding> RefCountHelper<VM> {
             let end_line = Line::from(Line::align(o.to_address::<VM>() + size));
             let mut line = start_line;
             while line != end_line {
-                self.set(line.start().to_object_reference::<VM>(), 0);
+                self.set_relaxed(line.start().to_object_reference::<VM>(), 0);
                 // std::sync::atomic::fence(Ordering::Relaxed);
-                RC_STRADDLE_LINES.store_atomic(line.start(), 0u8, Ordering::Relaxed);
+                unsafe { RC_STRADDLE_LINES.store(line.start(), 0u8) };
                 // std::sync::atomic::fence(Ordering::Relaxed);
                 line = line.next();
             }
