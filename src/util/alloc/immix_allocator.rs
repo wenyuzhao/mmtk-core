@@ -379,7 +379,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    pub fn flush(&mut self) {}
+    pub fn flush(&mut self) {
+        self.reset();
+    }
 
     pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
         self.space
