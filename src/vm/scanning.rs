@@ -3,6 +3,7 @@ use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::GCWorker;
 use crate::util::Address;
 use crate::util::ObjectReference;
+use crate::util::VMMutatorThread;
 use crate::util::VMWorkerThread;
 use crate::vm::edge_shape::Edge;
 use crate::vm::VMBinding;
@@ -244,6 +245,14 @@ pub trait Scanning<VM: VMBinding> {
         mutator: &'static mut Mutator<VM>,
         factory: impl RootsWorkFactory<VM::VMEdge>,
     );
+
+    fn scan_multiple_thread_root(
+        _tls: VMWorkerThread,
+        _mutators: Vec<VMMutatorThread>,
+        _factory: impl RootsWorkFactory<VM::VMEdge>,
+    ) {
+        unimplemented!()
+    }
 
     /// Scan VM-specific roots. The creation of all root scan tasks (except thread scanning)
     /// goes here.

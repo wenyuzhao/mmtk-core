@@ -675,6 +675,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 // coordinator work packets.
             }
             // Wait
+            if cfg!(feature = "report_worker_sleep_events")
+                && self.in_gc_pause.load(Ordering::Relaxed)
+            {
+                gc_log!([3]
+                    "    - ({:.3}ms) worker#{} sleep",
+                    crate::gc_start_time_ms(),
+                    worker.ordinal,
+                );
+            }
             flush_logs!();
             guard = self.worker_monitor.1.wait(guard).unwrap();
             // The worker is unparked here where `parking_guard` goes out of scope.

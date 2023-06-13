@@ -26,7 +26,7 @@ pub const REF_COUNT_BITS: u8 = 1 << LOG_REF_COUNT_BITS;
 pub const REF_COUNT_MASK: u8 = (((1u16 << REF_COUNT_BITS) - 1) & 0xff) as u8;
 pub const MAX_REF_COUNT: u8 = REF_COUNT_MASK;
 
-pub const LOG_MIN_OBJECT_SIZE: usize = 4;
+pub const LOG_MIN_OBJECT_SIZE: usize = crate::util::constants::LOG_MIN_OBJECT_SIZE as _;
 pub const MIN_OBJECT_SIZE: usize = 1 << LOG_MIN_OBJECT_SIZE;
 
 pub const RC_STRADDLE_LINES: SideMetadataSpec =
@@ -44,6 +44,8 @@ static TOTAL_INCS: AtomicUsize = AtomicUsize::new(0);
 static ROOT_INCS: AtomicUsize = AtomicUsize::new(0);
 static MATURE_INCS: AtomicUsize = AtomicUsize::new(0);
 static NURSERY_INCS: AtomicUsize = AtomicUsize::new(0);
+static FAST_NURSERY_INCS: AtomicUsize = AtomicUsize::new(0);
+static LOS_INCS: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(transparent)]
 #[derive(Debug, Copy)]
@@ -57,23 +59,37 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn reset_and_report_inc_counters(&self) {
-        gc_log!([3] " - INCS: total={} roots={} barrier={} rec={}",
+        gc_log!([3] " - INCS: total={} roots={} barrier={} rec={} rec-no-enqueue={} los={}",
             TOTAL_INCS.load(Ordering::Relaxed),
             ROOT_INCS.load(Ordering::Relaxed),
             MATURE_INCS.load(Ordering::Relaxed),
             NURSERY_INCS.load(Ordering::Relaxed),
+            FAST_NURSERY_INCS.load(Ordering::Relaxed),
+            LOS_INCS.load(Ordering::Relaxed),
         );
         TOTAL_INCS.store(0, Ordering::Relaxed);
         ROOT_INCS.store(0, Ordering::Relaxed);
         MATURE_INCS.store(0, Ordering::Relaxed);
         NURSERY_INCS.store(0, Ordering::Relaxed);
+        LOS_INCS.store(0, Ordering::Relaxed);
+        FAST_NURSERY_INCS.store(0, Ordering::Relaxed);
     }
 
-    pub fn flush_inc_counters(&self, total: usize, roots: usize, mature: usize, nursery: usize) {
+    pub fn flush_inc_counters(
+        &self,
+        total: usize,
+        roots: usize,
+        mature: usize,
+        nursery: usize,
+        los: usize,
+        fast_nursery: usize,
+    ) {
         TOTAL_INCS.fetch_add(total, Ordering::Relaxed);
         ROOT_INCS.fetch_add(roots, Ordering::Relaxed);
         MATURE_INCS.fetch_add(mature, Ordering::Relaxed);
         NURSERY_INCS.fetch_add(nursery, Ordering::Relaxed);
+        FAST_NURSERY_INCS.fetch_add(fast_nursery, Ordering::Relaxed);
+        LOS_INCS.fetch_add(los, Ordering::Relaxed);
     }
 
     pub fn increase_inc_buffer_size(&self, delta: usize) {
@@ -150,6 +166,10 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         RC_TABLE.store_atomic(o.to_address::<VM>(), count, Ordering::Relaxed)
     }
 
+    pub fn set_relaxed(&self, o: ObjectReference, count: u8) {
+        unsafe { RC_TABLE.store(o.to_address::<VM>(), count) }
+    }
+
     pub fn count(&self, o: ObjectReference) -> u8 {
         RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed)
     }
@@ -179,7 +199,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn is_straddle_line(&self, line: Line) -> bool {
-        let v: u8 = RC_STRADDLE_LINES.load_atomic(line.start(), Ordering::Relaxed);
+        let v: u8 = unsafe { RC_STRADDLE_LINES.load::<u8>(line.start()) };
         v != 0
     }
 
@@ -195,8 +215,8 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         let end_line = Line::from(Line::align(o.to_address::<VM>() + size));
         let mut line = start_line;
         while line != end_line {
-            RC_STRADDLE_LINES.store_atomic(line.start(), 1u8, Ordering::Relaxed);
-            self.set(line.start().to_object_reference::<VM>(), 1);
+            unsafe { RC_STRADDLE_LINES.store(line.start(), 1u8) };
+            self.set_relaxed(line.start().to_object_reference::<VM>(), 1);
             line = line.next();
         }
     }
@@ -215,9 +235,9 @@ impl<VM: VMBinding> RefCountHelper<VM> {
             let end_line = Line::from(Line::align(o.to_address::<VM>() + size));
             let mut line = start_line;
             while line != end_line {
-                self.set(line.start().to_object_reference::<VM>(), 0);
+                self.set_relaxed(line.start().to_object_reference::<VM>(), 0);
                 // std::sync::atomic::fence(Ordering::Relaxed);
-                RC_STRADDLE_LINES.store_atomic(line.start(), 0u8, Ordering::Relaxed);
+                unsafe { RC_STRADDLE_LINES.store(line.start(), 0u8) };
                 // std::sync::atomic::fence(Ordering::Relaxed);
                 line = line.next();
             }
@@ -235,6 +255,13 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     pub fn promote(&self, o: ObjectReference) {
         o.log_start_address::<VM>();
         let size = o.get_size::<VM>();
+        if size > Line::BYTES {
+            self.mark_straddle_object_with_size(o, size);
+        }
+    }
+
+    pub fn promote_with_size(&self, o: ObjectReference, size: usize) {
+        o.log_start_address::<VM>();
         if size > Line::BYTES {
             self.mark_straddle_object_with_size(o, size);
         }

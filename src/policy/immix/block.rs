@@ -471,15 +471,15 @@ impl Block {
     }
 
     pub fn set_as_in_place_promoted(&self) {
-        Self::NURSERY_PROMOTION_STATE_TABLE.fetch_or_atomic(self.start(), 1u8, Ordering::Relaxed);
+        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 1u8) };
     }
 
     pub fn is_in_place_promoted(&self) -> bool {
-        Self::NURSERY_PROMOTION_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
+        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.load::<u8>(self.start()) != 0 }
     }
 
     pub fn clear_in_place_promoted(&self) {
-        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed)
+        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 0u8) };
     }
 
     pub fn unlog(&self) {

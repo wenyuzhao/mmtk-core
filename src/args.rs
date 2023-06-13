@@ -63,7 +63,7 @@ impl Default for RuntimeArgs {
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
-            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
+            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(100),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
@@ -226,6 +226,13 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_no_chunk_defrag");
     dump_feature!("lxr_no_lazy");
     dump_feature!("lxr_no_cm");
+    dump_feature!("lxr_srv_ratio_counter");
+    dump_feature!("lxr_release_stage_timer");
+    dump_feature!("lxr_precise_incs_counter");
+    dump_feature!("lxr_fixed_satb_trigger");
+    dump_feature!("lxr_no_survival_trigger");
+    dump_feature!("no_map_fixed_noreplace");
+    dump_feature!("report_worker_sleep_events");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
