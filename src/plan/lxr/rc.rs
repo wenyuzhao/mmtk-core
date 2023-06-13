@@ -142,7 +142,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             self.rc.promote_with_size(o, size);
             if copied {
                 self.survival_ratio_predictor_local
-                    .record_copied_promotion(o.get_size::<VM>());
+                    .record_copied_promotion(size);
             }
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
