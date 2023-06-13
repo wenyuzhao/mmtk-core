@@ -240,7 +240,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
             self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .bulk_add(packets);
-        } else {
+        } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
             o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
                 let target = edge.load();
@@ -859,6 +859,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                             );
                         }
                         self.mark_objects.push(x);
+                        if self.mark_objects.is_full() {
+                            self.flush();
+                        }
                     }
                 }
             });
