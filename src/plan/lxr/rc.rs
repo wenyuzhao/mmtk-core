@@ -38,7 +38,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     concurrent_marking_in_progress: bool,
     no_evac: bool,
     slice: Option<VM::VMMemorySlice>,
-    root_objects: Option<Vec<ObjectReference>>,
     depth: usize,
     rc: RefCountHelper<VM>,
     pub root_kind: Option<RootKind>,
@@ -74,7 +73,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             rc: RefCountHelper::NEW,
             root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            root_objects: None,
             total_incs: 0,
             mature_incs: 0,
             nursery_incs: 0,
@@ -91,19 +89,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    pub fn new_objects(objects: Vec<ObjectReference>) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::INC_BUFFER_COUNTER.add(objects.len());
-        }
-        let lxr = GCWorker::<VM>::current()
-            .mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap();
-        Self {
-            root_objects: Some(objects),
-            ..Self::__default(lxr)
-        }
+    pub fn new_objects(_objects: Vec<ObjectReference>) -> Self {
+        unreachable!()
     }
 
     pub fn new(incs: Vec<VM::VMEdge>, lxr: &'static LXR<VM>) -> Self {
@@ -439,18 +426,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Some(o)
     }
 
-    fn process_object<const K: EdgeKind>(
-        &mut self,
-        o: ObjectReference,
-        cc: &mut GCWorkerCopyContext<VM>,
-    ) -> ObjectReference {
-        if !crate::args::RC_NURSERY_EVACUATION {
-            self.process_inc(o, 0, true)
-        } else {
-            self.process_inc_and_evacuate(o, cc, 0, true)
-        }
-    }
-
     fn process_edge<const K: EdgeKind>(
         &mut self,
         e: VM::VMEdge,
@@ -598,7 +573,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.concurrent_marking_in_progress = self.lxr.concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
         let count = if cfg!(feature = "rust_mem_counter") {
-            self.incs.len() + self.root_objects.as_ref().map(|x| x.len()).unwrap_or(0)
+            self.incs.len()
         } else {
             0
         };
@@ -645,15 +620,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             if let Some(slice) = self.slice.take() {
                 assert_eq!(KIND, EDGE_KIND_NURSERY);
                 self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth, false)
-            } else if let Some(objects) = self.root_objects.take() {
-                if cfg!(feature = "lxr_precise_incs_counter") {
-                    self.total_incs += objects.len();
-                    self.root_incs += objects.len();
-                }
-                for o in objects {
-                    self.process_object::<KIND>(o, copy_context);
-                }
-                None
             } else {
                 let incs = std::mem::take(&mut self.incs);
                 self.process_incs::<KIND>(
