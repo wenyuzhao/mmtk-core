@@ -4,6 +4,7 @@ use super::SurvivalRatioPredictorLocal;
 use super::LXR;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::line::Line;
 use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
@@ -11,6 +12,7 @@ use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
+use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
 use crate::vm::edge_shape::Edge;
@@ -28,6 +30,20 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+#[derive(Default)]
+pub struct RCIncCounters {
+    pub promoted_objs: u32,
+    pub promoted_scalars: (u32, u32, u32),
+    pub promoted_prim_arrays: (u32, u32, u32),
+    pub promoted_object_arrays: (u32, u32, u32),
+    pub total_incs: u32,
+    pub mature_incs: u32,
+    pub nursery_incs: u32,
+    pub fast_nursery_incs: u32,
+    pub root_incs: u32,
+    pub los_incs: u32,
+}
+
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
@@ -44,12 +60,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     rc: RefCountHelper<VM>,
     pub root_kind: Option<RootKind>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
-    total_incs: usize,
-    mature_incs: usize,
-    nursery_incs: usize,
-    fast_nursery_incs: usize,
-    root_incs: usize,
-    los_incs: usize,
+    counters: RCIncCounters,
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
@@ -77,12 +88,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             rc: RefCountHelper::NEW,
             root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            total_incs: 0,
-            mature_incs: 0,
-            nursery_incs: 0,
-            fast_nursery_incs: 0,
-            root_incs: 0,
-            los_incs: 0,
+            counters: Default::default(),
         }
     }
 
@@ -138,6 +144,36 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.survival_ratio_predictor_local
             .record_total_promotion(o.get_size::<VM>(), los);
         let size = o.get_size::<VM>();
+
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.counters.promoted_objs += 1;
+            if VM::VMScanning::is_val_array(o) {
+                if size <= Line::BYTES {
+                    self.counters.promoted_prim_arrays.0 += 1;
+                } else if size <= Block::BYTES {
+                    self.counters.promoted_prim_arrays.1 += 1;
+                } else {
+                    self.counters.promoted_prim_arrays.2 += 1;
+                }
+            } else if VM::VMScanning::is_obj_array(o) {
+                if size <= Line::BYTES {
+                    self.counters.promoted_object_arrays.0 += 1;
+                } else if size <= Block::BYTES {
+                    self.counters.promoted_object_arrays.1 += 1;
+                } else {
+                    self.counters.promoted_object_arrays.2 += 1;
+                }
+            } else {
+                if size <= Line::BYTES {
+                    self.counters.promoted_scalars.0 += 1;
+                } else if size <= Block::BYTES {
+                    self.counters.promoted_scalars.1 += 1;
+                } else {
+                    self.counters.promoted_scalars.2 += 1;
+                }
+            }
+        }
+
         if !los {
             let in_nursery_block = Block::containing::<VM>(o).get_state() == BlockState::Nursery;
             if !copied && in_nursery_block {
@@ -290,8 +326,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 } else {
                     if rc != crate::util::rc::MAX_REF_COUNT {
                         let _ = self.rc.inc(target);
-                        self.total_incs += 1;
-                        self.fast_nursery_incs += 1;
+                        if cfg!(feature = "lxr_precise_incs_counter") {
+                            self.counters.total_incs += 1;
+                            self.counters.fast_nursery_incs += 1;
+                        }
                     }
                     self.record_mature_evac_remset2(obj_in_defrag, edge, target);
                 }
@@ -455,16 +493,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         };
         if cfg!(feature = "lxr_precise_incs_counter") {
-            self.total_incs += 1;
+            self.counters.total_incs += 1;
             if K == EDGE_KIND_MATURE {
-                self.mature_incs += 1;
+                self.counters.mature_incs += 1;
             } else if K == EDGE_KIND_ROOT {
-                self.root_incs += 1;
+                self.counters.root_incs += 1;
             } else {
-                self.nursery_incs += 1;
+                self.counters.nursery_incs += 1;
             }
             if self.lxr.los().address_in_space(e.to_address()) {
-                self.los_incs += 1;
+                self.counters.los_incs += 1;
             }
         }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
@@ -718,14 +756,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
         }
         if cfg!(feature = "lxr_precise_incs_counter") {
-            self.rc.flush_inc_counters(
-                self.total_incs,
-                self.root_incs,
-                self.mature_incs,
-                self.nursery_incs,
-                self.los_incs,
-                self.fast_nursery_incs,
-            );
+            self.rc.flush_inc_counters(&self.counters);
         }
     }
 }
