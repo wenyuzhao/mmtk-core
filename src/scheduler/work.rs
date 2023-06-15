@@ -43,7 +43,6 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
             worker_stat.measure_work(TypeId::of::<Self>(), type_name::<Self>(), mmtk)
         };
 
-       
         if crate::args::LOG_WORK_PACKETS {
             println!("{} > {}", worker.ordinal, type_name::<Self>());
         }
