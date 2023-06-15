@@ -31,13 +31,15 @@ use std::sync::Arc;
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
+    inc_slices: Vec<VM::VMMemorySlice>,
     /// Recursively generated new increments
     new_incs: VectorQueue<VM::VMEdge>,
+    new_inc_slices: VectorQueue<VM::VMMemorySlice>,
+    new_incs_count: usize,
     lxr: &'static LXR<VM>,
     current_pause: Pause,
     concurrent_marking_in_progress: bool,
     no_evac: bool,
-    slice: Option<VM::VMMemorySlice>,
     depth: usize,
     rc: RefCountHelper<VM>,
     pub root_kind: Option<RootKind>,
@@ -51,7 +53,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    const CAPACITY: usize = 4096;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -63,12 +65,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn __default(lxr: &'static LXR<VM>) -> Self {
         Self {
             incs: vec![],
+            inc_slices: vec![],
             new_incs: VectorQueue::default(),
+            new_inc_slices: VectorQueue::default(),
+            new_incs_count: 0,
             lxr,
             current_pause: Pause::RefCount,
             concurrent_marking_in_progress: false,
             no_evac: false,
-            slice: None,
             depth: 1,
             rc: RefCountHelper::NEW,
             root_kind: None,
@@ -82,10 +86,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    fn new_array_slice(slice: VM::VMMemorySlice, lxr: &'static LXR<VM>) -> Self {
-        Self {
-            slice: Some(slice),
-            ..Self::__default(lxr)
+    fn add_new_edge(&mut self, e: VM::VMEdge) {
+        self.new_incs.push(e);
+        self.new_incs_count += 1;
+        if self.new_incs_count >= Self::CAPACITY {
+            self.flush();
+        }
+    }
+
+    fn add_new_slice(&mut self, e: VM::VMMemorySlice) {
+        let len = e.len();
+        if self.new_incs_count + len >= Self::CAPACITY {
+            self.flush();
+        }
+        self.new_incs_count += len;
+        self.new_inc_slices.push(e);
+        if self.new_incs_count >= Self::CAPACITY {
+            self.flush();
         }
     }
 
@@ -187,7 +204,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         o: ObjectReference,
         los: bool,
         in_place_promotion: bool,
-        depth: usize,
+        _depth: usize,
         size: usize,
     ) {
         let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
@@ -230,16 +247,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor += step;
             }
         };
-        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 128 {
+        if VM::VMScanning::is_obj_array(o) {
             let data = VM::VMScanning::obj_array_data(o);
-            let mut packets = vec![];
-            for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new_array_slice(chunk, self.lxr);
-                w.depth = depth + 1;
-                packets.push(Box::new(w) as Box<dyn GCWork<VM>>);
+            if data.len() > 0 {
+                for chunk in data.chunks(Self::CAPACITY) {
+                    self.add_new_slice(chunk);
+                }
             }
-            self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                .bulk_add(packets);
         } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
             o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
@@ -272,10 +286,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 let rc = self.rc.count(target);
                 if rc == 0 {
                     // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                    self.new_incs.push(edge);
-                    if self.new_incs.is_full() {
-                        self.flush()
-                    }
+                    self.add_new_edge(edge);
                 } else {
                     if rc != crate::util::rc::MAX_REF_COUNT {
                         let _ = self.rc.inc(target);
@@ -291,12 +302,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[cold]
     fn flush(&mut self) {
-        if !self.new_incs.is_empty() {
+        if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
             let new_incs = self.new_incs.take();
+            let new_inc_slices = self.new_inc_slices.take();
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
+            w.inc_slices = new_inc_slices;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
+        self.new_incs_count = 0;
     }
 
     fn inc(&self, o: ObjectReference, stick: bool) -> bool {
@@ -617,19 +631,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             .map(|r| r.is_young_or_weak())
             .unwrap_or_default();
         let roots = {
-            if let Some(slice) = self.slice.take() {
-                assert_eq!(KIND, EDGE_KIND_NURSERY);
-                self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth, false)
-            } else {
-                let incs = std::mem::take(&mut self.incs);
-                self.process_incs::<KIND>(
-                    AddressBuffer::Owned(incs),
-                    copy_context,
-                    self.depth,
-                    is_young_or_weak_root,
-                )
-            }
+            let incs = std::mem::take(&mut self.incs);
+            self.process_incs::<KIND>(
+                AddressBuffer::Owned(incs),
+                copy_context,
+                self.depth,
+                is_young_or_weak_root,
+            )
         };
+        for s in std::mem::take(&mut self.inc_slices) {
+            self.process_incs_for_obj_array::<KIND>(
+                s,
+                copy_context,
+                self.depth,
+                is_young_or_weak_root,
+            );
+        }
         if let Some(roots) = roots {
             if self.lxr.concurrent_marking_enabled()
                 && self.current_pause == Pause::InitialMark
@@ -662,11 +679,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         // Process recursively generated buffer
         let mut depth = self.depth;
         let mut incs = vec![];
+        let mut inc_slices = vec![];
         const ACTIVE_PACKET_SPLIT: bool = false;
-        while !self.new_incs.is_empty() {
+        while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
             depth += 1;
             incs.clear();
+            inc_slices.clear();
             self.new_incs.swap(&mut incs);
+            self.new_inc_slices.swap(&mut inc_slices);
             if ACTIVE_PACKET_SPLIT && depth >= 16 && incs.len() > 1 {
                 let (a, b) = incs.split_at(incs.len() / 2);
                 let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(b.to_vec(), self.lxr);
@@ -674,18 +694,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 self.worker().add_work(WorkBucketStage::Unconstrained, w);
                 incs = a.to_vec();
             }
-            let c = incs.len();
-            if cfg!(feature = "rust_mem_counter") {
-                crate::rust_mem_counter::INC_BUFFER_COUNTER.add(c);
+            if !incs.is_empty() {
+                self.process_incs::<EDGE_KIND_NURSERY>(
+                    AddressBuffer::Ref(&mut incs),
+                    copy_context,
+                    depth,
+                    false,
+                );
             }
-            self.process_incs::<EDGE_KIND_NURSERY>(
-                AddressBuffer::Ref(&mut incs),
-                copy_context,
-                depth,
-                false,
-            );
-            if cfg!(feature = "rust_mem_counter") {
-                crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(c);
+            if !inc_slices.is_empty() {
+                for s in &inc_slices {
+                    self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(
+                        s.clone(),
+                        copy_context,
+                        self.depth,
+                        false,
+                    );
+                }
             }
         }
         self.survival_ratio_predictor_local.sync();
