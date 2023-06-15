@@ -42,6 +42,7 @@ pub struct RCIncCounters {
     pub fast_nursery_incs: u32,
     pub root_incs: u32,
     pub los_incs: u32,
+    pub remset_inserts: u32,
 }
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
@@ -214,6 +215,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 .immix_space
                 .remset
                 .record(e, o, &self.lxr.immix_space);
+            self.counters.remset_inserts += 1;
         }
     }
 
@@ -232,6 +234,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 .immix_space
                 .remset
                 .record(e, o, &self.lxr.immix_space);
+            self.counters.remset_inserts += 1;
         }
     }
 
@@ -767,11 +770,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
             if ms > 10f32 {
                 gc_log!(
-                    "WARNING: Incs packet took {:.3}ms! depth={} counters={:?}",
-                    ms,
-                    depth,
-                    self.counters,
-                );
+                        "WARNING: Incs packet took {:.3}ms! KIND={} RootKind={:?} depth={} counters={:?}",
+                        ms,
+                        KIND,
+                        self.root_kind,
+                        depth,
+                        self.counters,
+                    );
             }
         }
     }
