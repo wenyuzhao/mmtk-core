@@ -43,9 +43,7 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
             worker_stat.measure_work(TypeId::of::<Self>(), type_name::<Self>(), mmtk)
         };
 
-        #[cfg(feature = "log_outstanding_packets")]
-        let t = std::time::SystemTime::now();
-
+       
         if crate::args::LOG_WORK_PACKETS {
             println!("{} > {}", worker.ordinal, type_name::<Self>());
         }
@@ -58,14 +56,6 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
         {
             let mut worker_stat = worker.shared.borrow_stat_mut();
             stat.end_of_work(&mut worker_stat);
-        }
-
-        #[cfg(feature = "log_outstanding_packets")]
-        {
-            let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
-            if ms > 10f32 {
-                gc_log!("WARNING: {} took {:.3}ms!", type_name::<Self>(), ms);
-            }
         }
     }
 }

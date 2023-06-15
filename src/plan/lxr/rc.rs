@@ -30,7 +30,7 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct RCIncCounters {
     pub promoted_objs: u32,
     pub promoted_scalars: (u32, u32, u32),
@@ -64,7 +64,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = 4096;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -619,6 +619,9 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        #[cfg(feature = "log_outstanding_packets")]
+        let t = std::time::SystemTime::now();
+
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.current_pause = self.lxr.current_pause().unwrap();
@@ -757,6 +760,19 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         }
         if cfg!(feature = "lxr_precise_incs_counter") {
             self.rc.flush_inc_counters(&self.counters);
+        }
+
+        #[cfg(feature = "log_outstanding_packets")]
+        {
+            let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
+            if ms > 10f32 {
+                gc_log!(
+                    "WARNING: Incs packet took {:.3}ms depth={} counters={:?}!",
+                    ms,
+                    depth,
+                    self.counters,
+                );
+            }
         }
     }
 }
