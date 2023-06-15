@@ -152,6 +152,7 @@ ix_no_defrag_fix = []
 lxr_no_chunk_defrag = []
 lxr_release_stage_timer = []
 report_worker_sleep_events = []
+log_outstanding_packets = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
