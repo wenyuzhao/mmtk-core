@@ -154,7 +154,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         {
             usize::MAX
         } else {
-            (num_cpus::get() << 23) >> Block::LOG_BYTES // 2M for each core
+            (num_cpus::get() << 20) >> Block::LOG_BYTES // 1M for each core
         };
         let space = self.space();
         // Sweep nursery blocks
