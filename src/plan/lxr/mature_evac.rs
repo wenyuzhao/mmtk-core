@@ -25,7 +25,7 @@ pub struct EvacuateMatureObjects<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> EvacuateMatureObjects<VM> {
-    pub const CAPACITY: usize = 512;
+    pub const CAPACITY: usize = 1024;
 
     pub(super) fn new(remset: Vec<RemSetEntry>) -> Self {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
