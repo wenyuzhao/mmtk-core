@@ -615,6 +615,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanVMSpecificRoots<E> {
     }
 }
 
+#[repr(u8)]
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum RootKind {
     Strong,

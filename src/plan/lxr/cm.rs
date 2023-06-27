@@ -69,11 +69,15 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    fn new_grey_objects(objects: Vec<(ObjectReference, Address)>, mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new_grey_objects(objects: Vec<(ObjectReference, Address)>) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
         }
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = GCWorker::<VM>::current()
+            .mmtk
+            .plan
+            .downcast_ref::<LXR<VM>>()
+            .unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -136,7 +140,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
         debug_assert!(self.plan.concurrent_marking_enabled());
-        let w = LXRConcurrentTraceObjects::<VM>::new_grey_objects(objects, worker.mmtk);
+        let w = LXRConcurrentTraceObjects::<VM>::new_grey_objects(objects);
         if self.plan.current_pause() == Some(Pause::RefCount) {
             worker.scheduler().postpone(w);
         } else {
