@@ -677,6 +677,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             // Wait
             if cfg!(feature = "report_worker_sleep_events")
                 && self.in_gc_pause.load(Ordering::Relaxed)
+                && self.work_buckets[WorkBucketStage::RCProcessIncs].is_activated()
             {
                 gc_log!([3]
                     "    - ({:.3}ms) worker#{} sleep",
