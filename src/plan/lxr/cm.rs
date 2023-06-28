@@ -445,8 +445,11 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
+    array_slices: Vec<VM::VMMemorySlice>,
     forwarded_roots: Vec<ObjectReference>,
     next_edges: VectorQueue<EdgeOf<Self>>,
+    next_array_slices: VectorQueue<VM::VMMemorySlice>,
+    next_edge_count: u32,
     remset_recorded_edges: bool,
     refs: Vec<ObjectReference>,
     should_record_forwarded_roots: bool,
@@ -484,7 +487,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             base,
             pause: Pause::RefCount,
             forwarded_roots: vec![],
+            array_slices: vec![],
             next_edges: VectorQueue::new(),
+            next_array_slices: VectorQueue::new(),
+            next_edge_count: 0,
             remset_recorded_edges: false,
             refs: vec![],
             should_record_forwarded_roots: false,
@@ -493,14 +499,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_edges.is_empty() {
+        if !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
             let edges = self.next_edges.take();
-            self.worker().add_boxed_work(
-                WorkBucketStage::Unconstrained,
-                Box::new(Self::new(edges, false, self.mmtk())),
-            );
+            let slices = self.next_array_slices.take();
+            let mut w = Self::new(edges, false, self.mmtk());
+            w.array_slices = slices;
+            self.worker()
+                .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
         assert!(self.nodes.is_empty());
+        self.next_edge_count = 0;
     }
 
     /// Trace  and evacuate objects.
@@ -563,24 +571,27 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if self.should_record_forwarded_roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
-        if self.pause == Pause::FullTraceFast {
-            for i in 0..self.edges.len() {
-                self.process_mark_edge(self.edges[i])
-            }
-        } else if self.remset_recorded_edges {
-            for i in 0..self.edges.len() {
-                self.process_remset_edge(self.edges[i], i)
-            }
-        } else {
-            for i in 0..self.edges.len() {
-                self.process_edge(self.edges[i])
-            }
+        let edges = std::mem::take(&mut self.edges);
+        let slices = std::mem::take(&mut self.array_slices);
+        self.process_edges_impl(&edges, &slices, self.remset_recorded_edges);
+        self.remset_recorded_edges = false;
+        let should_record_forwarded_roots = self.should_record_forwarded_roots;
+        self.should_record_forwarded_roots = false;
+        let mut edges = vec![];
+        let mut slices = vec![];
+        while !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
+            self.next_edge_count = 0;
+            edges.clear();
+            slices.clear();
+            self.next_edges.swap(&mut edges);
+            self.next_array_slices.swap(&mut slices);
+            self.process_edges_impl(&edges, &slices, false);
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
         }
         self.flush();
-        if self.should_record_forwarded_roots {
+        if should_record_forwarded_roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
         }
@@ -657,6 +668,40 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
             slot.store(new_object);
         }
     }
+
+    fn process_edges_impl(
+        &mut self,
+        edges: &[VM::VMEdge],
+        slices: &[VM::VMMemorySlice],
+        remset_edges: bool,
+    ) {
+        if self.pause == Pause::FullTraceFast {
+            for i in 0..edges.len() {
+                self.process_mark_edge(edges[i])
+            }
+        } else if remset_edges {
+            for i in 0..edges.len() {
+                self.process_remset_edge(edges[i], i)
+            }
+        } else {
+            for i in 0..edges.len() {
+                self.process_edge(edges[i])
+            }
+        }
+        if self.pause == Pause::FullTraceFast {
+            for i in 0..slices.len() {
+                for e in slices[i].iter_edges() {
+                    self.process_mark_edge(e)
+                }
+            }
+        } else {
+            for i in 0..slices.len() {
+                for e in slices[i].iter_edges() {
+                    self.process_edge(e)
+                }
+            }
+        }
+    }
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
@@ -667,12 +712,41 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
-            self.next_edges.push(e);
-            if self.next_edges.is_full() {
-                self.flush();
+        // Skip primitive array
+        if VM::VMScanning::is_val_array(object) {
+            return;
+        }
+        if VM::VMScanning::is_obj_array(object) {
+            let data = VM::VMScanning::obj_array_data(object);
+            if data.len() > 0 {
+                for chunk in data.chunks(Self::CAPACITY) {
+                    let len: usize = chunk.len();
+                    if self.next_edge_count as usize + len >= Self::CAPACITY {
+                        self.flush();
+                    }
+                    self.next_edge_count += len as u32;
+                    self.next_array_slices.push(chunk);
+                    if self.next_edge_count as usize >= Self::CAPACITY {
+                        self.flush();
+                    }
+                }
             }
-        })
+        } else {
+            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
+                let o = e.load();
+                if o.is_null() {
+                    return;
+                }
+                if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
+                    return;
+                }
+                self.next_edges.push(e);
+                self.next_edge_count += 1;
+                if self.next_edge_count as usize >= Self::CAPACITY {
+                    self.flush();
+                }
+            })
+        }
     }
 }
 

@@ -727,6 +727,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         let mut inc_slices = vec![];
         const ACTIVE_PACKET_SPLIT: bool = false;
         while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
+            self.new_incs_count = 0;
             depth += 1;
             incs.clear();
             inc_slices.clear();

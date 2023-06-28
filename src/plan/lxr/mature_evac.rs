@@ -104,7 +104,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 
-    fn process_edges(&mut self, mmtk: &'static MMTK<VM>) -> Box<dyn GCWork<VM>> {
+    fn process_edges(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
@@ -120,13 +120,21 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
                 refs.push(o);
             }
         }
-        Box::new(LXRStopTheWorldProcessEdges::new_remset(edges, refs, mmtk))
+        if !edges.is_empty() {
+            Some(Box::new(LXRStopTheWorldProcessEdges::new_remset(
+                edges, refs, mmtk,
+            )))
+        } else {
+            None
+        }
     }
 }
 
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let work = self.process_edges(mmtk);
+        let Some(work) = self.process_edges(mmtk) else {
+            return
+        };
         // transitive closure
         worker.add_boxed_work(WorkBucketStage::Closure, work)
     }
