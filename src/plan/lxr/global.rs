@@ -548,7 +548,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     ///  - Remset for CLDs. So we don't need to scan them all during RC pauses
     fn current_gc_should_scan_all_classloader_strong_roots(&self) -> bool {
         let pause = self.current_pause().unwrap();
-        pause == Pause::InitialMark || pause == Pause::FullTraceFast
+        pause == Pause::InitialMark || pause == Pause::FinalMark || pause == Pause::FullTraceFast
     }
 
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
