@@ -770,7 +770,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         #[cfg(feature = "log_outstanding_packets")]
         {
             let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
-            if ms > 10f32 {
+            if ms > 10f32 || cfg!(feature = "log_all_inc_packets") {
                 gc_log!(
                         "WARNING: Incs packet took {:.3}ms! KIND={} RootKind={:?} depth={} counters={:?}",
                         ms,
