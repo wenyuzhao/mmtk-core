@@ -676,27 +676,27 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         remset_edges: bool,
     ) {
         if self.pause == Pause::FullTraceFast {
-            for i in 0..edges.len() {
-                self.process_mark_edge(edges[i])
+            for e in edges {
+                self.process_mark_edge(*e)
             }
         } else if remset_edges {
-            for i in 0..edges.len() {
-                self.process_remset_edge(edges[i], i)
+            for (i, e) in edges.iter().enumerate() {
+                self.process_remset_edge(*e, i)
             }
         } else {
-            for i in 0..edges.len() {
-                self.process_edge(edges[i])
+            for e in edges {
+                self.process_edge(*e)
             }
         }
         if self.pause == Pause::FullTraceFast {
-            for i in 0..slices.len() {
-                for e in slices[i].iter_edges() {
+            for slice in slices {
+                for e in slice.iter_edges() {
                     self.process_mark_edge(e)
                 }
             }
         } else {
-            for i in 0..slices.len() {
-                for e in slices[i].iter_edges() {
+            for slice in slices {
+                for e in slice.iter_edges() {
                     self.process_edge(e)
                 }
             }
