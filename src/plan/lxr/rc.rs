@@ -226,16 +226,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     fn push_potential_weak_roots_into_mark_queue(&mut self, o: ObjectReference) {
-        if self.in_cm && self.rc.is_stuck(o) && !self.lxr.is_marked(o) {
-            if self.lxr.mark(o) {
-                self.mark_objects.push((o, o.class_pointer::<VM>()));
-                self.counters.mark_queue_inserts += 1;
-                if self.mark_objects.len() >= 128 {
-                    let objs = std::mem::take(&mut self.mark_objects);
-                    self.worker()
-                        .scheduler()
-                        .postpone(LXRConcurrentTraceObjects::new_grey_objects(objs));
-                }
+        if self.in_cm && !self.lxr.is_marked(o) && self.lxr.mark(o) {
+            self.mark_objects.push((o, o.class_pointer::<VM>()));
+            self.counters.mark_queue_inserts += 1;
+            if self.mark_objects.len() >= 128 {
+                let objs = std::mem::take(&mut self.mark_objects);
+                self.worker()
+                    .scheduler()
+                    .postpone(LXRConcurrentTraceObjects::new_grey_objects(objs));
             }
         }
     }
