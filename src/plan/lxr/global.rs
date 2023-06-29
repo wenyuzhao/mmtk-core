@@ -1172,7 +1172,7 @@ impl<VM: VMBinding> LXR<VM> {
             _ if hrs < 40 => (256 << 20) >> Block::LOG_BYTES, // 256M
             _ => (128 << 20) >> Block::LOG_BYTES,             // 128M
         };
-        if new_value != self.nursery_blocks.unwrap() {
+        if Some(new_value) != self.nursery_blocks {
             gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
             self.nursery_blocks = Some(new_value);
         }
