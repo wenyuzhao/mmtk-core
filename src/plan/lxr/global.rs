@@ -1161,18 +1161,16 @@ impl<VM: VMBinding> LXR<VM> {
         }
         assert!(cfg!(feature = "fixed_alloc_trigger_based_on_system_time"));
         let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
-        // 2023-05-05T00:00:00-07:00
-        // 2023-05-05T07:00:00Z
         let date230505 = std::time::SystemTime::UNIX_EPOCH + hours(467575);
         let d = SystemTime::now().duration_since(date230505).unwrap();
-        let hrs = (d.as_secs() / 3600) % 24;
+        let hrs = (d.as_secs() / 3600) % 48;
         let new_value: usize = match hrs {
-            _ if hrs < 4 => (2 << 30) >> Block::LOG_BYTES,    // 2G
-            _ if hrs < 8 => (1 << 30) >> Block::LOG_BYTES,    // 1G
-            _ if hrs < 12 => (512 << 20) >> Block::LOG_BYTES, // 512M
-            _ if hrs < 16 => (256 << 20) >> Block::LOG_BYTES, // 256M
-            _ if hrs < 20 => (128 << 20) >> Block::LOG_BYTES, // 128M
-            _ => (64 << 20) >> Block::LOG_BYTES,              // 64M
+            _ if hrs < 8 => (4 << 30) >> Block::LOG_BYTES,    // 4G
+            _ if hrs < 16 => (2 << 30) >> Block::LOG_BYTES,   // 2G
+            _ if hrs < 24 => (1 << 30) >> Block::LOG_BYTES,   // 1G
+            _ if hrs < 32 => (512 << 20) >> Block::LOG_BYTES, // 512M
+            _ if hrs < 40 => (256 << 20) >> Block::LOG_BYTES, // 256M
+            _ => (128 << 20) >> Block::LOG_BYTES,             // 128M
         };
         if new_value != self.nursery_blocks.unwrap() {
             gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
