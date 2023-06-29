@@ -86,14 +86,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if old_ref != o {
             return false;
         }
-        if !o.is_in_any_space() {
+        if !o.is_in_any_space() || !lxr.immix_space.in_space(o) {
             return false;
         }
-        if !lxr.rc.is_dead(o) && (lxr.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)) {
-            return true;
-        }
-        // See `ProcessIncs::record_mature_evac_remset` in lxr/rc.rs
-        if lxr.rc.is_stuck(o) && !lxr.is_marked(o) {
+        if !lxr.rc.is_dead(o) && Block::in_defrag_block::<VM>(o) {
             return true;
         }
         false

@@ -208,8 +208,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        let force = self.pause == Pause::FinalMark && !self.lxr.is_marked(o);
-        if force || (!edge_in_defrag && self.lxr.in_defrag(o)) {
+        if !edge_in_defrag && self.lxr.in_defrag(o) {
             self.lxr
                 .immix_space
                 .remset
@@ -223,19 +222,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
-    }
-
-    fn push_potential_weak_roots_into_mark_queue(&mut self, o: ObjectReference) {
-        if self.in_cm && !self.lxr.is_marked(o) && self.lxr.mark(o) {
-            self.mark_objects.push((o, o.class_pointer::<VM>()));
-            self.counters.mark_queue_inserts += 1;
-            if self.mark_objects.len() >= 128 {
-                let objs = std::mem::take(&mut self.mark_objects);
-                self.worker()
-                    .scheduler()
-                    .postpone(LXRConcurrentTraceObjects::new_grey_objects(objs));
-            }
-        }
     }
 
     fn scan_nursery_object(
@@ -335,7 +321,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                         }
                     }
                     self.record_mature_evac_remset2(obj_in_defrag, edge, target);
-                    self.push_potential_weak_roots_into_mark_queue(target);
                 }
                 super::record_edge_for_validation(edge, target);
             });
@@ -520,7 +505,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if K != EDGE_KIND_ROOT || stick {
             self.record_mature_evac_remset(e, new);
         }
-        self.push_potential_weak_roots_into_mark_queue(new);
         if new != o {
             // println!(
             //     " -- inc {:?}: {:?} => {:?} rc={} {:?}",

@@ -272,7 +272,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn load_reference(&mut self, o: ObjectReference) {
-        if !self.lxr.concurrent_marking_in_progress() {
+        if !self.lxr.concurrent_marking_in_progress() || self.lxr.is_marked(o) {
             return;
         }
         self.refs.push(o);

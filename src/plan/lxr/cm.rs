@@ -534,6 +534,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             self.remset_recorded_edges
         );
         debug_assert!(object.class_is_valid::<VM>());
+        let object = object.get_forwarded_object().unwrap_or(object);
         let new_object = if self.lxr.immix_space.in_space(object) {
             if self
                 .lxr
