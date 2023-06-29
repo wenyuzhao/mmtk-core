@@ -208,7 +208,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        let force = self.pause == Pause::FinalMark && self.rc.is_stuck(o) && !self.lxr.is_marked(o);
+        let force = self.pause == Pause::FinalMark && !self.lxr.is_marked(o);
         if force || (!edge_in_defrag && self.lxr.in_defrag(o)) {
             self.lxr
                 .immix_space
@@ -712,7 +712,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::FullTraceFast {
-                if !root_edges.is_empty() && self.root_kind != Some(RootKind::Weak) {
+                if !root_edges.is_empty() {
                     let mut w = LXRStopTheWorldProcessEdges::new(root_edges, true, mmtk);
                     w.root_kind = self.root_kind;
                     worker.add_work(WorkBucketStage::Closure, w)
