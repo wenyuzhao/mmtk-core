@@ -448,7 +448,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
         self.block_allocation.notify_mutator_phase_end();
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+        if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             //     self.mark_state = Self::MARKED_STATE;
@@ -471,13 +471,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
-        debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        if pause == Pause::InitialMark || pause == Pause::FullTraceFast {
+        debug_assert_ne!(pause, Pause::FullDefrag);
+        if pause == Pause::InitialMark || pause == Pause::Full {
             // Select mature evacuation set
             self.schedule_defrag_selection_packets(pause);
         }
         // Initialize mark state for tracing
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+        if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
                 self.mark_state = Self::MARKED_STATE;
@@ -488,7 +488,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Release nursery blocks
         if pause != Pause::RefCount {
-            if pause == Pause::FullTraceFast {
+            if pause == Pause::Full {
                 // Reset worker TLABs.
                 // The block of the current worker TLAB may be selected as part of the mature evacuation set.
                 // So the copied mature objects might be copied into defrag blocks, and get copied out again.
@@ -504,7 +504,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
-        } else if pause == Pause::FullTraceFast {
+        } else if pause == Pause::Full {
             self.is_end_of_satb_or_full_gc = true;
         }
     }
@@ -515,7 +515,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "    - ({:.3}ms) sweep_nursery_blocks start",
             crate::gc_start_time_ms(),
         );
-        debug_assert_ne!(pause, Pause::FullTraceDefrag);
+        debug_assert_ne!(pause, Pause::FullDefrag);
         self.block_allocation
             .sweep_nursery_blocks(&self.scheduler, pause);
         #[cfg(feature = "lxr_release_stage_timer")]
@@ -535,7 +535,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         } else {
-            debug_assert_ne!(pause, Pause::FullTraceFast);
+            debug_assert_ne!(pause, Pause::Full);
         }
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc = false;
@@ -544,13 +544,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn schedule_mature_sweeping(&self, pause: Pause) {
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        if pause == Pause::Full || pause == Pause::FinalMark {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
-                debug_assert_ne!(pause, Pause::FullTraceFast);
+                debug_assert_ne!(pause, Pause::Full);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {

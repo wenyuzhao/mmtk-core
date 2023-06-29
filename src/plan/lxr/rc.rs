@@ -664,7 +664,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         }
         // Process main buffer
         let root_edges = if KIND == EDGE_KIND_ROOT
-            && (self.pause == Pause::FinalMark || self.pause == Pause::FullTraceFast)
+            && (self.pause == Pause::FinalMark || self.pause == Pause::Full)
         {
             self.incs.clone()
         } else {
@@ -711,7 +711,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .scheduler()
                     .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
-            if self.pause == Pause::FinalMark || self.pause == Pause::FullTraceFast {
+            if self.pause == Pause::FinalMark || self.pause == Pause::Full {
                 if !root_edges.is_empty() {
                     let mut w = LXRStopTheWorldProcessEdges::new(root_edges, true, mmtk);
                     w.root_kind = self.root_kind;
@@ -1011,7 +1011,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
-            || lxr.previous_pause() == Some(Pause::FullTraceFast);
+            || lxr.previous_pause() == Some(Pause::Full);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let count = if cfg!(feature = "rust_mem_counter") {
             self.decs.as_ref().map(|x| x.len()).unwrap_or(0)

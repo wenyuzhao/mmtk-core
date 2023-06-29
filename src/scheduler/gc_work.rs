@@ -303,7 +303,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .plan
             .downcast_ref::<LXR<VM>>()
             .map(|ix| ix.current_pause().unwrap())
-            .unwrap_or(Pause::FullTraceFast);
+            .unwrap_or(Pause::Full);
         crate::add_pause_time(pause, pause_time.as_nanos());
         if crate::verbose(2) {
             let _released_n =

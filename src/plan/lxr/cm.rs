@@ -675,7 +675,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         slices: &[VM::VMMemorySlice],
         remset_edges: bool,
     ) {
-        if self.pause == Pause::FullTraceFast {
+        if self.pause == Pause::Full {
             for e in edges {
                 self.process_mark_edge(*e)
             }
@@ -688,7 +688,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 self.process_edge(*e)
             }
         }
-        if self.pause == Pause::FullTraceFast {
+        if self.pause == Pause::Full {
             for slice in slices {
                 for e in slice.iter_edges() {
                     self.process_mark_edge(e)

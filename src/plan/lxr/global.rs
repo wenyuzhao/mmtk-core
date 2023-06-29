@@ -223,7 +223,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         let x = self.previous_pause.load(Ordering::SeqCst);
-        x == Some(Pause::FullTraceFast) || x == Some(Pause::FullTraceDefrag)
+        x == Some(Pause::Full) || x == Some(Pause::FullDefrag)
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
@@ -276,9 +276,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
         );
         match pause {
-            Pause::FullTraceFast => self
+            Pause::Full => self
                 .schedule_emergency_full_heap_collection::<RCImmixCollectRootEdges<VM>>(scheduler),
-            Pause::FullTraceDefrag => unreachable!(),
+            Pause::FullDefrag => unreachable!(),
             Pause::RefCount => self.schedule_rc_collection(scheduler),
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
@@ -303,7 +303,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         #[cfg(feature = "analysis")]
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         // Resume mutators
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        if pause == Pause::Full || pause == Pause::FinalMark {
             #[cfg(feature = "sanity")]
             scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
         }
@@ -320,18 +320,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 s.rc_pauses += 1
             }
         });
-        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+        if pause == Pause::FinalMark || pause == Pause::Full {
             self.common.los.is_end_of_satb_or_full_gc = true;
             // release nursery memory before mature evacuation
             self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .add(ReleaseLOSNursery);
         }
-        self.common.prepare(
-            tls,
-            pause == Pause::FullTraceFast || pause == Pause::InitialMark,
-        );
-        if crate::args::RC_MATURE_EVACUATION
-            && (pause == Pause::FinalMark || pause == Pause::FullTraceFast)
+        self.common
+            .prepare(tls, pause == Pause::Full || pause == Pause::InitialMark);
+        if crate::args::RC_MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full)
         {
             self.immix_space.process_mature_evacuation_remset();
             self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
@@ -346,7 +343,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
-        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+        if pause == Pause::FinalMark || pause == Pause::Full {
             #[cfg(feature = "lxr_release_stage_timer")]
             gc_log!([3]
                 "    - ({:.3}ms) update_weak_processor start",
@@ -370,10 +367,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             "    - ({:.3}ms) los release start",
             crate::gc_start_time_ms(),
         );
-        self.common.release(
-            tls,
-            pause == Pause::FullTraceFast || pause == Pause::FinalMark,
-        );
+        self.common
+            .release(tls, pause == Pause::Full || pause == Pause::FinalMark);
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]
             "    - ({:.3}ms) ix release start",
@@ -388,7 +383,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         debug_assert!(curr_roots.is_empty());
         // release the collected region
         self.last_gc_was_defrag.store(
-            self.current_pause().unwrap() == Pause::FullTraceDefrag,
+            self.current_pause().unwrap() == Pause::FullDefrag,
             Ordering::Relaxed,
         );
         if cfg!(feature = "lxr_precise_incs_counter") {
@@ -491,12 +486,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
         self.dump_heap_usage(false);
         if cfg!(feature = "object_size_distribution") {
-            if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+            if pause == Pause::FinalMark || pause == Pause::Full {
                 crate::dump_and_reset_obj_dist("Static", &mut crate::OBJ_COUNT.lock().unwrap());
             }
         }
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
-            if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+            if pause == Pause::FinalMark || pause == Pause::Full {
                 crate::report_and_reset_live_bytes();
             }
         }
@@ -548,17 +543,17 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     ///  - Remset for CLDs. So we don't need to scan them all during RC pauses
     fn current_gc_should_scan_all_classloader_strong_roots(&self) -> bool {
         let pause = self.current_pause().unwrap();
-        pause == Pause::InitialMark || pause == Pause::FinalMark || pause == Pause::FullTraceFast
+        pause == Pause::InitialMark || pause == Pause::FinalMark || pause == Pause::Full
     }
 
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
         let pause = self.current_pause().unwrap();
-        pause == Pause::InitialMark || pause == Pause::FullTraceFast
+        pause == Pause::InitialMark || pause == Pause::Full
     }
 
     fn current_gc_should_perform_class_unloading(&self) -> bool {
         let pause = self.current_pause().unwrap();
-        pause == Pause::FinalMark || pause == Pause::FullTraceFast
+        pause == Pause::FinalMark || pause == Pause::Full
     }
 
     fn requires_weak_root_scanning(&self) -> bool {
@@ -653,7 +648,7 @@ impl<VM: VMBinding> LXR<VM> {
                     << Block::LOG_PAGES,
             )
             .saturating_sub(released_los_pages);
-        if pause == Pause::FinalMark || pause == Pause::FullTraceFast {
+        if pause == Pause::FinalMark || pause == Pause::Full {
             let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
             gc_log!([3] " - predicted live mature pages: {}", live_mature_pages)
         }
@@ -743,7 +738,7 @@ impl<VM: VMBinding> LXR<VM> {
                     self.base().is_user_triggered_collection(),
                     self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
                 );
-                Pause::FullTraceFast
+                Pause::Full
             };
         }
         if self
@@ -762,7 +757,7 @@ impl<VM: VMBinding> LXR<VM> {
                 return if self.concurrent_marking_enabled() {
                     Pause::InitialMark
                 } else {
-                    Pause::FullTraceFast
+                    Pause::Full
                 };
             } else {
                 return Pause::RefCount;
@@ -776,7 +771,7 @@ impl<VM: VMBinding> LXR<VM> {
             return if self.concurrent_marking_enabled() {
                 Pause::InitialMark
             } else {
-                Pause::FullTraceFast
+                Pause::Full
             };
         } else {
             return Pause::RefCount;
@@ -817,7 +812,7 @@ impl<VM: VMBinding> LXR<VM> {
             Pause::RefCount
         } else {
             let pause = self.select_lxr_collection_kind(emergency_collection);
-            if (pause == Pause::InitialMark || pause == Pause::FullTraceFast)
+            if (pause == Pause::InitialMark || pause == Pause::Full)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
             {
                 self.immix_space
@@ -867,7 +862,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
-        if crate::args::LAZY_DECREMENTS && pause != Pause::FullTraceFast {
+        if crate::args::LAZY_DECREMENTS && pause != Pause::Full {
             scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
         }
     }
@@ -934,7 +929,7 @@ impl<VM: VMBinding> LXR<VM> {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
-        self.disable_unnecessary_buckets(scheduler, Pause::FullTraceFast);
+        self.disable_unnecessary_buckets(scheduler, Pause::Full);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)

@@ -313,7 +313,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                     )
                 }
                 if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark
-                    || lxr.current_pause().unwrap() == crate::plan::immix::Pause::FullTraceFast
+                    || lxr.current_pause().unwrap() == crate::plan::immix::Pause::Full
                 {
                     assert!(
                         lxr.is_marked(object),

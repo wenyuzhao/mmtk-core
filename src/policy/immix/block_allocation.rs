@@ -113,7 +113,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub fn sweep_mutator_reused_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        if pause == Pause::Full || pause == Pause::FinalMark {
             self.reused_blocks.reset();
             return;
         }
@@ -150,7 +150,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         const PARALLEL_STW_SWEEPING: bool = false;
         let max_stw_sweep_blocks: usize = if cfg!(feature = "lxr_no_lazy_young_sweeping")
             || pause == Pause::FinalMark
-            || pause == Pause::FullTraceFast
+            || pause == Pause::Full
         {
             usize::MAX
         } else {
@@ -163,7 +163,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 return self.parallel_sweep_all_nursery_blocks(scheduler, blocks);
             }
             let total_nursery_blocks = blocks.len();
-            let stw_limit = if pause == Pause::FullTraceFast {
+            let stw_limit = if pause == Pause::Full {
                 total_nursery_blocks
             } else {
                 usize::min(total_nursery_blocks, max_stw_sweep_blocks)

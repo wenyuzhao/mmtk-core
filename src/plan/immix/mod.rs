@@ -9,8 +9,8 @@ pub use self::global::IMMIX_CONSTRAINTS;
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum Pause {
-    FullTraceFast,
-    FullTraceDefrag,
+    Full,
+    FullDefrag,
     RefCount,
     InitialMark,
     FinalMark,

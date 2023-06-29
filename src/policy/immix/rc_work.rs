@@ -46,7 +46,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        let is_emergency_gc = lxr.current_pause().unwrap() == Pause::FullTraceFast;
+        let is_emergency_gc = lxr.current_pause().unwrap() == Pause::Full;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
             let chunk_defarg_percent = if is_emergency_gc {
@@ -90,8 +90,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 // block.calc_dead_bytes::<VM>()
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
-            if lxr.current_pause().unwrap() == Pause::FullTraceFast || score >= (Block::BYTES >> 1)
-            {
+            if lxr.current_pause().unwrap() == Pause::Full || score >= (Block::BYTES >> 1) {
                 fragmented_blocks.push((block, score));
             }
         }
@@ -452,19 +451,18 @@ impl MatureEvacuationSet {
         _total_pages: usize,
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
-        if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+        if lxr.current_pause().unwrap() == Pause::Full {
             // Make sure LOS sweeping finishes before evac selection begin
             // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
             let los = lxr.common().get_los();
             los.release_rc_nursery_objects();
         }
         // Select mature defrag blocks
-        let available_clean_pages_for_defrag =
-            if lxr.current_pause().unwrap() == Pause::FullTraceFast {
-                lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
-            } else {
-                lxr.immix_space.defrag_headroom_pages()
-            };
+        let available_clean_pages_for_defrag = if lxr.current_pause().unwrap() == Pause::Full {
+            lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
+        } else {
+            lxr.immix_space.defrag_headroom_pages()
+        };
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];

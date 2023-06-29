@@ -108,7 +108,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
-                || lxr.current_pause() == Some(Pause::FullTraceFast)
+                || lxr.current_pause() == Some(Pause::Full)
         );
         let remset = std::mem::take(&mut self.remset);
         let mut edges = vec![];
