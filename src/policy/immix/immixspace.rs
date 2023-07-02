@@ -56,6 +56,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
     lines_consumed: AtomicUsize,
+    reused_lines_consumed: AtomicUsize,
     /// Object mark state
     mark_state: u8,
     /// Work packet scheduler
@@ -377,6 +378,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
             lines_consumed: AtomicUsize::new(0),
+            reused_lines_consumed: AtomicUsize::new(0),
             reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
@@ -541,6 +543,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.is_end_of_satb_or_full_gc = false;
         // This cannot be done in parallel in a separate thread
         self.schedule_mature_sweeping(pause);
+        self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
     pub fn schedule_mature_sweeping(&self, pause: Pause) {
@@ -742,8 +745,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.block_allocation
             .initialize_new_clean_block(block, copy, self.cm_enabled);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
-        self.lines_consumed
-            .fetch_add(Block::LINES, Ordering::SeqCst);
+        if !self.rc_enabled {
+            self.lines_consumed
+                .fetch_add(Block::LINES, Ordering::SeqCst);
+        }
 
         #[cfg(feature = "lxr_srv_ratio_counter")]
         if !copy {
@@ -1212,6 +1217,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
         let num_lines = Line::steps_between(&start, &end).unwrap();
+        if !copy {
+            self.reused_lines_consumed
+                .fetch_add(num_lines, Ordering::Relaxed);
+        }
         block.dec_dead_bytes_sloppy((num_lines as u32) << Line::LOG_BYTES);
         #[cfg(feature = "lxr_srv_ratio_counter")]
         crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
@@ -1333,9 +1342,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .add_prioritized(Box::new(RCReleaseMatureLOS::new(counter.clone())));
     }
 
+    pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {
+        debug_assert!(self.rc_enabled);
+        self.reused_lines_consumed.load(Ordering::Relaxed)
+            >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
+    }
+
     pub(crate) fn get_pages_allocated(&self) -> usize {
         debug_assert!(!self.rc_enabled);
-        self.lines_consumed.load(Ordering::SeqCst) >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
+        self.lines_consumed.load(Ordering::Relaxed) >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
     }
 
     /// Post copy routine for Immix copy contexts

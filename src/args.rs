@@ -1,7 +1,8 @@
 use crate::{
     policy::immix::{block::Block, line::Line},
     util::{
-        heap::layout::vm_layout_constants::VMLayoutConstants, linear_scan::Region, options::Options,
+        constants::LOG_BYTES_IN_MBYTE, heap::layout::vm_layout_constants::VMLayoutConstants,
+        linear_scan::Region, options::Options,
     },
     BarrierSelector,
 };
@@ -14,6 +15,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) incs_limit: Option<usize>,
     pub(crate) no_mutator_line_recycling: bool,
     pub(crate) nursery_blocks: Option<usize>,
+    pub(crate) young_limit_mb: Option<usize>,
     pub(crate) nursery_ratio: Option<usize>,
     pub(crate) lower_concurrent_worker_priority: bool,
     pub(crate) concurrent_worker_ratio: usize,
@@ -50,16 +52,20 @@ impl Default for RuntimeArgs {
             incs_limit: env_arg("INCS_LIMIT"),
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
             nursery_blocks: env_arg("NURSERY_BLOCKS").or(
-                if cfg!(feature = "lxr_fixed_young_size") {
+                if cfg!(feature = "lxr_fixed_clean_rc_trigger") {
                     const BLOCKS_IN_MB: usize = (1 << 20) >> Block::LOG_BYTES;
                     Some(128 * BLOCKS_IN_MB) // 128 M
-                } else if cfg!(feature = "lxr_fixed_young_size_8g") {
-                    const BLOCKS_IN_GB: usize = (1 << 30) >> Block::LOG_BYTES;
-                    Some(8 * BLOCKS_IN_GB) // 8 G
                 } else {
                     None
                 },
             ),
+            young_limit_mb: env_arg("YOUNG_LIMIT")
+                .or_else(|| env_arg("YOUNG_LIMIT_MB"))
+                .or(if cfg!(feature = "lxr_fixed_rc_trigger") {
+                    Some(128 << LOG_BYTES_IN_MBYTE) // 128 M
+                } else {
+                    None
+                }),
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
@@ -68,8 +74,8 @@ impl Default for RuntimeArgs {
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
             rc_stop_percent: env_arg("RC_STOP_PERCENT").unwrap_or(5),
-            max_survival_mb: if cfg!(feature = "lxr_fixed_young_size")
-                || cfg!(feature = "lxr_fixed_young_size_8g")
+            max_survival_mb: if cfg!(feature = "lxr_fixed_rc_trigger")
+                || cfg!(feature = "lxr_fixed_clean_rc_trigger")
             {
                 usize::MAX
             } else {
@@ -221,7 +227,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("bpr_spin_lock");
     dump_feature!("lxr_no_nursery_evac");
     dump_feature!("lxr_fixed_young_size");
-    dump_feature!("lxr_fixed_young_size_8g");
     dump_feature!("lxr_no_lazy_young_sweeping");
     dump_feature!("lxr_no_chunk_defrag");
     dump_feature!("lxr_no_lazy");

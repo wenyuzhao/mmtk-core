@@ -2,6 +2,7 @@ use super::block::BlockState;
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
 use crate::scheduler::WorkBucketStage;
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::{
     plan::lxr::LXR,
     policy::space::Space,
@@ -86,12 +87,17 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         unsafe { &**self.space.get() }
     }
 
-    pub fn nursery_blocks(&self) -> usize {
+    pub fn clean_nursery_blocks(&self) -> usize {
         self.nursery_blocks.len()
     }
 
-    pub fn nursery_mb(&self) -> usize {
-        self.nursery_blocks() << Block::LOG_BYTES >> 20
+    pub fn clean_nursery_mb(&self) -> usize {
+        self.clean_nursery_blocks() << Block::LOG_BYTES >> 20
+    }
+
+    pub fn total_young_allocation_in_bytes(&self) -> usize {
+        (self.nursery_blocks.len() << Block::LOG_BYTES)
+            + (self.space().get_mutator_recycled_lines_in_pages() << LOG_BYTES_IN_PAGE)
     }
 
     pub fn init(&self, space: &ImmixSpace<VM>) {

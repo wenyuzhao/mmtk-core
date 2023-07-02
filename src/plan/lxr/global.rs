@@ -85,7 +85,8 @@ pub struct LXR<VM: VMBinding> {
     next_gc_may_perform_cycle_collection: AtomicBool,
     next_gc_may_perform_emergency_collection: AtomicBool,
     last_gc_was_defrag: AtomicBool,
-    nursery_blocks: Option<usize>,
+    nursery_blocks: usize,
+    young_alloc_trigger: usize,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     zeroing_packets_scheduled: AtomicBool,
     next_gc_selected: (Mutex<bool>, Condvar),
@@ -123,14 +124,20 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
+            println!("GC A");
             return true;
         }
         // Survival limits
-        let predicted_survival = ((self.immix_space.block_allocation.nursery_mb() as f64
-            * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
-            << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
+        let total_young_alloc_pages = self
+            .immix_space
+            .block_allocation
+            .total_young_allocation_in_bytes()
+            >> LOG_BYTES_IN_MBYTE;
+        let predicted_survival_mb: usize =
+            ((total_young_alloc_pages as f64 * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
+                << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
         if !cfg!(feature = "lxr_no_survival_trigger") {
-            if predicted_survival >= crate::args().max_survival_mb {
+            if predicted_survival_mb >= crate::args().max_survival_mb {
                 SURVIVAL_TRIGGERED.store(true, Ordering::Relaxed);
                 self.gc_cause.store(GCCause::Survival, Ordering::Relaxed);
                 return true;
@@ -139,39 +146,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if !self.immix_space.common().contiguous {
             let available_to_space = (self.immix_space.pr.available_pages()
                 + (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)))
-                / 256;
-            if predicted_survival >= available_to_space {
+                >> (LOG_BYTES_IN_MBYTE - LOG_BYTES_IN_PAGE);
+            if predicted_survival_mb >= available_to_space {
                 self.gc_cause
                     .store(GCCause::ImmixSpaceFull, Ordering::Relaxed);
                 return true;
             }
         }
         if crate::args::LXR_RC_ONLY {
-            let inc_overflow = crate::args()
-                .incs_limit
-                .map(|x| self.rc.inc_buffer_size() >= x)
-                .unwrap_or(false);
-            let alloc_overflow = self
-                .nursery_blocks
-                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
-                .unwrap_or(false);
-            if alloc_overflow || inc_overflow {
-                if inc_overflow {
-                    INCS_TRIGGERED.store(true, Ordering::SeqCst);
-                }
-                if alloc_overflow {
-                    ALLOC_TRIGGERED.store(true, Ordering::SeqCst);
-                }
-                return true;
-            }
-
-            if crate::args::ENABLE_INITIAL_ALLOC_LIMIT
-                && !INITIAL_GC_TRIGGERED.load(Ordering::SeqCst)
-            {
-                if self.immix_space.block_allocation.nursery_blocks() >= 1024 {
-                    return true;
-                }
-            }
+            unimplemented!()
         }
         // inc limits
         if !crate::args::LXR_RC_ONLY
@@ -183,12 +166,21 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.gc_cause.store(GCCause::Increments, Ordering::Relaxed);
             return true;
         }
-        // fresh young blocks limits
+        // clean young blocks limits
+        if !crate::args::LXR_RC_ONLY
+            && self.immix_space.block_allocation.clean_nursery_blocks() >= self.nursery_blocks
+        {
+            self.gc_cause
+                .store(GCCause::FixedNursery, Ordering::Relaxed);
+            return true;
+        }
+        // total young alloc limits (including clean and recycled allocation)
         if !crate::args::LXR_RC_ONLY
             && self
-                .nursery_blocks
-                .map(|x| self.immix_space.block_allocation.nursery_blocks() >= x)
-                .unwrap_or(false)
+                .immix_space
+                .block_allocation
+                .total_young_allocation_in_bytes()
+                >= self.young_alloc_trigger
         {
             self.gc_cause
                 .store(GCCause::FixedNursery, Ordering::Relaxed);
@@ -268,12 +260,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         };
         gc_log!([3] "GC({}) GC Cause {:?}", crate::GC_EPOCH.load(Ordering::SeqCst), gc_cause);
         gc_log!([2]
-            "GC({}) {:?} start. incs={} young-blocks={}({}M)",
+            "GC({}) {:?} start. incs={} young-alloc={}M young-clean-blocks={}({}M)",
             crate::GC_EPOCH.load(Ordering::SeqCst),
             pause,
             self.rc.inc_buffer_size(),
-            self.immix_space.block_allocation.nursery_blocks(),
-            self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
+            self.immix_space.block_allocation.total_young_allocation_in_bytes() >> LOG_BYTES_IN_MBYTE,
+            self.immix_space.block_allocation.clean_nursery_blocks(),
+            self.immix_space.block_allocation.clean_nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
         );
         match pause {
             Pause::Full => self
@@ -392,7 +385,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        let predicted_survival = (self.immix_space.block_allocation.nursery_mb() as f64
+        let predicted_survival = (self.immix_space.block_allocation.clean_nursery_mb() as f64
             * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize;
         let survival = predicted_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
         return survival + self.immix_space.defrag_headroom_pages();
@@ -416,8 +409,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
 
-        super::SURVIVAL_RATIO_PREDICTOR
-            .set_alloc_size(self.immix_space.block_allocation.nursery_blocks() << Block::LOG_BYTES);
+        super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
+            self.immix_space
+                .block_allocation
+                .total_young_allocation_in_bytes(),
+        );
         super::SURVIVAL_RATIO_PREDICTOR
             .pause_start
             .store(SystemTime::now(), Ordering::SeqCst);
@@ -597,7 +593,11 @@ impl<VM: VMBinding> LXR<VM> {
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
-            nursery_blocks: crate::args().nursery_blocks,
+            nursery_blocks: crate::args().nursery_blocks.unwrap_or(usize::MAX),
+            young_alloc_trigger: crate::args()
+                .young_limit_mb
+                .map(|x| x << LOG_BYTES_IN_MBYTE)
+                .unwrap_or(usize::MAX),
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             zeroing_packets_scheduled: AtomicBool::new(false),
             next_gc_selected: (Mutex::new(true), Condvar::new()),
@@ -1118,7 +1118,7 @@ impl<VM: VMBinding> LXR<VM> {
             };
             let total_blocks = heap_size >> Block::LOG_BYTES;
             let nursery_blocks = total_blocks / (nursery_ratio + 1);
-            self.nursery_blocks = Some(nursery_blocks);
+            self.nursery_blocks = nursery_blocks;
         }
     }
 
@@ -1156,25 +1156,41 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn update_fixed_alloc_trigger(&mut self) {
-        if !cfg!(feature = "fixed_alloc_trigger_based_on_system_time") {
+        if !cfg!(feature = "fixed_alloc_trigger_based_on_system_time")
+            && !cfg!(feature = "fixed_clean_alloc_trigger_based_on_system_time")
+        {
             return;
         }
-        assert!(cfg!(feature = "fixed_alloc_trigger_based_on_system_time"));
         let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
         let date230505 = std::time::SystemTime::UNIX_EPOCH + hours(467575);
         let d = SystemTime::now().duration_since(date230505).unwrap();
         let hrs = (d.as_secs() / 3600) % 48;
-        let new_value: usize = match hrs {
-            _ if hrs < 8 => (4 << 30) >> Block::LOG_BYTES,    // 4G
-            _ if hrs < 16 => (2 << 30) >> Block::LOG_BYTES,   // 2G
-            _ if hrs < 24 => (1 << 30) >> Block::LOG_BYTES,   // 1G
-            _ if hrs < 32 => (512 << 20) >> Block::LOG_BYTES, // 512M
-            _ if hrs < 40 => (256 << 20) >> Block::LOG_BYTES, // 256M
-            _ => (128 << 20) >> Block::LOG_BYTES,             // 128M
-        };
-        if Some(new_value) != self.nursery_blocks {
-            gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
-            self.nursery_blocks = Some(new_value);
+        if cfg!(feature = "fixed_clean_alloc_trigger_based_on_system_time") {
+            let new_value: usize = match hrs {
+                _ if hrs < 8 => (4 << 30) >> Block::LOG_BYTES,    // 4G
+                _ if hrs < 16 => (2 << 30) >> Block::LOG_BYTES,   // 2G
+                _ if hrs < 24 => (1 << 30) >> Block::LOG_BYTES,   // 1G
+                _ if hrs < 32 => (512 << 20) >> Block::LOG_BYTES, // 512M
+                _ if hrs < 40 => (256 << 20) >> Block::LOG_BYTES, // 256M
+                _ => (128 << 20) >> Block::LOG_BYTES,             // 128M
+            };
+            if new_value != self.nursery_blocks {
+                gc_log!([1] "===>>> Update Fixed Clean Alloc Trigger: {:?} <<<===", new_value);
+                self.nursery_blocks = new_value;
+            }
+        } else if cfg!(feature = "fixed_alloc_trigger_based_on_system_time") {
+            let new_value: usize = match hrs {
+                _ if hrs < 8 => 4096 << LOG_BYTES_IN_MBYTE,  // 4G
+                _ if hrs < 16 => 2048 << LOG_BYTES_IN_MBYTE, // 2G
+                _ if hrs < 24 => 1024 << LOG_BYTES_IN_MBYTE, // 1G
+                _ if hrs < 32 => 512 << LOG_BYTES_IN_MBYTE,  // 512M
+                _ if hrs < 40 => 256 << LOG_BYTES_IN_MBYTE,  // 256M
+                _ => 128 << LOG_BYTES_IN_MBYTE,              // 128M
+            };
+            if new_value != self.nursery_blocks {
+                gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
+                self.young_alloc_trigger = new_value;
+            }
         }
     }
 }
