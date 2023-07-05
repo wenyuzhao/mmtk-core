@@ -124,7 +124,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
-            println!("GC A");
             return true;
         }
         // Survival limits
@@ -1187,7 +1186,7 @@ impl<VM: VMBinding> LXR<VM> {
                 _ if hrs < 40 => 256 << LOG_BYTES_IN_MBYTE,  // 256M
                 _ => 128 << LOG_BYTES_IN_MBYTE,              // 128M
             };
-            if new_value != self.nursery_blocks {
+            if new_value != self.young_alloc_trigger {
                 gc_log!([1] "===>>> Update Fixed Alloc Trigger: {:?} <<<===", new_value);
                 self.young_alloc_trigger = new_value;
             }
