@@ -206,8 +206,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         // If the VM requires that only the coordinator thread can stop the world,
         // we delegate the work to the coordinator.
         if <E::VM as VMBinding>::VMCollection::COORDINATOR_ONLY_STW && !worker.is_coordinator() {
-            mmtk.scheduler
-                .add_coordinator_work(StopMutators::<E>::new(), worker);
+            worker
+                .sender
+                .add_coordinator_work(Box::new(StopMutators::<E>::new()));
             return;
         }
 
@@ -235,7 +236,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         gc_log!([3] "Discovered {} mutators", n);
         if BULK_THREAD_SCAN {
             let n_workers: usize = mmtk.scheduler.worker_group.worker_count();
-            for ms in mutators.chunks((mutators.len() / n_workers / 2).max(1)) {
+            for ms in mutators.chunks(std::cmp::max(mutators.len() / n_workers / 2, 1)) {
                 mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
                     .add(ScanMultipleStacks::<E>(ms.to_vec(), PhantomData));
             }
