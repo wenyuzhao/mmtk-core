@@ -10,11 +10,9 @@ use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::EdgeIterator;
-use crate::util::constants::BYTES_IN_ADDRESS;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::{ObjectModel, VMBinding};
 
-use super::constants::BYTES_IN_WORD;
 use super::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 
 /// size in bytes
