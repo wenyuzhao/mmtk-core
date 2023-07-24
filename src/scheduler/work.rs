@@ -5,13 +5,6 @@ use crate::vm::VMBinding;
 use std::any::TypeId;
 use std::any::{type_name, Any};
 
-/// A special kind of work that will execute on the coordinator (i.e. controller) thread
-///
-/// The coordinator thread holds the global monitor lock when executing `CoordinatorWork`s.
-/// So, directly adding new work to any buckets will cause dead lock.
-/// For this case, use `WorkBucket::add_with_priority_unsync` instead.
-pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
-
 pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     fn get_type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
