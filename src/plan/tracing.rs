@@ -46,6 +46,10 @@ impl<T> VectorQueue<T> {
         self.buffer.is_empty()
     }
 
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
     /// Return the contents of the underlying vector.  It will empty the queue.
     pub fn take(&mut self) -> Vec<T> {
         std::mem::take(&mut self.buffer)

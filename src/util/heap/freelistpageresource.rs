@@ -1,5 +1,8 @@
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, MutexGuard};
+
+use atomic::Ordering;
 
 use super::layout::vm_layout_constants::{PAGES_IN_CHUNK, PAGES_IN_SPACE64};
 use super::layout::VMMap;
@@ -45,6 +48,7 @@ pub struct FreeListPageResource<VM: VMBinding> {
     _p: PhantomData<VM>,
     /// Protect memory on release, and unprotect on re-allocate.
     pub(crate) protect_memory_on_release: bool,
+    pub(crate) total_chunks: AtomicUsize,
 }
 
 struct FreeListPageResourceSync {
@@ -99,6 +103,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
     ) -> Result<PRAllocResult, PRAllocFail> {
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
         let mut new_chunk = false;
@@ -200,6 +205,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             }),
             _p: PhantomData,
             protect_memory_on_release: false,
+            total_chunks: AtomicUsize::new(0),
         }
     }
 
@@ -227,6 +233,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             }),
             _p: PhantomData,
             protect_memory_on_release: false,
+            total_chunks: AtomicUsize::new(0),
         }
     }
 
@@ -267,6 +274,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         assert!(self.common.growable);
         // FIXME: We need a safe implementation
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let self_mut: &mut Self = unsafe { &mut *(self as *const Self as *mut Self) };
         let mut sync = self.sync.lock().unwrap();
         let page_offset =
@@ -297,11 +305,13 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     ) -> i32 {
         let mut rtn = freelist::FAILURE;
         let required_chunks = crate::policy::space::required_chunks(pages);
-        let region = self
+        let region: Address = self
             .common
             .grow_discontiguous_space(space_descriptor, required_chunks);
 
         if !region.is_zero() {
+            self.total_chunks
+                .fetch_add(required_chunks, Ordering::Relaxed);
             debug_assert_eq!(
                 self.vm_map().get_contiguous_region_chunks(region),
                 required_chunks
@@ -325,6 +335,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
 
     fn free_contiguous_chunk(&mut self, chunk: Address, sync: &mut FreeListPageResourceSync) {
         let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
+        self.total_chunks.fetch_sub(num_chunks, Ordering::Relaxed);
         /* nail down all pages associated with the chunk, so it is no longer on our free list */
         let mut chunk_start = conversions::bytes_to_pages(chunk - self.start);
         let chunk_end = chunk_start + (num_chunks * PAGES_IN_CHUNK);
@@ -362,6 +373,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         // FIXME
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         self.common.accounting.release(pages as _);
         let freed = me.free_list.free(page_offset as _, true);
@@ -388,6 +400,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         let mut sync = self.sync.lock().unwrap();
         // FIXME
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const Self as *mut Self) };
         self.common.accounting.release(pages as _);
         let freed = me.free_list.free(page_offset as _, true);

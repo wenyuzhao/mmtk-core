@@ -30,6 +30,7 @@ impl RemSetEntry {
 
 pub struct RemSet<VM: VMBinding> {
     pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
+    local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
     _p: PhantomData<VM>,
 }
 
@@ -39,9 +40,12 @@ impl<VM: VMBinding> RemSet<VM> {
     pub fn new(workers: usize) -> Self {
         let mut rs = RemSet {
             gc_buffers: vec![],
+            local_packets: vec![],
             _p: PhantomData,
         };
         rs.gc_buffers
+            .resize_with(workers, || UnsafeCell::new(vec![]));
+        rs.local_packets
             .resize_with(workers, || UnsafeCell::new(vec![]));
         rs
     }
@@ -55,17 +59,33 @@ impl<VM: VMBinding> RemSet<VM> {
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
                 let remset = std::mem::take(self.gc_buffer(id));
+                if cfg!(feature = "rust_mem_counter") {
+                    crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
+                }
                 mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
+            }
+        }
+        for id in 0..self.local_packets.len() {
+            let buf = unsafe { &mut *self.local_packets[id].get() };
+            if buf.len() > 0 {
+                let packets = std::mem::take(buf);
+                for p in packets {
+                    mature_evac_remsets.push(p);
+                }
             }
         }
     }
 
     #[cold]
-    fn flush(&self, id: usize, space: &ImmixSpace<VM>) {
+    fn flush(&self, id: usize, _space: &ImmixSpace<VM>) {
         if self.gc_buffer(id).len() > 0 {
             let remset = std::mem::take(self.gc_buffer(id));
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
+            }
             let w = EvacuateMatureObjects::new(remset);
-            space.mature_evac_remsets.lock().unwrap().push(Box::new(w));
+            let packet_buffer = unsafe { &mut *self.local_packets[id].get() };
+            packet_buffer.push(Box::new(w));
         }
     }
 
@@ -90,6 +110,9 @@ impl<VM: VMBinding> RemSet<VM> {
         space: &ImmixSpace<VM>,
         validity_state: u8,
     ) {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.add(1);
+        }
         let id = crate::gc_worker_id().unwrap();
         self.gc_buffer(id)
             .push(RemSetEntry::encode::<VM>(e, validity_state, o));

@@ -6,6 +6,7 @@ use crate::util::opaque_pointer::*;
 use crate::vm::ActivePlan;
 use std::sync::Mutex;
 
+use super::chunk_map::Chunk;
 use super::layout::VMMap;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::PageAccounting;
@@ -107,6 +108,14 @@ pub trait PageResource<VM: VMBinding>: 'static {
     fn common_mut(&mut self) -> &mut CommonPageResource;
     fn vm_map(&self) -> &'static dyn VMMap {
         self.common().vm_map
+    }
+
+    fn has_chunk_fragmentation_info(&self) -> bool {
+        false
+    }
+
+    fn get_live_pages_in_chunk(&self, _chunk: Chunk) -> usize {
+        unreachable!()
     }
 }
 

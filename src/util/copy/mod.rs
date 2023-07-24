@@ -115,7 +115,8 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
             && !self.config.constraints.needs_field_log_bit
         {
             // If the plan uses unlogged bit, we set the unlogged bit (the object is unlogged/mature)
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .mark_byte_as_unlogged::<VM>(object, Ordering::Relaxed);
         }
         // Policy specific post copy.
         match self.config.copy_mapping[semantics] {

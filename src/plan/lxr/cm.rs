@@ -7,7 +7,7 @@ use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::rc::RefCountHelper;
 use crate::util::{Address, ObjectReference};
-use crate::vm::edge_shape::Edge;
+use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::{
     plan::ObjectQueue,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
@@ -20,53 +20,139 @@ use std::sync::Arc;
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
-    objects: Option<Vec<ObjectReference>>,
-    objects_arc: Option<Arc<Vec<ObjectReference>>>,
-    next_objects: VectorQueue<ObjectReference>,
+    // objects to mark and scan
+    white_objects: Option<Vec<ObjectReference>>,
+    white_objects_arc: Option<Arc<Vec<ObjectReference>>>,
+    // objects to scan
+    grey_objects: Option<Vec<(ObjectReference, Address)>>,
+    grey_large_ref_array: Option<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    // recursively discovered grey objects
+    next_grey_objects: VectorQueue<(ObjectReference, Address)>,
     klass: Address,
     rc: RefCountHelper<VM>,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
+        }
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
-            objects: Some(objects),
-            objects_arc: None,
-            next_objects: VectorQueue::default(),
-            rc: RefCountHelper::NEW,
+            white_objects: Some(objects),
+            white_objects_arc: None,
+            grey_objects: None,
+            grey_large_ref_array: None,
+            next_grey_objects: VectorQueue::default(),
             klass: Address::ZERO,
+            rc: RefCountHelper::NEW,
         }
     }
 
     pub fn new_arc(objects: Arc<Vec<ObjectReference>>, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
+        }
         let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
-            objects: None,
-            objects_arc: Some(objects),
-            next_objects: VectorQueue::default(),
-            rc: RefCountHelper::NEW,
+            white_objects: None,
+            white_objects_arc: Some(objects),
+            grey_objects: None,
+            grey_large_ref_array: None,
+            next_grey_objects: VectorQueue::default(),
             klass: Address::ZERO,
+            rc: RefCountHelper::NEW,
+        }
+    }
+
+    pub fn new_grey_objects(objects: Vec<(ObjectReference, Address)>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
+        }
+        let plan = GCWorker::<VM>::current()
+            .mmtk
+            .plan
+            .downcast_ref::<LXR<VM>>()
+            .unwrap();
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        Self {
+            plan,
+            white_objects: None,
+            white_objects_arc: None,
+            grey_objects: Some(objects),
+            grey_large_ref_array: None,
+            next_grey_objects: VectorQueue::default(),
+            klass: Address::ZERO,
+            rc: RefCountHelper::NEW,
+        }
+    }
+
+    pub fn new_grey_large_ref_array(
+        o: ObjectReference,
+        klass: Address,
+        size: usize,
+        slice: VM::VMMemorySlice,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        Self {
+            plan,
+            white_objects: None,
+            white_objects_arc: None,
+            grey_objects: None,
+            grey_large_ref_array: Some((o, klass, size, slice)),
+            next_grey_objects: VectorQueue::default(),
+            klass: Address::ZERO,
+            rc: RefCountHelper::NEW,
+        }
+    }
+
+    fn create_scan_large_ref_array_packet(
+        &mut self,
+        o: ObjectReference,
+        klass: Address,
+        size: usize,
+        slice: VM::VMMemorySlice,
+    ) {
+        // This packet is executed in concurrent.
+        let worker = GCWorker::<VM>::current();
+        debug_assert!(self.plan.concurrent_marking_enabled());
+        let w = LXRConcurrentTraceObjects::<VM>::new_grey_large_ref_array(
+            o,
+            klass,
+            size,
+            slice,
+            worker.mmtk,
+        );
+        if self.plan.current_pause() == Some(Pause::RefCount) {
+            worker.scheduler().postpone(w);
+        } else {
+            worker.add_work(WorkBucketStage::Unconstrained, w);
+        }
+    }
+
+    fn create_scan_objects_packet(&mut self, objects: Vec<(ObjectReference, Address)>) {
+        // This packet is executed in concurrent.
+        let worker = GCWorker::<VM>::current();
+        debug_assert!(self.plan.concurrent_marking_enabled());
+        let w = LXRConcurrentTraceObjects::<VM>::new_grey_objects(objects);
+        if self.plan.current_pause() == Some(Pause::RefCount) {
+            worker.scheduler().postpone(w);
+        } else {
+            worker.add_work(WorkBucketStage::Unconstrained, w);
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_objects.is_empty() {
-            let new_nodes = self.next_objects.take();
-            // This packet is executed in concurrent.
-            let worker = GCWorker::<VM>::current();
-            debug_assert!(self.plan.concurrent_marking_enabled());
-            let w = LXRConcurrentTraceObjects::<VM>::new(new_nodes, worker.mmtk);
-            if self.plan.current_pause() == Some(Pause::RefCount) {
-                worker.scheduler().postpone(w);
-            } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
-            }
+        if !self.next_grey_objects.is_empty() {
+            let new_nodes = self.next_grey_objects.take();
+            self.create_scan_objects_packet(new_nodes);
         }
     }
 
@@ -110,9 +196,114 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         object
     }
 
-    fn process_objects(&mut self, objects: &[ObjectReference]) {
+    fn trace_objects(&mut self, objects: &[ObjectReference]) {
         for o in objects {
             self.trace_object(*o);
+        }
+    }
+
+    fn process_edge_after_obj_scan(
+        &mut self,
+        object: ObjectReference,
+        e: VM::VMEdge,
+        t: ObjectReference,
+        validity: u8,
+        should_check_remset: bool,
+    ) {
+        if t.is_null() || self.rc.count(t) == 0 {
+            return;
+        }
+        if cfg!(feature = "sanity") {
+            assert!(
+                t.to_address::<VM>().is_mapped(),
+                "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
+                object,
+                e,
+                t
+            );
+        }
+        if crate::args::RC_MATURE_EVACUATION
+            && (should_check_remset || !e.to_address().is_mapped())
+            && self.plan.in_defrag(t)
+        {
+            self.plan.immix_space.remset.record_with_validity_state(
+                e,
+                t,
+                &self.plan.immix_space,
+                validity,
+            );
+        }
+        self.trace_object(t);
+    }
+
+    fn scan_object(&mut self, object: ObjectReference, klass: Address) {
+        if cfg!(feature = "sanity") {
+            assert!(
+                object.to_address::<VM>().is_mapped(),
+                "Invalid obj {:?}: address is not mapped",
+                object
+            );
+        }
+        if self.rc.count(object) == 0 || object.class_pointer::<VM>() != klass {
+            return;
+        }
+        let should_check_remset = !self.plan.in_defrag(object);
+        object.iterate_fields_with_klass::<VM, _>(
+            CLDScanPolicy::Claim,
+            RefScanPolicy::Discover,
+            klass,
+            |e| {
+                let t: ObjectReference = e.load();
+                if t.is_null() {
+                    return;
+                }
+                let validity = self
+                    .plan
+                    .immix_space
+                    .remset
+                    .get_currrent_validity_state(e, &self.plan.immix_space);
+                if self.rc.count(object) != 0 {
+                    self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
+                }
+            },
+        );
+    }
+
+    fn scan_large_ref_array(
+        &mut self,
+        object: ObjectReference,
+        klass: Address,
+        size: usize,
+        slice: VM::VMMemorySlice,
+    ) {
+        if cfg!(feature = "sanity") {
+            assert!(
+                object.to_address::<VM>().is_mapped(),
+                "Invalid obj {:?}: address is not mapped",
+                object
+            );
+        }
+        let current_klass = object.class_pointer::<VM>();
+        if self.rc.count(object) == 0 {
+            return;
+        }
+        if current_klass != klass || object.get_size::<VM>() != size {
+            return;
+        }
+        let should_check_remset = !self.plan.in_defrag(object);
+        for e in slice.iter_edges() {
+            let t: ObjectReference = e.load();
+            if t.is_null() {
+                continue;
+            }
+            let validity = self
+                .plan
+                .immix_space
+                .remset
+                .get_currrent_validity_state(e, &self.plan.immix_space);
+            if self.rc.count(object) != 0 {
+                self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
+            }
         }
     }
 }
@@ -126,72 +317,32 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 object
             );
         }
-        if self.rc.count(object) == 0 {
+        // Don't enqueue the object if RC is zero
+        if self.rc.count(object) == 0 || VM::VMScanning::is_val_array(object) {
             return;
         }
-        let should_check_remset = !self.plan.in_defrag(object);
-        let mut cached_children: Vec<(VM::VMEdge, ObjectReference, u8)> = vec![];
-        object.iterate_fields_with_klass::<VM, _>(
-            CLDScanPolicy::Claim,
-            RefScanPolicy::Discover,
-            self.klass,
-            |e| {
-                let t: ObjectReference = e.load();
-                if t.is_null() {
-                    return;
-                }
-                let validity = self
-                    .plan
-                    .immix_space
-                    .remset
-                    .get_currrent_validity_state(e, &self.plan.immix_space);
-                cached_children.push((e, t, validity));
-            },
-        );
-        if self.rc.count(object) != 0 {
-            if cfg!(feature = "object_size_distribution") {
-                crate::record_obj(object.get_size::<VM>());
+        if object.get_size::<VM>() <= 256 {
+            // Small objects: enqueue
+            self.next_grey_objects.push((object, self.klass));
+            if self.next_grey_objects.len() >= 128 {
+                self.flush();
             }
-            for (e, t, validity) in cached_children {
-                if t.is_null() || self.rc.count(t) == 0 {
-                    continue;
-                }
-                if cfg!(feature = "sanity") {
-                    assert!(
-                        t.to_address::<VM>().is_mapped(),
-                        "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
-                        object,
-                        e,
-                        t
-                    );
-                }
-                if crate::args::RC_MATURE_EVACUATION
-                    && (should_check_remset || !e.to_address().is_mapped())
-                    && self.plan.in_defrag(t)
-                {
-                    self.plan.immix_space.remset.record_with_validity_state(
-                        e,
-                        t,
-                        &self.plan.immix_space,
-                        validity,
-                    );
-                }
-                if !self.plan.is_marked(t) {
-                    if cfg!(any(feature = "sanity", debug_assertions)) {
-                        assert!(
-                            t.to_address::<VM>().is_mapped(),
-                            "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                            object,
-                            e,
-                            t
-                        );
-                    }
-                    self.next_objects.push(t);
-                    if self.next_objects.is_full() {
-                        self.flush();
-                    }
-                }
+        } else if VM::VMScanning::is_obj_array(object)
+            && VM::VMScanning::obj_array_data(object).len() >= 128
+        // && false
+        {
+            let data = VM::VMScanning::obj_array_data(object);
+            for chunk in data.chunks(128) {
+                self.create_scan_large_ref_array_packet(
+                    object,
+                    self.klass,
+                    object.get_size::<VM>(),
+                    chunk,
+                );
             }
+        } else {
+            // Large objects: create a separate packet
+            self.create_scan_objects_packet(vec![(object, self.klass)])
         }
     }
 }
@@ -205,10 +356,19 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
-        if let Some(objects) = self.objects.take() {
-            self.process_objects(&objects)
-        } else if let Some(objects) = self.objects_arc.take() {
-            self.process_objects(&objects)
+        // mark objects
+        if let Some(objects) = self.white_objects.take() {
+            self.trace_objects(&objects)
+        } else if let Some(objects) = self.white_objects_arc.take() {
+            self.trace_objects(&objects)
+        }
+        // scan and mark fields
+        if let Some(objects) = self.grey_objects.take() {
+            for (o, k) in objects {
+                self.scan_object(o, k)
+            }
+        } else if let Some((o, k, size, s)) = self.grey_large_ref_array.take() {
+            self.scan_large_ref_array(o, k, size, s)
         }
         // CM: Decrease counter
         self.flush();
@@ -285,10 +445,14 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
+    array_slices: Vec<VM::VMMemorySlice>,
     forwarded_roots: Vec<ObjectReference>,
     next_edges: VectorQueue<EdgeOf<Self>>,
+    next_array_slices: VectorQueue<VM::VMMemorySlice>,
+    next_edge_count: u32,
     remset_recorded_edges: bool,
     refs: Vec<ObjectReference>,
+    should_record_forwarded_roots: bool,
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
@@ -297,6 +461,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         refs: Vec<ObjectReference>,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+        }
         let mut me = Self::new(edges, false, mmtk);
         me.remset_recorded_edges = true;
         me.refs = refs;
@@ -310,6 +477,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+        }
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -317,22 +487,28 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             base,
             pause: Pause::RefCount,
             forwarded_roots: vec![],
+            array_slices: vec![],
             next_edges: VectorQueue::new(),
+            next_array_slices: VectorQueue::new(),
+            next_edge_count: 0,
             remset_recorded_edges: false,
             refs: vec![],
+            should_record_forwarded_roots: false,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_edges.is_empty() {
+        if !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
             let edges = self.next_edges.take();
-            self.worker().add_boxed_work(
-                WorkBucketStage::Unconstrained,
-                Box::new(Self::new(edges, false, self.mmtk())),
-            );
+            let slices = self.next_array_slices.take();
+            let mut w = Self::new(edges, false, self.mmtk());
+            w.array_slices = slices;
+            self.worker()
+                .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
         assert!(self.nodes.is_empty());
+        self.next_edge_count = 0;
     }
 
     /// Trace  and evacuate objects.
@@ -358,6 +534,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             self.remset_recorded_edges
         );
         debug_assert!(object.class_is_valid::<VM>());
+        let object = object.get_forwarded_object().unwrap_or(object);
         let new_object = if self.lxr.immix_space.in_space(object) {
             if self
                 .lxr
@@ -379,32 +556,43 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.push(new_object)
         }
         new_object
     }
 
     fn process_edges(&mut self) {
+        self.should_record_forwarded_roots = self.roots
+            && !self
+                .root_kind
+                .map(|r| r.is_young_or_weak())
+                .unwrap_or_default();
         self.pause = self.lxr.current_pause().unwrap();
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.reserve(self.edges.len());
         }
-        if self.pause == Pause::FullTraceFast {
-            for i in 0..self.edges.len() {
-                self.process_mark_edge(self.edges[i])
-            }
-        } else if self.remset_recorded_edges {
-            for i in 0..self.edges.len() {
-                self.process_remset_edge(self.edges[i], i)
-            }
-        } else {
-            for i in 0..self.edges.len() {
-                self.process_edge(self.edges[i])
-            }
+        let edges = std::mem::take(&mut self.edges);
+        let slices = std::mem::take(&mut self.array_slices);
+        self.process_edges_impl(&edges, &slices, self.remset_recorded_edges);
+        self.remset_recorded_edges = false;
+        let should_record_forwarded_roots = self.should_record_forwarded_roots;
+        self.should_record_forwarded_roots = false;
+        let mut edges = vec![];
+        let mut slices = vec![];
+        while !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
+            self.next_edge_count = 0;
+            edges.clear();
+            slices.clear();
+            self.next_edges.swap(&mut edges);
+            self.next_array_slices.swap(&mut slices);
+            self.process_edges_impl(&edges, &slices, false);
+        }
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
         }
         self.flush();
-        if self.roots {
+        if should_record_forwarded_roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
         }
@@ -448,7 +636,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         } else {
             self.lxr.los().trace_object(self, object)
         };
-        if self.roots {
+        if self.should_record_forwarded_roots {
             self.forwarded_roots.push(x)
         }
         x
@@ -461,9 +649,14 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         }
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            debug_assert!(self.remset_recorded_edges);
-            // Don't do the store if the original is already overwritten
-            let _ = slot.compare_exchange(object, new_object, Ordering::SeqCst, Ordering::SeqCst);
+            if slot.to_address().is_mapped() {
+                debug_assert!(self.remset_recorded_edges);
+                // Don't do the store if the original is already overwritten
+                let _ =
+                    slot.compare_exchange(object, new_object, Ordering::SeqCst, Ordering::SeqCst);
+            } else {
+                slot.store(new_object);
+            }
         }
         super::record_edge_for_validation(slot, new_object);
     }
@@ -476,6 +669,40 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
             slot.store(new_object);
         }
     }
+
+    fn process_edges_impl(
+        &mut self,
+        edges: &[VM::VMEdge],
+        slices: &[VM::VMMemorySlice],
+        remset_edges: bool,
+    ) {
+        if self.pause == Pause::Full {
+            for e in edges {
+                self.process_mark_edge(*e)
+            }
+        } else if remset_edges {
+            for (i, e) in edges.iter().enumerate() {
+                self.process_remset_edge(*e, i)
+            }
+        } else {
+            for e in edges {
+                self.process_edge(*e)
+            }
+        }
+        if self.pause == Pause::Full {
+            for slice in slices {
+                for e in slice.iter_edges() {
+                    self.process_mark_edge(e)
+                }
+            }
+        } else {
+            for slice in slices {
+                for e in slice.iter_edges() {
+                    self.process_edge(e)
+                }
+            }
+        }
+    }
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
@@ -483,12 +710,44 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
         }
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
-            self.next_edges.push(e);
-            if self.next_edges.is_full() {
-                self.flush();
+        if cfg!(feature = "lxr_satb_live_bytes_counter") {
+            crate::record_live_bytes(object.get_size::<VM>());
+        }
+        // Skip primitive array
+        if VM::VMScanning::is_val_array(object) {
+            return;
+        }
+        if VM::VMScanning::is_obj_array(object) {
+            let data = VM::VMScanning::obj_array_data(object);
+            if data.len() > 0 {
+                for chunk in data.chunks(Self::CAPACITY) {
+                    let len: usize = chunk.len();
+                    if self.next_edge_count as usize + len >= Self::CAPACITY {
+                        self.flush();
+                    }
+                    self.next_edge_count += len as u32;
+                    self.next_array_slices.push(chunk);
+                    if self.next_edge_count as usize >= Self::CAPACITY {
+                        self.flush();
+                    }
+                }
             }
-        })
+        } else {
+            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
+                let o = e.load();
+                if o.is_null() {
+                    return;
+                }
+                if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
+                    return;
+                }
+                self.next_edges.push(e);
+                self.next_edge_count += 1;
+                if self.next_edge_count as usize >= Self::CAPACITY {
+                    self.flush();
+                }
+            })
+        }
     }
 }
 
@@ -518,6 +777,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+        }
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -574,6 +836,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         for i in 0..self.edges.len() {
             ProcessEdgesWork::process_edge(self, self.edges[i])
         }
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
+        }
         self.flush();
     }
 
@@ -586,6 +851,9 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
+        }
+        if cfg!(feature = "lxr_satb_live_bytes_counter") {
+            crate::record_live_bytes(object.get_size::<VM>());
         }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
             self.next_edges.push(e);

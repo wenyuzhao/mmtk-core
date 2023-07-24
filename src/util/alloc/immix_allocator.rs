@@ -106,7 +106,9 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
-            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+            if (self.copy || !crate::args().no_mutator_line_recycling)
+                && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES
+            {
                 // Size larger than a line: do large allocation
                 self.overflow_alloc(size, align, offset)
             } else {

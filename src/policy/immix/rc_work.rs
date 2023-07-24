@@ -8,12 +8,12 @@ use crate::{
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
         constants::LOG_BYTES_IN_PAGE,
-        heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK},
+        heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, PageResource},
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,
     },
-    vm::{Collection, ObjectModel, VMBinding},
+    vm::{ObjectModel, VMBinding},
     LazySweepingJobsCounter, Plan, MMTK,
 };
 
@@ -46,7 +46,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        let is_emergency_gc = lxr.current_pause().unwrap() == Pause::FullTraceFast;
+        let is_emergency_gc = lxr.current_pause().unwrap() == Pause::Full;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
             let chunk_defarg_percent = if is_emergency_gc {
@@ -59,20 +59,24 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             threshold.max(1)
         };
         // Iterate over all blocks in this chunk
+        let has_chunk_frag_info = lxr.immix_space.pr.has_chunk_fragmentation_info();
         for block in self.chunk.iter_region::<Block>() {
             // Skip unallocated blocks.
             if MatureEvacuationSet::skip_block(block) {
                 continue;
             }
             // This is a block in a fragmented chunk?
-            let live_blocks_in_chunk = lxr
-                .immix_space
-                .pr
-                .get_live_blocks_in_chunk(Chunk::from_unaligned_address(block.start()));
-            if live_blocks_in_chunk < threshold {
-                let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
-                blocks_in_fragmented_chunks.push((block, dead_blocks));
-                continue;
+            if has_chunk_frag_info {
+                let live_blocks_in_chunk = lxr
+                    .immix_space
+                    .pr
+                    .get_live_pages_in_chunk(Chunk::from_unaligned_address(block.start()))
+                    >> Block::LOG_PAGES;
+                if live_blocks_in_chunk < threshold {
+                    let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
+                    blocks_in_fragmented_chunks.push((block, dead_blocks));
+                    continue;
+                }
             }
             // This is a fragmented block?
             let score = if crate::args::HOLE_COUNTING {
@@ -86,29 +90,32 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 // block.calc_dead_bytes::<VM>()
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
-            if lxr.current_pause().unwrap() == Pause::FullTraceFast || score >= (Block::BYTES >> 1)
-            {
+            if lxr.current_pause().unwrap() == Pause::Full || score >= (Block::BYTES >> 1) {
                 fragmented_blocks.push((block, score));
             }
         }
         // Flush to global fragmented_blocks
-        lxr.immix_space
-            .evac_set
-            .fragmented_blocks_size
-            .fetch_add(fragmented_blocks.len(), Ordering::SeqCst);
-        lxr.immix_space
-            .evac_set
-            .fragmented_blocks
-            .push(fragmented_blocks);
+        if !fragmented_blocks.is_empty() {
+            lxr.immix_space
+                .evac_set
+                .fragmented_blocks_size
+                .fetch_add(fragmented_blocks.len(), Ordering::SeqCst);
+            lxr.immix_space
+                .evac_set
+                .fragmented_blocks
+                .push(fragmented_blocks);
+        }
         // Flush to global blocks_in_fragmented_chunks
-        lxr.immix_space
-            .evac_set
-            .blocks_in_fragmented_chunks_size
-            .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
-        lxr.immix_space
-            .evac_set
-            .blocks_in_fragmented_chunks
-            .push(blocks_in_fragmented_chunks);
+        if !blocks_in_fragmented_chunks.is_empty() {
+            lxr.immix_space
+                .evac_set
+                .blocks_in_fragmented_chunks_size
+                .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
+            lxr.immix_space
+                .evac_set
+                .blocks_in_fragmented_chunks
+                .push(blocks_in_fragmented_chunks);
+        }
 
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
             lxr.immix_space
@@ -119,14 +126,6 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                     mmtk.plan.get_total_pages(),
                 )
         }
-    }
-}
-
-pub struct UpdateWeakProcessor;
-
-impl<VM: VMBinding> GCWork<VM> for UpdateWeakProcessor {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        VM::VMCollection::update_weak_processor(true);
     }
 }
 
@@ -330,6 +329,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Clear unlog table on CM
             if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
                 block.initialize_field_unlog_table_as_unlogged::<VM>();
+                unreachable!();
             }
             // Check if this block needs to be defragmented.
             if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
@@ -451,27 +451,28 @@ impl MatureEvacuationSet {
         _total_pages: usize,
     ) {
         debug_assert!(crate::args::RC_MATURE_EVACUATION);
-        if lxr.current_pause().unwrap() == Pause::FullTraceFast {
+        if lxr.current_pause().unwrap() == Pause::Full {
             // Make sure LOS sweeping finishes before evac selection begin
             // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
             let los = lxr.common().get_los();
             los.release_rc_nursery_objects();
         }
         // Select mature defrag blocks
-        let available_clean_pages_for_defrag =
-            if lxr.current_pause().unwrap() == Pause::FullTraceFast {
-                lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
-            } else {
-                lxr.immix_space.defrag_headroom_pages()
-            };
+        let available_clean_pages_for_defrag = if lxr.current_pause().unwrap() == Pause::Full {
+            lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
+        } else {
+            lxr.immix_space.defrag_headroom_pages()
+        };
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
-        self.select_blocks_in_fragmented_chunks(
-            &mut selected_blocks,
-            &mut copy_bytes,
-            max_copy_bytes,
-        );
+        if lxr.immix_space.pr.has_chunk_fragmentation_info() {
+            self.select_blocks_in_fragmented_chunks(
+                &mut selected_blocks,
+                &mut copy_bytes,
+                max_copy_bytes,
+            );
+        }
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         gc_log!([2]
@@ -480,10 +481,16 @@ impl MatureEvacuationSet {
             selected_blocks.len(),
             count1,
         );
-        lxr.dump_heap_usage();
+        // lxr.dump_heap_usage(false);
         self.num_defrag_blocks
             .store(selected_blocks.len(), Ordering::SeqCst);
         let mut defrag_blocks = self.defrag_blocks.lock().unwrap();
         *defrag_blocks = selected_blocks;
+        // cleanup
+        assert!(self.fragmented_blocks.is_empty());
+        assert!(self.blocks_in_fragmented_chunks.is_empty());
+        self.fragmented_blocks_size.store(0, Ordering::SeqCst);
+        self.blocks_in_fragmented_chunks_size
+            .store(0, Ordering::SeqCst);
     }
 }

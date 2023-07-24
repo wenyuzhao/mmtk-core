@@ -273,7 +273,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         let min_nursery = plan.base().options.get_min_nursery_pages();
         let next_gc_full_heap = available < min_nursery;
         trace!(
-            "next gc will be full heap? {}, availabe pages = {}, min nursery = {}",
+            "next gc will be full heap? {}, available pages = {}, min nursery = {}",
             next_gc_full_heap,
             available,
             min_nursery

@@ -4,7 +4,7 @@ use atomic::Ordering;
 
 use super::block::Block;
 use crate::plan::lxr::RemSet;
-use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD};
+use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD, LOG_MIN_OBJECT_SIZE};
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
 use crate::util::rc;
@@ -207,17 +207,18 @@ impl Line {
         let start = lines.start.start();
         let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
         let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        for i in (0..size).step_by(16) {
+        for i in (0..size).step_by(1 << LOG_MIN_OBJECT_SIZE) {
             mark_bit.store_atomic(start + i, 0u8, Ordering::SeqCst);
         }
     }
 
     pub(super) fn initialize_mark_table_as_marked<VM: VMBinding>(lines: Range<Line>) {
-        let start = lines.start.start();
-        let size = Line::steps_between(&lines.start, &lines.end).unwrap() << Line::LOG_BYTES;
-        let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        for i in (0..size).step_by(16) {
-            mark_bit.store_atomic(start + i, 1u8, Ordering::SeqCst);
+        let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
+        let start: *mut u8 = address_to_meta_address(&meta, lines.start.start()).to_mut_ptr();
+        let limit: *mut u8 = address_to_meta_address(&meta, lines.end.start()).to_mut_ptr();
+        unsafe {
+            let bytes = limit.offset_from(start) as usize;
+            std::ptr::write_bytes(start, 0xffu8, bytes);
         }
     }
 }
@@ -263,6 +264,17 @@ impl UintType for Uint<128> {
     type Type = u128;
     fn is_zero(v: Self::Type) -> bool {
         v == 0
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct UInt256([u8; 256 / 8]);
+
+impl UintType for Uint<256> {
+    type Type = UInt256;
+    fn is_zero(v: Self::Type) -> bool {
+        v == UInt256([0; 256 / 8])
     }
 }
 

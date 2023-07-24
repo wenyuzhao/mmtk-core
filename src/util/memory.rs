@@ -109,14 +109,25 @@ pub fn mmap_noreserve(start: Address, size: usize) -> Result<()> {
 
 fn mmap_fixed(start: Address, size: usize, prot: libc::c_int, flags: libc::c_int) -> Result<()> {
     let ptr = start.to_mut_ptr();
-    wrap_libc_call(
+    let result = wrap_libc_call(
         &|| unsafe { libc::mmap(start.to_mut_ptr(), size, prot, flags, -1, 0) },
         ptr,
-    )
+    );
+    if crate::args().transparent_hugepage {
+        let _ = unsafe { libc::madvise(start.to_mut_ptr(), size, libc::MADV_HUGEPAGE) };
+    }
+    if result.is_ok() {
+        crate::rust_mem_counter::record_mmap(size);
+    }
+    result
 }
 
 pub fn munmap(start: Address, size: usize) -> Result<()> {
-    wrap_libc_call(&|| unsafe { libc::munmap(start.to_mut_ptr(), size) }, 0)
+    let result = wrap_libc_call(&|| unsafe { libc::munmap(start.to_mut_ptr(), size) }, 0);
+    if result.is_ok() {
+        crate::rust_mem_counter::record_munmap(size);
+    }
+    result
 }
 
 /// Properly handle errors from a mmap Result, including invoking the binding code in the case of

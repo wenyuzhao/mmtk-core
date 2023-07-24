@@ -4,14 +4,18 @@ use super::SurvivalRatioPredictorLocal;
 use super::LXR;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::BlockState;
+use crate::policy::immix::line::Line;
 use crate::scheduler::gc_work::EdgeOf;
+use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
+use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
+use crate::util::Address;
 use crate::vm::edge_shape::Edge;
 use crate::vm::edge_shape::MemorySlice;
 use crate::LazySweepingJobsCounter;
@@ -27,22 +31,40 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+#[derive(Default, Debug)]
+pub struct RCIncCounters {
+    pub promoted_objs: u32,
+    pub promoted_scalars: (u32, u32, u32),
+    pub promoted_prim_arrays: (u32, u32, u32),
+    pub promoted_object_arrays: (u32, u32, u32),
+    pub total_incs: u32,
+    pub mature_incs: u32,
+    pub nursery_incs: u32,
+    pub fast_nursery_incs: u32,
+    pub root_incs: u32,
+    pub los_incs: u32,
+    pub remset_inserts: u32,
+    pub mark_queue_inserts: u32,
+}
+
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
+    inc_slices: Vec<VM::VMMemorySlice>,
     /// Recursively generated new increments
     new_incs: VectorQueue<VM::VMEdge>,
-    lxr: &'static LXR<VM>,
-    current_pause: Pause,
-    concurrent_marking_in_progress: bool,
+    new_inc_slices: VectorQueue<VM::VMMemorySlice>,
+    new_incs_count: u32,
+    pause: Pause,
+    in_cm: bool,
     no_evac: bool,
-    slice: Option<VM::VMMemorySlice>,
-    root_objects: Option<Vec<ObjectReference>>,
-    depth: usize,
+    pub root_kind: Option<RootKind>,
+    depth: u32,
+    mark_objects: Vec<(ObjectReference, Address)>,
+    lxr: &'static LXR<VM>,
     rc: RefCountHelper<VM>,
-    pub cld_roots: bool,
-    pub weak_cld_roots: bool,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
+    counters: RCIncCounters,
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
@@ -55,75 +77,66 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         GCWorker::<VM>::current()
     }
 
-    fn lxr(&self) -> &'static LXR<VM> {
-        self.lxr
-    }
-
-    pub fn new_array_slice(slice: VM::VMMemorySlice, lxr: &'static LXR<VM>) -> Self {
+    fn __default(lxr: &'static LXR<VM>) -> Self {
         Self {
             incs: vec![],
+            inc_slices: vec![],
             new_incs: VectorQueue::default(),
+            new_inc_slices: VectorQueue::default(),
+            new_incs_count: 0,
             lxr,
-            current_pause: Pause::RefCount,
-            concurrent_marking_in_progress: false,
+            pause: Pause::RefCount,
+            in_cm: false,
             no_evac: false,
-            slice: Some(slice),
             depth: 1,
             rc: RefCountHelper::NEW,
-            cld_roots: false,
-            weak_cld_roots: false,
+            root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            root_objects: None,
+            counters: Default::default(),
+            mark_objects: vec![],
         }
     }
 
-    pub fn new_objects(objects: Vec<ObjectReference>) -> Self {
-        let lxr = GCWorker::<VM>::current()
-            .mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap();
-        Self {
-            incs: vec![],
-            new_incs: VectorQueue::default(),
-            lxr,
-            current_pause: Pause::RefCount,
-            concurrent_marking_in_progress: false,
-            no_evac: false,
-            slice: None,
-            depth: 1,
-            rc: RefCountHelper::NEW,
-            cld_roots: false,
-            weak_cld_roots: false,
-            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            root_objects: Some(objects),
+    fn add_new_edge(&mut self, e: VM::VMEdge) {
+        self.new_incs.push(e);
+        self.new_incs_count += 1;
+        if self.new_incs_count as usize >= Self::CAPACITY {
+            self.flush();
         }
+    }
+
+    fn add_new_slice(&mut self, e: VM::VMMemorySlice) {
+        let len = e.len();
+        if self.new_incs_count as usize + len >= Self::CAPACITY {
+            self.flush();
+        }
+        self.new_incs_count += len as u32;
+        self.new_inc_slices.push(e);
+        if self.new_incs_count as usize >= Self::CAPACITY {
+            self.flush();
+        }
+    }
+
+    pub fn new_objects(_objects: Vec<ObjectReference>) -> Self {
+        unreachable!()
     }
 
     pub fn new(incs: Vec<VM::VMEdge>, lxr: &'static LXR<VM>) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::INC_BUFFER_COUNTER.add(incs.len());
+        }
         Self {
             incs,
-            new_incs: VectorQueue::default(),
-            lxr,
-            current_pause: Pause::RefCount,
-            concurrent_marking_in_progress: false,
-            no_evac: false,
-            slice: None,
-            depth: 1,
-            rc: RefCountHelper::NEW,
-            cld_roots: false,
-            weak_cld_roots: false,
-            survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            root_objects: None,
+            ..Self::__default(lxr)
         }
     }
 
-    fn promote(&mut self, o: ObjectReference, copied: bool, los: bool, depth: usize) {
+    fn promote(&mut self, o: ObjectReference, copied: bool, los: bool, depth: u32) {
         o.verify::<VM>();
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
-            if self.lxr().los().in_space(o) {
+            if self.lxr.los().in_space(o) {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
             }
@@ -132,41 +145,83 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 s.promoted_copy_volume += o.get_size::<VM>();
             }
         });
-        #[cfg(feature = "lxr_total_promoted_size_counter")]
+        #[cfg(feature = "lxr_srv_ratio_counter")]
         self.survival_ratio_predictor_local
-            .record_total_promotion(o.get_size::<VM>());
+            .record_total_promotion(o.get_size::<VM>(), los);
+        let size = o.get_size::<VM>();
+
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.counters.promoted_objs += 1;
+            if VM::VMScanning::is_val_array(o) {
+                if size <= Line::BYTES {
+                    self.counters.promoted_prim_arrays.0 += 1;
+                } else if size <= Block::BYTES {
+                    self.counters.promoted_prim_arrays.1 += 1;
+                } else {
+                    self.counters.promoted_prim_arrays.2 += 1;
+                }
+            } else if VM::VMScanning::is_obj_array(o) {
+                if size <= Line::BYTES {
+                    self.counters.promoted_object_arrays.0 += 1;
+                } else if size <= Block::BYTES {
+                    self.counters.promoted_object_arrays.1 += 1;
+                } else {
+                    self.counters.promoted_object_arrays.2 += 1;
+                }
+            } else {
+                if size <= Line::BYTES {
+                    self.counters.promoted_scalars.0 += 1;
+                } else if size <= Block::BYTES {
+                    self.counters.promoted_scalars.1 += 1;
+                } else {
+                    self.counters.promoted_scalars.2 += 1;
+                }
+            }
+        }
+
         if !los {
             let in_nursery_block = Block::containing::<VM>(o).get_state() == BlockState::Nursery;
             if !copied && in_nursery_block {
                 Block::containing::<VM>(o).set_as_in_place_promoted();
             }
-            self.rc.promote(o);
+            self.rc.promote_with_size(o, size);
             if copied {
                 self.survival_ratio_predictor_local
-                    .record_copied_promotion(o.get_size::<VM>());
+                    .record_copied_promotion(size);
             }
         } else {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
-        if self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark {
-            debug_assert!(self.lxr().is_marked(o));
+        if self.in_cm || self.pause == Pause::FinalMark {
+            debug_assert!(self.lxr.is_marked(o));
         }
-        self.scan_nursery_object(o, los, !copied, depth);
+        self.scan_nursery_object(o, los, !copied, depth, size);
     }
 
-    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference, force: bool) {
-        if !(crate::args::RC_MATURE_EVACUATION
-            && (self.concurrent_marking_in_progress || self.current_pause == Pause::FinalMark))
-        {
+    fn record_mature_evac_remset2(
+        &mut self,
+        edge_in_defrag: bool,
+        e: VM::VMEdge,
+        o: ObjectReference,
+    ) {
+        if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        if force || (!self.lxr().address_in_defrag(e.to_address()) && self.lxr().in_defrag(o)) {
-            self.lxr()
+        if !edge_in_defrag && self.lxr.in_defrag(o) {
+            self.lxr
                 .immix_space
                 .remset
-                .record(e, o, &self.lxr().immix_space);
+                .record(e, o, &self.lxr.immix_space);
+            self.counters.remset_inserts += 1;
         }
+    }
+
+    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference) {
+        if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
+            return;
+        }
+        self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
     }
 
     fn scan_nursery_object(
@@ -174,26 +229,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         o: ObjectReference,
         los: bool,
         in_place_promotion: bool,
-        depth: usize,
+        _depth: u32,
+        size: usize,
     ) {
         let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
             32usize
         } else {
             64
         };
-        let heap_bytes_per_unlog_bit = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
-            4usize
-        } else {
-            8
-        };
+        let is_val_array = VM::VMScanning::is_val_array(o);
         if los {
-            if !VM::VMScanning::is_val_array(o) {
+            if !is_val_array {
                 let start =
                     side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address::<VM>())
                         .to_mut_ptr::<u8>();
                 let limit = side_metadata::address_to_meta_address(
                     &Self::UNLOG_BITS,
-                    (o.to_address::<VM>() + o.get_size::<VM>()).align_up(heap_bytes_per_unlog_byte),
+                    (o.to_address::<VM>() + size).align_up(heap_bytes_per_unlog_byte),
                 )
                 .to_mut_ptr::<u8>();
                 unsafe {
@@ -201,106 +253,104 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
             }
-            o.to_address::<VM>().unlog_field::<VM>();
-        } else if in_place_promotion {
+            o.to_address::<VM>().unlog_field_relaxed::<VM>();
+        } else if in_place_promotion && !is_val_array {
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                 12usize
             } else {
                 16
             };
-            let size = o.get_size::<VM>();
+            let step = heap_bytes_per_unlog_byte << 2;
             let end = o.to_address::<VM>() + size;
-            let aligned_end = end.align_down(heap_bytes_per_unlog_byte);
-            let mut cursor = o.to_address::<VM>() + header_size;
-            let mut meta = side_metadata::address_to_meta_address(
-                &Self::UNLOG_BITS,
-                cursor.align_up(heap_bytes_per_unlog_byte),
-            );
-            while cursor < end && !cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
-                cursor.unlog_field::<VM>();
-                cursor += heap_bytes_per_unlog_bit;
-            }
+            let aligned_end = end.align_up(step);
+            let cursor = o.to_address::<VM>() + header_size;
+            let mut cursor = cursor.align_down(step);
+            let mut meta = side_metadata::address_to_meta_address(&Self::UNLOG_BITS, cursor);
             while cursor < aligned_end {
-                if cursor.is_aligned_to(heap_bytes_per_unlog_byte) {
-                    unsafe { meta.store(0xffu8) }
-                    meta += 1usize;
-                    cursor += heap_bytes_per_unlog_byte;
-                } else {
-                    cursor.unlog_field::<VM>();
-                    cursor += heap_bytes_per_unlog_bit;
-                }
-            }
-            while cursor < end {
-                cursor.unlog_field::<VM>();
-                cursor += heap_bytes_per_unlog_bit;
+                unsafe { meta.store(0xffffffffu32) }
+                meta += 4usize;
+                cursor += step;
             }
         };
-        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() >= 128 {
+        if VM::VMScanning::is_obj_array(o) {
             let data = VM::VMScanning::obj_array_data(o);
-            let mut packets = vec![];
-            for chunk in data.chunks(Self::CAPACITY) {
-                let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new_array_slice(chunk, self.lxr);
-                w.depth = depth + 1;
-                packets.push(Box::new(w) as Box<dyn GCWork<VM>>);
+            if data.len() > 0 {
+                for chunk in data.chunks(Self::CAPACITY) {
+                    self.add_new_slice(chunk);
+                }
             }
-            self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                .bulk_add(packets);
-        } else {
+        } else if !is_val_array {
+            let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
             o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
                 let target = edge.load();
-                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
-                if !target.is_null() {
-                    debug_assert!(
-                        target.to_address::<VM>().is_mapped(),
-                        "Unmapped obj {:?}.{:?} -> {:?}",
-                        o,
-                        edge,
-                        target
-                    );
-                    debug_assert!(
-                        target.is_in_any_space(),
-                        "Unmapped obj {:?}.{:?} -> {:?}",
-                        o,
-                        edge,
-                        target
-                    );
-                    debug_assert!(
-                        target.class_is_valid::<VM>(),
-                        "Invalid object {:?}.{:?} -> {:?}",
-                        o,
-                        edge,
-                        target
-                    );
-                    if !self.rc.is_stuck(target) {
-                        // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                        self.new_incs.push(edge);
-                        if self.new_incs.is_full() {
-                            self.flush()
-                        }
-                    } else {
-                        super::record_edge_for_validation(edge, target);
-                        self.record_mature_evac_remset(edge, target, false);
-                    }
-                } else {
-                    super::record_edge_for_validation(edge, target);
+                if target.is_null() {
+                    return;
                 }
+                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                debug_assert!(
+                    target.to_address::<VM>().is_mapped(),
+                    "Unmapped obj {:?}.{:?} -> {:?}",
+                    o,
+                    edge,
+                    target
+                );
+                debug_assert!(
+                    target.is_in_any_space(),
+                    "Unmapped obj {:?}.{:?} -> {:?}",
+                    o,
+                    edge,
+                    target
+                );
+                debug_assert!(
+                    target.class_is_valid::<VM>(),
+                    "Invalid object {:?}.{:?} -> {:?}",
+                    o,
+                    edge,
+                    target
+                );
+                let rc = self.rc.count(target);
+                if rc == 0 {
+                    // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
+                    self.add_new_edge(edge);
+                } else {
+                    if rc != crate::util::rc::MAX_REF_COUNT {
+                        let _ = self.rc.inc(target);
+                        if cfg!(feature = "lxr_precise_incs_counter") {
+                            self.counters.total_incs += 1;
+                            self.counters.fast_nursery_incs += 1;
+                        }
+                    }
+                    self.record_mature_evac_remset2(obj_in_defrag, edge, target);
+                }
+                super::record_edge_for_validation(edge, target);
             });
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.new_incs.is_empty() {
+        if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
             let new_incs = self.new_incs.take();
+            let new_inc_slices = self.new_inc_slices.take();
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
+            w.inc_slices = new_inc_slices;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
+        }
+        self.new_incs_count = 0;
+    }
+
+    fn inc(&self, o: ObjectReference, stick: bool) -> bool {
+        if stick {
+            self.rc.stick(o) == Ok(0)
+        } else {
+            self.rc.inc(o) == Ok(0)
         }
     }
 
-    fn process_inc(&mut self, o: ObjectReference, depth: usize) -> ObjectReference {
-        if let Ok(0) = self.rc.inc(o) {
-            self.promote(o, false, self.lxr().los().in_space(o), depth);
+    fn process_inc(&mut self, o: ObjectReference, depth: u32, stick: bool) -> ObjectReference {
+        if self.inc(o, stick) {
+            self.promote(o, false, self.lxr.los().in_space(o), depth);
         }
         o
     }
@@ -329,7 +379,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         o: ObjectReference,
         copy_context: &mut GCWorkerCopyContext<VM>,
-        depth: usize,
+        depth: u32,
+        stick: bool,
     ) -> ObjectReference {
         o.verify::<VM>();
         crate::stat(|s| {
@@ -337,23 +388,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_volume += o.get_size::<VM>();
         });
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
-        let los = self.lxr().los().in_space(o);
+        let los = self.lxr.los().in_space(o);
         if self.dont_evacuate(o, los) {
-            if let Ok(0) = self.rc.inc(o) {
+            if self.inc(o, stick) {
                 self.promote(o, false, los, depth);
             }
             return o;
         }
         if object_forwarding::is_forwarded::<VM>(o) {
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            let _ = self.rc.inc(new);
+            self.inc(new, stick);
             return new;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
             let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-            let _ = self.rc.inc(new);
+            self.inc(new, stick);
             new
         } else {
             let is_nursery = self.rc.count(o) == 0;
@@ -372,15 +423,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                             Ordering::Relaxed,
                         );
                     }
-                    let _ = self.rc.inc(new);
+                    self.inc(new, stick);
                     self.promote(new, true, false, depth);
                     new
                 } else {
                     gc_log!([1] "to-space overflow");
                     // Object is not moved.
-                    let r = self.rc.inc(o);
+                    let promoted = self.inc(o, stick);
                     object_forwarding::clear_forwarding_bits::<VM>(o);
-                    if let Ok(0) = r {
+                    if promoted {
                         self.promote(o, false, los, depth);
                     }
                     crate::NO_EVAC.store(true, Ordering::Relaxed);
@@ -389,9 +440,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 }
             } else {
                 // Object is not moved.
-                let r = self.rc.inc(o);
+                let promoted = self.inc(o, stick);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
-                if let Ok(0) = r {
+                if promoted {
                     self.promote(o, false, los, depth);
                 }
                 o
@@ -408,7 +459,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE {
-            e.to_address().unlog_field::<VM>();
+            e.to_address().unlog_field_relaxed::<VM>();
         }
         if o.is_null() {
             return None;
@@ -416,23 +467,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Some(o)
     }
 
-    fn process_object<const K: EdgeKind>(
-        &mut self,
-        o: ObjectReference,
-        cc: &mut GCWorkerCopyContext<VM>,
-    ) -> ObjectReference {
-        if !crate::args::RC_NURSERY_EVACUATION {
-            self.process_inc(o, 0)
-        } else {
-            self.process_inc_and_evacuate(o, cc, 0)
-        }
-    }
-
     fn process_edge<const K: EdgeKind>(
         &mut self,
         e: VM::VMEdge,
         cc: &mut GCWorkerCopyContext<VM>,
-        depth: usize,
+        depth: u32,
+        stick: bool,
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
@@ -441,15 +481,29 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 return None;
             }
         };
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.counters.total_incs += 1;
+            if K == EDGE_KIND_MATURE {
+                self.counters.mature_incs += 1;
+            } else if K == EDGE_KIND_ROOT {
+                self.counters.root_incs += 1;
+            } else {
+                self.counters.nursery_incs += 1;
+            }
+            if self.lxr.los().address_in_space(e.to_address()) {
+                self.counters.los_incs += 1;
+            }
+        }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         o.verify::<VM>();
         let new = if !crate::args::RC_NURSERY_EVACUATION {
-            self.process_inc(o, depth)
+            self.process_inc(o, depth, stick)
         } else {
-            self.process_inc_and_evacuate(o, cc, depth)
+            self.process_inc_and_evacuate(o, cc, depth, stick)
         };
-        if K != EDGE_KIND_ROOT || self.cld_roots {
-            self.record_mature_evac_remset(e, o, false);
+        // Put this into remset if this is a young or weak root
+        if K != EDGE_KIND_ROOT || stick {
+            self.record_mature_evac_remset(e, new);
         }
         if new != o {
             // println!(
@@ -478,13 +532,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         mut incs: AddressBuffer<'_, VM::VMEdge>,
         copy_context: &mut GCWorkerCopyContext<VM>,
-        depth: usize,
+        depth: u32,
+        stick: bool,
     ) -> Option<Vec<ObjectReference>> {
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
             for e in &mut *incs {
-                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth) {
+                if let Some(new) = self.process_edge::<K>(*e, copy_context, depth, stick) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
@@ -502,7 +557,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         } else {
             for e in &mut *incs {
-                self.process_edge::<K>(*e, copy_context, depth);
+                self.process_edge::<K>(*e, copy_context, depth, stick);
             }
             None
         }
@@ -512,10 +567,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         slice: VM::VMMemorySlice,
         copy_context: &mut GCWorkerCopyContext<VM>,
-        depth: usize,
+        depth: u32,
     ) -> Option<Vec<ObjectReference>> {
         for e in slice.iter_edges() {
-            self.process_edge::<K>(e, copy_context, depth);
+            self.process_edge::<K>(e, copy_context, depth, false);
         }
         None
     }
@@ -552,11 +607,19 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        #[cfg(feature = "log_outstanding_packets")]
+        let t = std::time::SystemTime::now();
+
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        self.current_pause = self.lxr().current_pause().unwrap();
-        self.concurrent_marking_in_progress = self.lxr().concurrent_marking_in_progress();
+        self.pause = self.lxr.current_pause().unwrap();
+        self.in_cm = self.lxr.concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
+        let count = if cfg!(feature = "rust_mem_counter") {
+            self.incs.len()
+        } else {
+            0
+        };
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
@@ -585,29 +648,40 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         }
         // Process main buffer
         let root_edges = if KIND == EDGE_KIND_ROOT
-            && (self.current_pause == Pause::FinalMark
-                || self.current_pause == Pause::FullTraceFast)
+            && (self.pause == Pause::FinalMark || self.pause == Pause::Full)
         {
             self.incs.clone()
         } else {
             vec![]
         };
+        let is_weak_root = self
+            .root_kind
+            .map(|r| r == RootKind::Weak)
+            .unwrap_or_default();
+        let is_young_or_weak_root = self
+            .root_kind
+            .map(|r| r.is_young_or_weak())
+            .unwrap_or_default();
         let roots = {
-            if let Some(slice) = self.slice.take() {
-                assert_eq!(KIND, EDGE_KIND_NURSERY);
-                self.process_incs_for_obj_array::<KIND>(slice, copy_context, self.depth)
-            } else if let Some(objects) = self.root_objects.take() {
-                for o in objects {
-                    self.process_object::<KIND>(o, copy_context);
-                }
-                None
-            } else {
-                let incs = std::mem::take(&mut self.incs);
-                self.process_incs::<KIND>(AddressBuffer::Owned(incs), copy_context, self.depth)
-            }
+            let incs = std::mem::take(&mut self.incs);
+            self.process_incs::<KIND>(
+                AddressBuffer::Owned(incs),
+                copy_context,
+                self.depth,
+                is_weak_root,
+            )
         };
+        if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
+            assert!(!is_young_or_weak_root);
+        }
+        for s in std::mem::take(&mut self.inc_slices) {
+            self.process_incs_for_obj_array::<KIND>(s, copy_context, self.depth);
+        }
         if let Some(roots) = roots {
-            if self.lxr().concurrent_marking_enabled() && self.current_pause == Pause::InitialMark {
+            if self.lxr.concurrent_marking_enabled()
+                && self.pause == Pause::InitialMark
+                && self.root_kind != Some(RootKind::Weak)
+            {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
                     for r in &roots {
                         assert!(
@@ -621,32 +695,83 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .scheduler()
                     .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
-            if self.current_pause == Pause::FinalMark || self.current_pause == Pause::FullTraceFast
-            {
+            if self.pause == Pause::FinalMark || self.pause == Pause::Full {
                 if !root_edges.is_empty() {
-                    worker.add_work(
-                        WorkBucketStage::Closure,
-                        LXRStopTheWorldProcessEdges::new(root_edges, !self.cld_roots, mmtk),
-                    )
+                    let mut w = LXRStopTheWorldProcessEdges::new(root_edges, true, mmtk);
+                    w.root_kind = self.root_kind;
+                    worker.add_work(WorkBucketStage::Closure, w)
                 }
-            } else if !self.cld_roots {
-                self.lxr().curr_roots.read().unwrap().push(roots);
+            } else if !is_young_or_weak_root {
+                self.lxr.curr_roots.read().unwrap().push(roots);
             }
         }
         // Process recursively generated buffer
         let mut depth = self.depth;
         let mut incs = vec![];
-        while !self.new_incs.is_empty() {
+        let mut inc_slices = vec![];
+        const ACTIVE_PACKET_SPLIT: bool = false;
+        while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
+            self.new_incs_count = 0;
             depth += 1;
             incs.clear();
+            inc_slices.clear();
             self.new_incs.swap(&mut incs);
-            self.process_incs::<EDGE_KIND_NURSERY>(
-                AddressBuffer::Ref(&mut incs),
-                copy_context,
-                depth,
-            );
+            self.new_inc_slices.swap(&mut inc_slices);
+            if ACTIVE_PACKET_SPLIT && depth >= 16 && incs.len() > 1 {
+                let (a, b) = incs.split_at(incs.len() / 2);
+                let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(b.to_vec(), self.lxr);
+                w.depth = depth;
+                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+                incs = a.to_vec();
+            }
+            if !incs.is_empty() {
+                self.process_incs::<EDGE_KIND_NURSERY>(
+                    AddressBuffer::Ref(&mut incs),
+                    copy_context,
+                    depth,
+                    false,
+                );
+            }
+            if !inc_slices.is_empty() {
+                for s in &inc_slices {
+                    self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(
+                        s.clone(),
+                        copy_context,
+                        self.depth,
+                    );
+                }
+            }
         }
         self.survival_ratio_predictor_local.sync();
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
+        }
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            self.rc.flush_inc_counters(&self.counters);
+        }
+
+        #[cfg(feature = "log_outstanding_packets")]
+        {
+            let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
+            if ms > 10f32 || cfg!(feature = "log_all_inc_packets") {
+                gc_log!(
+                        "WARNING: Incs packet took {:.3}ms! KIND={} RootKind={:?} depth={} counters={:?}",
+                        ms,
+                        KIND,
+                        self.root_kind,
+                        depth,
+                        self.counters,
+                    );
+            }
+        }
+        if !self.mark_objects.is_empty() {
+            let objs = std::mem::take(&mut self.mark_objects);
+            assert!(self.in_cm);
+            assert_ne!(self.pause, Pause::FinalMark);
+            worker
+                .scheduler()
+                .postpone(LXRConcurrentTraceObjects::new_grey_objects(objs));
+        }
     }
 }
 
@@ -671,6 +796,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(decs.len());
+        }
         Self {
             decs: Some(decs),
             decs_arc: None,
@@ -684,6 +812,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     pub fn new_arc(decs: Arc<Vec<ObjectReference>>, counter: LazySweepingJobsCounter) -> Self {
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(decs.len());
+        }
         Self {
             decs: None,
             decs_arc: Some(decs),
@@ -760,7 +891,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         if self.concurrent_marking_in_progress {
-            immix.mark(o);
+            let marked = immix.mark(o);
+            if cfg!(feature = "lxr_satb_live_bytes_counter") && marked {
+                crate::record_live_bytes(o.get_size::<VM>());
+            }
         }
         // println!(" - dead {:?}", o);
         // debug_assert_eq!(self::count(o), 0);
@@ -795,6 +929,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                             );
                         }
                         self.mark_objects.push(x);
+                        if self.mark_objects.is_full() {
+                            self.flush();
+                        }
                     }
                 }
             });
@@ -858,8 +995,14 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
-            || lxr.previous_pause() == Some(Pause::FullTraceFast);
+            || lxr.previous_pause() == Some(Pause::Full);
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
+        let count = if cfg!(feature = "rust_mem_counter") {
+            self.decs.as_ref().map(|x| x.len()).unwrap_or(0)
+                + self.decs_arc.as_ref().map(|x| x.len()).unwrap_or(0)
+        } else {
+            0
+        };
         if let Some(decs) = std::mem::take(&mut self.decs) {
             self.process_decs(&decs, lxr);
         } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
@@ -869,9 +1012,19 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         while !self.new_decs.is_empty() {
             decs.clear();
             self.new_decs.swap(&mut decs);
+            let c = decs.len();
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(c);
+            }
             self.process_decs(&decs, lxr);
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(c);
+            }
         }
         self.flush();
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(count);
+        }
     }
 }
 
@@ -901,10 +1054,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
-            if self.cld_roots {
-                w.cld_roots = true;
-                w.weak_cld_roots = self.weak_cld_roots;
-            }
+            w.root_kind = self.root_kind;
             GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }

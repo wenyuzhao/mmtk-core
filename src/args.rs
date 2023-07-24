@@ -1,7 +1,8 @@
 use crate::{
     policy::immix::{block::Block, line::Line},
     util::{
-        heap::layout::vm_layout_constants::VMLayoutConstants, linear_scan::Region, options::Options,
+        constants::LOG_BYTES_IN_MBYTE, heap::layout::vm_layout_constants::VMLayoutConstants,
+        linear_scan::Region, options::Options,
     },
     BarrierSelector,
 };
@@ -14,6 +15,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) incs_limit: Option<usize>,
     pub(crate) no_mutator_line_recycling: bool,
     pub(crate) nursery_blocks: Option<usize>,
+    pub(crate) young_limit_mb: Option<usize>,
     pub(crate) nursery_ratio: Option<usize>,
     pub(crate) lower_concurrent_worker_priority: bool,
     pub(crate) concurrent_worker_ratio: usize,
@@ -21,7 +23,8 @@ pub(crate) struct RuntimeArgs {
     pub(crate) max_mature_defrag_percent: usize,
     pub(crate) max_pause_millis: Option<usize>,
     pub(crate) max_young_evac_size: usize,
-    pub(crate) concurrent_marking_stop_blocks: usize,
+    /// Terminate CM or RC loop if the availabel heap after a RC pause is still small
+    pub(crate) rc_stop_percent: usize,
     pub(crate) max_survival_mb: usize,
     pub(crate) survival_predictor_harmonic_mean: bool,
     pub(crate) survival_predictor_weighted: bool,
@@ -29,6 +32,7 @@ pub(crate) struct RuntimeArgs {
     pub(crate) min_reuse_lines: usize,
     pub(crate) no_recursive_dec: bool,
     pub(crate) chunk_defarg_percent: usize,
+    pub(crate) transparent_hugepage: bool,
 }
 
 impl Default for RuntimeArgs {
@@ -48,21 +52,31 @@ impl Default for RuntimeArgs {
             incs_limit: env_arg("INCS_LIMIT"),
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
             nursery_blocks: env_arg("NURSERY_BLOCKS").or(
-                if cfg!(feature = "lxr_fixed_young_size") {
-                    Some(327680)
+                if cfg!(feature = "lxr_fixed_clean_rc_trigger") {
+                    const BLOCKS_IN_MB: usize = (1 << 20) >> Block::LOG_BYTES;
+                    Some(128 * BLOCKS_IN_MB) // 128 M
                 } else {
                     None
                 },
             ),
+            young_limit_mb: env_arg("YOUNG_LIMIT")
+                .or_else(|| env_arg("YOUNG_LIMIT_MB"))
+                .or(if cfg!(feature = "lxr_fixed_rc_trigger") {
+                    Some(128 << LOG_BYTES_IN_MBYTE) // 128 M
+                } else {
+                    None
+                }),
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
-            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(50),
+            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(100),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
-            concurrent_marking_stop_blocks: env_arg("CM_STOP_BLOCKS").unwrap_or(128),
-            max_survival_mb: if cfg!(feature = "lxr_fixed_young_size") {
+            rc_stop_percent: env_arg("RC_STOP_PERCENT").unwrap_or(5),
+            max_survival_mb: if cfg!(feature = "lxr_fixed_rc_trigger")
+                || cfg!(feature = "lxr_fixed_clean_rc_trigger")
+            {
                 usize::MAX
             } else {
                 env_arg::<usize>("MAX_SURVIVAL_MB").unwrap_or(128)
@@ -77,6 +91,9 @@ impl Default for RuntimeArgs {
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
             no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
             chunk_defarg_percent: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
+            transparent_hugepage: env_bool_arg("TRANSPARENT_HUGEPAGE")
+                .or(env_bool_arg("HUGEPAGE"))
+                .unwrap_or(true),
         }
     }
 }
@@ -154,6 +171,7 @@ pub const RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES: bool =
 
 // ---------- Barrier flags ---------- //
 pub const BARRIER_MEASUREMENT: bool = cfg!(feature = "barrier_measurement");
+pub const BARRIER_MEASUREMENT_NO_SLOW: bool = cfg!(feature = "barrier_measurement_no_slow");
 pub const TAKERATE_MEASUREMENT: bool = false;
 pub const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 
@@ -181,6 +199,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     if *options.verbose == 0 {
         return;
     }
+    eprintln!("JVM Process ID: {}", std::process::id());
     eprintln!("-------------------- Immix Args --------------------");
 
     dump_feature!("barrier", format!("{:?}", active_barrier));
@@ -205,6 +224,20 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_reference_types", *options.no_reference_types);
     dump_feature!("workers", *options.threads);
     dump_feature!("address_space", VMLayoutConstants::get_address_space());
+    dump_feature!("bpr_spin_lock");
+    dump_feature!("lxr_no_nursery_evac");
+    dump_feature!("lxr_fixed_young_size");
+    dump_feature!("lxr_no_lazy_young_sweeping");
+    dump_feature!("lxr_no_chunk_defrag");
+    dump_feature!("lxr_no_lazy");
+    dump_feature!("lxr_no_cm");
+    dump_feature!("lxr_srv_ratio_counter");
+    dump_feature!("lxr_release_stage_timer");
+    dump_feature!("lxr_precise_incs_counter");
+    dump_feature!("lxr_fixed_satb_trigger");
+    dump_feature!("lxr_no_survival_trigger");
+    dump_feature!("no_map_fixed_noreplace");
+    dump_feature!("report_worker_sleep_events");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 

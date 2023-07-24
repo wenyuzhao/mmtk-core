@@ -376,7 +376,9 @@ impl Block {
             } else {
                 BlockState::Unmarked
             });
-            Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+            if !reuse || cfg!(feature = "ix_no_defrag_fix") {
+                Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+            }
         }
     }
 
@@ -454,7 +456,10 @@ impl Block {
     }
 
     pub fn set_as_in_place_promoted(&self) {
-        Self::NURSERY_PROMOTION_STATE_TABLE.fetch_or_atomic(self.start(), 1u8, Ordering::Relaxed);
+        if self.is_in_place_promoted() {
+            return;
+        }
+        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 1u8) };
     }
 
     pub fn is_in_place_promoted(&self) -> bool {
@@ -462,7 +467,7 @@ impl Block {
     }
 
     pub fn clear_in_place_promoted(&self) {
-        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed)
+        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 0u8) };
     }
 
     pub fn unlog(&self) {
@@ -584,10 +589,17 @@ impl Block {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                 }
-                // Update mark_histogram
-                mark_histogram[holes] += marked_lines;
-                // Record number of holes in block side metadata.
-                self.set_holes(holes);
+                if cfg!(feature = "ix_live_size_based_defrag") {
+                    // Update mark_histogram
+                    mark_histogram[Block::LINES - marked_lines] += marked_lines;
+                    // Record number of holes in block side metadata.
+                    self.set_holes(Block::LINES - marked_lines);
+                } else {
+                    // Update mark_histogram
+                    mark_histogram[holes] += marked_lines;
+                    // Record number of holes in block side metadata.
+                    self.set_holes(holes);
+                }
                 false
             }
         }
@@ -631,7 +643,7 @@ impl Block {
         }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
-                space.release_block(*self, false, true, false);
+                space.release_block(*self, false, true, defrag);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {

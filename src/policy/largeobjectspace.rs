@@ -35,7 +35,7 @@ const LOS_BIT_MASK: u8 = 0b11;
 /// to one Treadmill space.
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pr: FreeListPageResource<VM>,
+    pub(crate) pr: FreeListPageResource<VM>,
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill,
@@ -102,6 +102,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 object.to_address::<VM>(),
                 (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
             );
+            #[cfg(feature = "lxr_srv_ratio_counter")]
+            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+                .los_alloc_vol
+                .fetch_add(bytes, Ordering::SeqCst);
             return;
         }
         let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
@@ -286,12 +290,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             debug_assert!(self.treadmill.is_from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
+        self.num_pages_released_lazy.store(0, Ordering::Relaxed);
         if self.rc_enabled {
             return;
         }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
-        self.num_pages_released_lazy.store(0, Ordering::Relaxed);
     }
 
     pub fn release(&mut self, full_heap: bool) {
@@ -339,7 +343,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 self.treadmill.copy(object, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
-                if !self.rc_enabled && self.common.needs_log_bit {
+                if !self.rc_enabled
+                    && self.common.needs_log_bit
+                    && !crate::args::BARRIER_MEASUREMENT_NO_SLOW
+                {
                     if self.common.needs_field_log_bit {
                         let step = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                             4

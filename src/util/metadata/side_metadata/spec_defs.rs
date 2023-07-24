@@ -83,17 +83,17 @@ define_side_metadata_specs!(
     // Mark blocks by immix
     IX_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Striddle line marks
-    RC_STRADDLE_LINES = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
+    RC_STRADDLE_LINES = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     // LXR Block logging bits
     IX_BLOCK_LOG   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
-    NURSERY_PROMOTION_STATE   = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
+    NURSERY_PROMOTION_STATE   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     IX_BLOCK_DEAD_WORDS = (global: false, log_num_of_bits: 5 /* u32 */, log_bytes_in_region: Block::LOG_BYTES),
     IX_LINE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     LOS_PAGE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_PAGE as usize),
     // Mark chunks (any plan that uses the chunk map should include this spec in their local sidemetadata specs)
     CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_BIN   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
-    CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
+    CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_PREV   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_NEXT   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     IX_BLOCK_ALLOC_BITS   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),

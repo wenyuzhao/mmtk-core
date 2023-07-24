@@ -172,7 +172,6 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
                 self.flush_decs_and_satb();
             }
         }
-        self.lxr.rc.increase_inc_buffer_size(1);
         self.incs.push(edge);
         if self.incs.is_full() {
             self.flush_incs();
@@ -206,6 +205,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
+            self.lxr.rc.increase_inc_buffer_size(incs.len());
             self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
                 _,
                 EDGE_KIND_MATURE,
@@ -272,7 +272,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn load_reference(&mut self, o: ObjectReference) {
-        if !self.lxr.concurrent_marking_in_progress() {
+        if !self.lxr.concurrent_marking_in_progress() || self.lxr.is_marked(o) {
             return;
         }
         self.refs.push(o);
@@ -281,11 +281,8 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+    fn object_probable_write_slow(&mut self, obj: ObjectReference) {
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-            if !e.to_address().is_mapped() {
-                return;
-            }
             self.enqueue_node(obj, e, None);
         })
     }

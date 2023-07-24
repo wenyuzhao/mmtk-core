@@ -494,7 +494,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     .elapsed()
                     .unwrap()
                     .as_nanos();
-                crate::COUNTERS.roots_nanos.fetch_add(t, Ordering::SeqCst);
+                crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
             }
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
@@ -675,6 +675,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 // coordinator work packets.
             }
             // Wait
+            if cfg!(feature = "report_worker_sleep_events")
+                && self.in_gc_pause.load(Ordering::Relaxed)
+                && self.work_buckets[WorkBucketStage::RCProcessIncs].is_activated()
+            {
+                gc_log!([3]
+                    "    - ({:.3}ms) worker#{} sleep",
+                    crate::gc_start_time_ms(),
+                    worker.ordinal,
+                );
+            }
             flush_logs!();
             guard = self.worker_monitor.1.wait(guard).unwrap();
             // The worker is unparked here where `parking_guard` goes out of scope.

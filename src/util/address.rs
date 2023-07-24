@@ -15,6 +15,7 @@ use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::{ObjectModel, VMBinding};
 
 use super::constants::BYTES_IN_WORD;
+use super::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -233,7 +234,7 @@ impl Address {
     /// # Safety
     /// This could throw a segment fault if the address is invalid
     pub unsafe fn load<T: Copy>(self) -> T {
-        *(self.0 as *mut T)
+        std::ptr::read_unaligned(self.0 as *const T)
     }
 
     /// stores a value of type T to the address
@@ -242,7 +243,7 @@ impl Address {
     pub unsafe fn store<T>(self, value: T) {
         // We use a ptr.write() operation as directly setting the pointer would drop the old value
         // which may result in unexpected behaviour
-        (self.0 as *mut T).write(value);
+        std::ptr::write_unaligned(self.0 as *mut T, value);
     }
 
     /// atomic operation: load
@@ -415,6 +416,22 @@ impl Address {
             .as_spec()
             .extract_side_spec()
             .store_atomic(self, UNLOGGED_VALUE, Ordering::Relaxed)
+    }
+
+    pub fn unlog_field_relaxed<VM: VMBinding>(self) {
+        debug_assert!(!self.is_zero());
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
+        } else {
+            64
+        };
+        let a = self.align_down(heap_bytes_per_unlog_byte);
+        unsafe {
+            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
+                .as_spec()
+                .extract_side_spec()
+                .store(a, 0xffu8)
+        }
     }
 
     pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
@@ -625,7 +642,7 @@ impl ObjectReference {
 
     /// Is the object live, determined by the policy?
     pub fn is_live(self) -> bool {
-        if self.0 == 0 {
+        if self.is_null() {
             false
         } else {
             unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_live(self)
@@ -633,20 +650,38 @@ impl ObjectReference {
     }
 
     pub fn is_movable(self) -> bool {
+        if self.is_null() {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_movable()
     }
 
     /// Get forwarding pointer if the object is forwarded.
     pub fn get_forwarded_object(self) -> Option<Self> {
+        if self.is_null() {
+            return None;
+        }
+        debug_assert!({
+            let addr = self.to_raw_address();
+            addr >= VM_LAYOUT_CONSTANTS.heap_start && addr < VM_LAYOUT_CONSTANTS.heap_end
+        });
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
     pub fn is_in_any_space(self) -> bool {
+        let addr = self.to_raw_address();
+        if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_in_space(self)
     }
 
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
+        let addr = self.to_raw_address();
+        if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_sane()
     }
 
@@ -663,17 +698,7 @@ impl ObjectReference {
         a..a + self.get_size::<VM>()
     }
 
-    pub fn log_start_address<VM: VMBinding>(self) {
-        debug_assert!(!self.is_null());
-        self.to_address::<VM>().unlog_field::<VM>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log_field::<VM>();
-    }
-
-    pub fn clear_start_address_log<VM: VMBinding>(self) {
-        debug_assert!(!self.is_null());
-        self.to_address::<VM>().log_field::<VM>();
-        (self.to_address::<VM>() + BYTES_IN_ADDRESS).log_field::<VM>();
-    }
+    pub fn log_start_address<VM: VMBinding>(self) {}
 
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
         VM::VMObjectModel::get_class_pointer(self)
@@ -707,12 +732,7 @@ impl ObjectReference {
     }
 
     pub fn fix_start_address<VM: VMBinding>(self) -> Self {
-        let a = unsafe { Address::from_usize(self.to_address::<VM>().as_usize() >> 4 << 4) };
-        if !(a + BYTES_IN_WORD).is_field_logged::<VM>() {
-            (a + BYTES_IN_WORD).to_object_reference::<VM>()
-        } else {
-            a.to_object_reference::<VM>()
-        }
+        self
     }
 
     pub fn verify<VM: VMBinding>(self) {

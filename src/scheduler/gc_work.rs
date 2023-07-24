@@ -51,6 +51,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let plan_mut: &mut C::PlanType =
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.prepare(worker.tls);
@@ -132,6 +133,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
 
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let plan_mut: &mut C::PlanType =
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.release(worker.tls);
@@ -211,16 +213,33 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
 
         trace!("stop_all_mutators start");
         mmtk.plan.base().prepare_for_stack_scanning();
+        const BULK_THREAD_SCAN: bool = true;
+        let mut mutators: Vec<VMMutatorThread> = vec![];
+        let mut n = 0;
         <E::VM as VMBinding>::VMCollection::stop_all_mutators(
             worker.tls,
             |mutator| {
                 mutator.flush();
-                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                    .add(ScanStackRoot::<E>(mutator));
+                mutator.prepare(worker.tls);
+                if BULK_THREAD_SCAN {
+                    mutators.push(mutator.get_tls());
+                } else {
+                    mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                        .add(ScanStackRoot::<E>(mutator));
+                }
+                n += 1;
             },
             mmtk.get_plan()
                 .current_gc_should_prepare_for_class_unloading(),
         );
+        gc_log!([3] "Discovered {} mutators", n);
+        if BULK_THREAD_SCAN {
+            let n_workers: usize = mmtk.scheduler.worker_group.worker_count();
+            for ms in mutators.chunks((mutators.len() / n_workers / 2).max(1)) {
+                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    .add(ScanMultipleStacks::<E>(ms.to_vec(), PhantomData));
+            }
+        }
         trace!("stop_all_mutators end");
         if crate::verbose(2) {
             crate::RESERVED_PAGES_AT_GC_START
@@ -269,6 +288,12 @@ pub struct EndOfGC {
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
+        if mmtk.plan.downcast_ref::<LXR<VM>>().is_none() {
+            if perform_class_unloading {
+                gc_log!([3] "    - class unloading");
+            }
+            <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
+        }
         let pause_time = crate::GC_START_TIME
             .load(Ordering::SeqCst)
             .elapsed()
@@ -278,7 +303,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             .plan
             .downcast_ref::<LXR<VM>>()
             .map(|ix| ix.current_pause().unwrap())
-            .unwrap_or(Pause::FullTraceFast);
+            .unwrap_or(Pause::Full);
         crate::add_pause_time(pause, pause_time.as_nanos());
         if crate::verbose(2) {
             let _released_n =
@@ -315,6 +340,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
 
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
+        #[allow(cast_ref_to_mut)]
         let plan_mut: &mut dyn Plan<VM = VM> = unsafe { &mut *(&*mmtk.plan as *const _ as *mut _) };
         plan_mut.end_of_gc(worker.tls);
 
@@ -335,12 +361,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         // Reset the triggering information.
         mmtk.plan.base().reset_collection_trigger();
 
-        let is_lxr = mmtk.plan.downcast_ref::<LXR<VM>>().is_some();
-        <VM as VMBinding>::VMCollection::resume_mutators(
-            worker.tls,
-            is_lxr,
-            perform_class_unloading,
-        );
+        <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
     }
 }
 
@@ -457,7 +478,8 @@ impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ProcessWeakRefs");
-        <E::VM as VMBinding>::VMCollection::process_weak_refs::<E>(worker); // TODO: Pass a factory/callback to decide what work packet to create.
+        <<E::VM as VMBinding>::VMCollection as Collection<E::VM>>::process_weak_refs::<E>(worker);
+        // TODO: Pass a factory/callback to decide what work packet to create.
     }
 }
 
@@ -560,6 +582,21 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanStackRoot<E> {
     }
 }
 
+pub struct ScanMultipleStacks<Edges: ProcessEdgesWork>(Vec<VMMutatorThread>, PhantomData<Edges>);
+
+unsafe impl<Edges: ProcessEdgesWork> Send for ScanMultipleStacks<Edges> {}
+
+impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanMultipleStacks<E> {
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        let factory = ProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
+        <E::VM as VMBinding>::VMScanning::scan_multiple_thread_root(
+            worker.tls,
+            std::mem::take(&mut self.0),
+            factory,
+        );
+    }
+}
+
 #[derive(Default)]
 pub struct ScanVMSpecificRoots<Edges: ProcessEdgesWork>(PhantomData<Edges>);
 
@@ -578,6 +615,60 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanVMSpecificRoots<E> {
     }
 }
 
+#[repr(u8)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum RootKind {
+    Strong,
+    /// This is a young **strong** root that is newly created in the previous mutator phase.
+    /// If we guarantee that a type of root pointers will never dead before a full-heap trace, we can only scan newly created ones in nursery / RC pauses.
+    ///
+    /// e.g. For LXR, the embeded pointers in code objects is immutable, and is reclaimed only during class unloading. So it is safe to skip decs,
+    /// and do inc once for each of these roots, just to keep them alive before marking ends.
+    ///
+    /// For LXR,
+    /// #### RC Pause
+    ///   * Only collect young root pointers with RC=0
+    ///   * Do RC increments (preferably once) to keep them alive until the end of SATB or Full GC
+    ///   * During SATB: mark them and keep them alive.
+    /// #### Initial Mark Pause
+    ///   * Both young amd mature roots are required for marking
+    /// #### Final Mark Pause
+    ///   * Both young amd mature roots are required for pointer updating
+    /// #### Full GC
+    ///   * Both young amd mature roots are required for marking and pointer updating
+    Young,
+    // This is a weak root that is newly created in the previous mutator phase.
+    // Same as young roots, decrements on these pointers can be skipped.
+    // If possible, increment can happen only once.
+    /// This is a **weak** root pointer. which means that
+    ///   1. It should never be marked directly through this root pointer. But can be transitively reachable by other strong roots.
+    ///   2. The reference must be kept alive until the end of a full-heap trace.
+    ///
+    /// e.g. For LXR, the strong table roots are weak pointers that is purged only at the end of a full-heap trace.
+    /// So it is safe to skip decs, and do inc once for each of these roots, just to keep them alive before marking ends.
+    ///
+    /// For LXR,
+    /// #### RC Pause
+    ///   * Only collect young weak root pointers with RC=0
+    ///   * Do RC increments (preferably once) to keep them alive until the end of SATB or Full GC
+    ///   * During SATB: mark them and keep them alive.
+    /// #### Initial Mark Pause
+    ///   * Don't send these pointers to the mark queue
+    /// #### Final Mark Pause
+    ///   * Either skip pointer updating and do a batch update after the GC (e.g. `StringTable::oops_do(&cl)`)
+    ///   * Or, update these pointers, but don't do marking on them.
+    /// #### Full GC
+    ///   * Either skip pointer updating and do a batch update after the GC (e.g. `StringTable::oops_do(&cl)`)
+    ///   * Or, update these pointers, but don't do marking on them.
+    Weak,
+}
+
+impl RootKind {
+    pub fn is_young_or_weak(&self) -> bool {
+        *self == Self::Young || *self == Self::Weak
+    }
+}
+
 pub struct ProcessEdgesBase<VM: VMBinding> {
     pub edges: Vec<VM::VMEdge>,
     pub nodes: VectorObjectQueue,
@@ -586,8 +677,7 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     // Because a copying gc will dereference this pointer at least once for every object copy.
     worker: *mut GCWorker<VM>,
     pub roots: bool,
-    pub cld_roots: bool,
-    pub weak_cld_roots: bool,
+    pub root_kind: Option<RootKind>,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
@@ -609,8 +699,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             mmtk,
             worker: std::ptr::null_mut(),
             roots,
-            cld_roots: false,
-            weak_cld_roots: false,
+            root_kind: if roots { Some(RootKind::Strong) } else { None },
         }
     }
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
@@ -668,9 +757,13 @@ pub trait ProcessEdgesWork:
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 
     #[cfg(feature = "sanity")]
-    fn cache_roots_for_sanity_gc(&mut self, roots: Vec<EdgeOf<Self>>) {
+    fn cache_roots_for_sanity_gc(&mut self, _roots: Vec<EdgeOf<Self>>) {
         assert!(self.roots);
-        self.mmtk().sanity_checker.lock().unwrap().add_roots(roots);
+        self.mmtk()
+            .sanity_checker
+            .lock()
+            .unwrap()
+            .add_root_edges(self.edges.clone());
     }
 
     /// Start the a scan work packet. If SCAN_OBJECTS_IMMEDIATELY, the work packet will be executed immediately, in this method.
@@ -727,7 +820,6 @@ pub trait ProcessEdgesWork:
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
-        trace!("ProcessEdgesWork");
         self.set_worker(worker);
         #[cfg(feature = "sanity")]
         let roots = if self.roots {
@@ -798,22 +890,9 @@ impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkRootsWorkFactory<E> {
 }
 
 impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsWorkFactory<E> {
-    fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            if E::RC_ROOTS {
-                WorkBucketStage::RCProcessIncs
-            } else {
-                WorkBucketStage::Closure
-            },
-            E::new(edges, true, self.mmtk),
-        );
-    }
-
-    fn create_process_edge_roots_work_for_cld_roots(&mut self, edges: Vec<EdgeOf<E>>, weak: bool) {
+    fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>, kind: RootKind) {
         let mut w = E::new(edges, true, self.mmtk);
-        w.cld_roots = true;
-        w.weak_cld_roots = weak;
+        w.root_kind = Some(kind);
         crate::memory_manager::add_work_packet(
             self.mmtk,
             if E::RC_ROOTS {
@@ -825,11 +904,10 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
         );
     }
 
-    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
+    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>, kind: RootKind) {
         if let Some(_lxr) = self.mmtk.plan.downcast_ref::<LXR<E::VM>>() {
             let mut w = ProcessIncs::<E::VM, EDGE_KIND_ROOT>::new_objects(nodes);
-            w.cld_roots = true;
-            w.weak_cld_roots = false;
+            w.root_kind = Some(kind);
             crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::RCProcessIncs, w);
         } else {
             let process_edges_work = E::new(vec![], true, self.mmtk);
@@ -884,6 +962,16 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         should_claim_and_scan_clds: bool,
     ) {
         let tls = worker.tls;
+
+        #[cfg(feature = "sanity")]
+        {
+            if self.roots() {
+                mmtk.sanity_checker
+                    .lock()
+                    .unwrap()
+                    .add_root_nodes(buffer.to_vec());
+            }
+        }
 
         // If this is a root packet, the objects in this packet will have not been traced, yet.
         //

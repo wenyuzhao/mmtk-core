@@ -56,6 +56,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
     lines_consumed: AtomicUsize,
+    reused_lines_consumed: AtomicUsize,
     /// Object mark state
     mark_state: u8,
     /// Work packet scheduler
@@ -222,8 +223,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
         self.common()
             .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata);
         // Initialize the block queues in `reusable_blocks` and `pr`.
-        let me = unsafe { &mut *(self as *const Self as *mut Self) };
-        me.block_allocation.init(unsafe { &*(self as *const Self) })
+        self.block_allocation.init(self);
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -334,7 +334,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         args: crate::policy::space::PlanCreateSpaceArgs<VM>,
         space_args: ImmixSpaceArgs,
     ) -> Self {
-        #[cfg(feature = "immix_no_defrag")]
+        #[cfg(feature = "immix_non_moving")]
         info!(
             "Creating non-moving ImmixSpace: {}. Block size: 2^{}",
             args.name,
@@ -378,6 +378,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
             lines_consumed: AtomicUsize::new(0),
+            reused_lines_consumed: AtomicUsize::new(0),
             reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
@@ -449,7 +450,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
         self.block_allocation.notify_mutator_phase_end();
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+        if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             //     self.mark_state = Self::MARKED_STATE;
@@ -472,13 +473,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
-        debug_assert_ne!(pause, Pause::FullTraceDefrag);
-        if pause == Pause::InitialMark || pause == Pause::FullTraceFast {
+        debug_assert_ne!(pause, Pause::FullDefrag);
+        if pause == Pause::InitialMark || pause == Pause::Full {
             // Select mature evacuation set
             self.schedule_defrag_selection_packets(pause);
         }
         // Initialize mark state for tracing
-        if pause == Pause::FullTraceFast || pause == Pause::InitialMark {
+        if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
                 self.mark_state = Self::MARKED_STATE;
@@ -489,53 +490,70 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Release nursery blocks
         if pause != Pause::RefCount {
-            if pause == Pause::FullTraceFast {
+            if pause == Pause::Full {
                 // Reset worker TLABs.
                 // The block of the current worker TLAB may be selected as part of the mature evacuation set.
                 // So the copied mature objects might be copied into defrag blocks, and get copied out again.
                 crate::scheduler::worker::reset_workers::<VM>();
             }
             // Release young blocks to reduce to-space overflow
-            self.block_allocation
-                .sweep_nursery_blocks(&self.scheduler, pause);
+            // self.block_allocation
+            //     .sweep_nursery_blocks(&self.scheduler, pause);
             self.flush_page_resource();
         }
         self.block_allocation
-            .reset_block_mark_for_mutator_reused_blocks();
+            .reset_block_mark_for_mutator_reused_blocks(pause);
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
-        } else if pause == Pause::FullTraceFast {
+        } else if pause == Pause::Full {
             self.is_end_of_satb_or_full_gc = true;
         }
     }
 
     pub fn release_rc(&mut self, pause: Pause) {
-        debug_assert_ne!(pause, Pause::FullTraceDefrag);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_nursery_blocks start",
+            crate::gc_start_time_ms(),
+        );
+        debug_assert_ne!(pause, Pause::FullDefrag);
         self.block_allocation
             .sweep_nursery_blocks(&self.scheduler, pause);
-        self.block_allocation.sweep_mutator_reused_blocks(pause);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mutator_reused_blocks start",
+            crate::gc_start_time_ms(),
+        );
+        self.block_allocation
+            .sweep_mutator_reused_blocks(&self.scheduler, pause);
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mutator_reused_blocks finish",
+            crate::gc_start_time_ms(),
+        );
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
             self.scheduler().process_lazy_decrement_packets();
         } else {
-            debug_assert_ne!(pause, Pause::FullTraceFast);
+            debug_assert_ne!(pause, Pause::Full);
         }
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc = false;
         // This cannot be done in parallel in a separate thread
         self.schedule_mature_sweeping(pause);
+        self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
     pub fn schedule_mature_sweeping(&self, pause: Pause) {
-        if pause == Pause::FullTraceFast || pause == Pause::FinalMark {
+        if pause == Pause::Full || pause == Pause::FinalMark {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
-                debug_assert_ne!(pause, Pause::FullTraceFast);
+                debug_assert_ne!(pause, Pause::Full);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {
@@ -727,8 +745,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.block_allocation
             .initialize_new_clean_block(block, copy, self.cm_enabled);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
-        self.lines_consumed
-            .fetch_add(Block::LINES, Ordering::SeqCst);
+        if !self.rc_enabled {
+            self.lines_consumed
+                .fetch_add(Block::LINES, Ordering::SeqCst);
+        }
+
+        #[cfg(feature = "lxr_srv_ratio_counter")]
+        if !copy {
+            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+                .ix_clean_alloc_vol
+                .fetch_add(Block::BYTES, Ordering::SeqCst);
+        }
         Some(block)
     }
 
@@ -997,7 +1024,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     fn unlog_object_if_needed(&self, object: ObjectReference) {
         debug_assert!(!self.rc_enabled);
         if self.space_args.unlog_object_when_traced {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+            // Make sure the side metadata for the line can fit into one byte. For smaller line size, we should
+            // use `mark_as_unlogged` instead to mark the bit.
+            // const_assert!(
+            //     Line::BYTES
+            //         >= (1
+            //             << (crate::util::constants::LOG_BITS_IN_BYTE
+            //                 + crate::util::constants::LOG_MIN_OBJECT_SIZE))
+            // );
+            // const_assert_eq!(
+            //     crate::vm::object_model::specs::VMGlobalLogBitSpec::LOG_NUM_BITS,
+            //     0
+            // ); // We should put this to the addition, but type casting is not allowed in constant assertions.
+
+            // Every immix line is 256 bytes, which is mapped to 4 bytes in the side metadata.
+            // If we have one object in the line that is mature, we can assume all the objects in the line are mature objects.
+            // So we can just mark the byte.
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .mark_byte_as_unlogged::<VM>(object, Ordering::Relaxed);
         }
     }
 
@@ -1102,7 +1146,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if self.rc_enabled {
             self.rc_get_next_available_lines(copy, search_start)
         } else {
-            self.normal_get_next_available_lines(search_start)
+            self.normal_get_next_available_lines(copy, search_start)
         }
     }
 
@@ -1172,9 +1216,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
-        block.dec_dead_bytes_sloppy(
-            (Line::steps_between(&start, &end).unwrap() as u32) << Line::LOG_BYTES,
-        );
+        let num_lines = Line::steps_between(&start, &end).unwrap();
+        if !copy {
+            self.reused_lines_consumed
+                .fetch_add(num_lines, Ordering::Relaxed);
+        }
+        block.dec_dead_bytes_sloppy((num_lines as u32) << Line::LOG_BYTES);
+        #[cfg(feature = "lxr_srv_ratio_counter")]
+        crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+            .reused_alloc_vol
+            .fetch_add(num_lines << Line::LOG_BYTES, Ordering::SeqCst);
         if self
             .block_allocation
             .concurrent_marking_in_progress_or_final_mark()
@@ -1190,7 +1241,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[allow(clippy::assertions_on_constants)]
-    pub fn normal_get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
+    pub fn normal_get_next_available_lines(
+        &self,
+        copy: bool,
+        search_start: Line,
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(!self.rc_enabled);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
@@ -1227,12 +1282,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if end == block.end_line() {
                 return None;
             } else {
-                return self.normal_get_next_available_lines(end);
+                return self.normal_get_next_available_lines(copy, end);
             };
         }
-        // if self.common.needs_log_bit {
-        //     Line::clear_log_table::<VM>(start..end);
-        // }
+        if self.common.needs_log_bit && !crate::args::BARRIER_MEASUREMENT_NO_SLOW {
+            if !copy {
+                Line::clear_field_unlog_table::<VM>(start..end);
+            } else {
+                Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
+            }
+        }
         Some((start, end))
     }
 
@@ -1283,9 +1342,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .add_prioritized(Box::new(RCReleaseMatureLOS::new(counter.clone())));
     }
 
+    pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {
+        debug_assert!(self.rc_enabled);
+        self.reused_lines_consumed.load(Ordering::Relaxed)
+            >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
+    }
+
     pub(crate) fn get_pages_allocated(&self) -> usize {
         debug_assert!(!self.rc_enabled);
-        self.lines_consumed.load(Ordering::SeqCst) >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
+        self.lines_consumed.load(Ordering::Relaxed) >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
     }
 
     /// Post copy routine for Immix copy contexts
@@ -1333,19 +1398,11 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
                 unimplemented!("We cannot bulk zero unlogged bit.")
             }
         }
-        debug_assert!(!self.space.rc_enabled);
-        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-            side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
-        }
-        // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
-        // until the forwarding bits are also set, at which time we also write the forwarding
-        // pointer.
     }
 }
 
 impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         // Clear object mark table for this chunk
         self.reset_object_mark();
         // Iterate over all blocks in this chunk
@@ -1356,24 +1413,33 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 continue;
             }
             // Check if this block needs to be defragmented.
-            if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
-                block.set_as_defrag_source(true);
+            let is_defrag_source = if !super::DEFRAG {
+                // Do not set any block as defrag source if defrag is disabled.
+                false
+            } else if super::DEFRAG_EVERY_BLOCK {
+                // Set every block as defrag source if so desired.
+                true
+            } else if let Some(defrag_threshold) = self.defrag_threshold {
+                // This GC is a defrag GC.
+                block.get_holes() > defrag_threshold
             } else {
-                block.set_as_defrag_source(false);
-            }
+                // Not a defrag GC.
+                false
+            };
+            block.set_as_defrag_source(is_defrag_source);
             // Clear block mark data.
             block.set_state(BlockState::Unmarked);
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
             // Clear forwarding bits if necessary.
-            // if is_defrag_source {
-            //     if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-            //         // Clear on-the-side forwarding bits.
-            //         // NOTE: In theory, we only need to clear the forwarding bits of occupied lines of
-            //         // blocks that are defrag sources.
-            //         side.bzero_metadata(block.start(), Block::BYTES);
-            //     }
-            // }
+            if is_defrag_source {
+                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+                    // Clear on-the-side forwarding bits.
+                    // NOTE: In theory, we only need to clear the forwarding bits of occupied lines of
+                    // blocks that are defrag sources.
+                    side.bzero_metadata(block.start(), Block::BYTES);
+                }
+            }
             // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
             // until the forwarding bits are also set, at which time we also write the forwarding
             // pointer.

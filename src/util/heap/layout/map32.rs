@@ -12,9 +12,9 @@ use crate::util::Address;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-const SMALL_CHUNK_SPACE_BOUNDARY: usize = 30 << 30;
-
-// const LARGE_CH
+const NO_SPACE: u8 = 0;
+const SMALL_SPACE: u8 = 1;
+const LARGE_SPACE: u8 = 2;
 
 pub struct Map32 {
     prev_link: Vec<i32>,
@@ -42,9 +42,9 @@ pub struct Map32 {
 impl Map32 {
     pub fn new() -> Self {
         Map32 {
-            prev_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
-            next_link: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
-            chunk_space: vec![0; VM_LAYOUT_CONSTANTS.max_chunks()],
+            prev_link: vec![-1; VM_LAYOUT_CONSTANTS.max_chunks()],
+            next_link: vec![-1; VM_LAYOUT_CONSTANTS.max_chunks()],
+            chunk_space: vec![NO_SPACE; VM_LAYOUT_CONSTANTS.max_chunks()],
             region_map: IntArrayFreeList::new(
                 VM_LAYOUT_CONSTANTS.max_chunks(),
                 VM_LAYOUT_CONSTANTS.max_chunks() as _,
@@ -73,6 +73,11 @@ impl Map32 {
     }
 
     fn get_large_chunk_reserve_boundary() -> Address {
+        if let Some(small_chunk_space_size) = VM_LAYOUT_CONSTANTS.small_chunk_space_size {
+            let small_chunk_space_end =
+                (VM_LAYOUT_CONSTANTS.heap_start + small_chunk_space_size).align_up(BYTES_IN_CHUNK);
+            return small_chunk_space_end;
+        }
         const LARGE_CHUNK_RESERVE_RATIO: f64 = 1f64 / 32f64;
         const MIN_LARGE_CHUNK_RESERVE: usize = 512 << 20;
         let virtual_space_size = VM_LAYOUT_CONSTANTS.heap_end - VM_LAYOUT_CONSTANTS.heap_start;
@@ -138,33 +143,21 @@ impl VMMap for Map32 {
         let (_sync, self_mut) = self.mut_self_with_sync();
         let mut large = false;
         let chunk = if !Self::is_large_chunk_allocation(chunks) {
-            let r = self_mut.region_map.alloc(chunks as _);
-            if r == -1 {
-                large = true;
-                self_mut.large_region_map.alloc(chunks as _)
-            } else {
-                r
-            }
+            self_mut.region_map.alloc(chunks as _)
         } else {
             if crate::verbose(3) {
                 gc_log!("Alloc {} large chunks", chunks);
             }
             large = true;
-            let r = self_mut.large_region_map.alloc(chunks as _);
-            if r == -1 {
-                large = false;
-                self_mut.region_map.alloc(chunks as _)
-            } else {
-                r
-            }
+            self_mut.large_region_map.alloc(chunks as _)
         };
-        debug_assert!(chunk != 0);
         if chunk == -1 {
             self.out_of_virtual_space.store(true, Ordering::SeqCst);
             gc_log!([1]
-                "WARNING: Failed to allocate {} chunks. total_available_discontiguous_chunks={}",
+                "WARNING: Failed to allocate {} chunks. total-free-chunks={} total-free-large-chunks={}",
                 chunks,
-                self.total_available_discontiguous_chunks
+                self.total_available_discontiguous_chunks,
+                self.total_available_large_discontiguous_chunks,
             );
             return unsafe { Address::zero() };
         }
@@ -172,23 +165,26 @@ impl VMMap for Map32 {
         if large {
             self_mut.total_available_large_discontiguous_chunks -= chunks;
         }
-        self_mut.chunk_space[chunk as usize] = if large { 1 } else { 0 };
+        self_mut.chunk_space[chunk as usize] = if large { LARGE_SPACE } else { SMALL_SPACE };
         let rtn: Address = conversions::chunk_index_to_address(chunk as _);
         self.insert(rtn, chunks << LOG_BYTES_IN_CHUNK, descriptor);
         if head.is_zero() {
-            debug_assert!(self.next_link[chunk as usize] == 0);
+            debug_assert!(self.next_link[chunk as usize] == -1);
         } else {
             self_mut.next_link[chunk as usize] = head.chunk_index() as _;
             self_mut.prev_link[head.chunk_index()] = chunk;
         }
-        debug_assert!(self.prev_link[chunk as usize] == 0);
+        debug_assert!(self.prev_link[chunk as usize] == -1);
         rtn
     }
 
     fn get_next_contiguous_region(&self, start: Address) -> Address {
+        if start.is_zero() {
+            return Address::ZERO;
+        }
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        if chunk == 0 || self.next_link[chunk] == 0 {
+        if self.next_link[chunk] == -1 {
             unsafe { Address::zero() }
         } else {
             let a = self.next_link[chunk];
@@ -199,7 +195,7 @@ impl VMMap for Map32 {
     fn get_contiguous_region_chunks(&self, start: Address) -> usize {
         debug_assert!(start == conversions::chunk_align_down(start));
         let chunk = start.chunk_index();
-        if self.chunk_space[chunk as usize] == 0 {
+        if self.chunk_space[chunk as usize] == SMALL_SPACE {
             self.region_map.size(chunk as i32) as _
         } else {
             self.large_region_map.size(chunk as i32) as _
@@ -224,11 +220,11 @@ impl VMMap for Map32 {
         debug_assert!(any_chunk == conversions::chunk_align_down(any_chunk));
         if !any_chunk.is_zero() {
             let chunk = any_chunk.chunk_index();
-            while self_mut.next_link[chunk] != 0 {
+            while self_mut.next_link[chunk] != -1 {
                 let x = self_mut.next_link[chunk];
                 self_mut.free_contiguous_chunks_no_lock(x);
             }
-            while self_mut.prev_link[chunk] != 0 {
+            while self_mut.prev_link[chunk] != -1 {
                 let x = self_mut.prev_link[chunk];
                 self_mut.free_contiguous_chunks_no_lock(x);
             }
@@ -270,8 +266,6 @@ impl VMMap for Map32 {
         let unavail_start_chunk = last_chunk + 1;
         let trailing_chunks = VM_LAYOUT_CONSTANTS.max_chunks() - unavail_start_chunk;
         let pages = (1 + last_chunk - first_chunk) * PAGES_IN_CHUNK;
-        // start_address=0xb0000000, first_chunk=704, last_chunk=703, unavail_start_chunk=704, trailing_chunks=320, pages=0
-        // startAddress=0x68000000 firstChunk=416 lastChunk=703 unavailStartChunk=704 trailingChunks=320 pages=294912
         self_mut.global_page_map.resize_freelist(pages, pages as _);
         // TODO: Clippy favors using iter().flatten() rather than iter() with if-let.
         // https://rust-lang.github.io/rust-clippy/master/index.html#manual_flatten
@@ -281,6 +275,7 @@ impl VMMap for Map32 {
         for fl in self_mut.shared_fl_map.iter() {
             if let Some(fl) = fl {
                 #[allow(clippy::cast_ref_to_mut)]
+                #[allow(cast_ref_to_mut)]
                 let fl_mut: &mut CommonFreeListPageResource = unsafe {
                     &mut *(*fl as *const CommonFreeListPageResource
                         as *mut CommonFreeListPageResource)
@@ -288,21 +283,16 @@ impl VMMap for Map32 {
                 fl_mut.resize_freelist(start_address);
             }
         }
-        // [
-        //  2: -1073741825
-        //  3: -1073741825
-        //  5: -2147482624
-        //  2048: -2147483648
-        //  2049: -2147482624
-        //  2050: 1024
-        //  2051: 1024
-        // ]
         /* set up the region map free list */
-        self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        if first_chunk != 0 {
+            self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        }
         for _ in first_chunk..=last_chunk {
             self_mut.region_map.alloc_first_fit(1);
         }
-        self_mut.large_region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        if first_chunk != 0 {
+            self_mut.large_region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
+        }
         for _ in first_chunk..=last_chunk {
             self_mut.large_region_map.alloc_first_fit(1);
         }
@@ -390,6 +380,7 @@ impl Map32 {
     /// In other cases, use mut_self_with_sync().
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
+    #[allow(cast_ref_to_mut)]
     unsafe fn mut_self(&self) -> &mut Self {
         &mut *(self as *const Self as *mut Self)
     }
@@ -401,26 +392,29 @@ impl Map32 {
 
     fn free_contiguous_chunks_no_lock(&mut self, chunk: i32) -> usize {
         let mut large = false;
-        let chunks = if self.chunk_space[chunk as usize] == 0 {
+        let chunks = if self.chunk_space[chunk as usize] == SMALL_SPACE {
             self.region_map.free(chunk, false)
         } else {
             large = true;
             self.large_region_map.free(chunk, false)
         };
         self.total_available_discontiguous_chunks += chunks as usize;
+        for c in chunk..chunk + chunks {
+            self.chunk_space[c as usize] = NO_SPACE;
+        }
         if large {
             self.total_available_large_discontiguous_chunks += chunks as usize;
         }
         let next = self.next_link[chunk as usize];
         let prev = self.prev_link[chunk as usize];
-        if next != 0 {
+        if next != -1 {
             self.prev_link[next as usize] = prev
         };
-        if prev != 0 {
+        if prev != -1 {
             self.next_link[prev as usize] = next
         };
-        self.prev_link[chunk as usize] = 0;
-        self.next_link[chunk as usize] = 0;
+        self.prev_link[chunk as usize] = -1;
+        self.next_link[chunk as usize] = -1;
         for offset in 0..chunks {
             let index = (chunk + offset) as usize;
             let chunk_start = conversions::chunk_index_to_address(index);
