@@ -13,6 +13,7 @@ use enum_map::Enum;
 use enum_map::{enum_map, EnumMap};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -30,6 +31,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
     bucket_update_progress: AtomicUsize,
+    pub(super) controller_channel: (mpsc::Sender<()>, mpsc::Receiver<()>),
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -102,6 +104,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             in_gc_pause: AtomicBool::new(false),
             affinity,
             bucket_update_progress: AtomicUsize::new(0),
+            controller_channel: mpsc::channel(),
         })
     }
 
@@ -533,6 +536,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Check if all the work buckets are empty
+    fn all_activated_buckets_are_empty(&self) -> bool {
+        for bucket in self.work_buckets.values() {
+            if bucket.is_activated() && !bucket.is_drained() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Check if all the work buckets are empty
     pub(crate) fn assert_all_activated_buckets_are_empty(&self) {
         let mut error_example = None;
         for (id, bucket) in self.work_buckets.iter() {
@@ -612,16 +625,74 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .unwrap_or_else(|| self.poll_slow(worker))
     }
 
+    fn find_more_work_for_workers(&self) -> bool {
+        if self.worker_group.has_designated_work() {
+            return true;
+        }
+
+        // See if any bucket has a sentinel.
+        if self.schedule_sentinels() {
+            return true;
+        }
+
+        // Try to open new buckets.
+        if self.update_buckets() {
+            return true;
+        }
+
+        // If all of the above failed, it means GC has finished.
+        false
+    }
+
     fn poll_slow(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
+        let mut sync = self.worker_monitor.sync.lock().unwrap();
         loop {
             flush_logs!();
             // Retry polling
             if let Some(work) = self.poll_schedulable_work(worker) {
                 return work;
             }
-            self.worker_monitor.park_and_wait(worker);
+
+            // Park this worker
+            self.worker_monitor.parked.fetch_add(1, Ordering::Relaxed);
+            let all_parked = sync.inc_parked_workers();
+            // gc_log!("park #{}", worker.ordinal);
+
+            if all_parked {
+                // gc_log!("all parked");
+                if self.worker_group.has_designated_work() {
+                    self.worker_monitor.all_workers_parked.notify_all();
+                } else {
+                    if self.schedule_sentinels() {
+                        self.worker_monitor.parked.fetch_sub(1, Ordering::Relaxed);
+                        sync.dec_parked_workers();
+                        break;
+                    }
+                    if self.update_buckets() {
+                        self.worker_monitor.parked.fetch_sub(1, Ordering::Relaxed);
+                        sync.dec_parked_workers();
+                        break;
+                    }
+                    // gc_log!("no packets");
+                    debug_assert!(!self.worker_group.has_designated_work());
+                    if self.in_gc_pause.load(Ordering::SeqCst) {
+                        worker.sender.send(()).unwrap();
+                    }
+                }
+            }
+            sync = self.worker_monitor.all_workers_parked.wait(sync).unwrap();
+            // Unpark this worker.
+            self.worker_monitor.parked.fetch_sub(1, Ordering::Relaxed);
+            sync.dec_parked_workers();
+            // gc_log!("unpark #{}", worker.ordinal);
             flush_logs!();
         }
+        let work = self.poll_schedulable_work(worker).unwrap();
+        if !self.all_activated_buckets_are_empty() {
+            // Have more jobs in this buckets. Notify other workers.
+            self.worker_monitor.all_workers_parked.notify_all();
+        }
+        return work;
     }
 
     pub fn enable_stat(&self) {
