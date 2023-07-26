@@ -9,7 +9,7 @@ use atomic::Atomic;
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use crossbeam::deque::{self, Stealer};
 use crossbeam::queue::ArrayQueue;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 
 /// Represents the ID of a GC worker thread.
@@ -53,6 +53,7 @@ pub struct GCWorkerShared<VM: VMBinding> {
     pub designated_work: ArrayQueue<Box<dyn GCWork<VM>>>,
     /// Handle for stealing packets from the current worker
     pub stealer: Option<Stealer<Box<dyn GCWork<VM>>>>,
+    pub sleep: AtomicBool,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
@@ -61,6 +62,7 @@ impl<VM: VMBinding> GCWorkerShared<VM> {
             stat: Default::default(),
             designated_work: ArrayQueue::new(16),
             stealer,
+            sleep: AtomicBool::new(false),
         }
     }
 }
