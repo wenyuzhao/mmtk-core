@@ -864,6 +864,8 @@ impl<VM: VMBinding> LXR<VM> {
         if crate::args::LAZY_DECREMENTS && pause != Pause::Full {
             scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
         }
+        assert!(!cfg!(feature = "sanity"));
+        scheduler.work_buckets[WorkBucketStage::Final].set_as_disabled();
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {

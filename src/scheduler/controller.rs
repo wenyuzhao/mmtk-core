@@ -89,7 +89,10 @@ impl<VM: VMBinding> GCController<VM> {
         // );
 
         // Add a ScheduleCollection work packet.  It is the seed of other work packets.
-        self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
+        // self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
+        let mut sc = ScheduleCollection;
+        sc.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+        self.scheduler.worker_monitor.notify_work_available(true);
 
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.
@@ -157,7 +160,9 @@ impl<VM: VMBinding> GCController<VM> {
         let mut end_of_gc = EndOfGC {
             elapsed: gc_start.elapsed(),
         };
+        // println!("end_of_gc start");
         end_of_gc.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+        // println!("end_of_gc complete");
 
         self.scheduler.in_gc_pause.store(false, Ordering::SeqCst);
         self.scheduler.schedule_concurrent_packets(queue, pqueue);
