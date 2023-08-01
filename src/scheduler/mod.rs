@@ -4,6 +4,7 @@ pub mod affinity;
 
 #[allow(clippy::module_inception)]
 mod scheduler;
+pub(crate) use scheduler::CoordinatorMessage;
 pub(crate) use scheduler::GCWorkScheduler;
 
 mod stat;

@@ -206,9 +206,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         // If the VM requires that only the coordinator thread can stop the world,
         // we delegate the work to the coordinator.
         if <E::VM as VMBinding>::VMCollection::COORDINATOR_ONLY_STW && !worker.is_coordinator() {
-            worker
-                .sender
-                .add_coordinator_work(Box::new(StopMutators::<E>::new()));
+            mmtk.scheduler
+                .add_coordinator_work(StopMutators::<E>::new(), worker);
             return;
         }
 
