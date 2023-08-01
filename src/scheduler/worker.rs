@@ -130,7 +130,7 @@ impl WorkerMonitor {
     /// This function doesn't change the `work_group_state` variable.
     /// If workers are in the `Sleeping` state, use `resume_and_wait` to resume workers.
     pub fn notify_work_available(&self, all: bool) {
-        let sync = self.sync.lock().unwrap();
+        // let sync = self.sync.lock().unwrap();
         if self.parked.load(Ordering::Relaxed) == 0 {
             return;
         }
@@ -140,7 +140,7 @@ impl WorkerMonitor {
         // if sync.worker_group_state == WorkerGroupState::Sleeping {
         //     return;
         // }
-        if sync.parked_workers == 0 {
+        if self.parked.load(Ordering::SeqCst) == 0 {
             return;
         }
 
@@ -152,7 +152,7 @@ impl WorkerMonitor {
     }
 
     pub fn force_notify_work_available(&self, all: bool) {
-        let _sync = self.sync.lock().unwrap();
+        // let _sync = self.sync.lock().unwrap();
         if all {
             self.all_workers_parked.notify_all();
         } else {
