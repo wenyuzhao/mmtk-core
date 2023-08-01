@@ -10,6 +10,7 @@ mod stat;
 pub(self) mod work_counter;
 
 mod work;
+pub use work::CoordinatorWork;
 pub use work::GCWork;
 pub(crate) use work::GCWorkContext;
 
