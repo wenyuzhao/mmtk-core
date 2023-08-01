@@ -113,7 +113,6 @@ impl<VM: VMBinding> GCController<VM> {
                 CoordinatorMessage::Finish => {}
             }
         }
-
         {
             // Note: GC workers may spuriously wake up, examining the states of work buckets and
             // trying to open them.  Use lock to ensure workers do not wake up when we deactivate

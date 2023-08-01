@@ -4,8 +4,7 @@ use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 struct BucketQueue<VM: VMBinding> {
     // FIXME: Performance!
@@ -130,7 +129,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
         // Notify one if there're any parked workers.
         if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
+            // let _guard = self.monitor.0.lock().unwrap();
             self.monitor.1.notify_one()
         }
     }
@@ -142,7 +141,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
         // Notify all if there're any parked workers.
         if self.group.parked_workers() > 0 {
-            let _guard = self.monitor.0.lock().unwrap();
+            // let _guard = self.monitor.0.lock().unwrap();
             self.monitor.1.notify_all()
         }
     }

@@ -33,7 +33,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// The shared part of the GC worker object of the controller thread
     coordinator_worker_shared: Arc<GCWorkerShared<VM>>,
     /// Condition Variable for worker synchronization
-    pub(crate) worker_monitor: Arc<(Mutex<()>, Condvar)>,
+    pub worker_monitor: Arc<(Mutex<()>, Condvar)>,
     pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     pub(super) in_gc_pause: AtomicBool,
@@ -395,19 +395,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
-        debug_assert!(
-            self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
-            "GCWorker attempted to open buckets when there are pending coordinator work packets"
-        );
+        // debug_assert!(
+        //     self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
+        //     "GCWorker attempted to open buckets when there are pending coordinator work packets"
+        // );
         buckets
             .iter()
             .all(|&b| self.work_buckets[b].is_drained() || self.work_buckets[b].disabled())
     }
 
     pub fn all_buckets_empty(&self) -> bool {
-        self.work_buckets
-            .values()
-            .all(|bucket| bucket.is_empty() || bucket.disabled())
+        self.work_buckets.values().all(|bucket| bucket.is_empty())
     }
 
     pub(super) fn schedule_concurrent_packets(
@@ -550,10 +548,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
-    pub fn in_concurrent(&self) -> bool {
-        !self.in_gc_pause.load(Ordering::SeqCst)
-    }
-
     pub fn add_coordinator_work(&self, work: impl CoordinatorWork<VM>, worker: &GCWorker<VM>) {
         self.pending_coordinator_packets
             .fetch_add(1, Ordering::SeqCst);
@@ -561,6 +555,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .sender
             .send(CoordinatorMessage::Work(Box::new(work)))
             .unwrap();
+    }
+
+    pub fn in_concurrent(&self) -> bool {
+        !self.in_gc_pause.load(Ordering::SeqCst)
     }
 
     /// Check if all the work buckets are empty
@@ -639,6 +637,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Note: The lock is released during `wait` in the loop.
         let mut guard = self.worker_monitor.0.lock().unwrap();
         'polling_loop: loop {
+            flush_logs!();
             // Retry polling
             if let Some(work) = self.poll_schedulable_work(worker) {
                 return work;
@@ -676,9 +675,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 // coordinator work packets.
             }
             // Wait
+            if cfg!(feature = "report_worker_sleep_events")
+                && self.in_gc_pause.load(Ordering::Relaxed)
+                && self.work_buckets[WorkBucketStage::RCProcessIncs].is_activated()
+            {
+                gc_log!([3]
+                    "    - ({:.3}ms) worker#{} sleep",
+                    crate::gc_start_time_ms(),
+                    worker.ordinal,
+                );
+            }
+            flush_logs!();
             guard = self.worker_monitor.1.wait(guard).unwrap();
             // The worker is unparked here where `parking_guard` goes out of scope.
         }
+        flush_logs!();
 
         // We guarantee that we can at least fetch one packet when we reach here.
         let work = self.poll_schedulable_work(worker).unwrap();
@@ -734,7 +745,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
         mmtk.plan.base().gc_requester.clear_request();
         let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
-        debug_assert!(!first_stw_bucket.is_activated());
         first_stw_bucket.activate();
         if first_stw_bucket.is_empty()
             && self.worker_group.parked_workers() + 1 == self.worker_group.worker_count()

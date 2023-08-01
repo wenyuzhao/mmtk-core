@@ -351,7 +351,6 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         }
 
         mmtk.plan.gc_pause_end();
-
         if <VM as VMBinding>::VMCollection::COORDINATOR_ONLY_STW {
             assert!(worker.is_coordinator(),
                     "VM only allows coordinator to resume mutators, but the current worker is not the coordinator.");
