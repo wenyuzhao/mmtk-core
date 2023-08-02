@@ -167,7 +167,7 @@ pub fn alloc<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     size: usize,
     align: usize,
-    offset: isize,
+    offset: usize,
     semantics: AllocationSemantics,
 ) -> Address {
     crate::stat(|s| {
