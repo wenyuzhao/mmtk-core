@@ -54,7 +54,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.line = None;
     }
 
-    fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
+    fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
         if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
             return Address::ZERO;
         }
