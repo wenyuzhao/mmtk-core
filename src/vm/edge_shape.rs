@@ -163,6 +163,11 @@ pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
     fn iter_edges(&self) -> Self::EdgeIterator;
     /// Split the slice into smaller chunks and iterate over them.
     fn chunks(&self, chunk_size: usize) -> Self::ChunkIterator;
+    /// The object which this slice belongs to. If we know the object for the slice, we will check the object state (e.g. mature or not), rather than the slice address.
+    /// Normally checking the object and checking the slice does not make a difference, as the slice is part of the object (in terms of memory range). However,
+    /// if a slice is in a different location from the object, the object state and the slice can be hugely different, and providing a proper implementation
+    /// of this method for the owner object is important.
+    fn object(&self) -> Option<ObjectReference>;
     /// Start address of the memory slice
     fn start(&self) -> Address;
     /// Size of the memory slice in bytes
@@ -207,6 +212,10 @@ impl MemorySlice for Range<Address> {
 
     fn chunks(&self, _chunk_size: usize) -> Self::ChunkIterator {
         unimplemented!()
+    }
+
+    fn object(&self) -> Option<ObjectReference> {
+        None
     }
 
     fn start(&self) -> Address {
@@ -274,6 +283,10 @@ impl<E: Edge> MemorySlice for UnimplementedMemorySlice<E> {
     }
 
     fn chunks(&self, _chunk_size: usize) -> Self::ChunkIterator {
+        unimplemented!()
+    }
+
+    fn object(&self) -> Option<ObjectReference> {
         unimplemented!()
     }
 
