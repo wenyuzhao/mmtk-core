@@ -72,7 +72,7 @@ spin = { version = "0.9.4", features = ["std"] }
 # static_assertions = "1.1.0"
 strum = "0.24.1"
 strum_macros = "0.24.3"
-sys-info = "0.9"
+sysinfo = "0.29"
 
 [dev-dependencies]
 rand = "0.7.3"
