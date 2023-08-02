@@ -128,6 +128,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &self.common.base
     }
 
+    fn base_mut(&mut self) -> &mut BasePlan<Self::VM> {
+        &mut self.common.base
+    }
+
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }

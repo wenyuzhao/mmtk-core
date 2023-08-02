@@ -821,7 +821,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
             self.flush();
         }
         #[cfg(feature = "sanity")]
-        if self.roots {
+        if self.roots && !_mmtk.plan.is_in_sanity() {
             self.cache_roots_for_sanity_gc(roots.unwrap());
         }
         trace!("ProcessEdgesWork End");
@@ -954,7 +954,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
 
         #[cfg(feature = "sanity")]
         {
-            if self.roots() {
+            if self.roots() && !mmtk.plan.is_in_sanity() {
                 mmtk.sanity_checker
                     .lock()
                     .unwrap()

@@ -23,10 +23,15 @@ doctest = false
 mmtk-macros = { version = "0.18.0", path = "macros/" }
 
 libc = "0.2.138"
-jemalloc-sys = { version = "0.3.2", features = ["disable_initial_exec_tls"], optional = true }
+jemalloc-sys = { version = "0.3.2", features = [
+    "disable_initial_exec_tls",
+], optional = true }
 mimalloc-sys = { version = "0.1.6", optional = true }
 lazy_static = "1.4.0"
-log = { version = "0.4.17", features = ["max_level_trace", "release_max_level_off"] }
+log = { version = "0.4.17", features = [
+    "max_level_trace",
+    "release_max_level_off",
+] }
 crossbeam = "0.8"
 num_cpus = "1.15.0"
 enum-map = "2.4"
@@ -34,7 +39,7 @@ downcast-rs = "1.2"
 atomic-traits = "0.3"
 atomic = "0.5.1"
 num-traits = "0.2.15"
-spin = {version = "0.9.4", features = ["std"]}
+spin = { version = "0.9.4", features = ["std"] }
 env_logger = "0.8.4"
 pfm = { version = "0.1.0-beta.1", optional = true }
 atomic_refcell = "0.1.8"
@@ -47,6 +52,7 @@ regex = "1.7.0"
 probe = { version = "0.3", optional = true }
 humantime = "2.1.0"
 # static_assertions = "1.1.0"
+delegate = "0.9.0"
 
 [dev-dependencies]
 rand = "0.7.3"
@@ -185,7 +191,7 @@ vm_space = []
 ro_space = []
 # A code space with execution permission.
 # TODO: This is not properly implemented yet. We currently use an immortal space instead, and all our spaces have execution permission at the moment.
-code_space  = []
+code_space = []
 
 # Global valid object (VO) bit metadata.
 # The VO bit is set when an object is allocated, and cleared when it is reclaimed.

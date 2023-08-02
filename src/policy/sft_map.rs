@@ -124,8 +124,14 @@ mod space_map {
                 assert!(old.name() == EMPTY_SFT_NAME || old.name() == space.name());
                 // Make sure the range is in the space
                 let space_start = Self::index_to_space_start(index);
-                assert!(start >= space_start);
-                assert!(start + bytes <= space_start + VM_LAYOUT_CONSTANTS.max_space_extent());
+                // FIXME: Curerntly skip the check for the last space. The following works fine for MMTk internal spaces,
+                // but the VM space is an exception. Any address after the last space is considered as the last space,
+                // based on our indexing function. In that case, we cannot assume the end of the region is within the last space (with MAX_SPACE_EXTENT).
+                let table_size = Self::addr_to_index(Address::MAX) + 1;
+                if index != table_size - 1 {
+                    assert!(start >= space_start);
+                    assert!(start + bytes <= space_start + VM_LAYOUT_CONSTANTS.max_space_extent());
+                }
             }
             *self.sft.get_unchecked(index).get() = space;
         }
@@ -490,8 +496,9 @@ mod sparse_chunk_map {
                 // in which case, we still set SFT map again.
                 debug_assert!(
                     old == EMPTY_SFT_NAME || new == EMPTY_SFT_NAME || old == new,
-                    "attempt to overwrite a non-empty chunk {} in SFT map (from {} to {})",
+                    "attempt to overwrite a non-empty chunk {} ({}) in SFT map (from {} to {})",
                     chunk,
+                    crate::util::conversions::chunk_index_to_address(chunk),
                     old,
                     new
                 );

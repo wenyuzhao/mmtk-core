@@ -28,3 +28,5 @@ pub mod largeobjectspace;
 pub mod lockfreeimmortalspace;
 pub mod markcompactspace;
 pub mod marksweepspace;
+#[cfg(feature = "vm_space")]
+pub mod vmspace;
