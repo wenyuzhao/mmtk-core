@@ -120,7 +120,7 @@ impl SideMetadataSpec {
         match log_b {
             _ if log_b < 3 => {
                 assert_eq!(T::LOG2, 3);
-                if let Some(v) = val {
+                if let Some(_v) = val {
                     // assert!(
                     //     v.to_u8().unwrap() < (1 << (1 << log_b)),
                     //     "Input value {:?} is invalid for the spec {:?}",
