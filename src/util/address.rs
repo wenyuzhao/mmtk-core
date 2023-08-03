@@ -577,7 +577,7 @@ mod tests {
 /// methods in [`crate::vm::ObjectModel`]. Major refactoring is needed in MMTk to allow
 /// the opaque `ObjectReference` type, and we haven't seen a use case for now.
 #[repr(transparent)]
-#[derive(Copy, Clone, Eq, Hash, PartialOrd, PartialEq)]
+#[derive(Copy, Clone, Eq, Hash, PartialOrd, Ord, PartialEq)]
 pub struct ObjectReference(usize);
 
 impl ObjectReference {
