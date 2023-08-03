@@ -78,7 +78,7 @@ pub trait ObjectModel<VM: VMBinding> {
     const LOCAL_FORWARDING_POINTER_SPEC: VMLocalForwardingPointerSpec;
 
     /// A local 2-bit metadata for the forwarding status bits, used by copying plans. If your runtime requires
-    /// word-aligned addresses (i.e. 2- or 4-bytes), you can use the last two bits in the object header to store
+    /// word-aligned addresses (i.e. 4- or 8-bytes), you can use the last two bits in the object header to store
     /// the forwarding bits. Note that you must be careful if you place this in the header as the runtime may
     /// be using those bits for some other reason.
     const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec;
@@ -555,9 +555,9 @@ pub mod specs {
                     }
                 }
                 pub const fn side_after(spec: &MetadataSpec) -> Self {
-                    debug_assert!(spec.is_on_side());
+                    assert!(spec.is_on_side());
                     let side_spec = spec.extract_side_spec();
-                    debug_assert!(side_spec.is_global == Self::IS_GLOBAL);
+                    assert!(side_spec.is_global == Self::IS_GLOBAL);
                     Self(MetadataSpec::OnSide(SideMetadataSpec {
                         name: stringify!($spec_name),
                         is_global: Self::IS_GLOBAL,

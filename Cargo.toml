@@ -29,6 +29,9 @@ downcast-rs = "1.2"
 enum-map = "2.4"
 env_logger = "0.8.4"
 humantime = "2.1.0"
+# We do not use this crate, but env_logger uses it. env_logger uses is_terminal 0.4.0. However, since 0.4.8, is_terminal requires Rust 1.63.
+# So we fix on 0.4.7 here. Once we bump our MSRV, we can remove this.
+is-terminal = "=0.4.7"
 itertools = "0.10.5"
 jemalloc-sys = { version = "0.3.2", features = [
     "disable_initial_exec_tls",
@@ -50,7 +53,7 @@ spin = { version = "0.9.4", features = ["std"] }
 # static_assertions = "1.1.0"
 strum = "0.24.1"
 strum_macros = "0.24.3"
-sysinfo = "0.29"
+sysinfo = "=0.29.5"
 
 [dev-dependencies]
 rand = "0.7.3"
