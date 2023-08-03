@@ -93,6 +93,12 @@ pub struct ImmixSpaceArgs {
     /// bit to differentiate them. So we reset all the log bits in major GCs,
     /// and unlogged the objects when they are traced (alive).
     pub reset_log_bit_in_major_gc: bool,
+    /// Whether this ImmixSpace instance contains both young and old objects.
+    /// This affects the updating of valid-object bits.  If some lines or blocks of this ImmixSpace
+    /// instance contain young objects, their VO bits need to be updated during this GC.  Currently
+    /// only StickyImmix is affected.  GenImmix allocates young objects in a separete CopySpace
+    /// nursery and its VO bits can be cleared in bulk.
+    pub mixed_age: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -367,6 +373,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
 
         super::validate_features();
+        #[cfg(feature = "vo_bit")]
+        vo_bit::helper::validate_config::<VM>();
         let vm_map = args.vm_map;
         let scheduler = args.scheduler.clone();
         let rc_enabled = args.constraints.rc_enabled;
@@ -625,6 +633,42 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
+
+        #[cfg(feature = "vo_bit")]
+        if vo_bit::helper::need_to_clear_vo_bits_before_tracing::<VM>() {
+            let maybe_scope = if major_gc {
+                // If it is major GC, we always clear all VO bits because we are doing full-heap
+                // tracing.
+                Some(VOBitsClearingScope::FullGC)
+            } else if self.space_args.mixed_age {
+                // StickyImmix nursery GC.
+                // Some lines (or blocks) contain only young objects,
+                // while other lines (or blocks) contain only old objects.
+                if super::BLOCK_ONLY {
+                    // Block only.  Young objects are only allocated into fully empty blocks.
+                    // Only clear unmarked blocks.
+                    Some(VOBitsClearingScope::BlockOnly)
+                } else {
+                    // Young objects are allocated into empty lines.
+                    // Only clear unmarked lines.
+                    let line_mark_state = self.line_mark_state.load(Ordering::SeqCst);
+                    Some(VOBitsClearingScope::Line {
+                        state: line_mark_state,
+                    })
+                }
+            } else {
+                // GenImmix nursery GC.  We do nothing to the ImmixSpace because the nursery is a
+                // separate CopySpace.  It'll clear its own VO bits.
+                None
+            };
+
+            if let Some(scope) = maybe_scope {
+                let work_packets = self
+                    .chunk_map
+                    .generate_tasks(|chunk| Box::new(ClearVOBitsAfterPrepare { chunk, scope }));
+                self.scheduler.work_buckets[WorkBucketStage::ClearVOBits].bulk_add(work_packets);
+            }
+        }
     }
 
     /// Release for the immix space. This is called when a GC finished.
@@ -842,11 +886,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         #[cfg(feature = "vo_bit")]
-        debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
-            "{:x}: VO bit not set",
-            object
-        );
+        vo_bit::helper::on_trace_object::<VM>(object);
+
         if self.attempt_mark(object) {
             if self.rc_enabled {
                 let straddle = self
@@ -869,6 +910,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     }
                 }
             }
+
+            #[cfg(feature = "vo_bit")]
+            vo_bit::helper::on_object_marked::<VM>(object);
+
             // Visit node
             queue.enqueue(object);
             if !self.rc_enabled {
@@ -891,12 +936,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ObjectReference {
         let copy_context = worker.get_copy_context_mut();
         debug_assert!(!super::BLOCK_ONLY);
+
         #[cfg(feature = "vo_bit")]
-        debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
-            "{:x}: VO bit not set",
-            object
-        );
+        vo_bit::helper::on_trace_object::<VM>(object);
+
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // We lost the forwarding race as some other thread has set the forwarding word; wait
@@ -944,12 +987,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.attempt_mark(object);
                 ForwardingWord::clear_forwarding_bits::<VM>(object);
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_object_marked::<VM>(object);
+
                 object
             } else {
                 // We are forwarding objects. When the copy allocator allocates the block, it should
                 // mark the block. So we do not need to explicitly mark it here.
-                ForwardingWord::try_forward_object::<VM>(object, semantics, copy_context)
-                    .expect("to-space overflow")
+                // Clippy complains if the "vo_bit" feature is not enabled.
+                #[allow(clippy::let_and_return)]
+                let new_object =
+                    ForwardingWord::try_forward_object::<VM>(object, semantics, copy_context)
+                    .expect("to-space overflow");
+
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_object_forwarded::<VM>(new_object);
+    
+                    new_object
             };
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
@@ -1636,5 +1691,53 @@ impl<VM: VMBinding> ImmixHybridCopyContext<VM> {
         );
         // Just get the space from either allocator
         self.defrag_allocator.immix_space()
+    }
+}
+
+#[cfg(feature = "vo_bit")]
+#[derive(Clone, Copy)]
+enum VOBitsClearingScope {
+    /// Clear all VO bits in all blocks.
+    FullGC,
+    /// Clear unmarked blocks, only.
+    BlockOnly,
+    /// Clear unmarked lines, only.  (i.e. lines with line mark state **not** equal to `state`).
+    Line { state: u8 },
+}
+
+/// A work packet to clear VO bit metadata after Prepare.
+#[cfg(feature = "vo_bit")]
+struct ClearVOBitsAfterPrepare {
+    chunk: Chunk,
+    scope: VOBitsClearingScope,
+}
+
+#[cfg(feature = "vo_bit")]
+impl<VM: VMBinding> GCWork<VM> for ClearVOBitsAfterPrepare {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        match self.scope {
+            VOBitsClearingScope::FullGC => {
+                vo_bit::bzero_vo_bit(self.chunk.start(), Chunk::BYTES);
+            }
+            VOBitsClearingScope::BlockOnly => {
+                self.clear_blocks(None);
+            }
+            VOBitsClearingScope::Line { state } => {
+                self.clear_blocks(Some(state));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "vo_bit")]
+impl ClearVOBitsAfterPrepare {
+    fn clear_blocks(&mut self, line_mark_state: Option<u8>) {
+        for block in self
+            .chunk
+            .iter_region::<Block>()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+        {
+            block.clear_vo_bits_for_unmarked_regions(line_mark_state);
+        }
     }
 }

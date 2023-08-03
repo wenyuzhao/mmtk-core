@@ -166,6 +166,10 @@ pub trait Scanning<VM: VMBinding> {
     /// The VM may skip a reference field if it holds a null reference.  If the VM supports tagged
     /// references, it must skip tagged reference fields which are not holding references.
     ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled, and
+    /// -   `VM::VMObjectModel::NEED_VO_BITS_DURING_TRACING` is true.
+    ///
     /// Arguments:
     /// * `tls`: The VM-specific thread-local storage for the current worker.
     /// * `object`: The object to be scanned.
@@ -193,6 +197,10 @@ pub trait Scanning<VM: VMBinding> {
     ///
     /// The VM may skip a reference field if it holds a null reference.  If the VM supports tagged
     /// references, it must skip tagged reference fields which are not holding references.
+    ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled, and
+    /// -   `VM::VMObjectModel::NEED_VO_BITS_DURING_TRACING` is true.
     ///
     /// Arguments:
     /// * `tls`: The VM-specific thread-local storage for the current worker.
@@ -229,6 +237,9 @@ pub trait Scanning<VM: VMBinding> {
 
     /// Scan all the mutators for roots.
     ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled.
+    ///
     /// Arguments:
     /// * `tls`: The GC thread that is performing this scanning.
     /// * `factory`: The VM uses it to create work packets for scanning roots.
@@ -238,6 +249,9 @@ pub trait Scanning<VM: VMBinding> {
     );
 
     /// Scan one mutator for roots.
+    ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled.
     ///
     /// Arguments:
     /// * `tls`: The GC thread that is performing this scanning.
@@ -259,6 +273,9 @@ pub trait Scanning<VM: VMBinding> {
 
     /// Scan VM-specific roots. The creation of all root scan tasks (except thread scanning)
     /// goes here.
+    ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled.
     ///
     /// Arguments:
     /// * `tls`: The GC thread that is performing this scanning.
@@ -305,6 +322,10 @@ pub trait Scanning<VM: VMBinding> {
     /// again.  The VM binding can make use of this by adding custom work packets into the
     /// `VMRefClosure` bucket.  The bucket will be `VMRefForwarding`, instead, when forwarding.
     /// See below.
+    ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled, and
+    /// -   `VM::VMObjectModel::NEED_VO_BITS_DURING_TRACING` is true.
     ///
     /// Arguments:
     /// * `worker`: The current GC worker.
