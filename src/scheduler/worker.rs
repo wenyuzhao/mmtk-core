@@ -9,8 +9,8 @@ use atomic::Atomic;
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use crossbeam::deque::{self, Stealer};
 use crossbeam::queue::ArrayQueue;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
@@ -53,6 +53,7 @@ pub struct GCWorkerShared<VM: VMBinding> {
     pub designated_work: ArrayQueue<Box<dyn GCWork<VM>>>,
     /// Handle for stealing packets from the current worker
     pub stealer: Option<Stealer<Box<dyn GCWork<VM>>>>,
+    pub sleep: AtomicBool,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
@@ -61,6 +62,7 @@ impl<VM: VMBinding> GCWorkerShared<VM> {
             stat: Default::default(),
             designated_work: ArrayQueue::new(16),
             stealer,
+            sleep: AtomicBool::new(false),
         }
     }
 }
@@ -69,7 +71,7 @@ impl<VM: VMBinding> GCWorkerShared<VM> {
 /// and also waking up workers when more work packets are available.
 pub(crate) struct WorkerMonitor {
     /// The synchronized part.
-    pub sync: Mutex<WorkerMonitorSync>,
+    pub(super) sync: Mutex<WorkerMonitorSync>,
     /// This is notified when new work is made available for the workers.
     /// Particularly, it is notified when
     /// -   `sync.worker_group_state` is transitioned to `Working` because
@@ -78,10 +80,11 @@ pub(crate) struct WorkerMonitor {
     ///     -   some work buckets are opened, or
     /// -   any work packet is added to any open bucket.
     /// Workers wait on this condvar.
-    work_available: Condvar,
+    // work_available: Condvar,
     /// This is notified when all workers parked.
     /// The coordinator waits on this condvar.
-    all_workers_parked: Condvar,
+    pub(super) all_workers_parked: Condvar,
+    pub parked: AtomicUsize,
 }
 
 /// The state of the worker group.
@@ -91,6 +94,7 @@ pub(crate) struct WorkerMonitor {
 /// `Sleeping` state, they will not be allowed to packets from buckets until the coordinator
 /// explicitly transitions the state back to `Working` after it found more work for workers to do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(unused)]
 enum WorkerGroupState {
     /// In this state, the coordinator can open new buckets and close buckets,
     /// but workers cannot execute any packets or get any work packets from any buckets.
@@ -104,11 +108,9 @@ enum WorkerGroupState {
 /// The synchronized part of `WorkerMonitor`.
 pub(crate) struct WorkerMonitorSync {
     /// The total number of workers.
-    worker_count: usize,
+    pub(super) worker_count: usize,
     /// Number of parked workers.
-    pub parked_workers: usize,
-    /// The worker group state.
-    worker_group_state: WorkerGroupState,
+    pub(super) parked_workers: usize,
 }
 
 impl WorkerMonitor {
@@ -117,10 +119,10 @@ impl WorkerMonitor {
             sync: Mutex::new(WorkerMonitorSync {
                 worker_count,
                 parked_workers: 0,
-                worker_group_state: WorkerGroupState::Sleeping,
             }),
-            work_available: Default::default(),
+            // work_available: Default::default(),
             all_workers_parked: Default::default(),
+            parked: Default::default(),
         }
     }
 
@@ -129,83 +131,34 @@ impl WorkerMonitor {
     /// This function doesn't change the `work_group_state` variable.
     /// If workers are in the `Sleeping` state, use `resume_and_wait` to resume workers.
     pub fn notify_work_available(&self, all: bool) {
-        let sync = self.sync.lock().unwrap();
+        // let sync = self.sync.lock().unwrap();
+        if self.parked.load(Ordering::Relaxed) == 0 {
+            return;
+        }
 
         // Don't notify workers if we are adding packets when workers are sleeping.
         // This could happen when we add `ScheduleCollection` or schedule sentinels.
-        if sync.worker_group_state == WorkerGroupState::Sleeping {
+        // if sync.worker_group_state == WorkerGroupState::Sleeping {
+        //     return;
+        // }
+        if self.parked.load(Ordering::SeqCst) == 0 {
             return;
         }
 
         if all {
-            self.work_available.notify_all();
+            self.all_workers_parked.notify_all();
         } else {
-            self.work_available.notify_one();
-        }
-    }
-
-    /// Wake up workers and wait until they transition to `Sleeping` state again.
-    /// This is called by the coordinator.
-    /// If `all` is true, notify all workers; otherwise only notify one worker.
-    pub fn resume_and_wait(&self, all: bool) {
-        let mut sync = self.sync.lock().unwrap();
-        sync.worker_group_state = WorkerGroupState::Working;
-        if all {
-            self.work_available.notify_all();
-        } else {
-            self.work_available.notify_one();
-        }
-        let _sync = self
-            .all_workers_parked
-            .wait_while(sync, |sync| {
-                sync.worker_group_state == WorkerGroupState::Working
-            })
-            .unwrap();
-    }
-
-    /// Test if the worker group is in the `Sleeping` state.
-    pub fn debug_is_sleeping(&self) -> bool {
-        let sync = self.sync.lock().unwrap();
-        sync.worker_group_state == WorkerGroupState::Sleeping
-    }
-
-    /// Park until more work is available.
-    /// The argument `worker` indicates this function can only be called by workers.
-    pub fn park_and_wait<VM: VMBinding>(&self, worker: &GCWorker<VM>) {
-        let mut sync = self.sync.lock().unwrap();
-
-        // Park this worker
-        let all_parked = sync.inc_parked_workers();
-        trace!("Worker {} parked.", worker.ordinal);
-
-        if all_parked {
-            // If all workers are parked, enter "Sleeping" state and notify controller.
-            sync.worker_group_state = WorkerGroupState::Sleeping;
-            debug!(
-                "Worker {} notifies the coordinator that all workerer parked.",
-                worker.ordinal
-            );
             self.all_workers_parked.notify_one();
-        } else {
-            // Otherwise wait until notified.
-            // Note: The condition for this `cond.wait` is "more work is available".
-            // If this worker spuriously wakes up, then in the next loop iteration, the
-            // `poll_schedulable_work` invocation above will fail, and the worker will reach
-            // here and wait again.
-            sync = self.work_available.wait(sync).unwrap();
         }
+    }
 
-        // If we are in the `Sleeping` state, wait until leaving that state.
-        sync = self
-            .work_available
-            .wait_while(sync, |sync| {
-                sync.worker_group_state == WorkerGroupState::Sleeping
-            })
-            .unwrap();
-
-        // Unpark this worker.
-        sync.dec_parked_workers();
-        trace!("Worker {} unparked.", worker.ordinal);
+    pub fn force_notify_work_available(&self, all: bool) {
+        // let _sync = self.sync.lock().unwrap();
+        if all {
+            self.all_workers_parked.notify_all();
+        } else {
+            self.all_workers_parked.notify_one();
+        }
     }
 }
 
@@ -214,7 +167,7 @@ impl WorkerMonitorSync {
     /// Called before a worker is parked.
     ///
     /// Return true if all the workers are parked.
-    fn inc_parked_workers(&mut self) -> bool {
+    pub(super) fn inc_parked_workers(&mut self) -> bool {
         let old = self.parked_workers;
         debug_assert!(old < self.worker_count);
         let new = old + 1;
@@ -224,7 +177,7 @@ impl WorkerMonitorSync {
 
     /// Decrease the packed-workers counter.
     /// Called after a worker is resumed from the parked state.
-    fn dec_parked_workers(&mut self) {
+    pub(super) fn dec_parked_workers(&mut self) {
         let old = self.parked_workers;
         debug_assert!(old <= self.worker_count);
         debug_assert!(old > 0);
@@ -254,6 +207,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
+    pub sender: mpsc::Sender<()>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -287,11 +241,12 @@ impl<VM: VMBinding> GCWorker<VM> {
             ordinal,
             // We will set this later
             copy: GCWorkerCopyContext::new_non_copy(),
-            scheduler,
+            scheduler: scheduler.clone(),
             mmtk,
             is_coordinator,
             shared,
             local_work_buffer,
+            sender: scheduler.controller_channel.0.clone(),
         }
     }
 
