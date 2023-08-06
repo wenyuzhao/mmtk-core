@@ -24,15 +24,10 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
         crate::GC_TRIGGER_TIME.store(SystemTime::now(), Ordering::SeqCst);
         crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         mmtk.plan.schedule_collection(worker.scheduler());
-
-        // Tell GC trigger that GC started.
-        // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
-        // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
-        // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
-        // statement. Consider if there is a better place to call `on_gc_start`.
-        mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
     }
 }
+
+impl<VM: VMBinding> CoordinatorWork<VM> for ScheduleCollection {}
 
 /// The global GC Preparation Work
 /// This work packet invokes prepare() for the plan (which will invoke prepare() for each space), and
@@ -208,6 +203,14 @@ impl<ScanEdges: ProcessEdgesWork> StopMutators<ScanEdges> {
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        // If the VM requires that only the coordinator thread can stop the world,
+        // we delegate the work to the coordinator.
+        if <E::VM as VMBinding>::VMCollection::COORDINATOR_ONLY_STW && !worker.is_coordinator() {
+            mmtk.scheduler
+                .add_coordinator_work(StopMutators::<E>::new(), worker);
+            return;
+        }
+
         trace!("stop_all_mutators start");
         mmtk.plan.base().prepare_for_stack_scanning();
         const BULK_THREAD_SCAN: bool = true;
@@ -274,6 +277,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         mmtk.scheduler.notify_mutators_paused(mmtk);
     }
 }
+
+impl<E: ProcessEdgesWork> CoordinatorWork<E::VM> for StopMutators<E> {}
 
 #[derive(Default)]
 pub struct EndOfGC {
@@ -355,6 +360,8 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
     }
 }
+
+impl<VM: VMBinding> CoordinatorWork<VM> for EndOfGC {}
 
 /// This implements `ObjectTracer` by forwarding the `trace_object` calls to the wrapped
 /// `ProcessEdgesWork` instance.

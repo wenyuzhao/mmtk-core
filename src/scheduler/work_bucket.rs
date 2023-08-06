@@ -1,4 +1,4 @@
-use super::worker::WorkerMonitor;
+use super::worker::WorkerGroup;
 use super::*;
 use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
@@ -47,7 +47,7 @@ pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     queue: BucketQueue<VM>,
     prioritized_queue: Option<BucketQueue<VM>>,
-    monitor: Arc<WorkerMonitor>,
+    monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<BucketOpenCondition<VM>>,
     /// After this bucket is activated and all pending work packets (including the packets in this
     /// bucket) are drained, this work packet, if exists, will be added to this bucket.  When this
@@ -61,10 +61,15 @@ pub struct WorkBucket<VM: VMBinding> {
     /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
     /// can be used repeatedly to discover and process more such objects.
     sentinel: Mutex<Option<Box<dyn GCWork<VM>>>>,
+    group: Arc<WorkerGroup<VM>>,
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
-    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
+    pub fn new(
+        active: bool,
+        monitor: Arc<(Mutex<()>, Condvar)>,
+        group: Arc<WorkerGroup<VM>>,
+    ) -> Self {
         Self {
             disable: AtomicBool::new(false),
             active: AtomicBool::new(active),
@@ -73,6 +78,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
             monitor,
             can_open: None,
             sentinel: Mutex::new(None),
+            group,
         }
     }
 
@@ -122,11 +128,10 @@ impl<VM: VMBinding> WorkBucket<VM> {
             return;
         }
         // Notify one if there're any parked workers.
-        self.monitor.notify_work_available(false);
-    }
-
-    pub fn force_notify_all_workers(&self) {
-        self.monitor.notify_work_available(true);
+        if self.group.parked_workers() > 0 {
+            // let _guard = self.monitor.0.lock().unwrap();
+            self.monitor.1.notify_one()
+        }
     }
 
     pub fn notify_all_workers(&self) {
@@ -135,7 +140,10 @@ impl<VM: VMBinding> WorkBucket<VM> {
             return;
         }
         // Notify all if there're any parked workers.
-        self.monitor.notify_work_available(true);
+        if self.group.parked_workers() > 0 {
+            // let _guard = self.monitor.0.lock().unwrap();
+            self.monitor.1.notify_all()
+        }
     }
 
     pub fn is_activated(&self) -> bool {
@@ -270,10 +278,13 @@ impl<VM: VMBinding> WorkBucket<VM> {
             sentinel.take()
         };
         if let Some(work) = maybe_sentinel {
-            // We don't need to call `self.add` because this function is called by the coordinator
-            // when workers are stopped.  We don't need to notify the workers because the
-            // coordinator will do that later.
-            // We can just "sneak" the sentinel work packet into the current bucket.
+            // We cannot call `self.add` now, because:
+            // 1.  The current function is called only when all workers parked, and we are holding
+            //     the monitor lock.  `self.add` also needs that lock to notify other workers.
+            //     Trying to lock it again will result in deadlock.
+            // 2.  After this function returns, the current worker will check if there is pending
+            //     work immediately, and notify other workers.
+            // So we can just "sneak" the sentinel work packet into the current bucket now.
             self.queue.push(work);
             true
         } else {
