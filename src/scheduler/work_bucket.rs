@@ -4,7 +4,7 @@ use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 struct BucketQueue<VM: VMBinding> {
     // FIXME: Performance!
@@ -126,7 +126,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 
     pub fn force_notify_all_workers(&self) {
-        self.monitor.force_notify_work_available(true)
+        self.monitor.notify_work_available(true);
     }
 
     pub fn notify_all_workers(&self) {

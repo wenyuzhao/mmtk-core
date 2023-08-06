@@ -13,7 +13,6 @@ use crossbeam::deque::{self, Injector, Steal};
 use enum_map::{Enum, EnumMap};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc;
 use std::sync::Arc;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -24,14 +23,13 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// The shared part of the GC worker object of the controller thread
     coordinator_worker_shared: Arc<GCWorkerShared<VM>>,
     /// Condition Variable for worker synchronization
-    pub(crate) worker_monitor: Arc<WorkerMonitor>,
+    pub(super) worker_monitor: Arc<WorkerMonitor>,
     pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
     pub(super) in_gc_pause: AtomicBool,
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
     bucket_update_progress: AtomicUsize,
-    pub(super) controller_channel: (mpsc::Sender<()>, mpsc::Receiver<()>),
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -89,7 +87,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             in_gc_pause: AtomicBool::new(false),
             affinity,
             bucket_update_progress: AtomicUsize::new(0),
-            controller_channel: mpsc::channel(),
         })
     }
 
@@ -519,17 +516,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Check if all the work buckets are empty
-    fn all_activated_buckets_are_empty(&self) -> bool {
-        for bucket in self.work_buckets.values() {
-            if bucket.is_activated() && !bucket.is_drained() {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// Check if all the work buckets are empty
-    #[allow(unused)]
     pub(crate) fn assert_all_activated_buckets_are_empty(&self) {
         let mut error_example = None;
         for (id, bucket) in self.work_buckets.iter() {
@@ -550,47 +536,30 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Get a schedulable work packet without retry.
     fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
         let mut should_retry = false;
-        let in_gc_pause = self.in_gc_pause.load(Ordering::Relaxed);
         // Try find a packet that can be processed only by this worker.
-        if in_gc_pause && !worker.shared.designated_work.is_empty() {
-            if let Some(w) = worker.shared.designated_work.pop() {
-                return Steal::Success(w);
-            }
+        if let Some(w) = worker.shared.designated_work.pop() {
+            return Steal::Success(w);
         }
         if self.in_concurrent() && !worker.is_concurrent_worker() {
             return Steal::Empty;
         }
         // Try get a packet from a work bucket.
-        if in_gc_pause {
-            for work_bucket in self.work_buckets.values() {
-                match work_bucket.poll(&worker.local_work_buffer) {
-                    Steal::Success(w) => return Steal::Success(w),
-                    Steal::Retry => should_retry = true,
-                    _ => {}
-                }
-            }
-        } else {
-            let unconstrained = &self.work_buckets[WorkBucketStage::Unconstrained];
-            if !unconstrained.is_empty() {
-                match unconstrained.poll(&worker.local_work_buffer) {
-                    Steal::Success(w) => return Steal::Success(w),
-                    Steal::Retry => should_retry = true,
-                    _ => {}
-                }
+        for work_bucket in self.work_buckets.values() {
+            match work_bucket.poll(&worker.local_work_buffer) {
+                Steal::Success(w) => return Steal::Success(w),
+                Steal::Retry => should_retry = true,
+                _ => {}
             }
         }
         // Try steal some packets from any worker
-        if self.worker_monitor.parked.load(Ordering::Relaxed) + 1 < self.worker_group.worker_count()
-        {
-            for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
-                if id == worker.ordinal || worker_shared.sleep.load(Ordering::Relaxed) {
-                    continue;
-                }
-                match worker_shared.stealer.as_ref().unwrap().steal() {
-                    Steal::Success(w) => return Steal::Success(w),
-                    Steal::Retry => should_retry = true,
-                    _ => {}
-                }
+        for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
+            if id == worker.ordinal {
+                continue;
+            }
+            match worker_shared.stealer.as_ref().unwrap().steal() {
+                Steal::Success(w) => return Steal::Success(w),
+                Steal::Retry => should_retry = true,
+                _ => {}
             }
         }
         if should_retry {
@@ -627,7 +596,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     fn poll_slow(&self, worker: &GCWorker<VM>) -> Box<dyn GCWork<VM>> {
-        let mut sync = self.worker_monitor.sync.lock().unwrap();
         loop {
             flush_logs!();
             // Retry polling
@@ -635,46 +603,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 return work;
             }
 
-            // Park this worker
-            self.worker_monitor.parked.fetch_add(1, Ordering::Relaxed);
-            let all_parked = sync.inc_parked_workers();
-            // gc_log!("park #{}", worker.ordinal);
-
-            if all_parked && self.in_gc_pause.load(Ordering::Relaxed) {
-                if self.worker_group.has_designated_work() {
-                    self.worker_monitor.all_workers_parked.notify_all();
-                } else {
-                    if self.schedule_sentinels() {
-                        self.worker_monitor.parked.fetch_sub(1, Ordering::Relaxed);
-                        sync.dec_parked_workers();
-                        break;
-                    }
-                    if self.update_buckets() {
-                        self.worker_monitor.parked.fetch_sub(1, Ordering::Relaxed);
-                        sync.dec_parked_workers();
-                        break;
-                    }
-                    debug_assert!(!self.worker_group.has_designated_work());
-                    if self.in_gc_pause.load(Ordering::SeqCst) {
-                        worker.sender.send(()).unwrap();
-                    }
-                }
-            }
-            worker.shared.sleep.store(true, Ordering::SeqCst);
-            sync = self.worker_monitor.all_workers_parked.wait(sync).unwrap();
-            worker.shared.sleep.store(false, Ordering::SeqCst);
-            // Unpark this worker.
-            self.worker_monitor.parked.fetch_sub(1, Ordering::Relaxed);
-            sync.dec_parked_workers();
-            // gc_log!("unpark #{}", worker.ordinal);
+            self.worker_monitor.park_and_wait(worker);
             flush_logs!();
         }
-        let work = self.poll_schedulable_work(worker).unwrap();
-        if !self.all_activated_buckets_are_empty() {
-            // Have more jobs in this buckets. Notify other workers.
-            self.worker_monitor.all_workers_parked.notify_all();
-        }
-        return work;
     }
 
     pub fn enable_stat(&self) {
@@ -730,7 +661,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // make the synchronization more robust,
         first_stw_bucket.activate();
         if first_stw_bucket.is_empty()
-            && self.worker_monitor.parked.load(Ordering::Relaxed) + 1
+            && self.worker_monitor.sync.lock().unwrap().parked_workers + 1
                 == self.worker_group.worker_count()
         {
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];

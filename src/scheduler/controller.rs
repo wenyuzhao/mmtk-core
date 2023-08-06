@@ -59,7 +59,6 @@ impl<VM: VMBinding> GCController<VM> {
     }
 
     /// Find more work for workers to do.  Return true if more work is available.
-    #[allow(unused)]
     fn find_more_work_for_workers(&mut self) -> bool {
         if self.scheduler.worker_group.has_designated_work() {
             return true;
@@ -84,27 +83,38 @@ impl<VM: VMBinding> GCController<VM> {
         self.scheduler.in_gc_pause.store(true, Ordering::SeqCst);
         let gc_start = std::time::Instant::now();
 
-        // debug_assert!(
-        //     self.scheduler.worker_monitor.debug_is_sleeping(),
-        //     "Workers are still doing work when GC started."
-        // );
+        debug_assert!(
+            self.scheduler.worker_monitor.debug_is_sleeping(),
+            "Workers are still doing work when GC started."
+        );
 
         // Add a ScheduleCollection work packet.  It is the seed of other work packets.
         self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
 
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.
+        self.scheduler.worker_monitor.resume_and_wait(false);
+
+        // Gradually open more buckets as workers stop each time they drain all open bucket.
         loop {
-            let _ = self.scheduler.controller_channel.1.recv().unwrap();
-            let sync = self.scheduler.worker_monitor.sync.lock().unwrap();
-            if sync.parked_workers == sync.worker_count && self.scheduler.all_buckets_empty() {
+            // Workers should only transition to the `Sleeping` state when all open buckets have
+            // been drained.
+            self.scheduler.assert_all_activated_buckets_are_empty();
+
+            let new_work_available = self.find_more_work_for_workers();
+
+            // GC finishes if there is no new work to do.
+            if !new_work_available {
                 break;
             }
+
+            // Notify all workers because there should be many work packets available in the newly
+            // opened bucket(s).
+            self.scheduler.worker_monitor.resume_and_wait(true);
         }
-        for _ in self.scheduler.controller_channel.1.try_iter() {}
 
         // All GC workers must have parked by now.
-        // debug_assert!(self.scheduler.worker_monitor.debug_is_sleeping());
+        debug_assert!(self.scheduler.worker_monitor.debug_is_sleeping());
         debug_assert!(!self.scheduler.worker_group.has_designated_work());
         debug_assert!(self.scheduler.all_buckets_empty());
 
