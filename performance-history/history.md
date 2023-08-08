@@ -1,3 +1,9 @@
+# [06-Aug-2023] core-8228e5e, binding-e461a61
+
+![](./20230806-core_8228e5e-binding_e461a61.png)
+
+Plotty Log: [lxr-xput-regression-boar-2023-08-06-Sun-235839](http://squirrel.anu.edu.au/plotty-public/wenyuz/v8/p/t5YEmZ)
+
 # [18-Jul-2023] core-ad9314e, binding-98eb6f9f
 
 ![](./20230718-core_ad9314e-binding_98eb6f9f.png)
