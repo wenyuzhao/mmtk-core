@@ -65,7 +65,7 @@ built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
 # default = ["sanity"]
-default = ["perf_counter"]
+default = ["perf_counter", "no_meta_counting"]
 # default = []
 nontemporal = []
 satb_timer = []

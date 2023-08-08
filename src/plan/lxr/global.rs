@@ -25,6 +25,7 @@ use crate::util::constants::*;
 use crate::util::copy::*;
 use crate::util::heap::layout::vm_layout_constants::*;
 use crate::util::heap::{PageResource, VMRequest};
+use crate::util::metadata::side_metadata::spec_defs::CM_SCANNING;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
@@ -566,6 +567,7 @@ impl<VM: VMBinding> LXR<VM> {
         let immix_specs = metadata::extract_side_metadata(&[
             RC_LOCK_BIT_SPEC,
             MetadataSpec::OnSide(RC_TABLE),
+            MetadataSpec::OnSide(CM_SCANNING),
             MetadataSpec::OnSide(
                 *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
                     .as_spec()
@@ -1196,5 +1198,17 @@ impl<VM: VMBinding> LXR<VM> {
                 self.young_alloc_trigger = new_value;
             }
         }
+    }
+
+    pub fn set_scanning(&self, obj: ObjectReference) {
+        CM_SCANNING.store_atomic(obj.to_object_start::<VM>(), 1u8, Ordering::SeqCst);
+    }
+
+    pub fn clear_scanning(&self, obj: ObjectReference) {
+        CM_SCANNING.store_atomic(obj.to_object_start::<VM>(), 0u8, Ordering::SeqCst);
+    }
+
+    pub fn is_scanning(obj: ObjectReference) -> bool {
+        CM_SCANNING.load_atomic::<u8>(obj.to_object_start::<VM>(), Ordering::SeqCst) != 0
     }
 }

@@ -60,7 +60,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     no_evac: bool,
     pub root_kind: Option<RootKind>,
     depth: u32,
-    mark_objects: Vec<(ObjectReference, Address)>,
     lxr: &'static LXR<VM>,
     rc: RefCountHelper<VM>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
@@ -93,7 +92,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             counters: Default::default(),
-            mark_objects: vec![],
         }
     }
 
@@ -764,14 +762,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     );
             }
         }
-        if !self.mark_objects.is_empty() {
-            let objs = std::mem::take(&mut self.mark_objects);
-            assert!(self.in_cm);
-            assert_ne!(self.pause, Pause::FinalMark);
-            worker
-                .scheduler()
-                .postpone(LXRConcurrentTraceObjects::new_grey_objects(objs));
-        }
     }
 }
 
@@ -874,7 +864,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[cold]
-    fn process_dead_object(&mut self, o: ObjectReference, immix: &LXR<VM>) {
+    fn process_dead_object(&mut self, o: ObjectReference, immix: &LXR<VM>) -> bool {
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -890,10 +880,14 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 s.dead_mature_rc_los_volume += o.get_size::<VM>();
             }
         });
+        let mut should_defer_dec = false;
         if self.concurrent_marking_in_progress {
             let marked = immix.mark(o);
             if cfg!(feature = "lxr_satb_live_bytes_counter") && marked {
                 crate::record_live_bytes(o.get_size::<VM>());
+            }
+            if !marked && LXR::<VM>::is_scanning(o) {
+                should_defer_dec = true;
             }
         }
         // println!(" - dead {:?}", o);
@@ -954,6 +948,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         } else {
             immix.los().rc_free(o);
         }
+        should_defer_dec
     }
 
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
@@ -977,7 +972,12 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let _ = self.rc.clone().fetch_update(o, |c| {
                 if c == 1 && !dead {
                     dead = true;
-                    self.process_dead_object(o, lxr);
+                    let should_defer_dec = self.process_dead_object(o, lxr);
+                    if should_defer_dec {
+                        // self.deferred_dec += 1;
+                        println!("DEFER DRC {:?}", o);
+                        return None;
+                    }
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if c == 0 || c == MAX_REF_COUNT {
