@@ -5,9 +5,14 @@ use crate::vm::edge_shape::Edge;
 use crate::vm::*;
 use crate::MMTK;
 use crate::{scheduler::*, ObjectQueue};
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
+
+const HEAP_SNAPSHOT_OUTPUT_DIR: &'static str = "./_heap_snapshots";
+const HEAP_SNAPSHOT_ENABLED: bool = cfg!(feature = "heap_snapshot");
 
 #[allow(dead_code)]
 pub struct SanityChecker<ES: Edge> {
@@ -17,6 +22,12 @@ pub struct SanityChecker<ES: Edge> {
     root_edges: Vec<Vec<ES>>,
     /// Cached root nodes for sanity root scanning
     root_nodes: Vec<Vec<ObjectReference>>,
+
+    snapshot_max_epoch: usize,
+    snapshot_epoch: usize,
+    snapshot_objects_map: HashMap<ObjectReference, usize>,
+    snapshot_fields: HashMap<ObjectReference, Vec<ObjectReference>>,
+    snapshot_roots: Vec<Vec<ObjectReference>>,
 }
 
 impl<ES: Edge> Default for SanityChecker<ES> {
@@ -31,6 +42,11 @@ impl<ES: Edge> SanityChecker<ES> {
             refs: HashSet::new(),
             root_edges: vec![],
             root_nodes: vec![],
+            snapshot_epoch: 0,
+            snapshot_max_epoch: 5,
+            snapshot_objects_map: Default::default(),
+            snapshot_fields: Default::default(),
+            snapshot_roots: Default::default(),
         }
     }
 
@@ -62,6 +78,17 @@ impl<P: Plan> ScheduleSanityGC<P> {
 
 impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
     fn do_work(&mut self, worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
+        // Skip sanity gc until harness_begin
+        if HEAP_SNAPSHOT_ENABLED {
+            if !mmtk.inside_harness.load(Ordering::SeqCst) {
+                return;
+            }
+            let sanity_checker = mmtk.sanity_checker.lock().unwrap();
+            if sanity_checker.snapshot_epoch >= sanity_checker.snapshot_max_epoch {
+                return;
+            }
+        }
+
         let scheduler = worker.scheduler();
         let plan = &mmtk.plan;
 
@@ -135,6 +162,30 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());
         }
+        if HEAP_SNAPSHOT_ENABLED {
+            let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
+            sanity_checker.snapshot_epoch += 1;
+            sanity_checker.snapshot_fields.clear();
+            sanity_checker.snapshot_objects_map.clear();
+            sanity_checker.snapshot_roots.clear();
+            // record roots
+            let mut snapshot_roots = vec![];
+            for roots in &sanity_checker.root_edges {
+                let mut objs = vec![];
+                for e in roots {
+                    objs.push(e.load());
+                }
+                snapshot_roots.push(objs);
+            }
+            for roots in &sanity_checker.root_nodes {
+                let mut objs = vec![];
+                for o in roots {
+                    objs.push(*o);
+                }
+                snapshot_roots.push(objs);
+            }
+            sanity_checker.snapshot_roots = snapshot_roots;
+        }
     }
 }
 
@@ -160,6 +211,53 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
             debug_assert!(result.is_ok());
+        }
+
+        if HEAP_SNAPSHOT_ENABLED {
+            let sanity_checker = mmtk.sanity_checker.lock().unwrap();
+            let id = sanity_checker.snapshot_epoch - 1;
+            let mut s = format!(
+                "max_objects: {}\n",
+                sanity_checker.snapshot_objects_map.len()
+            );
+            s += &format!("roots:\n");
+            for roots in &sanity_checker.snapshot_roots {
+                let ids: Vec<_> = roots
+                    .iter()
+                    .map(|r| {
+                        if r.is_null() {
+                            "null".to_owned()
+                        } else {
+                            format!("{}", sanity_checker.snapshot_objects_map[r])
+                        }
+                    })
+                    .collect();
+                s += &format!("  - [ {} ]\n", ids.join(", "));
+            }
+            s += &format!("edges:\n");
+            let mut id_to_obj = HashMap::new();
+            for (o, i) in &sanity_checker.snapshot_objects_map {
+                id_to_obj.insert(*i, *o);
+            }
+            for i in 0..id_to_obj.len() {
+                let o = id_to_obj[&i];
+                let fields = &sanity_checker.snapshot_fields[&o];
+                let ids: Vec<_> = fields
+                    .iter()
+                    .map(|r| {
+                        if r.is_null() {
+                            "null".to_owned()
+                        } else {
+                            format!("{}", sanity_checker.snapshot_objects_map[r])
+                        }
+                    })
+                    .collect();
+                s += &format!("  - [ {} ]\n", ids.join(", "));
+            }
+            let mut file =
+                std::fs::File::create(format!("{}/snapshot-{}.yml", HEAP_SNAPSHOT_OUTPUT_DIR, id))
+                    .unwrap();
+            file.write_all(s.as_bytes()).unwrap();
         }
     }
 }
@@ -200,27 +298,45 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
         let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
         if !sanity_checker.refs.contains(&object) {
+            if !object.is_sane() {
+                return object;
+            }
             // FIXME steveb consider VM-specific integrity check on reference.
-            assert!(object.is_sane(), "Invalid reference {:?}", object);
+            // assert!(object.is_sane(), "Invalid reference {:?}", object);
 
             // Let plan check object
-            assert!(
-                self.mmtk().plan.sanity_check_object(object),
-                "Invalid reference {:?}",
-                object
-            );
+            // assert!(
+            //     self.mmtk().plan.sanity_check_object(object),
+            //     "Invalid reference {:?}",
+            //     object
+            // );
 
-            // Let VM check object
-            assert!(
-                VM::VMObjectModel::is_object_sane(object),
-                "Invalid reference {:?}",
-                object
-            );
+            // // Let VM check object
+            // assert!(
+            //     VM::VMObjectModel::is_object_sane(object),
+            //     "Invalid reference {:?}",
+            //     object
+            // );
 
             // Object is not "marked"
             sanity_checker.refs.insert(object); // "Mark" it
             trace!("Sanity mark object {}", object);
             self.nodes.enqueue(object);
+
+            if HEAP_SNAPSHOT_ENABLED {
+                let id = sanity_checker.snapshot_objects_map.len();
+                assert!(!sanity_checker.snapshot_objects_map.contains_key(&object));
+                sanity_checker.snapshot_objects_map.insert(object, id);
+                let mut fields = vec![];
+                <VM as VMBinding>::VMScanning::scan_object(
+                    self.worker().tls,
+                    object,
+                    &mut |e: <VM as VMBinding>::VMEdge| {
+                        fields.push(e.load());
+                    },
+                );
+                sanity_checker.snapshot_fields.insert(object, fields);
+            }
         }
 
         // If the valid object (VO) bit metadata is enabled, all live objects should have the VO

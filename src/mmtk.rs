@@ -90,7 +90,7 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) sanity_checker: Mutex<SanityChecker<VM::VMEdge>>,
     #[cfg(feature = "extreme_assertions")]
     pub(crate) edge_logger: EdgeLogger<VM::VMEdge>,
-    inside_harness: AtomicBool,
+    pub(crate) inside_harness: AtomicBool,
 }
 
 impl<VM: VMBinding> MMTK<VM> {
