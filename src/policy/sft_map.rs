@@ -1,5 +1,4 @@
 use super::sft::*;
-use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
 
