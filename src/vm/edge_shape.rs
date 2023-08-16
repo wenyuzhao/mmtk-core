@@ -55,14 +55,6 @@ pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash {
     fn prefetch_store(&self) {
         // no-op by default
     }
-
-    fn from_address(_address: Address) -> Self {
-        unimplemented!()
-    }
-
-    fn to_address(&self) -> Address {
-        unimplemented!()
-    }
 }
 
 /// A simple edge implementation that represents a word-sized slot where an ObjectReference value
