@@ -7,9 +7,11 @@ use super::constants::{
     LOG_GLOBAL_SIDE_METADATA_WORST_CASE_RATIO, LOG_LOCAL_SIDE_METADATA_WORST_CASE_RATIO,
 };
 use super::{SideMetadataContext, SideMetadataSpec};
+use crate::util::heap::layout::vm_layout_constants::VMLayoutConstants;
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::LOG_BYTES_IN_CHUNK;
-use crate::util::heap::layout::vm_layout_constants::{VMLayoutConstants, VM_LAYOUT_CONSTANTS};
+#[cfg(target_pointer_width = "64")]
+use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
 
 /// An internal enum to enhance code style for add/sub
 #[cfg(feature = "extreme_assertions")]
@@ -373,7 +375,7 @@ impl SideMetadataSanity {
 /// 2. Check if metadata address is out of bounds. If this fails, we will panic.
 fn verify_metadata_address_bound(spec: &SideMetadataSpec, data_addr: Address) {
     #[cfg(target_pointer_width = "32")]
-    assert_eq!(LOG_ADDRESS_SPACE, 32, "We assume we use all address space in 32 bits. This seems not true any more, we need a proper check here.");
+    assert_eq!(VMLayoutConstants::LOG_ARCH_ADDRESS_SPACE, 32, "We assume we use all address space in 32 bits. This seems not true any more, we need a proper check here.");
     #[cfg(target_pointer_width = "32")]
     let data_addr_in_address_space = true;
     #[cfg(target_pointer_width = "64")]

@@ -19,8 +19,6 @@ const MANTISSA_SHIFT: usize = EXPONENT_SHIFT + EXPONENT_BITS;
 const MANTISSA_BITS: usize = 14;
 const BASE_EXPONENT: usize = BITS_IN_INT - MANTISSA_BITS;
 
-// get_index() is only implemented for 64 bits
-#[cfg(target_pointer_width = "64")]
 const INDEX_MASK: usize = !TYPE_MASK;
 const INDEX_SHIFT: usize = TYPE_BITS;
 
@@ -94,7 +92,7 @@ impl SpaceDescriptor {
 
     #[cfg(target_pointer_width = "64")]
     pub fn get_start(self) -> Address {
-        if !VM_LAYOUT_CONSTANTS.force_use_contiguous_spaces() {
+        if !VM_LAYOUT_CONSTANTS.force_use_contiguous_spaces {
             // For 64-bit discontiguous space, use 32-bit start address
             self.get_start_32()
         } else {
@@ -119,7 +117,7 @@ impl SpaceDescriptor {
 
     #[cfg(target_pointer_width = "64")]
     pub fn get_extent(self) -> usize {
-        if !VM_LAYOUT_CONSTANTS.force_use_contiguous_spaces() {
+        if !VM_LAYOUT_CONSTANTS.force_use_contiguous_spaces {
             // For 64-bit discontiguous space, use 32-bit extent
             self.get_extent_32()
         } else {
