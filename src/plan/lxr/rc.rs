@@ -975,7 +975,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     let should_defer_dec = self.process_dead_object(o, lxr);
                     if should_defer_dec {
                         // self.deferred_dec += 1;
-                        println!("DEFER DRC {:?}", o);
+                        // println!("DEFER DRC {:?}", o);
                         return None;
                     }
                 }
