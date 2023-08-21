@@ -10,8 +10,9 @@ use crate::policy::space::{CommonSpace, Space};
 use crate::util::address::Address;
 
 use crate::util::conversions;
-use crate::util::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
+use crate::util::heap::layout::vm_layout::vm_layout;
 use crate::util::heap::PageResource;
+use crate::util::memory::MmapStrategy;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::opaque_pointer::*;
@@ -177,19 +178,19 @@ impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
             _ => unimplemented!(),
         };
         assert!(
-            total_bytes <= VM_LAYOUT_CONSTANTS.available_bytes(),
+            total_bytes <= vm_layout().available_bytes(),
             "Initial requested memory ({} bytes) overflows the heap. Max heap size is {} bytes.",
             total_bytes,
-            VM_LAYOUT_CONSTANTS.available_bytes()
+            vm_layout().available_bytes()
         );
 
         // FIXME: This space assumes that it can use the entire heap range, which is definitely wrong.
         // https://github.com/mmtk/mmtk-core/issues/314
         let space = Self {
             name: args.name,
-            cursor: Atomic::new(VM_LAYOUT_CONSTANTS.available_start()),
-            limit: VM_LAYOUT_CONSTANTS.available_start() + total_bytes,
-            start: VM_LAYOUT_CONSTANTS.available_start(),
+            cursor: Atomic::new(vm_layout().available_start()),
+            limit: vm_layout().available_start() + total_bytes,
+            start: vm_layout().available_start(),
             extent: total_bytes,
             slow_path_zeroing,
             metadata: SideMetadataContext {
@@ -200,11 +201,16 @@ impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
         };
 
         // Eagerly memory map the entire heap (also zero all the memory)
-        crate::util::memory::dzmmap_noreplace(VM_LAYOUT_CONSTANTS.available_start(), total_bytes)
+        let strategy = if *args.options.transparent_hugepages {
+            MmapStrategy::TransparentHugePages
+        } else {
+            MmapStrategy::Normal
+        };
+        crate::util::memory::dzmmap_noreplace(vm_layout().available_start(), total_bytes, strategy)
             .unwrap();
         if space
             .metadata
-            .try_map_metadata_space(VM_LAYOUT_CONSTANTS.available_start(), total_bytes)
+            .try_map_metadata_space(vm_layout().available_start(), total_bytes)
             .is_err()
         {
             // TODO(Javad): handle meta space allocation failure

@@ -196,9 +196,10 @@ macro_rules! options {
             /// This method returns false if the option string is invalid, or if it includes any invalid option.
             ///
             /// Arguments:
-            /// * `options`: a string that is key value pairs separated by white spaces, e.g. "threads=1 stress_factor=4096"
+            /// * `options`: a string that is key value pairs separated by white spaces or commas, e.g. `threads=1 stress_factor=4096`,
+            /// or `threads=1,stress_factor=4096`
             pub fn set_bulk_from_command_line(&mut self, options: &str) -> bool {
-                for opt in options.split_ascii_whitespace() {
+                for opt in options.replace(",", " ").split_ascii_whitespace() {
                     let kv_pair: Vec<&str> = opt.split('=').collect();
                     if kv_pair.len() != 2 {
                         return false;
@@ -393,8 +394,8 @@ impl NurserySize {
         }
     }
 
-    /// Returns a NurserySize or String containing error. Expects nursery size to be formatted as
-    /// "<NurseryKind>:<size in bytes>". For example, "Fixed:8192" creates a Fixed nursery of size
+    /// Returns a [`NurserySize`] or [`String`] containing error. Expects nursery size to be formatted as
+    /// `<NurseryKind>:<size in bytes>`. For example, `Fixed:8192` creates a [`NurseryKind::Fixed`] nursery of size
     /// 8192 bytes.
     pub fn parse(s: &str) -> Result<NurserySize, String> {
         let ns: Vec<&str> = s.split(':').collect();
@@ -694,7 +695,7 @@ options! {
     // The start of vmspace.
     vm_space_start:        Address              [env_var: true, command_line: true]  [always_valid] = Address::ZERO,
     // The size of vmspace.
-    vm_space_size:         usize                [env_var: true, command_line: true] [|v: &usize| *v > 0]    = usize::MAX,
+    vm_space_size:         usize                [env_var: true, command_line: true] [|v: &usize| *v > 0]    = 0xdc0_0000,
     // Perf events to measure
     // Semicolons are used to separate events
     // Each event is in the format of event_name,pid,cpu (see man perf_event_open for what pid and cpu mean).
@@ -723,6 +724,8 @@ options! {
     // Set the GC trigger. This defines the heap size and how MMTk triggers a GC.
     // Default to a fixed heap size of 0.5x physical memory.
     gc_trigger     :        GCTriggerSelector    [env_var: true, command_line: true] [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((crate::util::memory::get_system_total_memory() as f64 * 0.5f64) as usize),
+    // Enable transparent hugepage support via madvise (only Linux is supported)
+    transparent_hugepages: bool                  [env_var: true, command_line: true]  [|v: &bool| !v || cfg!(target_os = "linux")] = false,
     // Enable 35-bit heap address space (normally for compressed pointers)
     use_35bit_address_space: bool                [env_var: true, command_line: true]  [always_valid] = false
 }
@@ -1059,6 +1062,17 @@ mod tests {
         serial_test(|| {
             let mut options = Options::default();
             let success = options.set_bulk_from_command_line("no_finalizer=true stress_factor=42");
+            assert!(success);
+            assert!(*options.no_finalizer);
+            assert_eq!(*options.stress_factor, 42);
+        })
+    }
+
+    #[test]
+    fn test_process_bulk_comma_separated_valid() {
+        serial_test(|| {
+            let mut options = Options::default();
+            let success = options.set_bulk_from_command_line("no_finalizer=true,stress_factor=42");
             assert!(success);
             assert!(*options.no_finalizer);
             assert_eq!(*options.stress_factor, 42);
