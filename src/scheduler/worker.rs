@@ -213,6 +213,8 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// Entry of the worker thread. Resolve thread affinity, if it has been specified by the user.
     /// Each worker will keep polling and executing work packets in a loop.
     pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
+        #[cfg(feature = "tracing")]
+        probe!(mmtk, gcworker_run);
         WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
         let worker = self as *mut Self;
         _WORKER.with(|x| x.store(Some(self as *mut Self as *mut ()), Ordering::SeqCst));
@@ -226,13 +228,19 @@ impl<VM: VMBinding> GCWorker<VM> {
         let lower_priority_for_concurrent_work = crate::args().lower_concurrent_worker_priority;
         assert!(!lower_priority_for_concurrent_work);
         loop {
+            // Instead of having work_start and work_end tracepoints, we have
+            // one tracepoint before polling for more work and one tracepoint
+            // before executing the work.
+            // This allows measuring the distribution of both the time needed
+            // poll work (between work_poll and work), and the time needed to
+            // execute work (between work and next work_poll).
+            // If we have work_start and work_end, we cannot measure the first
+            // poll.
             #[cfg(feature = "tracing")]
             probe!(mmtk, work_poll);
             let mut work = self.poll();
-            if crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst) && work.should_defer() {
-                mmtk.scheduler.postpone_dyn(work);
-                continue;
-            }
+            // probe! expands to an empty block on unsupported platforms
+            #[allow(unused_variables)]
             #[cfg(feature = "tracing")]
             let typename = work.get_type_name();
             #[cfg(feature = "tracing")]

@@ -36,7 +36,9 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
             .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::Relaxed))
             .unwrap()
             .as_nanos();
-        crate::counters().yield_nanos.fetch_add(t, Ordering::Relaxed);
+        crate::counters()
+            .yield_nanos
+            .fetch_add(t, Ordering::Relaxed);
     }
 
     gc_log!([3]
@@ -503,6 +505,8 @@ pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThre
     );
     mmtk.scheduler.spawn_gc_threads(mmtk, tls);
     mmtk.plan.base().initialized.store(true, Ordering::SeqCst);
+    #[cfg(feature = "tracing")]
+    probe!(mmtk, collection_initialized);
 }
 
 /// Allow MMTk to trigger garbage collection when heap is full. This should only be used in pair with disable_collection().

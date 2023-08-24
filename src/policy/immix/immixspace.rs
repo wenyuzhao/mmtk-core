@@ -999,12 +999,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[allow(clippy::let_and_return)]
                 let new_object =
                     ForwardingWord::try_forward_object::<VM>(object, semantics, copy_context)
-                    .expect("to-space overflow");
+                        .expect("to-space overflow");
 
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_object_forwarded::<VM>(new_object);
-    
-                    new_object
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_object_forwarded::<VM>(new_object);
+
+                new_object
             };
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();

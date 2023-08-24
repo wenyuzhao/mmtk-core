@@ -1,4 +1,4 @@
-///! MMTk instance.
+//! MMTk instance.
 use crate::plan::Plan;
 use crate::policy::sft_map::{create_sft_map, SFTMap};
 use crate::scheduler::GCWorkScheduler;
@@ -158,6 +158,8 @@ impl<VM: VMBinding> MMTK<VM> {
     }
 
     pub fn harness_begin(&self, tls: VMMutatorThread) {
+        #[cfg(feature = "tracing")]
+        probe!(mmtk, harness_begin);
         self.plan.handle_user_collection_request(tls, true, true);
         if tls.0 .0.is_null() {
             use crate::vm::Collection;
@@ -173,6 +175,8 @@ impl<VM: VMBinding> MMTK<VM> {
         self.plan.base().stats.stop_all(self);
         crate::INSIDE_HARNESS.store(false, Ordering::SeqCst);
         self.inside_harness.store(false, Ordering::SeqCst);
+        #[cfg(feature = "tracing")]
+        probe!(mmtk, harness_end);
     }
 
     pub fn inside_harness(&'static self) -> bool {

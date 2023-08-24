@@ -5,8 +5,8 @@ use super::*;
 use crate::mmtk::MMTK;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
-use crate::util::rust_util::array_from_fn;
 use crate::util::reference_processor::PhantomRefProcessing;
+use crate::util::rust_util::array_from_fn;
 use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam::deque::{self, Injector, Steal};
@@ -483,6 +483,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
+                #[cfg(feature = "tracing")]
+                probe!(mmtk, bucket_opened, id);
                 new_packets = new_packets || !bucket.is_drained();
                 new_packets = new_packets || bucket.maybe_schedule_sentinel();
                 if new_packets {
@@ -732,8 +734,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
         first_stw_bucket.activate();
         if first_stw_bucket.is_empty()
-            && self.worker_group.parked_workers() + 1
-                == self.worker_group.worker_count()
+            && self.worker_group.parked_workers() + 1 == self.worker_group.worker_count()
         {
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
             second_stw_bucket.activate();
