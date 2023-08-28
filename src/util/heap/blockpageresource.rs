@@ -4,7 +4,7 @@ use super::{FreeListPageResource, PageResource};
 use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::constants::*;
-use crate::util::heap::layout::vm_layout_constants::*;
+use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::linear_scan::Region;

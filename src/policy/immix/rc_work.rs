@@ -8,7 +8,7 @@ use crate::{
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
         constants::LOG_BYTES_IN_PAGE,
-        heap::{chunk_map::Chunk, layout::vm_layout_constants::LOG_BYTES_IN_CHUNK, PageResource},
+        heap::{chunk_map::Chunk, layout::vm_layout::LOG_BYTES_IN_CHUNK, PageResource},
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,

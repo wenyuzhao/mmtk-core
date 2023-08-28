@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use atomic::Ordering;
 
-use super::layout::vm_layout_constants::{PAGES_IN_CHUNK, PAGES_IN_SPACE64};
+use super::layout::vm_layout::PAGES_IN_CHUNK;
 use super::layout::VMMap;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
@@ -15,7 +15,7 @@ use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::conversions;
 use crate::util::freelist;
 use crate::util::freelist::FreeList;
-use crate::util::heap::layout::vm_layout_constants::*;
+use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::memory;
@@ -88,7 +88,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
                 .saturating_sub(self.common.vm_map.get_chunk_consumer_count());
             rtn += chunks * PAGES_IN_CHUNK;
         } else if self.common.growable && cfg!(target_pointer_width = "64") {
-            rtn = PAGES_IN_SPACE64 - self.reserved_pages();
+            rtn = vm_layout().pages_in_space64() - self.reserved_pages();
         }
 
         rtn
@@ -211,7 +211,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
 
     pub fn new_discontiguous(vm_map: &'static dyn VMMap, metadata: SideMetadataContext) -> Self {
         let common_flpr = {
-            let start = VM_LAYOUT_CONSTANTS.available_start();
+            let start = vm_layout().available_start();
             let common_flpr = Box::new(CommonFreeListPageResource {
                 free_list: vm_map.create_freelist(start),
                 start,

@@ -23,7 +23,7 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::analysis::GcHookWork;
 use crate::util::constants::*;
 use crate::util::copy::*;
-use crate::util::heap::layout::vm_layout_constants::*;
+use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::{PageResource, VMRequest};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;

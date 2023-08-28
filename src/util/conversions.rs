@@ -1,5 +1,5 @@
 use crate::util::constants::*;
-use crate::util::heap::layout::vm_layout_constants::*;
+use crate::util::heap::layout::vm_layout::*;
 use crate::util::Address;
 
 /* Alignment */
@@ -39,11 +39,11 @@ pub fn bytes_to_chunks_up(bytes: usize) -> usize {
 }
 
 pub fn address_to_chunk_index(addr: Address) -> usize {
-    (addr - VM_LAYOUT_CONSTANTS.heap_start) >> LOG_BYTES_IN_CHUNK
+    (addr - vm_layout().heap_start) >> LOG_BYTES_IN_CHUNK
 }
 
 pub fn chunk_index_to_address(chunk: usize) -> Address {
-    VM_LAYOUT_CONSTANTS.heap_start + (chunk << LOG_BYTES_IN_CHUNK)
+    vm_layout().heap_start + (chunk << LOG_BYTES_IN_CHUNK)
 }
 
 pub const fn raw_align_up(val: usize, align: usize) -> usize {

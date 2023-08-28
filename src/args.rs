@@ -1,8 +1,8 @@
 use crate::{
     policy::immix::{block::Block, line::Line},
     util::{
-        constants::LOG_BYTES_IN_MBYTE, heap::layout::vm_layout_constants::VMLayoutConstants,
-        linear_scan::Region, options::Options,
+        constants::LOG_BYTES_IN_MBYTE, heap::vm_layout::vm_layout, linear_scan::Region,
+        options::Options,
     },
     BarrierSelector,
 };
@@ -223,7 +223,10 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_finalizer", *options.no_finalizer);
     dump_feature!("no_reference_types", *options.no_reference_types);
     dump_feature!("workers", *options.threads);
-    dump_feature!("address_space", VMLayoutConstants::get_address_space());
+    dump_feature!(
+        "force_use_contiguous_spaces",
+        vm_layout().force_use_contiguous_spaces
+    );
     dump_feature!("bpr_spin_lock");
     dump_feature!("lxr_no_nursery_evac");
     dump_feature!("lxr_fixed_young_size");

@@ -14,7 +14,7 @@ use crate::plan::EdgeIterator;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::{ObjectModel, VMBinding};
 
-use super::heap::layout::vm_layout_constants::VM_LAYOUT_CONSTANTS;
+use super::heap::layout::vm_layout::vm_layout;
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -293,7 +293,7 @@ impl Address {
     }
 
     /// is this address aligned to the given alignment
-    pub fn is_aligned_to(self, align: usize) -> bool {
+    pub const fn is_aligned_to(self, align: usize) -> bool {
         use crate::util::conversions;
         conversions::raw_is_aligned(self.0, align)
     }
@@ -677,14 +677,14 @@ impl ObjectReference {
         }
         debug_assert!({
             let addr = self.to_raw_address();
-            addr >= VM_LAYOUT_CONSTANTS.heap_start && addr < VM_LAYOUT_CONSTANTS.heap_end
+            addr >= vm_layout().heap_start && addr < vm_layout().heap_end
         });
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
     pub fn is_in_any_space(self) -> bool {
         let addr = self.to_raw_address();
-        if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+        if addr < vm_layout().heap_start || addr >= vm_layout().heap_end {
             return false;
         }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_in_space(self)
@@ -693,7 +693,7 @@ impl ObjectReference {
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
         let addr = self.to_raw_address();
-        if addr < VM_LAYOUT_CONSTANTS.heap_start || addr >= VM_LAYOUT_CONSTANTS.heap_end {
+        if addr < vm_layout().heap_start || addr >= vm_layout().heap_end {
             return false;
         }
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_sane()

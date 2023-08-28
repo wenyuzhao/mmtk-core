@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use strum_macros::EnumString;
 
-use super::heap::layout::vm_layout_constants::VMLayoutConstants;
+use super::heap::vm_layout::vm_layout;
 
 #[derive(Copy, Clone, EnumString, Debug)]
 pub enum NurseryZeroingOptions {
@@ -77,26 +77,36 @@ impl FromStr for PerfEventOptions {
 
 /// Get max nursery space size.
 fn max_nursery_size() -> usize {
-    if cfg!(target_pointer_width = "32")
-        || VMLayoutConstants::get_address_space().pointer_compression()
-    {
+    if cfg!(target_pointer_width = "32") || !vm_layout().force_use_contiguous_spaces {
         32 << LOG_BYTES_IN_MBYTE
     } else {
         (1 << 20) << LOG_BYTES_IN_MBYTE
     }
 }
 
-lazy_static! {
-    /// The default nursery space size.
-    pub static ref NURSERY_SIZE: usize = max_nursery_size();
-    /// The default max nursery size. This does not affect the actual space we create as nursery. It is
-    /// only used in the GC trigger check.
-    pub static ref DEFAULT_MAX_NURSERY: usize =  max_nursery_size();
-}
-
+/// The default nursery space size.
+#[cfg(target_pointer_width = "64")]
+pub const NURSERY_SIZE: usize = (1 << 20) << LOG_BYTES_IN_MBYTE;
 /// The default min nursery size. This does not affect the actual space we create as nursery. It is
 /// only used in the GC trigger check.
+#[cfg(target_pointer_width = "64")]
 pub const DEFAULT_MIN_NURSERY: usize = 2 << LOG_BYTES_IN_MBYTE;
+/// The default max nursery size. This does not affect the actual space we create as nursery. It is
+/// only used in the GC trigger check.
+#[cfg(target_pointer_width = "64")]
+pub const DEFAULT_MAX_NURSERY: usize = (1 << 20) << LOG_BYTES_IN_MBYTE;
+
+/// The default nursery space size.
+#[cfg(target_pointer_width = "32")]
+pub const NURSERY_SIZE: usize = 32 << LOG_BYTES_IN_MBYTE;
+/// The default min nursery size. This does not affect the actual space we create as nursery. It is
+/// only used in the GC trigger check.
+#[cfg(target_pointer_width = "32")]
+pub const DEFAULT_MIN_NURSERY: usize = 2 << LOG_BYTES_IN_MBYTE;
+/// The default max nursery size. This does not affect the actual space we create as nursery. It is
+/// only used in the GC trigger check.
+#[cfg(target_pointer_width = "32")]
+pub const DEFAULT_MAX_NURSERY: usize = 32 << LOG_BYTES_IN_MBYTE;
 
 fn always_valid<T>(_: &T) -> bool {
     true
@@ -381,7 +391,7 @@ pub struct NurserySize {
     /// Minimum nursery size (in bytes)
     pub min: usize,
     /// Maximum nursery size (in bytes)
-    pub max: Option<usize>,
+    pub max: usize,
 }
 
 impl NurserySize {
@@ -390,12 +400,12 @@ impl NurserySize {
             NurseryKind::Bounded => NurserySize {
                 kind,
                 min: DEFAULT_MIN_NURSERY,
-                max: Some(value),
+                max: value,
             },
             NurseryKind::Fixed => NurserySize {
                 kind,
                 min: value,
-                max: Some(value),
+                max: value,
             },
         }
     }
@@ -426,7 +436,7 @@ impl FromStr for NurserySize {
 impl Options {
     /// Return upper bound of the nursery size (in number of bytes)
     pub fn get_max_nursery_bytes(&self) -> usize {
-        self.nursery.max.unwrap_or_else(|| *DEFAULT_MAX_NURSERY)
+        self.nursery.max
     }
 
     /// Return upper bound of the nursery size (in number of pages)
@@ -457,6 +467,15 @@ impl GCTriggerSelector {
     const M: u64 = 1024 * Self::K;
     const G: u64 = 1024 * Self::M;
     const T: u64 = 1024 * Self::G;
+
+    /// get max heap size
+    pub fn max_heap_size(&self) -> usize {
+        match self {
+            Self::FixedHeapSize(s) => *s,
+            Self::DynamicHeapSize(_, s) => *s,
+            _ => unreachable!("Cannot get max heap size"),
+        }
+    }
 
     /// Parse a size representation, which could be a number to represents bytes,
     /// or a number with the suffix K/k/M/m/G/g. Return the byte number if it can be
@@ -663,8 +682,8 @@ options! {
     // Bounded nursery only controls the upper bound, whereas the size for a Fixed nursery controls
     // both the upper and lower bounds. The nursery size can be set like "Fixed:8192", for example,
     // to have a Fixed nursery size of 8192 bytes
-    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && (v.max.is_none() || v.max.unwrap() > 0) && (v.max.is_none() || v.max.unwrap() >= v.min)]
-    = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: None },
+    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && v.max > 0 && v.max >= v.min]
+        = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: DEFAULT_MAX_NURSERY },
     // Should a major GC be performed when a system GC is required?
     full_heap_system_gc:   bool                 [env_var: true, command_line: true]  [always_valid] = false,
     // Should we shrink/grow the heap to adjust to application working set? (not supported)
@@ -692,7 +711,7 @@ options! {
     // The start of vmspace.
     vm_space_start:        Address              [env_var: true, command_line: true]  [always_valid] = Address::ZERO,
     // The size of vmspace.
-    vm_space_size:         usize                [env_var: true, command_line: true] [|v: &usize| *v > 0]    = usize::MAX,
+    vm_space_size:         usize                [env_var: true, command_line: true] [|v: &usize| *v > 0]    = 0xdc0_0000,
     // Perf events to measure
     // Semicolons are used to separate events
     // Each event is in the format of event_name,pid,cpu (see man perf_event_open for what pid and cpu mean).
