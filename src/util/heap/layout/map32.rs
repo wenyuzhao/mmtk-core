@@ -268,7 +268,7 @@ impl VMMap for Map32 {
         for fl in self_mut.shared_fl_map.iter() {
             if let Some(fl) = fl {
                 #[allow(clippy::cast_ref_to_mut)]
-                #[allow(cast_ref_to_mut)]
+                #[allow(invalid_reference_casting)]
                 let fl_mut: &mut CommonFreeListPageResource = unsafe {
                     &mut *(*fl as *const CommonFreeListPageResource
                         as *mut CommonFreeListPageResource)
@@ -373,7 +373,7 @@ impl Map32 {
     /// In other cases, use mut_self_with_sync().
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
-    #[allow(cast_ref_to_mut)]
+    #[allow(invalid_reference_casting)]
     unsafe fn mut_self(&self) -> &mut Self {
         &mut *(self as *const Self as *mut Self)
     }

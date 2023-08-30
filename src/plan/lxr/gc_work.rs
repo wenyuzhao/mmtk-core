@@ -27,7 +27,7 @@ pub struct FastRCPrepare;
 impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
-        #[allow(cast_ref_to_mut)]
+        #[allow(invalid_reference_casting)]
         let lxr = unsafe { &mut *(lxr as *const LXR<VM> as *mut LXR<VM>) };
         lxr.prepare(worker.tls)
     }

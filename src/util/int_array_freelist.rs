@@ -63,7 +63,7 @@ impl IntArrayFreeList {
     fn table_mut(&mut self) -> &mut Vec<i32> {
         match self.parent {
             Some(p) => {
-                #[allow(cast_ref_to_mut)]
+                #[allow(invalid_reference_casting)]
                 let parent_mut: &mut Self =
                     unsafe { &mut *(p as *const IntArrayFreeList as *mut IntArrayFreeList) };
                 parent_mut.table_mut()

@@ -51,7 +51,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
-        #[allow(cast_ref_to_mut)]
+        #[allow(invalid_reference_casting)]
         let plan_mut: &mut C::PlanType =
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.prepare(worker.tls);
@@ -133,7 +133,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
 
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
-        #[allow(cast_ref_to_mut)]
+        #[allow(invalid_reference_casting)]
         let plan_mut: &mut C::PlanType =
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.release(worker.tls);
@@ -351,7 +351,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
 
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
-        #[allow(cast_ref_to_mut)]
+        #[allow(invalid_reference_casting)]
         let plan_mut: &mut dyn Plan<VM = VM> = unsafe { &mut *(&*mmtk.plan as *const _ as *mut _) };
         plan_mut.end_of_gc(worker.tls);
 

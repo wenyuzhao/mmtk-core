@@ -135,7 +135,7 @@ impl VMMap for Map64 {
         /* Grow the free list to accommodate the new chunks */
         let free_list = self.fl_map[Self::space_index(descriptor.get_start()).unwrap()];
         if let Some(free_list) = free_list {
-            #[allow(cast_ref_to_mut)]
+            #[allow(invalid_reference_casting)]
             let free_list =
                 unsafe { &mut *(free_list as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
             free_list.grow_freelist(conversions::bytes_to_pages(extent) as _);
@@ -184,7 +184,7 @@ impl VMMap for Map64 {
         for pr in 0..MAX_SPACES {
             if let Some(fl) = self_mut.fl_map[pr] {
                 #[allow(clippy::cast_ref_to_mut)]
-                #[allow(cast_ref_to_mut)]
+                #[allow(invalid_reference_casting)]
                 let fl_mut: &mut RawMemoryFreeList =
                     unsafe { &mut *(fl as *const RawMemoryFreeList as *mut RawMemoryFreeList) };
                 fl_mut.grow_freelist(0);
@@ -199,7 +199,7 @@ impl VMMap for Map64 {
         for pr in 0..MAX_SPACES {
             if let Some(fl) = self_mut.fl_page_resources[pr] {
                 #[allow(clippy::cast_ref_to_mut)]
-                #[allow(cast_ref_to_mut)]
+                #[allow(invalid_reference_casting)]
                 let fl_mut: &mut CommonFreeListPageResource = unsafe {
                     &mut *(fl as *const CommonFreeListPageResource
                         as *mut CommonFreeListPageResource)
@@ -235,7 +235,7 @@ impl Map64 {
     /// In other cases, use mut_self_with_sync().
     #[allow(clippy::cast_ref_to_mut)]
     #[allow(clippy::mut_from_ref)]
-    #[allow(cast_ref_to_mut)]
+    #[allow(invalid_reference_casting)]
     unsafe fn mut_self(&self) -> &mut Self {
         &mut *(self as *const Self as *mut Self)
     }
