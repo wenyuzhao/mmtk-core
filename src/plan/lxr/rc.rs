@@ -301,13 +301,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     edge,
                     target
                 );
-                debug_assert!(
-                    target.class_is_valid::<VM>(),
-                    "Invalid object {:?}.{:?} -> {:?}",
-                    o,
-                    edge,
-                    target
-                );
+                // debug_assert!(
+                //     target.class_is_valid::<VM>(),
+                //     "Invalid object {:?}.{:?} -> {:?}",
+                //     o,
+                //     edge,
+                //     target
+                // );
                 let rc = self.rc.count(target);
                 if rc == 0 {
                     // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);

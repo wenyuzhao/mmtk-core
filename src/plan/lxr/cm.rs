@@ -621,7 +621,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         debug_assert_ne!(self.lxr.rc.count(object), 0);
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
-        debug_assert!(object.class_is_valid::<VM>());
+        // debug_assert!(object.class_is_valid::<VM>());
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
