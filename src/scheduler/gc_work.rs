@@ -1,3 +1,6 @@
+use atomic::Ordering;
+use portable_atomic::AtomicUsize;
+
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::GcStatus;
@@ -191,6 +194,8 @@ impl<C: GCWorkContext> StopMutators<C> {
     }
 }
 
+static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
+
 impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("stop_all_mutators start");
@@ -202,6 +207,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                 .add(ScanMutatorRoots::<C>(mutator));
         });
         trace!("stop_all_mutators end");
+        RESERVED_PAGES_AT_GC_START.store(mmtk.get_plan().get_reserved_pages(), Ordering::SeqCst);
         mmtk.scheduler.notify_mutators_paused(mmtk);
         mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanVMSpecificRoots::<C>::new());
     }
@@ -214,6 +220,14 @@ pub struct EndOfGC {
 
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if true {
+            println!(
+                "GC finished. {}M->{}M({}M) ",
+                RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,
+                mmtk.get_plan().get_reserved_pages() / 256,
+                mmtk.get_plan().get_total_pages() / 256,
+            );
+        }
         info!(
             "End of GC ({}/{} pages, took {} ms)",
             mmtk.get_plan().get_reserved_pages(),
