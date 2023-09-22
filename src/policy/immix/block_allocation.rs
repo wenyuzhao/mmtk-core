@@ -155,6 +155,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
         const PARALLEL_STW_SWEEPING: bool = false;
         let max_stw_sweep_blocks: usize = if cfg!(feature = "lxr_no_lazy_young_sweeping")
+            || cfg!(feature = "lxr_no_lazy")
             || pause == Pause::FinalMark
             || pause == Pause::Full
         {
