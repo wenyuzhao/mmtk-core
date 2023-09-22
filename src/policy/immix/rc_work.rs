@@ -297,7 +297,6 @@ pub(super) struct PrepareChunk {
     pub chunk: Chunk,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
-    pub defrag_threshold: Option<usize>,
 }
 
 impl PrepareChunk {
@@ -312,7 +311,6 @@ impl PrepareChunk {
 
 impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let defrag_threshold = self.defrag_threshold.unwrap_or(0);
         if !self.rc_enabled {
             Self::reset_object_mark::<VM>(self.chunk);
         }
@@ -331,12 +329,8 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
                 block.initialize_field_unlog_table_as_unlogged::<VM>();
                 unreachable!();
             }
-            // Check if this block needs to be defragmented.
-            if super::DEFRAG && defrag_threshold != 0 && block.get_holes() > defrag_threshold {
-                block.set_as_defrag_source(true);
-            } else if !self.rc_enabled {
-                block.set_as_defrag_source(false);
-            }
+            // Clear defrag state
+            block.set_as_defrag_source(false);
             // Clear block mark data.
             if block.get_state() != BlockState::Nursery {
                 block.set_state(BlockState::Unmarked);
@@ -444,7 +438,7 @@ impl MatureEvacuationSet {
         }
     }
 
-    pub fn select_mature_evacuation_candidates<VM: VMBinding>(
+    fn select_mature_evacuation_candidates<VM: VMBinding>(
         &self,
         lxr: &LXR<VM>,
         _pause: Pause,

@@ -485,7 +485,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     unimplemented!("cyclic mark bits is not supported at the moment");
             // }
             // Reset block mark and object mark table.
-            let work_packets = self.generate_prepare_tasks(None);
+            let work_packets = self.generate_lxr_full_trace_prepare_tasks();
             self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
         }
     }
@@ -734,16 +734,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep work packets.
-    pub fn generate_prepare_tasks(
-        &self,
-        defrag_threshold: Option<usize>,
-    ) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
         let rc_enabled = self.rc_enabled;
         let cm_enabled = self.cm_enabled;
         self.chunk_map.generate_tasks(|chunk| {
             Box::new(PrepareChunk {
                 chunk,
-                defrag_threshold,
                 rc_enabled,
                 cm_enabled,
             })
