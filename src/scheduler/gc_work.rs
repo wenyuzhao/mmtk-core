@@ -310,12 +310,13 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 _ => "Full",
             };
             gc_log!([2]
-                "GC({}) {} finished. {}M->{}M({}M) pause-time={:.3}ms",
+                "GC({}) {} finished. {}M->{}M({}M) used={}M pause-time={:.3}ms",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
                 pause,
                 crate::RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,
                 mmtk.plan.get_reserved_pages() / 256,
                 mmtk.plan.get_total_pages() / 256,
+                mmtk.plan.get_used_pages() / 256,
                 pause_time
             );
             crate::RESERVED_PAGES_AT_GC_END.store(mmtk.plan.get_reserved_pages(), Ordering::SeqCst);

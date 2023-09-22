@@ -242,6 +242,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_map_fixed_noreplace");
     dump_feature!("report_worker_sleep_events");
     dump_feature!("no_meta_counting");
+    dump_feature!("lxr_no_srv_copy_reserve");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 

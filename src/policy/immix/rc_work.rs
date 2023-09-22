@@ -330,7 +330,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
                 unreachable!();
             }
             // Clear defrag state
-            block.set_as_defrag_source(false);
+            assert!(!block.is_defrag_source());
             // Clear block mark data.
             if block.get_state() != BlockState::Nursery {
                 block.set_state(BlockState::Unmarked);
