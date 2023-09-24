@@ -46,6 +46,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
+    pub young_alloc_size: AtomicUsize,
     pub rc_enabled: bool,
     rc: RefCountHelper<VM>,
     pub is_end_of_satb_or_full_gc: bool,
@@ -95,6 +96,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
         if self.rc_enabled {
+            self.young_alloc_size.fetch_add(bytes, Ordering::Relaxed);
             debug_assert!(alloc);
             // Add to object set
             self.rc_nursery_objects.push(object);
@@ -220,8 +222,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_nursery_objects: Default::default(),
             rc_mature_objects: Default::default(),
             rc_dead_objects: Default::default(),
-            num_pages_released_lazy: AtomicUsize::new(0),
-            rc_killed_bytes: AtomicUsize::new(0),
+            num_pages_released_lazy: Default::default(),
+            rc_killed_bytes: Default::default(),
+            young_alloc_size: Default::default(),
             rc_enabled: false,
             rc: RefCountHelper::NEW,
             is_end_of_satb_or_full_gc: false,
@@ -293,6 +296,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
         self.num_pages_released_lazy.store(0, Ordering::Relaxed);
         self.rc_killed_bytes.store(0, Ordering::Relaxed);
+        self.young_alloc_size.store(0, Ordering::Relaxed);
         if self.rc_enabled {
             return;
         }

@@ -67,8 +67,10 @@ pub struct ImmixSpace<VM: VMBinding> {
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    pub num_clean_blocks_released: AtomicUsize,
+    pub num_clean_blocks_released_young: AtomicUsize,
+    pub num_clean_blocks_released_mature: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
+    pub copy_alloc_bytes: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
     pub remset: RemSet<VM>,
     pub cm_enabled: bool,
@@ -214,6 +216,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, _object: ObjectReference, _bytes: usize, _alloc: bool) {
+        self.copy_alloc_bytes.store(0, Ordering::SeqCst);
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit::<VM>(_object);
     }
@@ -417,8 +420,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
             mature_evac_remsets: Default::default(),
-            num_clean_blocks_released: Default::default(),
+            num_clean_blocks_released_young: Default::default(),
+            num_clean_blocks_released_mature: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
+            copy_alloc_bytes: Default::default(),
             rc_killed_bytes: Default::default(),
             cm_enabled: false,
             rc_enabled,
@@ -498,9 +503,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
-        self.num_clean_blocks_released.store(0, Ordering::SeqCst);
+        self.num_clean_blocks_released_young
+            .store(0, Ordering::SeqCst);
+        self.num_clean_blocks_released_mature
+            .store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
+        self.copy_alloc_bytes.store(0, Ordering::SeqCst);
         self.rc_killed_bytes.store(0, Ordering::SeqCst);
         debug_assert_ne!(pause, Pause::FullDefrag);
         if pause == Pause::InitialMark || pause == Pause::Full {
@@ -561,6 +570,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "    - ({:.3}ms) sweep_mutator_reused_blocks finish",
             crate::gc_start_time_ms(),
         );
+        if cfg!(feature = "lxr_log_reclaim") {
+            gc_log!([3]
+                " - copy alloc size {}({}M)",
+                self.copy_alloc_bytes.load( Ordering::Relaxed),
+                self.copy_alloc_bytes.load( Ordering::Relaxed) >> 20,
+            );
+        }
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
@@ -777,8 +793,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
             block.clear_field_unlog_table::<VM>();
         }
-        self.num_clean_blocks_released
-            .fetch_add(1, Ordering::Relaxed);
         block.deinit(self);
         crate::stat(|s| {
             if nursery {
@@ -1434,6 +1448,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Post copy routine for Immix copy contexts
     fn post_copy(&self, object: ObjectReference, _bytes: usize) {
         if self.rc_enabled {
+            if cfg!(feature = "lxr_log_reclaim") {
+                self.copy_alloc_bytes.fetch_add(_bytes, Ordering::Relaxed);
+            }
             return;
         }
         // Mark the object

@@ -2,7 +2,7 @@ use super::block::BlockState;
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
 use crate::scheduler::WorkBucketStage;
-use crate::util::constants::LOG_BYTES_IN_PAGE;
+use crate::util::constants::{LOG_BYTES_IN_MBYTE, LOG_BYTES_IN_PAGE};
 use crate::{
     plan::lxr::LXR,
     policy::space::Space,
@@ -178,11 +178,15 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             #[cfg(feature = "lxr_release_stage_timer")]
             gc_log!([3] "    - Process {}/{} young blocks in the pause (single-thread)", stw_limit, total_nursery_blocks);
             // 1. STW release a limited number of blocks
+            let mut num_blocks_released = 0;
             for b in &blocks[0..stw_limit] {
                 let block = b.load(Ordering::Relaxed);
                 debug_assert_ne!(block.get_state(), super::block::BlockState::Unallocated);
-                block.rc_sweep_nursery(space, true);
+                if block.rc_sweep_nursery(space, true) {
+                    num_blocks_released+=1;
+                }
             }
+            self.space().num_clean_blocks_released_young.fetch_add(num_blocks_released, Ordering::Relaxed);
             // 2. Release remaining blocks concurrently after the pause
             if total_nursery_blocks > stw_limit {
                 let packets = blocks[stw_limit..total_nursery_blocks]
@@ -197,6 +201,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
         });
         self.nursery_blocks.reset();
+        if !PARALLEL_STW_SWEEPING {
+            gc_log!([3] " - released young blocks since gc start {}({}M)", self.space().num_clean_blocks_released_young.load(Ordering::Relaxed), self.space().num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+        }
     }
 
     fn parallel_sweep_all_nursery_blocks(
@@ -304,6 +311,9 @@ impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
             }
         }
         space
+            .num_clean_blocks_released_young
+            .fetch_add(released_blocks, Ordering::SeqCst);
+        space
             .num_clean_blocks_released_lazy
             .fetch_add(released_blocks, Ordering::SeqCst);
     }
@@ -326,8 +336,14 @@ impl RCSTWSweepNurseryBlocks {
 impl<VM: VMBinding> GCWork<VM> for RCSTWSweepNurseryBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        let mut num_blocks_released = 0;
         for block in &self.blocks {
-            block.rc_sweep_nursery(space, false);
+            if block.rc_sweep_nursery(space, false) {
+                num_blocks_released += 1;
+            }
         }
+        space
+            .num_clean_blocks_released_young
+            .fetch_add(num_blocks_released, Ordering::Relaxed);
     }
 }

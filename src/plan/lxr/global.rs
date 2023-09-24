@@ -258,14 +258,22 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.gc_cause.load(Ordering::SeqCst)
         };
         gc_log!([3] "GC({}) GC Cause {:?}", crate::GC_EPOCH.load(Ordering::SeqCst), gc_cause);
+        let alloc_ix = self
+            .immix_space
+            .block_allocation
+            .total_young_allocation_in_bytes();
+        let alloc_los = self.los().young_alloc_size.load(Ordering::Relaxed);
+        let alloc_total = alloc_los + alloc_ix;
         gc_log!([2]
-            "GC({}) {:?} start. incs={} young-alloc={}M young-clean-blocks={}({}M)",
+            "GC({}) {:?} start. incs={} young-alloc={}M young-alloc-ix={}M young-clean-blocks={}({}M)  young-alloc-los={}M",
             crate::GC_EPOCH.load(Ordering::SeqCst),
             pause,
             self.rc.inc_buffer_size(),
-            self.immix_space.block_allocation.total_young_allocation_in_bytes() >> LOG_BYTES_IN_MBYTE,
+            alloc_total >> LOG_BYTES_IN_MBYTE,
+            alloc_ix >> LOG_BYTES_IN_MBYTE,
             self.immix_space.block_allocation.clean_nursery_blocks(),
             self.immix_space.block_allocation.clean_nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
+            alloc_los >> LOG_BYTES_IN_MBYTE,
         );
         match pause {
             Pause::Full => self
@@ -499,6 +507,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 crate::report_and_reset_live_bytes();
             }
         }
+        gc_log!([3] " - released young blocks since gc start {}({}M)", self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -1085,6 +1094,8 @@ impl<VM: VMBinding> LXR<VM> {
                     format!("{}G", total_released_bytes >> 30)
                 }
             );
+            gc_log!([3] " - released young blocks since gc start {}({}M)", lxr.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), lxr.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+            gc_log!([3] " - released mature blocks {}({}M)", lxr.immix_space.num_clean_blocks_released_mature.load(Ordering::Relaxed), lxr.immix_space.num_clean_blocks_released_mature.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
             if cfg!(feature = "lxr_log_reclaim") {
                 let rc_killed_ix = lxr.immix_space.rc_killed_bytes.load(Ordering::SeqCst);
                 let rc_killed_los = lxr.los().rc_killed_bytes.load(Ordering::SeqCst);
