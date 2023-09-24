@@ -72,7 +72,7 @@ impl Default for RuntimeArgs {
             concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(100),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
-            max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(1024),
+            max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(usize::MAX),
             rc_stop_percent: env_arg("RC_STOP_PERCENT").unwrap_or(5),
             max_survival_mb: if cfg!(feature = "lxr_fixed_rc_trigger")
                 || cfg!(feature = "lxr_fixed_clean_rc_trigger")
