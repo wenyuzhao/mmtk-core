@@ -45,6 +45,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_mature_objects: Mutex<HashSet<ObjectReference>>,
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
+    pub rc_killed_bytes: AtomicUsize,
     pub rc_enabled: bool,
     rc: RefCountHelper<VM>,
     pub is_end_of_satb_or_full_gc: bool,
@@ -220,6 +221,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_mature_objects: Default::default(),
             rc_dead_objects: Default::default(),
             num_pages_released_lazy: AtomicUsize::new(0),
+            rc_killed_bytes: AtomicUsize::new(0),
             rc_enabled: false,
             rc: RefCountHelper::NEW,
             is_end_of_satb_or_full_gc: false,
@@ -290,6 +292,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.mark_state = MARK_BIT - self.mark_state;
         }
         self.num_pages_released_lazy.store(0, Ordering::Relaxed);
+        self.rc_killed_bytes.store(0, Ordering::Relaxed);
         if self.rc_enabled {
             return;
         }

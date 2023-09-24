@@ -69,6 +69,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     pub num_clean_blocks_released: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
+    pub rc_killed_bytes: AtomicUsize,
     pub remset: RemSet<VM>,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
@@ -418,6 +419,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mature_evac_remsets: Default::default(),
             num_clean_blocks_released: Default::default(),
             num_clean_blocks_released_lazy: Default::default(),
+            rc_killed_bytes: Default::default(),
             cm_enabled: false,
             rc_enabled,
             is_end_of_satb_or_full_gc: false,
@@ -499,6 +501,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.num_clean_blocks_released.store(0, Ordering::SeqCst);
         self.num_clean_blocks_released_lazy
             .store(0, Ordering::SeqCst);
+        self.rc_killed_bytes.store(0, Ordering::SeqCst);
         debug_assert_ne!(pause, Pause::FullDefrag);
         if pause == Pause::InitialMark || pause == Pause::Full {
             // Select mature evacuation set

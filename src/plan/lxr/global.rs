@@ -1085,6 +1085,19 @@ impl<VM: VMBinding> LXR<VM> {
                     format!("{}G", total_released_bytes >> 30)
                 }
             );
+            if cfg!(feature = "lxr_log_reclaim") {
+                let rc_killed_ix = lxr.immix_space.rc_killed_bytes.load(Ordering::SeqCst);
+                let rc_killed_los = lxr.los().rc_killed_bytes.load(Ordering::SeqCst);
+                gc_log!([2]
+                    " - rc-killed={}({}M) rc-killed-ix={}({}M) rc-killed-los={}({}M)",
+                    (rc_killed_ix + rc_killed_los),
+                    (rc_killed_ix + rc_killed_los) / 1024 / 1024,
+                    rc_killed_ix,
+                    rc_killed_ix / 1024 / 1024,
+                    rc_killed_los,
+                    rc_killed_los / 1024 / 1024,
+                );
+            }
             gc_log!([2]
                 " - num_clean_blocks_released_lazy = {}",
                 lxr.immix_space

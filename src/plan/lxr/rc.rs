@@ -874,7 +874,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[cold]
-    fn process_dead_object(&mut self, o: ObjectReference, immix: &LXR<VM>) {
+    fn process_dead_object(&mut self, o: ObjectReference, lxr: &LXR<VM>) {
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -882,7 +882,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             s.dead_mature_rc_objects += 1;
             s.dead_mature_rc_volume += o.get_size::<VM>();
 
-            if !immix.immix_space.in_space(o) {
+            if !lxr.immix_space.in_space(o) {
                 s.dead_mature_los_objects += 1;
                 s.dead_mature_los_volume += o.get_size::<VM>();
 
@@ -891,7 +891,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         if self.concurrent_marking_in_progress {
-            let marked = immix.mark(o);
+            let marked = lxr.mark(o);
             if cfg!(feature = "lxr_satb_live_bytes_counter") && marked {
                 crate::record_live_bytes(o.get_size::<VM>());
             }
@@ -916,9 +916,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                             self.recursive_dec(x);
                         }
                     } else {
-                        self.record_mature_evac_remset(immix, edge, x);
+                        self.record_mature_evac_remset(lxr, edge, x);
                     }
-                    if self.concurrent_marking_in_progress && !immix.is_marked(x) {
+                    if self.concurrent_marking_in_progress && !lxr.is_marked(x) {
                         if cfg!(any(feature = "sanity", debug_assertions)) {
                             assert!(
                                 x.to_address::<VM>().is_mapped(),
@@ -936,7 +936,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 }
             });
         }
-        let in_ix_space = immix.immix_space.in_space(o);
+        let in_ix_space = lxr.immix_space.in_space(o);
         if !crate::args::HOLE_COUNTING && in_ix_space {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
@@ -947,12 +947,21 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             unsafe { o.to_address::<VM>().store(0xdeadusize) };
         }
         if in_ix_space {
+            if cfg!(feature = "lxr_log_reclaim") {
+                lxr.immix_space
+                    .rc_killed_bytes
+                    .fetch_add(o.get_size::<VM>(), Ordering::Relaxed);
+            }
             let block = Block::containing::<VM>(o);
-            immix
-                .immix_space
+            lxr.immix_space
                 .add_to_possibly_dead_mature_blocks(block, false);
         } else {
-            immix.los().rc_free(o);
+            if cfg!(feature = "lxr_log_reclaim") {
+                lxr.los()
+                    .rc_killed_bytes
+                    .fetch_add(o.get_size::<VM>(), Ordering::Relaxed);
+            }
+            lxr.los().rc_free(o);
         }
     }
 

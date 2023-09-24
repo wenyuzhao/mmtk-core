@@ -104,7 +104,7 @@ ix_block_only = []
 ix_no_defrag = []
 ix_retry_small_object_alloc = []
 
-# LXR Paraleters
+# LXR Parameters
 lxr_los_16k = []
 lxr_los_32k = []
 lxr_block_16k = []
@@ -165,6 +165,7 @@ log_outstanding_packets = []
 log_all_inc_packets = []
 lxr_no_srv_copy_reserve = []
 lxr_abort_on_trace = []
+lxr_log_reclaim = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
