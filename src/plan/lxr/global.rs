@@ -729,7 +729,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
         // Either final mark pause or full pause for emergency GC
         if emergency
-            || self.base().is_user_triggered_collection()
+            || (self.base().is_user_triggered_collection() && !cfg!(feature = "lxr_abort_on_trace"))
             || self
                 .next_gc_may_perform_emergency_collection
                 .load(Ordering::Relaxed)
