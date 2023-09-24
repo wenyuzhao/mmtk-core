@@ -164,7 +164,10 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                 );
             }
         }
-        if count != 0 && lxr.current_pause().is_none() {
+        if count != 0
+            && (lxr.current_pause().is_none()
+                || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
+        {
             lxr.immix_space
                 .num_clean_blocks_released_lazy
                 .fetch_add(count, Ordering::Relaxed);

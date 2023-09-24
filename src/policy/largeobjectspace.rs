@@ -8,6 +8,7 @@ use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
+use crate::scheduler::WorkBucketStage;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
@@ -570,7 +571,10 @@ impl RCReleaseMatureLOS {
             .plan
             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
             .unwrap();
-        if total_released_pages != 0 && lxr.current_pause().is_none() {
+        if total_released_pages != 0
+            && (lxr.current_pause().is_none()
+                || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
+        {
             los.num_pages_released_lazy
                 .fetch_add(total_released_pages, Ordering::Relaxed);
         }
