@@ -164,6 +164,7 @@ report_worker_sleep_events = []
 log_outstanding_packets = []
 log_all_inc_packets = []
 lxr_no_srv_copy_reserve = []
+lxr_abort_on_trace = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

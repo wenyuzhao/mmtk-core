@@ -901,6 +901,9 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if cfg!(feature = "lxr_abort_on_trace") {
+            panic!("ERROR: OutOfMemory");
+        }
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
@@ -912,6 +915,9 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if cfg!(feature = "lxr_abort_on_trace") {
+            panic!("ERROR: OutOfMemory");
+        }
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
@@ -934,6 +940,9 @@ impl<VM: VMBinding> LXR<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
+        if cfg!(feature = "lxr_abort_on_trace") {
+            panic!("ERROR: OutOfMemory");
+        }
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
