@@ -9,6 +9,7 @@ use crate::policy::gc_work::TraceKind;
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
+use crate::policy::sft_map::SFTMap;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::copy::*;
@@ -247,9 +248,12 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
-    fn initialize_sft(&self) {
-        self.common()
-            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata);
+    fn initialize_sft(&self, sft_map: &mut dyn SFTMap) {
+        self.common().initialize_sft(
+            self.as_sft(),
+            sft_map,
+            &self.get_page_resource().common().metadata,
+        );
         // Initialize the block queues in `reusable_blocks` and `pr`.
         self.block_allocation.init(self);
     }

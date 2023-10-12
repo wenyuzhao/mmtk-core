@@ -111,9 +111,12 @@ impl<VM: VMBinding> Space<VM> for MarkCompactSpace<VM> {
         &self.common
     }
 
-    fn initialize_sft(&self) {
-        self.common()
-            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
+    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
+        self.common().initialize_sft(
+            self.as_sft(),
+            sft_map,
+            &self.get_page_resource().common().metadata,
+        )
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
