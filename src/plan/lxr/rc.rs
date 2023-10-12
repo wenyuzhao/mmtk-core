@@ -698,7 +698,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::Full {
                 if !root_edges.is_empty() {
-                    let mut w = LXRStopTheWorldProcessEdges::new(root_edges, true, mmtk);
+                    let mut w = LXRStopTheWorldProcessEdges::new(
+                        root_edges,
+                        true,
+                        mmtk,
+                        WorkBucketStage::Closure,
+                    );
                     w.root_kind = self.root_kind;
                     worker.add_work(WorkBucketStage::Closure, w)
                 }
@@ -1049,9 +1054,14 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     const RC_ROOTS: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
         debug_assert!(roots);
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         Self { base }
     }
 

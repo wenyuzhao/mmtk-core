@@ -217,14 +217,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.affinity.resolve_affinity(thread);
     }
 
-    pub fn schedule_common_work_no_refs<C: GCWorkContext<VM = VM> + 'static>(
+    pub fn schedule_common_work_no_refs<C: GCWorkContext<VM = VM>>(
         &self,
         plan: &'static C::PlanType,
     ) {
         use crate::scheduler::gc_work::*;
         // Stop & scan mutators (mutator scanning can happen before STW)
-        self.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<C::ProcessEdgesWorkType>::new());
+        self.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<C>::new());
 
         // Prepare global/collectors/mutators
         self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new(plan));

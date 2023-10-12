@@ -887,12 +887,13 @@ impl<VM: VMBinding> LXR<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<LXRGCWorkContext<E<VM>>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -902,11 +903,11 @@ impl<VM: VMBinding> LXR<VM> {
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
+            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+            .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -922,12 +923,12 @@ impl<VM: VMBinding> LXR<VM> {
         }
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
+            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+            .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
@@ -946,13 +947,14 @@ impl<VM: VMBinding> LXR<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<LXRGCWorkContext<E>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+            .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
