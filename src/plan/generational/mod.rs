@@ -69,6 +69,7 @@ pub static GEN_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
         crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
         crate::util::options::NURSERY_SIZE,
     ),
+    needs_prepare_mutator: false,
     ..PlanConstraints::default()
 });
 

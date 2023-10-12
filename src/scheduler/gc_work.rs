@@ -57,7 +57,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             unsafe { &mut *(self.plan as *const C::PlanType as *mut C::PlanType) };
         plan_mut.prepare(worker.tls);
 
-        if !plan_mut.no_mutator_prepare_release() {
+        if !plan_mut.no_mutator_prepare_release() && plan_mut.constraints().needs_prepare_mutator {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));

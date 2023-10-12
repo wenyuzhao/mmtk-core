@@ -54,6 +54,7 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     } else {
         BarrierSelector::NoBarrier
     },
+    needs_prepare_mutator: false,
     ..PlanConstraints::default()
 };
 

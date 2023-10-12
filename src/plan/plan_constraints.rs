@@ -36,6 +36,10 @@ pub struct PlanConstraints {
     /// For plans that use those policies, they should set this as true.
     pub needs_forward_after_liveness: bool,
     pub rc_enabled: bool,
+    /// Some (in fact, most) plans do nothing when preparing mutators before tracing (i.e. in
+    /// `MutatorConfig::prepare_func`).  Those plans can set this to `false` so that the
+    /// `PrepareMutator` work packets will not be created at all.
+    pub needs_prepare_mutator: bool,
 }
 
 impl PlanConstraints {
@@ -56,6 +60,7 @@ impl PlanConstraints {
             needs_field_log_bit: false,
             barrier: BarrierSelector::NoBarrier,
             rc_enabled: false,
+            needs_prepare_mutator: true,
         }
     }
 }
