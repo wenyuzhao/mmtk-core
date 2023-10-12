@@ -9,6 +9,7 @@ use super::layout::vm_layout::PAGES_IN_CHUNK;
 use super::layout::VMMap;
 use super::pageresource::{PRAllocFail, PRAllocResult};
 use super::PageResource;
+use crate::mmtk::MMAPPER;
 use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::alloc::embedded_meta_data::*;
