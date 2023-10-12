@@ -42,6 +42,8 @@ pub const MARKCOMPACT_CONSTRAINTS: PlanConstraints = PlanConstraints {
     gc_header_words: 1,
     num_specialized_scans: 2,
     needs_forward_after_liveness: true,
+    max_non_los_default_alloc_bytes:
+        crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
     ..PlanConstraints::default()
 };
 
@@ -99,7 +101,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
             .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
         // do another trace to update references
-        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new());
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new(self));
         scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.mc_space));
 
         // Release global/collectors/mutators
