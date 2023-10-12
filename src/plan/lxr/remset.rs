@@ -131,7 +131,11 @@ pub struct FlushMatureEvacRemsets;
 
 impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix_space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        let immix_space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
         immix_space.remset.flush_all(immix_space);
         immix_space.process_mature_evacuation_remset();
     }

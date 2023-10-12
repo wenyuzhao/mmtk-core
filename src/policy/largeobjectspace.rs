@@ -548,7 +548,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        let los = mmtk.plan.common().get_los();
+        let los = mmtk.get_plan().common().get_los();
         los.sweep_rc_mature_objects(true, &|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
     }
 }
@@ -563,7 +563,7 @@ impl RCReleaseMatureLOS {
     }
 
     fn do_work_impl<VM: VMBinding>(&self, mmtk: &'static crate::MMTK<VM>) {
-        let los = mmtk.plan.common().get_los();
+        let los = mmtk.get_plan().common().get_los();
         let mut mature_objects = los.rc_mature_objects.lock();
         let mut total_released_pages = 0;
         while let Some(o) = los.rc_dead_objects.pop() {
@@ -575,7 +575,7 @@ impl RCReleaseMatureLOS {
             }
         }
         let lxr = mmtk
-            .plan
+            .get_plan()
             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
             .unwrap();
         if total_released_pages != 0

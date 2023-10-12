@@ -37,7 +37,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
         }
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -55,7 +55,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
         }
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -75,7 +75,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
         let plan = GCWorker::<VM>::current()
             .mmtk
-            .plan
+            .get_plan()
             .downcast_ref::<LXR<VM>>()
             .unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
@@ -98,7 +98,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         slice: VM::VMMemorySlice,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,

@@ -280,7 +280,11 @@ impl RCLazySweepMutatorReusedBlocks {
 
 impl<VM: VMBinding> GCWork<VM> for RCLazySweepMutatorReusedBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        let space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
         for block in &self.blocks {
             space.add_to_possibly_dead_mature_blocks(*block, false);
         }
@@ -303,7 +307,11 @@ impl RCLazySweepNurseryBlocks {
 
 impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        let space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
         let mut released_blocks = 0;
         for block in &self.blocks {
             if block.rc_sweep_nursery(space, false) {
@@ -335,7 +343,11 @@ impl RCSTWSweepNurseryBlocks {
 
 impl<VM: VMBinding> GCWork<VM> for RCSTWSweepNurseryBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let space = &mmtk.plan.downcast_ref::<LXR<VM>>().unwrap().immix_space;
+        let space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
         let mut num_blocks_released = 0;
         for block in &self.blocks {
             if block.rc_sweep_nursery(space, false) {

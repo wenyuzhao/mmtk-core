@@ -27,7 +27,7 @@ pub struct MatureSweeping;
 
 impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         lxr.immix_space
             .schedule_mature_sweeping(lxr.current_pause().unwrap())
     }
@@ -45,7 +45,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let is_emergency_gc = lxr.current_pause().unwrap() == Pause::Full;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
@@ -123,7 +123,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 .select_mature_evacuation_candidates(
                     lxr,
                     lxr.current_pause().unwrap(),
-                    mmtk.plan.get_total_pages(),
+                    mmtk.get_plan().get_total_pages(),
                 )
         }
     }
@@ -145,7 +145,7 @@ impl SweepBlocksAfterDecs {
 
 impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         if self.blocks.is_empty() {
             return;
         }
@@ -261,7 +261,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
         for block in self
             .chunk
