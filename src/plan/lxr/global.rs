@@ -303,7 +303,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         #[cfg(feature = "analysis")]
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         // Resume mutators
-        if pause == Pause::Full || pause == Pause::FinalMark {
+        if pause == Pause::Full || pause == Pause::FinalMark || cfg!(feature = "rc_verify") {
             #[cfg(feature = "sanity")]
             scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
         }
@@ -341,6 +341,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        println!(
+            "[GC] RC Live Size: {}",
+            crate::RC_LIVE_SIZE.load(Ordering::Relaxed)
+        );
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
         if pause == Pause::FinalMark || pause == Pause::Full {
@@ -541,6 +545,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn discover_reference(&self, reference: ObjectReference, referent: ObjectReference) {
         // Keep weak references and referents alive during SATB.
         // They can only be swept by mature sweeping.
+        unreachable!();
         let _ = self.rc.inc(reference);
         let _ = self.rc.inc(referent);
     }

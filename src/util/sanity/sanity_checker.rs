@@ -3,12 +3,13 @@ use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
+use crate::util::rc::{RefCountHelper, MAX_REF_COUNT};
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
 use crate::MMTK;
 use crate::{scheduler::*, ObjectQueue};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -20,6 +21,7 @@ pub struct SanityChecker<ES: Edge> {
     root_edges: Vec<Vec<ES>>,
     /// Cached root nodes for sanity root scanning
     root_nodes: Vec<Vec<ObjectReference>>,
+    rc: HashMap<ObjectReference, usize>,
 }
 
 impl<ES: Edge> Default for SanityChecker<ES> {
@@ -34,6 +36,7 @@ impl<ES: Edge> SanityChecker<ES> {
             refs: HashSet::new(),
             root_edges: vec![],
             root_nodes: vec![],
+            rc: HashMap::new(),
         }
     }
 
@@ -158,6 +161,7 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());
         }
+        crate::SANITY_LIVE_SIZE.store(0, Ordering::Relaxed);
     }
 }
 
@@ -183,6 +187,28 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
             debug_assert!(result.is_ok());
+        }
+        if cfg!(feature = "rc_verify") {
+            println!(
+                "[GC] Sanity Live Size {}",
+                crate::SANITY_LIVE_SIZE.load(Ordering::Relaxed)
+            );
+            // gc_log!("RC VERIFY");
+            // let mut checker = mmtk.sanity_checker.lock().unwrap();
+            // let rc_helper = RefCountHelper::<P::VM>::NEW;
+            // for (o, rc) in &checker.rc {
+            //     let rc2 = rc_helper.count(*o) as usize;
+            //     if rc2 == MAX_REF_COUNT as usize {
+            //         assert!(
+            //             *rc >= MAX_REF_COUNT as usize,
+            //             "panick: Object: {o:?} rc={rc2} sanity-rc={rc}"
+            //         );
+            //     } else {
+            //         assert_eq!(*rc, rc2, "Object: {o:?} rc={rc2} sanity-rc={rc}");
+            //     }
+            // }
+            // checker.rc.clear();
+            // gc_log!("RC VERIFY PASSED");
         }
     }
 }
@@ -245,6 +271,19 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
+        if cfg!(feature = "rc_verify") && self.roots && !object.is_null() {
+            if crate::LOG_RC_UPDATES {
+                println!("S R {slot:?} -> {object:?}");
+            }
+            self.mmtk()
+                .sanity_checker
+                .lock()
+                .unwrap()
+                .rc
+                .entry(object)
+                .and_modify(|rc| *rc += 1)
+                .or_insert(1);
+        }
         self.edge = Some(slot);
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE {
@@ -252,7 +291,42 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
     }
 
+    #[cfg(feature = "rc_verify")]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        use crate::util::address::{CLDScanPolicy, RefScanPolicy};
+        if object.is_null() {
+            return object;
+        }
+        if self.attempt_mark(object) {
+            crate::SANITY_LIVE_SIZE.fetch_add(object.get_size::<VM>(), Ordering::Relaxed);
+            // println!("mark {object:?}");
+            object.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+                // println!("e {e:?}");
+
+                let t = e.load();
+                if crate::LOG_RC_UPDATES {
+                    println!("S {object:?}.{e:?} -> {t:?}");
+                }
+                if t.is_null() {
+                    return;
+                }
+                self.mmtk()
+                    .sanity_checker
+                    .lock()
+                    .unwrap()
+                    .rc
+                    .entry(t)
+                    .and_modify(|rc| *rc += 1)
+                    .or_insert(1);
+            });
+            self.nodes.enqueue(object);
+        }
+        object
+    }
+
+    #[cfg(not(feature = "rc_verify"))]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        unreachable!();
         if let Some(_lxr) = self
             .mmtk()
             .get_plan()

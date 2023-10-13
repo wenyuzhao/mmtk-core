@@ -618,3 +618,7 @@ static VERBOSE: AtomicUsize = AtomicUsize::new(0);
 fn verbose(level: usize) -> bool {
     VERBOSE.load(Ordering::Relaxed) >= level
 }
+
+static RC_LIVE_SIZE: AtomicUsize = AtomicUsize::new(0); // promoted - rc-killed
+static SANITY_LIVE_SIZE: AtomicUsize = AtomicUsize::new(0); // promoted - rc-killed
+const LOG_RC_UPDATES: bool = false;

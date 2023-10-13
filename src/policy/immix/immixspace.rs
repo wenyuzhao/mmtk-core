@@ -770,6 +770,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
     }
 
+    pub fn dump_memory(&self) {
+        
+    }
+
     /// Release a block.
     pub fn release_block(
         &self,

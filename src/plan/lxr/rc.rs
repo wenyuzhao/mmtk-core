@@ -65,6 +65,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     rc: RefCountHelper<VM>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
     counters: RCIncCounters,
+    e: Address,
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
@@ -94,6 +95,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             counters: Default::default(),
             mark_objects: vec![],
+            e: Address::ZERO,
         }
     }
 
@@ -133,6 +135,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn promote(&mut self, o: ObjectReference, copied: bool, los: bool, depth: u32) {
         o.verify::<VM>();
+        crate::RC_LIVE_SIZE.fetch_add(o.get_size::<VM>(), Ordering::Relaxed);
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
@@ -283,10 +286,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
             o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
                 let target = edge.load();
+                if crate::LOG_RC_UPDATES {
+                    println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                }
                 if target.is_null() {
                     return;
                 }
-                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                 debug_assert!(
                     target.to_address::<VM>().is_mapped(),
                     "Unmapped obj {:?}.{:?} -> {:?}",
@@ -342,9 +347,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn inc(&self, o: ObjectReference, stick: bool) -> bool {
         if stick {
+            if crate::LOG_RC_UPDATES {
+                println!("stick {o:?}");
+            }
             self.rc.stick(o) == Ok(0)
         } else {
-            self.rc.inc(o) == Ok(0)
+            let r = self.rc.inc(o);
+            if crate::LOG_RC_UPDATES {
+                println!("inc {o:?} -> {r:?}");
+            }
+            r == Ok(0)
         }
     }
 
@@ -967,14 +979,19 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
         for o in decs {
-            // println!("dec {:?}", o);
             if o.is_null() {
                 continue;
             }
             if self.rc.is_dead_or_stuck(*o)
                 || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
             {
+                if crate::LOG_RC_UPDATES {
+                    println!("dec stuck {:?}", o);
+                }
                 continue;
+            }
+            if crate::LOG_RC_UPDATES {
+                println!("dec {:?}", o);
             }
             let o =
                 if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(*o) {
@@ -986,6 +1003,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let _ = self.rc.clone().fetch_update(o, |c| {
                 if c == 1 && !dead {
                     dead = true;
+                    if crate::LOG_RC_UPDATES {
+                        println!("Dead {:?}", o);
+                    }
+                    crate::RC_LIVE_SIZE.fetch_sub(o.get_size::<VM>(), Ordering::Relaxed);
                     self.process_dead_object(o, lxr);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
@@ -1060,6 +1081,10 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
 
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
+            #[cfg(feature = "rc_verify")]
+            if self.roots && !self.mmtk().plan.is_in_sanity() {
+                self.cache_roots_for_sanity_gc(self.edges.clone());
+            }
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);

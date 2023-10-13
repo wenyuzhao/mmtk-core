@@ -67,7 +67,7 @@ built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
 # default = ["sanity"]
-default = ["perf_counter"]
+default = ["perf_counter", "rc_verify"]
 # default = []
 nontemporal = []
 satb_timer = []
@@ -226,6 +226,15 @@ immix_zero_on_release = []
 
 # Run sanity GC
 sanity = []
+stw_rc_only = [
+    "no_meta_counting",
+    "lxr_no_cm",
+    "lxr_no_lazy",
+    "lxr_abort_on_trace",
+    "lxr_log_reclaim",
+    "lxr_rc_bits_8",
+]
+rc_verify = ["sanity"]
 # Run analysis
 analysis = []
 # Use lock free variant of NoGC

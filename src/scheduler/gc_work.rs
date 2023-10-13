@@ -369,6 +369,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         // Reset the triggering information.
         mmtk.plan.base().reset_collection_trigger();
 
+        gc_log!("GC resume_mutators");
         <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
     }
 }
