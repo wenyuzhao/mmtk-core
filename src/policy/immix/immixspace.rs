@@ -771,7 +771,65 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn dump_memory(&self) {
-        
+        println!(
+            "block-size={} line-size={} lines-in-block={}",
+            Block::BYTES,
+            Line::BYTES,
+            Block::LINES
+        );
+        let mut total_rc_live: usize = 0;
+        let mut total_line_live: usize = 0;
+        let mut total_block_live: usize = 0;
+        let mut total_nursery_live: usize = 0;
+        let mut total_mature_live: usize = 0;
+        for chunk in self.chunk_map.all_chunks() {
+            for block in chunk
+                .iter_region::<Block>()
+                .filter(|b| b.get_state() != BlockState::Unallocated)
+            {
+                print!("{:?} {:?} ", block, block.get_state());
+                total_block_live += Block::BYTES;
+                if block.get_state() == BlockState::Nursery {
+                    total_nursery_live += Block::BYTES;
+                } else {
+                    total_mature_live += Block::BYTES;
+                }
+                // line-live size
+                let live_lines = Block::LINES - block.calc_dead_lines();
+                print!(
+                    "live-lines={:?}({}B) ",
+                    live_lines,
+                    live_lines << Line::LOG_BYTES
+                );
+                total_line_live += live_lines << Line::LOG_BYTES;
+                // rc-live size
+                let mut rc_live_size = 0;
+                let mut rc_live_objs = 0;
+                let mut cursor = block.start();
+                let limit = block.end();
+                while cursor < limit {
+                    let o: ObjectReference = unsafe { cursor.to_object_reference::<VM>() };
+                    cursor = cursor + crate::util::rc::MIN_OBJECT_SIZE;
+                    let c = self.rc.count(o);
+                    if c != 0 {
+                        if Line::is_aligned(o.to_address::<VM>())
+                            && self.rc.is_straddle_line(Line::from(o.to_address::<VM>()))
+                        {
+                            continue;
+                        }
+                        rc_live_objs += 1;
+                        rc_live_size += o.get_size::<VM>();
+                    }
+                }
+                print!("rc-live={:?}B({} objs) ", rc_live_size, rc_live_objs);
+                total_rc_live += rc_live_size;
+                println!();
+            }
+        }
+        println!(
+            "rc-live={}B line-live={}B  total-live={}B (N: {}B M: {}B)",
+            total_rc_live, total_line_live, total_block_live, total_nursery_live, total_mature_live,
+        );
     }
 
     /// Release a block.

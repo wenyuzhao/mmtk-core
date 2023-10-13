@@ -231,6 +231,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    pub fn dump_memory(&self) {}
+
     fn update_validity(&self, start: Address, pages: usize) {
         if RemSet::<VM>::NO_VALIDITY_STATE {
             return;

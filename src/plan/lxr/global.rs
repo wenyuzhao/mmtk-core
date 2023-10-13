@@ -914,8 +914,18 @@ impl<VM: VMBinding> LXR<VM> {
             .add(Release::<LXRGCWorkContext<VM>>::new(self));
     }
 
+    fn dump_memory(&self) {
+        if crate::DUMP_MEM_ON_CRASH {
+            println!("\n\n\n---------- IMMIX ----------\n\n");
+            self.immix_space.dump_memory();
+            println!("\n\n\n---------- LOS ----------\n\n");
+            self.los().dump_memory();
+        }
+    }
+
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if cfg!(feature = "lxr_abort_on_trace") {
+            self.dump_memory();
             panic!("ERROR: OutOfMemory");
         }
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
@@ -930,6 +940,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if cfg!(feature = "lxr_abort_on_trace") {
+            self.dump_memory();
             panic!("ERROR: OutOfMemory");
         }
         if cfg!(feature = "lxr_fixed_satb_trigger") {
@@ -955,6 +966,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler: &GCWorkScheduler<VM>,
     ) {
         if cfg!(feature = "lxr_abort_on_trace") {
+            self.dump_memory();
             panic!("ERROR: OutOfMemory");
         }
         if cfg!(feature = "lxr_fixed_satb_trigger") {

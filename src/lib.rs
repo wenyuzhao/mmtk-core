@@ -622,3 +622,4 @@ fn verbose(level: usize) -> bool {
 static RC_LIVE_SIZE: AtomicUsize = AtomicUsize::new(0); // promoted - rc-killed
 static SANITY_LIVE_SIZE: AtomicUsize = AtomicUsize::new(0); // promoted - rc-killed
 const LOG_RC_UPDATES: bool = false;
+const DUMP_MEM_ON_CRASH: bool = true;
