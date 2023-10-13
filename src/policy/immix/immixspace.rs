@@ -808,7 +808,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let mut cursor = block.start();
                 let limit = block.end();
                 while cursor < limit {
-                    let o: ObjectReference = unsafe { cursor.to_object_reference::<VM>() };
+                    let o: ObjectReference = cursor.to_object_reference::<VM>();
                     cursor = cursor + crate::util::rc::MIN_OBJECT_SIZE;
                     let c = self.rc.count(o);
                     if c != 0 {
