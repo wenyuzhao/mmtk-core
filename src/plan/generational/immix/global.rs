@@ -190,6 +190,18 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = VM>> {
         Some(self)
     }
+
+    fn current_gc_should_scan_all_classloader_strong_roots(&self) -> bool {
+        self.gen.gc_full_heap.load(Ordering::SeqCst)
+    }
+
+    fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
+        self.gen.gc_full_heap.load(Ordering::SeqCst)
+    }
+
+    fn current_gc_should_perform_class_unloading(&self) -> bool {
+        self.gen.gc_full_heap.load(Ordering::SeqCst)
+    }
 }
 
 impl<VM: VMBinding> GenerationalPlan for GenImmix<VM> {
