@@ -75,15 +75,6 @@ impl FromStr for PerfEventOptions {
     }
 }
 
-/// Get max nursery space size.
-fn max_nursery_size() -> usize {
-    if cfg!(target_pointer_width = "32") || !vm_layout().force_use_contiguous_spaces {
-        32 << LOG_BYTES_IN_MBYTE
-    } else {
-        (1 << 20) << LOG_BYTES_IN_MBYTE
-    }
-}
-
 /// The default nursery space size.
 #[cfg(target_pointer_width = "64")]
 pub const NURSERY_SIZE: usize = (1 << 20) << LOG_BYTES_IN_MBYTE;
@@ -105,8 +96,9 @@ pub const NURSERY_SIZE: usize = 32 << LOG_BYTES_IN_MBYTE;
 pub const DEFAULT_MIN_NURSERY: usize = 2 << LOG_BYTES_IN_MBYTE;
 /// The default max nursery size. This does not affect the actual space we create as nursery. It is
 /// only used in the GC trigger check.
+pub const DEFAULT_MAX_NURSERY_32: usize = 32 << LOG_BYTES_IN_MBYTE;
 #[cfg(target_pointer_width = "32")]
-pub const DEFAULT_MAX_NURSERY: usize = 32 << LOG_BYTES_IN_MBYTE;
+pub const DEFAULT_MAX_NURSERY: usize = DEFAULT_MAX_NURSERY_32;
 
 fn always_valid<T>(_: &T) -> bool {
     true
@@ -391,11 +383,11 @@ pub struct NurserySize {
     /// Minimum nursery size (in bytes)
     pub min: usize,
     /// Maximum nursery size (in bytes)
-    pub max: usize,
+    max: Option<usize>,
 }
 
 impl NurserySize {
-    pub fn new(kind: NurseryKind, value: usize) -> Self {
+    pub fn new(kind: NurseryKind, value: Option<usize>) -> Self {
         match kind {
             NurseryKind::Bounded => NurserySize {
                 kind,
@@ -404,7 +396,7 @@ impl NurserySize {
             },
             NurseryKind::Fixed => NurserySize {
                 kind,
-                min: value,
+                min: value.unwrap(),
                 max: value,
             },
         }
@@ -421,7 +413,7 @@ impl NurserySize {
         let value = ns[1]
             .parse()
             .map_err(|_| String::from("Failed to parse size"))?;
-        Ok(NurserySize::new(kind, value))
+        Ok(NurserySize::new(kind, Some(value)))
     }
 }
 
@@ -436,7 +428,13 @@ impl FromStr for NurserySize {
 impl Options {
     /// Return upper bound of the nursery size (in number of bytes)
     pub fn get_max_nursery_bytes(&self) -> usize {
-        self.nursery.max
+        self.nursery.max.unwrap_or_else(|| {
+            if !vm_layout().force_use_contiguous_spaces {
+                DEFAULT_MAX_NURSERY_32
+            } else {
+                DEFAULT_MAX_NURSERY
+            }
+        })
     }
 
     /// Return upper bound of the nursery size (in number of pages)
@@ -682,8 +680,8 @@ options! {
     // Bounded nursery only controls the upper bound, whereas the size for a Fixed nursery controls
     // both the upper and lower bounds. The nursery size can be set like "Fixed:8192", for example,
     // to have a Fixed nursery size of 8192 bytes
-    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && v.max > 0 && v.max >= v.min]
-        = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: DEFAULT_MAX_NURSERY },
+    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && v.max.map(|max| max > 0 && max >= v.min).unwrap_or(true)]
+        = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: None },
     // Should a major GC be performed when a system GC is required?
     full_heap_system_gc:   bool                 [env_var: true, command_line: true]  [always_valid] = false,
     // Should we shrink/grow the heap to adjust to application working set? (not supported)
