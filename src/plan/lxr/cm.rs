@@ -37,7 +37,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
         }
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -55,7 +55,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
         }
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -75,7 +75,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
         let plan = GCWorker::<VM>::current()
             .mmtk
-            .plan
+            .get_plan()
             .downcast_ref::<LXR<VM>>()
             .unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
@@ -98,7 +98,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         slice: VM::VMMemorySlice,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
-        let plan = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
@@ -464,7 +464,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
         }
-        let mut me = Self::new(edges, false, mmtk);
+        let mut me = Self::new(edges, false, mmtk, WorkBucketStage::Closure);
         me.remset_recorded_edges = true;
         me.refs = refs;
         me
@@ -476,11 +476,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
         }
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
             lxr,
@@ -502,7 +507,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
             let edges = self.next_edges.take();
             let slices = self.next_array_slices.take();
-            let mut w = Self::new(edges, false, self.mmtk());
+            let mut w = Self::new(edges, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
             self.worker()
                 .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
@@ -776,11 +781,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
         }
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
             lxr,
@@ -796,7 +806,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             let edges = self.next_edges.take();
             self.worker().add_boxed_work(
                 WorkBucketStage::Unconstrained,
-                Box::new(Self::new(edges, false, self.mmtk())),
+                Box::new(Self::new(edges, false, self.mmtk(), self.bucket)),
             );
         }
         assert!(self.nodes.is_empty());

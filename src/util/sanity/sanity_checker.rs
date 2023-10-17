@@ -69,7 +69,7 @@ impl<P: Plan> ScheduleSanityGC<P> {
 impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
     fn do_work(&mut self, worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
         let scheduler = worker.scheduler();
-        let plan = &mmtk.plan;
+        let plan = mmtk.get_plan();
 
         scheduler.reset_state();
 
@@ -95,7 +95,12 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
             let sanity_checker = mmtk.sanity_checker.lock().unwrap();
             for roots in &sanity_checker.root_edges {
                 scheduler.work_buckets[WorkBucketStage::Closure].add(
-                    SanityGCProcessEdges::<P::VM>::new(roots.clone(), true, mmtk),
+                    SanityGCProcessEdges::<P::VM>::new(
+                        roots.clone(),
+                        true,
+                        mmtk,
+                        WorkBucketStage::Closure,
+                    ),
                 );
             }
             for roots in &sanity_checker.root_nodes {
@@ -107,6 +112,7 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
                     true,
                     false,
                     false,
+                    WorkBucketStage::Closure,
                 ));
             }
         }
@@ -148,7 +154,7 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
         Self::update_mark_state();
         <P::VM as VMBinding>::VMCollection::clear_cld_claimed_marks();
         info!("Sanity GC prepare");
-        mmtk.plan.enter_sanity();
+        mmtk.get_plan().enter_sanity();
         {
             let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
             sanity_checker.refs.clear();
@@ -178,7 +184,7 @@ impl<P: Plan> SanityRelease<P> {
 impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
         info!("Sanity GC release");
-        mmtk.plan.leave_sanity();
+        mmtk.get_plan().leave_sanity();
         mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
         for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::Release]
@@ -261,9 +267,14 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     type ScanObjectsWorkType = ScanObjects<Self>;
 
     const OVERWRITE_REFERENCE: bool = false;
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
         Self {
-            base: ProcessEdgesBase::new(edges, roots, mmtk),
+            base: ProcessEdgesBase::new(edges, roots, mmtk, bucket),
             // ..Default::default()
             edge: None,
         }
@@ -420,7 +431,8 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         nodes: Vec<ObjectReference>,
         roots: bool,
     ) -> Self::ScanObjectsWorkType {
-        let mut x = ScanObjects::<Self>::new(nodes, false, roots, false, false);
+        let mut x =
+            ScanObjects::<Self>::new(nodes, false, roots, false, false, WorkBucketStage::Closure);
         x.discovery = false;
         x
     }

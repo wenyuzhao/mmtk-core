@@ -54,7 +54,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             incs: VectorQueue::default(),
             decs: VectorQueue::default(),
             refs: VectorQueue::default(),
-            lxr: mmtk.plan.downcast_ref::<LXR<VM>>().unwrap(),
+            lxr: mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap(),
         }
     }
 

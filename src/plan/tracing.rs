@@ -99,6 +99,7 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     should_discover_references: bool,
     should_claim_and_scan_clds: bool,
+    bucket: WorkBucketStage,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -106,12 +107,14 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         worker: &'a mut GCWorker<E::VM>,
         should_discover_references: bool,
         should_claim_and_scan_clds: bool,
+        bucket: WorkBucketStage,
     ) -> Self {
         Self {
             buffer: VectorQueue::new(),
             worker,
             should_discover_references,
             should_claim_and_scan_clds,
+            bucket,
         }
     }
 
@@ -119,8 +122,8 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         let buf = self.buffer.take();
         if !buf.is_empty() {
             self.worker.add_work(
-                WorkBucketStage::Closure,
-                E::new(buf, false, self.worker.mmtk),
+                self.bucket,
+                E::new(buf, false, self.worker.mmtk, self.bucket),
             );
         }
     }

@@ -75,15 +75,6 @@ impl FromStr for PerfEventOptions {
     }
 }
 
-/// Get max nursery space size.
-fn max_nursery_size() -> usize {
-    if cfg!(target_pointer_width = "32") || !vm_layout().force_use_contiguous_spaces {
-        32 << LOG_BYTES_IN_MBYTE
-    } else {
-        (1 << 20) << LOG_BYTES_IN_MBYTE
-    }
-}
-
 /// The default nursery space size.
 #[cfg(target_pointer_width = "64")]
 pub const NURSERY_SIZE: usize = (1 << 20) << LOG_BYTES_IN_MBYTE;
@@ -105,8 +96,9 @@ pub const NURSERY_SIZE: usize = 32 << LOG_BYTES_IN_MBYTE;
 pub const DEFAULT_MIN_NURSERY: usize = 2 << LOG_BYTES_IN_MBYTE;
 /// The default max nursery size. This does not affect the actual space we create as nursery. It is
 /// only used in the GC trigger check.
+pub const DEFAULT_MAX_NURSERY_32: usize = 32 << LOG_BYTES_IN_MBYTE;
 #[cfg(target_pointer_width = "32")]
-pub const DEFAULT_MAX_NURSERY: usize = 32 << LOG_BYTES_IN_MBYTE;
+pub const DEFAULT_MAX_NURSERY: usize = DEFAULT_MAX_NURSERY_32;
 
 fn always_valid<T>(_: &T) -> bool {
     true
@@ -125,8 +117,6 @@ pub struct MMTKOption<T: Debug + Clone> {
     from_env_var: bool,
     /// Can we set this option through command line options/API?
     from_command_line: bool,
-    /// Is this a default value?
-    pub is_default: bool,
 }
 
 impl<T: Debug + Clone> MMTKOption<T> {
@@ -154,7 +144,6 @@ impl<T: Debug + Clone> MMTKOption<T> {
             validator,
             from_env_var,
             from_command_line,
-            is_default: true,
         }
     }
 
@@ -162,7 +151,6 @@ impl<T: Debug + Clone> MMTKOption<T> {
     pub fn set(&mut self, value: T) -> bool {
         if (self.validator)(&value) {
             self.value = value;
-            self.is_default = false;
             return true;
         }
         false
@@ -248,27 +236,37 @@ macro_rules! options {
                     _ => panic!("Invalid Options key: {}", s)
                 }
             }
-        }
-        impl Default for Options {
-            fn default() -> Self {
-                let mut options = Options {
-                    $($name: MMTKOption::new($default, $validator, $env_var,$command_line)),*
-                };
 
-                // If we have env vars that start with MMTK_ and match any option (such as MMTK_STRESS_FACTOR),
-                // we set the option to its value (if it is a valid value). Otherwise, use the default value.
+            /// Create an `Options` instance with built-in default settings.
+            fn new() -> Self {
+                Options {
+                    $($name: MMTKOption::new($default, $validator, $env_var, $command_line)),*
+                }
+            }
+
+            /// Read options from environment variables, and apply those settings to self.
+            ///
+            /// If we have environment variables that start with `MMTK_` and match any option (such
+            /// as `MMTK_STRESS_FACTOR`), we set the option to its value (if it is a valid value).
+            pub fn read_env_var_settings(&mut self) {
                 const PREFIX: &str = "MMTK_";
                 for (key, val) in std::env::vars() {
                     // strip the prefix, and get the lower case string
                     if let Some(rest_of_key) = key.strip_prefix(PREFIX) {
                         let lowercase: &str = &rest_of_key.to_lowercase();
                         match lowercase {
-                            $(stringify!($name) => { options.set_from_env_var(lowercase, &val); },)*
+                            $(stringify!($name) => { self.set_from_env_var(lowercase, &val); },)*
                             _ => {}
                         }
                     }
                 }
-                return options;
+            }
+        }
+
+        impl Default for Options {
+            /// By default, `Options` instance is created with built-in default settings.
+            fn default() -> Self {
+                Self::new()
             }
         }
     ]
@@ -391,11 +389,11 @@ pub struct NurserySize {
     /// Minimum nursery size (in bytes)
     pub min: usize,
     /// Maximum nursery size (in bytes)
-    pub max: usize,
+    max: Option<usize>,
 }
 
 impl NurserySize {
-    pub fn new(kind: NurseryKind, value: usize) -> Self {
+    pub fn new(kind: NurseryKind, value: Option<usize>) -> Self {
         match kind {
             NurseryKind::Bounded => NurserySize {
                 kind,
@@ -404,7 +402,7 @@ impl NurserySize {
             },
             NurseryKind::Fixed => NurserySize {
                 kind,
-                min: value,
+                min: value.unwrap(),
                 max: value,
             },
         }
@@ -421,7 +419,7 @@ impl NurserySize {
         let value = ns[1]
             .parse()
             .map_err(|_| String::from("Failed to parse size"))?;
-        Ok(NurserySize::new(kind, value))
+        Ok(NurserySize::new(kind, Some(value)))
     }
 }
 
@@ -436,7 +434,13 @@ impl FromStr for NurserySize {
 impl Options {
     /// Return upper bound of the nursery size (in number of bytes)
     pub fn get_max_nursery_bytes(&self) -> usize {
-        self.nursery.max
+        self.nursery.max.unwrap_or_else(|| {
+            if !vm_layout().force_use_contiguous_spaces {
+                DEFAULT_MAX_NURSERY_32
+            } else {
+                DEFAULT_MAX_NURSERY
+            }
+        })
     }
 
     /// Return upper bound of the nursery size (in number of pages)
@@ -682,8 +686,8 @@ options! {
     // Bounded nursery only controls the upper bound, whereas the size for a Fixed nursery controls
     // both the upper and lower bounds. The nursery size can be set like "Fixed:8192", for example,
     // to have a Fixed nursery size of 8192 bytes
-    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && v.max > 0 && v.max >= v.min]
-        = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: DEFAULT_MAX_NURSERY },
+    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.min > 0 && v.max.map(|max| max > 0 && max >= v.min).unwrap_or(true)]
+        = NurserySize { kind: NurseryKind::Bounded, min: DEFAULT_MIN_NURSERY, max: None },
     // Should a major GC be performed when a system GC is required?
     full_heap_system_gc:   bool                 [env_var: true, command_line: true]  [always_valid] = false,
     // Should we shrink/grow the heap to adjust to application working set? (not supported)
@@ -737,7 +741,6 @@ options! {
     // there is no core with (perceived) id 12.
     // XXX: This option is currently only supported on Linux.
     thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
-    use_35bit_address_space:        bool                 [env_var: true, command_line: true]  [always_valid] = false,
     verbose:                       usize                 [env_var: true, command_line: true] [|v: &usize| *v <= 10]  = 0,
     // Set the GC trigger. This defines the heap size and how MMTk triggers a GC.
     // Default to a fixed heap size of 0.5x physical memory.
@@ -756,7 +759,8 @@ mod tests {
     #[test]
     fn no_env_var() {
         serial_test(|| {
-            let options = Options::default();
+            let mut options = Options::default();
+            options.read_env_var_settings();
             assert_eq!(*options.stress_factor, DEFAULT_STRESS_FACTOR);
         })
     }
@@ -768,7 +772,8 @@ mod tests {
                 || {
                     std::env::set_var("MMTK_STRESS_FACTOR", "4096");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(*options.stress_factor, 4096);
                 },
                 || {
@@ -786,7 +791,8 @@ mod tests {
                     std::env::set_var("MMTK_STRESS_FACTOR", "4096");
                     std::env::set_var("MMTK_NO_FINALIZER", "true");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(*options.stress_factor, 4096);
                     assert!(*options.no_finalizer);
                 },
@@ -806,7 +812,8 @@ mod tests {
                     // invalid value, we cannot parse the value, so use the default value
                     std::env::set_var("MMTK_STRESS_FACTOR", "abc");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(*options.stress_factor, DEFAULT_STRESS_FACTOR);
                 },
                 || {
@@ -824,11 +831,30 @@ mod tests {
                     // invalid value, we cannot parse the value, so use the default value
                     std::env::set_var("MMTK_ABC", "42");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(*options.stress_factor, DEFAULT_STRESS_FACTOR);
                 },
                 || {
                     std::env::remove_var("MMTK_ABC");
+                },
+            )
+        })
+    }
+
+    #[test]
+    fn ignore_env_var() {
+        serial_test(|| {
+            with_cleanup(
+                || {
+                    std::env::set_var("MMTK_STRESS_FACTOR", "42");
+
+                    let options = Options::default();
+                    // Not calling read_env_var_settings here.
+                    assert_eq!(*options.stress_factor, DEFAULT_STRESS_FACTOR);
+                },
+                || {
+                    std::env::remove_var("MMTK_STRESS_FACTOR");
                 },
             )
         })
@@ -853,7 +879,8 @@ mod tests {
                 || {
                     std::env::set_var("MMTK_WORK_PERF_EVENTS", "PERF_COUNT_HW_CPU_CYCLES,0,-1");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(
                         *options.work_perf_events,
                         PerfEventOptions {
@@ -877,7 +904,8 @@ mod tests {
                     // The option needs to start with "hello", otherwise it is invalid.
                     std::env::set_var("MMTK_WORK_PERF_EVENTS", "PERF_COUNT_HW_CPU_CYCLES");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     // invalid value from env var, use default.
                     assert_eq!(
                         *options.work_perf_events,
@@ -900,7 +928,8 @@ mod tests {
                     // We did not enable the perf_counter feature. The option will be invalid anyway, and will be set to empty.
                     std::env::set_var("MMTK_PHASE_PERF_EVENTS", "PERF_COUNT_HW_CPU_CYCLES,0,-1");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     // invalid value from env var, use default.
                     assert_eq!(
                         *options.work_perf_events,
@@ -921,7 +950,8 @@ mod tests {
                 || {
                     std::env::set_var("MMTK_THREAD_AFFINITY", "0-");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     // invalid value from env var, use default.
                     assert_eq!(*options.thread_affinity, AffinityKind::OsDefault);
                 },
@@ -940,7 +970,8 @@ mod tests {
                 || {
                     std::env::set_var("MMTK_THREAD_AFFINITY", "0");
 
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(
                         *options.thread_affinity,
                         AffinityKind::RoundRobin(vec![0_u16])
@@ -970,7 +1001,8 @@ mod tests {
                     }
 
                     std::env::set_var("MMTK_THREAD_AFFINITY", cpu_list);
-                    let options = Options::default();
+                    let mut options = Options::default();
+                    options.read_env_var_settings();
                     assert_eq!(*options.thread_affinity, AffinityKind::RoundRobin(vec));
                 },
                 || {

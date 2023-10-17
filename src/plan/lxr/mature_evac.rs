@@ -101,7 +101,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 
     fn process_edges(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
                 || lxr.current_pause() == Some(Pause::Full)

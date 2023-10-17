@@ -102,7 +102,7 @@ impl<VM: VMBinding> GCController<VM> {
         // Tell GC trigger that GC started - this happens after ScheduleCollection so we
         // will know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
         self.mmtk
-            .plan
+            .get_plan()
             .base()
             .gc_trigger
             .policy
@@ -146,7 +146,12 @@ impl<VM: VMBinding> GCController<VM> {
         );
 
         // Tell GC trigger that GC ended - this happens before EndOfGC where we resume mutators.
-        self.mmtk.plan.base().gc_trigger.policy.on_gc_end(self.mmtk);
+        self.mmtk
+            .get_plan()
+            .base()
+            .gc_trigger
+            .policy
+            .on_gc_end(self.mmtk);
 
         // Finalization: Resume mutators, reset gc states
         // Note: Resume-mutators must happen after all work buckets are closed.

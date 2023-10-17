@@ -12,11 +12,11 @@ use crate::policy::space::Space;
 use crate::scheduler::GCWorkScheduler;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::heap::VMRequest;
-use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
+use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
 use enum_map::EnumMap;
-use mmtk_macros::PlanTraceObject;
+use mmtk_macros::{HasSpaces, PlanTraceObject};
 
 #[cfg(feature = "malloc_mark_sweep")]
 pub type MarkSweepSpace<VM> = crate::policy::marksweepspace::malloc_ms::MallocSpace<VM>;
@@ -28,11 +28,11 @@ pub type MarkSweepSpace<VM> = crate::policy::marksweepspace::native_ms::MarkSwee
 #[cfg(not(feature = "malloc_mark_sweep"))]
 use crate::policy::marksweepspace::native_ms::MAX_OBJECT_SIZE;
 
-#[derive(PlanTraceObject)]
+#[derive(HasSpaces, PlanTraceObject)]
 pub struct MarkSweep<VM: VMBinding> {
-    #[fallback_trace]
+    #[parent]
     common: CommonPlan<VM>,
-    #[trace]
+    #[space]
     ms: MarkSweepSpace<VM>,
 }
 
@@ -43,18 +43,12 @@ pub const MS_CONSTRAINTS: PlanConstraints = PlanConstraints {
     num_specialized_scans: 1,
     max_non_los_default_alloc_bytes: MAX_OBJECT_SIZE,
     may_trace_duplicate_edges: true,
+    needs_prepare_mutator: !cfg!(feature = "malloc_mark_sweep")
+        && !cfg!(feature = "eager_sweeping"),
     ..PlanConstraints::default()
 };
 
 impl<VM: VMBinding> Plan for MarkSweep<VM> {
-    type VM = VM;
-
-    fn get_spaces(&self) -> Vec<&dyn Space<Self::VM>> {
-        let mut ret = self.common.get_spaces();
-        ret.push(&self.ms);
-        ret
-    }
-
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
@@ -120,11 +114,8 @@ impl<VM: VMBinding> MarkSweep<VM> {
             common: CommonPlan::new(plan_args),
         };
 
-        let mut side_metadata_sanity_checker = SideMetadataSanity::new();
-        res.common
-            .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
-        res.ms
-            .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
+        res.verify_side_metadata_sanity();
+
         res
     }
 

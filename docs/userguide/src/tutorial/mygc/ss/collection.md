@@ -104,13 +104,19 @@ the new `tospace`.
 
 ### Prepare mutator
 
-Going back to `mutator.rs`, create a new function called 
-`mygc_mutator_prepare(_mutator: &mut Mutator <MyGC<VM>>, _tls: OpaquePointer,)`. 
-This function will be called at the preparation stage of a collection 
-(at the start of a collection) for each mutator. Its body can stay empty, as 
-there aren't any preparation steps for the mutator in this GC.
-In `create_mygc_mutator()`, find the field `prep_func` and change it from
-`mygc_mutator_noop()` to `mygc_mutator_prepare()`.
+Going back to `mutator.rs`, create a new function called
+`mygc_mutator_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>, _tls: VMWorkerThread)`.
+This function will be called at the preparation stage of a collection (at the start of a
+collection) for each mutator. Its body can stay empty, as there aren't any preparation steps for
+the mutator in this GC.  In `create_mygc_mutator()`, find the field `prepare_func` and change it
+from `&unreachable_prepare_func` to `&mygc_mutator_prepare`.
+
+> 💡 Hint: If your plan does nothing when preparing mutators, there is an optimization you can do.
+You may set the plan constraints field `PlanConstraints::needs_prepare_mutator` to `false` so that
+the `PrepareMutator` work packets which call `prepare_func` will not be created in the first place.
+This optimization is helpful for VMs that run with a large number of mutator threads.  If you do
+this optimization, you may also leave the `MutatorConfig::prepare_func` field as
+`&unreachable_prepare_func` to indicate it should not be called.
 
 ## Release
 
@@ -131,24 +137,18 @@ routines for the common plan spaces and the fromspace.
 
 ### Release in mutator
 
-Go back to `mutator.rs`. In `create_mygc_mutator()`, replace 
-`mygc_mutator_noop()` in the `release_func` field with `mygc_mutator_release()`.
-Leave the `release()` function in the `CopyContext` empty. There are no 
-release steps for `CopyContext` in this collector.
+Go back to `mutator.rs`.  Create a new function called `mygc_mutator_release()` that takes the same
+inputs as the `mygc_mutator_prepare()` function above.
 
-Create a new function called `mygc_mutator_release()` that takes the same 
-inputs as the `prepare()` function above. This function will be called at the 
-release stage of a collection (at the end of a collection) for each mutator. 
-It rebinds the allocator for the `Default` allocation semantics to the new 
-tospace. When the mutator threads resume, any new allocations for `Default` 
-will then go to the new tospace.
- 
 ```rust
 {{#include ../../code/mygc_semispace/mutator.rs:release}}
 ```
 
-Delete `mygc_mutator_noop()`. It was a placeholder for the prepare and 
-release functions that you have now added, so it is now dead code.
+Then go to `create_mygc_mutator()`, replace `&unreachable_release_func` in the `release_func` field
+with `&mygc_mutator_release`.  This function will be called at the release stage of a collection
+(at the end of a collection) for each mutator.  It rebinds the allocator for the `Default`
+allocation semantics to the new tospace. When the mutator threads resume, any new allocations for
+`Default` will then go to the new tospace.
 
 ## ProcessEdgesWork for MyGC
 
@@ -165,7 +165,7 @@ are.
 ### Approach 1: Use `SFTProcessEdges`
 
 [`SFTProcessEdges`](https://docs.mmtk.io/api/mmtk/scheduler/gc_work/struct.SFTProcessEdges.html) dispatches
-the tracing of objects to their respective spaces through [Space Function Table (SFT)](https://docs.mmtk.io/api/mmtk/policy/space/trait.SFT.html).
+the tracing of objects to their respective spaces through [Space Function Table (SFT)](https://docs.mmtk.io/api/mmtk/policy/sft/trait.SFT.html).
 As long as all the policies in a plan provide an implementation of `sft_trace_object()` in their SFT implementations,
 the plan can use `SFTProcessEdges`. Currently most policies provide an implementation for `sft_trace_object()`, except
 mark compact and immix. Those two policies use multiple GC traces, and due to the limitation of SFT, SFT does not allow
@@ -176,16 +176,24 @@ multiple `sft_trace_object()` for a policy.
 ### Approach 2: Derive `PlanTraceObject` and use `PlanProcessEdges`
 
 `PlanProcessEdges` is another general `ProcessEdgesWork` implementation that can be used by most plans. When a plan
-implements the [`PlanTraceObject`](https://docs.mmtk.io/api/mmtk/plan/transitive_closure/trait.PlanTraceObject.html),
+implements the [`PlanTraceObject`](https://docs.mmtk.io/api/mmtk/plan/global/trait.PlanTraceObject.html),
 it can use `PlanProcessEdges`.
 
 You can manually provide an implementation of `PlanTraceObject` for `MyGC`. But you can also use the derive macro MMTK provides,
 and the macro will generate an implementation of `PlanTraceObject`:
-* add `#[derive(PlanTraceObject)]` for `MyGC` (import the macro properly: `use mmtk_macros::PlanTraceObject`)
-* add `#[trace(CopySemantics::Default)]` to both copy space fields, `copyspace0` and `copyspace1`. This tells the macro to generate
-  trace code for both spaces, and for any copying in the spaces, use `CopySemantics::DefaultCopy` that we have configured early.
-* add `#[fallback_trace]` to `common`. This tells the macro that if an object is not found in any space with `#[trace]` in ths plan,
-  try find the space for the object in the 'parent' plan. In our case, we fall back to the `CommonPlan`, as the object may be
+
+* Make sure `MyGC` already has the `#[derive(HasSpaces)]` attribute because all plans need to
+  implement the `HasSpaces` trait anyway.  (import the macro properly: `use mmtk_macros::HasSpaces`)
+* Add `#[derive(PlanTraceObject)]` for `MyGC` (import the macro properly: `use mmtk_macros::PlanTraceObject`)
+* Add both `#[space]` and `#[copy_semantics(CopySemantics::Default)]` to both copy space fields,
+  `copyspace0` and `copyspace1`. `#[space]` tells the macro that both `copyspace0` and `copyspace1`
+  are spaces in the `MyGC` plan, and the generated trace code will check both spaces.
+  `#[copy_semantics(CopySemantics::DefaultCopy)]` specifies the copy semantics to use when tracing
+  objects in the corresponding space.
+* Add `#[parent]` to `common`. This tells the macro that there are more spaces defined in `common`
+  and its nested structs.  If an object is not found in any space with `#[space]` in this plan,
+  the trace code will try to find the space for the object in the 'parent' plan.  In our case, the
+  trace code will proceed by checking spaces in the `CommonPlan`, as the object may be
   in large object space or immortal space in the common plan. `CommonPlan` also implements `PlanTraceObject`, so it knows how to
   find a space for the object and trace it in the same way.
 
@@ -238,10 +246,10 @@ In the end, use `MyGCProcessEdges` as `ProcessEdgesWorkType` in the `GCWorkConte
 ## Summary
 
 You should now have MyGC working and able to collect garbage. All three
-benchmarks should be able to pass now. 
+benchmarks should be able to pass now.
 
 If the benchmarks pass - good job! You have built a functional copying
 collector!
 
 If you get particularly stuck, the code for the completed `MyGC` plan
-is available [here](https://github.com/mmtk/mmtk-core/tree/master/docs/tutorial/code/mygc_semispace).
+is available [here](https://github.com/mmtk/mmtk-core/tree/master/docs/userguide/src/tutorial/code/mygc_semispace).

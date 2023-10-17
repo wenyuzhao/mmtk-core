@@ -623,7 +623,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         let t = std::time::SystemTime::now();
 
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        self.lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        self.lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.pause = self.lxr.current_pause().unwrap();
         self.in_cm = self.lxr.concurrent_marking_in_progress();
         let copy_context = self.worker().get_copy_context_mut();
@@ -646,8 +646,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                         >= threshold as u128
                 })
                 .unwrap_or(false);
-            let over_space = mmtk.plan.get_used_pages() - mmtk.plan.get_collection_reserved_pages()
-                > mmtk.plan.get_total_pages();
+            let over_space = mmtk.get_plan().get_used_pages()
+                - mmtk.get_plan().get_collection_reserved_pages()
+                > mmtk.get_plan().get_total_pages();
             if over_space || over_time {
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
@@ -709,7 +710,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::Full {
                 if !root_edges.is_empty() {
-                    let mut w = LXRStopTheWorldProcessEdges::new(root_edges, true, mmtk);
+                    let mut w = LXRStopTheWorldProcessEdges::new(
+                        root_edges,
+                        true,
+                        mmtk,
+                        WorkBucketStage::Closure,
+                    );
                     w.root_kind = self.root_kind;
                     worker.add_work(WorkBucketStage::Closure, w)
                 }
@@ -859,7 +865,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         let mmtk = GCWorker::<VM>::current().mmtk;
         if !self.new_decs.is_empty() {
             let new_decs = self.new_decs.take();
-            let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+            let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
                 lxr,
                 ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
@@ -1022,7 +1028,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.plan.downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
             || lxr.previous_pause() == Some(Pause::Full);
@@ -1069,9 +1075,14 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     const RC_ROOTS: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
         debug_assert!(roots);
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         Self { base }
     }
 

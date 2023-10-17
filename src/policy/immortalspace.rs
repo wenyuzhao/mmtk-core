@@ -105,9 +105,12 @@ impl<VM: VMBinding> Space<VM> for ImmortalSpace<VM> {
         &self.common
     }
 
-    fn initialize_sft(&self) {
-        self.common()
-            .initialize_sft(self.as_sft(), &self.get_page_resource().common().metadata)
+    fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
+        self.common().initialize_sft(
+            self.as_sft(),
+            sft_map,
+            &self.get_page_resource().common().metadata,
+        )
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
@@ -183,7 +186,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
                 .on_block_reset::<VM>(self.common.start, self.common.extent)
         } else {
             // Otherwise, we reset the mark bit for the allocated regions.
-            self.pr.for_allocated_regions(|addr, size| {
+            for (addr, size) in self.pr.iterate_allocated_regions() {
                 debug!(
                     "{:?}: reset mark bit from {} to {}",
                     self.name(),
@@ -191,7 +194,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
                     addr + size
                 );
                 self.mark_state.on_block_reset::<VM>(addr, size);
-            })
+            }
         }
     }
 

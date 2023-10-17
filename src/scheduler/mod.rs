@@ -8,7 +8,7 @@ pub(crate) use scheduler::CoordinatorMessage;
 pub(crate) use scheduler::GCWorkScheduler;
 
 mod stat;
-pub(self) mod work_counter;
+mod work_counter;
 
 mod work;
 pub use work::CoordinatorWork;

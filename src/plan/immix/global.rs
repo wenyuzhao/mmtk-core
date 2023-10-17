@@ -17,7 +17,6 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
-use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
@@ -26,14 +25,15 @@ use std::sync::atomic::AtomicBool;
 use atomic::Ordering;
 use enum_map::EnumMap;
 
-use mmtk_macros::PlanTraceObject;
+use mmtk_macros::{HasSpaces, PlanTraceObject};
 
-#[derive(PlanTraceObject)]
+#[derive(HasSpaces, PlanTraceObject)]
 pub struct Immix<VM: VMBinding> {
     #[post_scan]
-    #[trace(CopySemantics::DefaultCopy)]
+    #[space]
+    #[copy_semantics(CopySemantics::DefaultCopy)]
     pub immix_space: ImmixSpace<VM>,
-    #[fallback_trace]
+    #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
 }
@@ -54,12 +54,11 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     } else {
         BarrierSelector::NoBarrier
     },
+    needs_prepare_mutator: false,
     ..PlanConstraints::default()
 };
 
 impl<VM: VMBinding> Plan for Immix<VM> {
-    type VM = VM;
-
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
         self.base().collection_required(self, space_full)
     }
@@ -82,12 +81,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             space_mapping: vec![(CopySelector::Immix(0), &self.immix_space)],
             constraints: &IMMIX_CONSTRAINTS,
         }
-    }
-
-    fn get_spaces(&self) -> Vec<&dyn Space<Self::VM>> {
-        let mut ret = self.common.get_spaces();
-        ret.push(&self.immix_space);
-        ret
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -176,15 +169,7 @@ impl<VM: VMBinding> Immix<VM> {
             last_gc_was_defrag: AtomicBool::new(false),
         };
 
-        {
-            let mut side_metadata_sanity_checker = SideMetadataSanity::new();
-            immix
-                .common
-                .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
-            immix
-                .immix_space
-                .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
-        }
+        immix.verify_side_metadata_sanity();
 
         immix
     }
@@ -193,8 +178,8 @@ impl<VM: VMBinding> Immix<VM> {
     /// to schedule a full heap collection. A plan must call set_collection_kind and set_gc_status before this method.
     pub(crate) fn schedule_immix_full_heap_collection<
         PlanType: Plan<VM = VM>,
-        FastContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
-        DefragContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
+        FastContext: GCWorkContext<VM = VM, PlanType = PlanType>,
+        DefragContext: GCWorkContext<VM = VM, PlanType = PlanType>,
     >(
         plan: &'static DefragContext::PlanType,
         immix_space: &ImmixSpace<VM>,

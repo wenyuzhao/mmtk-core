@@ -26,7 +26,6 @@ use crate::util::copy::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::{PageResource, VMRequest};
 use crate::util::metadata::side_metadata::SideMetadataContext;
-use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::metadata::MetadataSpec;
 use crate::util::options::{GCTriggerSelector, Options};
 use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
@@ -55,7 +54,7 @@ static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 static RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(0);
 static MAX_RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(128);
 
-use mmtk_macros::PlanTraceObject;
+use mmtk_macros::{HasSpaces, PlanTraceObject};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -70,12 +69,13 @@ enum GCCause {
     ImmixSpaceFull,
 }
 
-#[derive(PlanTraceObject)]
+#[derive(HasSpaces, PlanTraceObject)]
 pub struct LXR<VM: VMBinding> {
     #[post_scan]
-    #[trace(CopySemantics::DefaultCopy)]
+    #[space]
+    #[copy_semantics(CopySemantics::DefaultCopy)]
     pub immix_space: ImmixSpace<VM>,
-    #[fallback_trace]
+    #[parent]
     pub common: CommonPlan<VM>,
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.
@@ -112,14 +112,6 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
 });
 
 impl<VM: VMBinding> Plan for LXR<VM> {
-    type VM = VM;
-
-    fn get_spaces(&self) -> Vec<&dyn Space<Self::VM>> {
-        let mut ret = self.common.get_spaces();
-        ret.push(&self.immix_space);
-        ret
-    }
-
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
@@ -221,7 +213,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         &LXR_CONSTRAINTS
     }
 
-    fn create_copy_config(&'static self) -> CopyConfig<Self::VM> {
+    fn create_copy_config(&'static self) -> CopyConfig<VM> {
         use enum_map::enum_map;
         CopyConfig {
             copy_mapping: enum_map! {
@@ -415,7 +407,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         &self.common.base
     }
 
-    fn base_mut(&mut self) -> &mut BasePlan<Self::VM> {
+    fn base_mut(&mut self) -> &mut BasePlan<VM> {
         &mut self.common.base
     }
 
@@ -635,13 +627,7 @@ impl<VM: VMBinding> LXR<VM> {
 
         lxr.gc_init(&options);
 
-        {
-            let mut side_metadata_sanity_checker = SideMetadataSanity::new();
-            lxr.common
-                .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
-            lxr.immix_space
-                .verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
-        }
+        lxr.verify_side_metadata_sanity();
 
         lxr
     }
@@ -906,12 +892,13 @@ impl<VM: VMBinding> LXR<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E<VM>>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<LXRGCWorkContext<E<VM>>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
     }
 
     fn dump_memory(&self) {
@@ -931,11 +918,11 @@ impl<VM: VMBinding> LXR<VM> {
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
+            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+            .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -952,12 +939,12 @@ impl<VM: VMBinding> LXR<VM> {
         }
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<RCImmixCollectRootEdges<VM>>::new());
+            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+            .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
@@ -977,13 +964,14 @@ impl<VM: VMBinding> LXR<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<E>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<LXRGCWorkContext<E>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(Prepare::<LXRGCWorkContext<VM>>::new(self));
+            .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
-            .add(Release::<LXRGCWorkContext<VM>>::new(self));
+            .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
