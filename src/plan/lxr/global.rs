@@ -504,6 +504,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }
         }
         gc_log!([3] " - released young blocks since gc start {}({}M)", self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+
+        self.dump_memory();
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -902,7 +904,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn dump_memory(&self) {
-        if crate::DUMP_MEM_ON_CRASH {
+        if crate::DUMP_MEM_ON_CRASH && crate::GC_EPOCH.load(Ordering::SeqCst) >= 180 {
             println!("\n\n\n---------- IMMIX ----------\n\n");
             self.immix_space.dump_memory();
             println!("\n\n\n---------- LOS ----------\n\n");

@@ -31,6 +31,7 @@ use crate::{
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
+use itertools::Itertools;
 use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -786,27 +787,36 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let mut total_rc_live: usize = 0;
         let mut total_line_live: usize = 0;
         let mut total_block_live: usize = 0;
-        let mut total_nursery_live: usize = 0;
-        let mut total_mature_live: usize = 0;
+        let mut block_avail_pages = vec![];
+        let mut block_avail_lines = vec![];
+        let mut page_avail_lines = vec![];
         for chunk in self.chunk_map.all_chunks() {
             for block in chunk
                 .iter_region::<Block>()
                 .filter(|b| b.get_state() != BlockState::Unallocated)
             {
-                print!("{:?} {:?} ", block, block.get_state());
                 total_block_live += Block::BYTES;
-                if block.get_state() == BlockState::Nursery {
-                    total_nursery_live += Block::BYTES;
-                } else {
-                    total_mature_live += Block::BYTES;
+                let rc_array = RCArray::of(block);
+                let mut avail_lines_in_block = 0;
+                let mut avail_pages_in_block = 0;
+                for page in block.iter_region::<Page>() {
+                    let mut avail_lines_in_page = 0;
+                    for line in page.iter_region::<Line>() {
+                        let i = line.get_index_within_block();
+                        if rc_array.is_dead(i) {
+                            avail_lines_in_page += 1;
+                        }
+                    }
+                    page_avail_lines.push(avail_lines_in_page);
+                    avail_lines_in_block += avail_lines_in_page;
+                    if avail_lines_in_page == Page::BYTES / Line::BYTES {
+                        avail_pages_in_block += 1;
+                    }
                 }
+                block_avail_lines.push(avail_lines_in_block);
+                block_avail_pages.push(avail_pages_in_block);
                 // line-live size
                 let live_lines = Block::LINES - block.calc_dead_lines();
-                print!(
-                    "live-lines={:?}({}B) ",
-                    live_lines,
-                    live_lines << Line::LOG_BYTES
-                );
                 total_line_live += live_lines << Line::LOG_BYTES;
                 // rc-live size
                 let mut rc_live_size = 0;
@@ -827,14 +837,29 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         rc_live_size += o.get_size::<VM>();
                     }
                 }
-                print!("rc-live={:?}B({} objs) ", rc_live_size, rc_live_objs);
+                // print!("rc-live={:?}B({} objs) ", rc_live_size, rc_live_objs);
                 total_rc_live += rc_live_size;
-                println!();
+                // println!();
             }
         }
         println!(
-            "rc-live={}B line-live={}B  total-live={}B (N: {}B M: {}B)",
-            total_rc_live, total_line_live, total_block_live, total_nursery_live, total_mature_live,
+            "rc-live={}B line-live={}B  total-live={}B",
+            total_rc_live, total_line_live, total_block_live,
+        );
+        println!("BLOCK AVAIL LINES:");
+        println!(
+            "{}",
+            block_avail_lines.iter().map(|x| format!("{x}")).join(",")
+        );
+        println!("BLOCK AVAIL PAGES:");
+        println!(
+            "{}",
+            block_avail_pages.iter().map(|x| format!("{x}")).join(",")
+        );
+        println!("PAGE AVAIL LINES:");
+        println!(
+            "{}",
+            page_avail_lines.iter().map(|x| format!("{x}")).join(",")
         );
     }
 

@@ -79,6 +79,24 @@ impl BlockState {
 /// Data structure to reference an immix block.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+pub struct Page(Address);
+
+impl Region for Page {
+    const LOG_BYTES: usize = 12;
+
+    fn from_aligned_address(address: Address) -> Self {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+
+    fn start(&self) -> Address {
+        self.0
+    }
+}
+
+/// Data structure to reference an immix block.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
 pub struct Block(Address);
 
 impl Region for Block {
