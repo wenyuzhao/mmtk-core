@@ -104,16 +104,13 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         unsafe { *self.space.get() = space as *const ImmixSpace<VM> }
     }
 
-    pub fn reset_block_mark_for_mutator_reused_blocks(&self, pause: Pause) {
-        if pause == Pause::RefCount || pause == Pause::InitialMark {
-            return;
-        }
+    pub fn reset_block_mark_for_mutator_reused_blocks(&self, _pause: Pause) {
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
         self.reused_blocks.visit_slice(|blocks| {
             for b in blocks {
                 let b = b.load(Ordering::Relaxed);
-                b.set_state(BlockState::Marked);
+                b.set_state(BlockState::Unmarked);
             }
         });
     }
