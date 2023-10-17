@@ -858,6 +858,8 @@ impl<VM: VMBinding> LXR<VM> {
             scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
         }
+        scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
