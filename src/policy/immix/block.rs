@@ -163,6 +163,8 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
+    pub const AVAIL_PAGES: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_AVAIL_PAGES_IN_BLOCK;
 
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
         let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
@@ -374,6 +376,7 @@ impl Block {
         // }
         if space.rc_enabled {
             if !reuse {
+                Block::AVAIL_PAGES.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
                 self.clear_in_place_promoted();
                 debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
@@ -663,8 +666,37 @@ impl Block {
         .is_ok()
     }
 
+    pub fn update_avail_pages<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        let state = self.get_state();
+        assert_ne!(state, BlockState::Reusing, "{:?}", self);
+        // if state != BlockState::Reusing {
+        let new_avail_pages: u8 = self.calc_avail_pages() as u8;
+        let old_avail_pages = Block::AVAIL_PAGES
+            .fetch_update_atomic(self.start(), Ordering::SeqCst, Ordering::SeqCst, |_| {
+                Some(new_avail_pages)
+            })
+            .unwrap();
+        assert!(new_avail_pages >= old_avail_pages);
+        if new_avail_pages > old_avail_pages {
+            space.avail_pages.fetch_add(
+                (new_avail_pages - old_avail_pages) as usize,
+                Ordering::SeqCst,
+            );
+            // println!(
+            //     "+ {} {} {}",
+            //     new_avail_pages - old_avail_pages,
+            //     new_avail_pages,
+            //     old_avail_pages
+            // );
+        }
+        // }
+    }
+
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
+        let state = self.get_state();
+        if state == BlockState::Unallocated || state == BlockState::Nursery
+        // || state == BlockState::Reusing
+        {
             return false;
         }
         if defrag || self.rc_dead() {
@@ -673,6 +705,7 @@ impl Block {
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {
+            self.update_avail_pages(space);
             // See the caller of this function.
             // At least one object is dead in the block.
             let add_as_reusable = if !crate::args::IGNORE_REUSING_BLOCKS {
@@ -716,6 +749,24 @@ impl Block {
 
     pub fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
+    }
+
+    pub fn calc_avail_pages(&self) -> usize {
+        let rc_array = RCArray::of(*self);
+        let mut avail_pages_in_block = 0;
+        for page in self.iter_region::<Page>() {
+            let mut avail_lines_in_page = 0;
+            for line in page.iter_region::<Line>() {
+                let i = line.get_index_within_block();
+                if rc_array.is_dead(i) {
+                    avail_lines_in_page += 1;
+                }
+            }
+            if avail_lines_in_page == Page::BYTES / Line::BYTES {
+                avail_pages_in_block += 1;
+            }
+        }
+        avail_pages_in_block
     }
 
     pub fn has_holes(&self) -> bool {

@@ -89,6 +89,7 @@ define_side_metadata_specs!(
     NURSERY_PROMOTION_STATE   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     IX_BLOCK_DEAD_WORDS = (global: false, log_num_of_bits: 5 /* u32 */, log_bytes_in_region: Block::LOG_BYTES),
     IX_LINE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
+    IX_AVAIL_PAGES_IN_BLOCK    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     LOS_PAGE_VALIDITY    = (global: false, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_PAGE as usize),
     // Mark chunks (any plan that uses the chunk map should include this spec in their local sidemetadata specs)
     CHUNK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),

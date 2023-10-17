@@ -400,7 +400,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.immix_space.reserved_pages() + self.common.get_used_pages()
+        self.immix_space.rc_reserved_pages() + self.common.get_used_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -456,6 +456,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .as_nanos();
             crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
+        let avail_pages = self.immix_space.avail_pages.load(Ordering::Relaxed);
+        gc_log!([3] " - reusable pages {}({}M)", avail_pages,avail_pages/256);
     }
 
     fn gc_pause_end(&self) {
@@ -506,6 +508,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         gc_log!([3] " - released young blocks since gc start {}({}M)", self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
 
         self.dump_memory();
+
+        let avail_pages = self.immix_space.avail_pages.load(Ordering::Relaxed);
+        gc_log!([3] " - reusable pages {}({}M)", avail_pages,avail_pages/256);
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -904,7 +909,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn dump_memory(&self) {
-        if crate::DUMP_MEM_ON_CRASH && crate::GC_EPOCH.load(Ordering::SeqCst) >= 180 {
+        if crate::DUMP_MEM_ON_CRASH && crate::GC_EPOCH.load(Ordering::SeqCst) >= 100 {
             println!("\n\n\n---------- IMMIX ----------\n\n");
             self.immix_space.dump_memory();
             println!("\n\n\n---------- LOS ----------\n\n");

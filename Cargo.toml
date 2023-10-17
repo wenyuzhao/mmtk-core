@@ -67,7 +67,7 @@ built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
 # default = ["sanity"]
-default = ["perf_counter", "rc_verify"]
+default = ["perf_counter"]
 # default = []
 nontemporal = []
 satb_timer = []

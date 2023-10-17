@@ -74,6 +74,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub num_clean_blocks_released_lazy: AtomicUsize,
     pub copy_alloc_bytes: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
+    pub avail_pages: AtomicUsize,
     pub remset: RemSet<VM>,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
@@ -337,6 +338,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::NURSERY_PROMOTION_STATE_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
                 MetadataSpec::OnSide(Line::VALIDITY_STATE),
+                MetadataSpec::OnSide(Block::AVAIL_PAGES),
             ]);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -432,12 +434,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             num_clean_blocks_released_lazy: Default::default(),
             copy_alloc_bytes: Default::default(),
             rc_killed_bytes: Default::default(),
+            avail_pages: Default::default(),
             cm_enabled: false,
             rc_enabled,
             is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
             evac_set: MatureEvacuationSet::default(),
         }
+    }
+
+    pub fn rc_reserved_pages(&self) -> usize {
+        self.reserved_pages() - self.avail_pages.load(Ordering::SeqCst)
     }
 
     /// Flush the thread-local queues in BlockPageResource
@@ -846,21 +853,39 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "rc-live={}B line-live={}B  total-live={}B",
             total_rc_live, total_line_live, total_block_live,
         );
-        println!("BLOCK AVAIL LINES:");
+        let total_block_avail_lines: usize = block_avail_lines.iter().sum();
         println!(
-            "{}",
-            block_avail_lines.iter().map(|x| format!("{x}")).join(",")
+            "BLOCK AVAIL LINES: {}({}M)",
+            total_block_avail_lines,
+            (total_block_avail_lines << Line::LOG_BYTES) >> 20
         );
-        println!("BLOCK AVAIL PAGES:");
+        let total_block_avail_pages: usize = block_avail_pages.iter().sum();
         println!(
-            "{}",
-            block_avail_pages.iter().map(|x| format!("{x}")).join(",")
+            "BLOCK AVAIL PAGES: {}({}M)",
+            total_block_avail_pages,
+            total_block_avail_pages / 256
         );
-        println!("PAGE AVAIL LINES:");
+        let total_page_avail_lines: usize = page_avail_lines.iter().sum();
         println!(
-            "{}",
-            page_avail_lines.iter().map(|x| format!("{x}")).join(",")
+            "PAGE AVAIL LINES: {}({}M)",
+            total_page_avail_lines,
+            (total_page_avail_lines << Line::LOG_BYTES) >> 20
         );
+        // println!("BLOCK AVAIL LINES:");
+        // println!(
+        //     "{}",
+        //     block_avail_lines.iter().map(|x| format!("{x}")).join(",")
+        // );
+        // println!("BLOCK AVAIL PAGES:");
+        // println!(
+        //     "{}",
+        //     block_avail_pages.iter().map(|x| format!("{x}")).join(",")
+        // );
+        // println!("PAGE AVAIL LINES:");
+        // println!(
+        //     "{}",
+        //     page_avail_lines.iter().map(|x| format!("{x}")).join(",")
+        // );
     }
 
     /// Release a block.
@@ -871,6 +896,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         zero_unlog_table: bool,
         single_thread: bool,
     ) {
+        let avail_pages: u8 = Block::AVAIL_PAGES.load_atomic::<u8>(block.start(), Ordering::SeqCst);
+        Block::AVAIL_PAGES.store_atomic(block.start(), 0u8, Ordering::SeqCst);
+        if nursery {
+            debug_assert_eq!(avail_pages, 0);
+        } else {
+            // println!("-x {}", avail_pages);
+            self.avail_pages
+                .fetch_sub(avail_pages as usize, Ordering::SeqCst);
+        }
         // println!(
         //     "Release {:?} nursery={} defrag={}",
         //     block,
@@ -954,6 +988,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     if !copy {
                         self.block_allocation.reused_blocks.push(block);
                     }
+                    // let avail_pages = Block::AVAIL_PAGES
+                    //     .fetch_update_atomic::<u8, _>(
+                    //         block.start(),
+                    //         Ordering::SeqCst,
+                    //         Ordering::SeqCst,
+                    //         |_| Some(0),
+                    //     )
+                    //     .unwrap();
+
+                    let avail_pages =
+                        Block::AVAIL_PAGES.load_atomic::<u8>(block.start(), Ordering::SeqCst);
+                    Block::AVAIL_PAGES.store_atomic::<u8>(block.start(), 0, Ordering::SeqCst);
+                    // println!("- {}", avail_pages);
+                    self.avail_pages
+                        .fetch_sub(avail_pages as usize, Ordering::SeqCst);
+                    // assert_ne!(state, BlockState::Reusing, "{:?}", self);
                 } else {
                     // Get available lines. Do this before block.init which will reset block state.
                     let lines_delta = match block.get_state() {

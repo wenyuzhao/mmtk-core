@@ -105,15 +105,16 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub fn reset_block_mark_for_mutator_reused_blocks(&self, pause: Pause) {
-        if pause == Pause::RefCount || pause == Pause::InitialMark {
-            return;
-        }
+        // if pause == Pause::RefCount || pause == Pause::InitialMark {
+        //     return;
+        // }
         // SATB sweep has problem scanning mutator recycled blocks.
         // Remaing the block state as "reusing" and reset them here.
         self.reused_blocks.visit_slice(|blocks| {
             for b in blocks {
+                // println!("RESET {:?}", b);
                 let b = b.load(Ordering::Relaxed);
-                b.set_state(BlockState::Marked);
+                b.set_state(BlockState::Unmarked);
             }
         });
     }
