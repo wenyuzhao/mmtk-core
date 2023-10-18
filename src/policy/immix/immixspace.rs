@@ -328,7 +328,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Get side metadata specs
     fn side_metadata_specs(rc_enabled: bool) -> Vec<SideMetadataSpec> {
         if rc_enabled {
-            return metadata::extract_side_metadata(&vec![
+            let mut meta = vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
@@ -337,9 +337,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::NURSERY_PROMOTION_STATE_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
-                MetadataSpec::OnSide(Line::VALIDITY_STATE),
                 MetadataSpec::OnSide(Block::AVAIL_PAGES),
-            ]);
+            ];
+            if !RemSet::<VM>::NO_VALIDITY_STATE {
+                meta.push(MetadataSpec::OnSide(Line::VALIDITY_STATE));
+            }
+            return metadata::extract_side_metadata(&meta);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
