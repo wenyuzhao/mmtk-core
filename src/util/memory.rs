@@ -14,6 +14,18 @@ pub fn result_is_mapped(result: Result<()>) -> bool {
     }
 }
 
+pub fn prefetch(start: Address, mut len: usize) {
+    if cfg!(feature = "prefetch_1k") {
+        len = usize::max(len, 1024);
+    }
+    for i in (0..len).step_by(64) {
+        unsafe {
+            let addr = start + i;
+            let _ = std::ptr::read_volatile(addr.to_ptr::<u8>());
+        }
+    }
+}
+
 pub fn zero(start: Address, len: usize) {
     set(start, 0, len);
 }

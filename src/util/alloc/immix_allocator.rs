@@ -241,6 +241,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         self.bump_pointer.limit - self.bump_pointer.cursor,
                     );
                 }
+                if cfg!(feature = "prefetch") {
+                    crate::util::memory::prefetch(
+                        self.bump_pointer.cursor,
+                        self.bump_pointer.limit - self.bump_pointer.cursor,
+                    );
+                }
                 debug_assert!(
                     align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
                         <= self.bump_pointer.limit
@@ -293,6 +299,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.large_bump_pointer.cursor = block.start();
                     self.large_bump_pointer.limit = block.end();
                 } else {
+                    if cfg!(feature = "prefetch") {
+                        crate::util::memory::prefetch(block.start(), Block::BYTES);
+                    }
                     self.bump_pointer.cursor = block.start();
                     self.bump_pointer.limit = block.end();
                 }
