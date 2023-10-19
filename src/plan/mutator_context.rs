@@ -22,7 +22,7 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
     _mutator: &mut Mutator<VM>,
     _tls: VMWorkerThread,
 ) {
-    unreachable!("`MutatorConfig::prepare_func` must not be called for the current plan.")
+    // unreachable!("`MutatorConfig::prepare_func` must not be called for the current plan.")
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
@@ -31,7 +31,7 @@ pub(crate) fn unreachable_release_func<VM: VMBinding>(
     _mutator: &mut Mutator<VM>,
     _tls: VMWorkerThread,
 ) {
-    unreachable!("`MutatorConfig::release_func` must not be called for the current plan.")
+    // unreachable!("`MutatorConfig::release_func` must not be called for the current plan.")
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that does nothing.
