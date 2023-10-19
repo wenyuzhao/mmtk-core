@@ -49,7 +49,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+        if cfg!(feature = "ix_retry_small_object_alloc_small_only")
+            && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES
+        {
             return Address::ZERO;
         }
         if self.acquire_recyclable_lines(size, align, offset) {

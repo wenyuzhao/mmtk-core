@@ -103,6 +103,7 @@ chunk_32m = []
 ix_block_only = []
 ix_no_defrag = []
 ix_retry_small_object_alloc = []
+ix_retry_small_object_alloc_small_only = []
 
 # LXR Parameters
 lxr_los_16k = []
