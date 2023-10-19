@@ -14,6 +14,7 @@ use std::{env, str::FromStr};
 pub(crate) struct RuntimeArgs {
     pub(crate) incs_limit: Option<usize>,
     pub(crate) no_mutator_line_recycling: bool,
+    pub(crate) no_line_recycling: bool,
     pub(crate) nursery_blocks: Option<usize>,
     pub(crate) young_limit_mb: Option<usize>,
     pub(crate) nursery_ratio: Option<usize>,
@@ -51,6 +52,7 @@ impl Default for RuntimeArgs {
         Self {
             incs_limit: env_arg("INCS_LIMIT"),
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
+            no_line_recycling: env_bool_arg("NO_LINE_RECYCLING").unwrap_or(false),
             nursery_blocks: env_arg("NURSERY_BLOCKS").or(
                 if cfg!(feature = "lxr_fixed_clean_rc_trigger") {
                     const BLOCKS_IN_MB: usize = (1 << 20) >> Block::LOG_BYTES;
