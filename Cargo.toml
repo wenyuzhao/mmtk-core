@@ -89,6 +89,7 @@ no_map_fixed_noreplace = []
 prefetch = []
 prefetch_1k = ["prefetch"]
 block_alloc_order_1 = []
+block_state_reset_bug = []
 
 ss_los_16m = []
 ss_tlab_4k = []
