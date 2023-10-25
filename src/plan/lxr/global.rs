@@ -102,7 +102,7 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
     gc_header_bits: 2,
     gc_header_words: 0,
     num_specialized_scans: 1,
-    /// Max immix object size is half of a block.
+    // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     barrier: BarrierSelector::FieldBarrier,
     needs_log_bit: true,
