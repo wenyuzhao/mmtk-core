@@ -27,7 +27,7 @@ crossbeam = "0.8"
 delegate = "0.9.0"
 downcast-rs = "1.2"
 enum-map = "2.4"
-env_logger = "0.8.4"
+env_logger = { version = "0.8.4", optional = true }
 humantime = "2.1.0"
 # We do not use this crate, but env_logger uses it. env_logger uses is_terminal 0.4.0. However, since 0.4.8, is_terminal requires Rust 1.63.
 # So we fix on 0.4.7 here. Once we bump our MSRV, we can remove this.
@@ -50,7 +50,7 @@ num-traits = "0.2.15"
 pfm = { git = "https://github.com/wenyuzhao/pfm.git", branch = "plm0", optional = true }
 probe = { version = "0.5", optional = true }
 portable-atomic = "1.4.3"
-regex = "1.7.0"
+regex = { version = "1.7.0", optional = true }
 spin = { version = "0.9.4", features = ["std"] }
 # static_assertions = "1.1.0"
 strum = "0.24.1"
@@ -67,9 +67,8 @@ built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
 # default = ["sanity"]
-default = ["perf_counter", "enable_sysinfo"]
+default = ["perf_counter", "dep:sysinfo", "dep:regex", "dep:env_logger"]
 # default = []
-enable_sysinfo = ["sysinfo"]
 nontemporal = []
 satb_timer = []
 yield_and_roots_timer = []
