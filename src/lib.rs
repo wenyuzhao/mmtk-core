@@ -618,3 +618,6 @@ static VERBOSE: AtomicUsize = AtomicUsize::new(0);
 fn verbose(level: usize) -> bool {
     VERBOSE.load(Ordering::Relaxed) >= level
 }
+
+static SANITY_LIVE_SIZE_IX: AtomicUsize = AtomicUsize::new(0);
+static SANITY_LIVE_SIZE_LOS: AtomicUsize = AtomicUsize::new(0);

@@ -164,6 +164,8 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());
         }
+        crate::SANITY_LIVE_SIZE_IX.store(0, Ordering::Relaxed);
+        crate::SANITY_LIVE_SIZE_LOS.store(0, Ordering::Relaxed);
     }
 }
 
@@ -263,6 +265,28 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
     }
 
+    #[cfg(feature = "fragmentation_analysis")]
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        use crate::util::address::{CLDScanPolicy, RefScanPolicy};
+        if object.is_null() {
+            return object;
+        }
+        if self.attempt_mark(object) {
+            let lxr = self
+                .mmtk()
+                .get_plan()
+                .downcast_ref::<crate::plan::lxr::LXR<VM>>()
+                .unwrap();
+            if lxr.immix_space.in_space(object) {
+                crate::SANITY_LIVE_SIZE_IX.fetch_add(object.get_size::<VM>(), Ordering::Relaxed);
+            } else {
+                crate::SANITY_LIVE_SIZE_LOS.fetch_add(object.get_size::<VM>(), Ordering::Relaxed);
+            }
+            self.nodes.enqueue(object);
+        }
+        object
+    }
+    #[cfg(not(feature = "fragmentation_analysis"))]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         if let Some(_lxr) = self
             .mmtk()

@@ -779,6 +779,161 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
     }
 
+    /// Dump fragmentation distribution and heap usage
+    ///
+    /// Collect 5 distrubutions:
+    /// 1. `avail-pages-in-block` -  Number of available pages in block (0-8)
+    /// 2. `avail-lines-in-block` -  Number of available lines in block (0-128)
+    /// 3. `contig-avail-lines` -  Number of **contiguous** available lines in block (0-64)
+    /// 4. `avail-blocks-in-chunk` -  Number of available blocks in chunk (0-128)
+    /// 5. `rc-live-words-in-block` -  RC Live size in block (0-4096)
+    pub fn dump_memory(&self) {
+        #[derive(Default)]
+        struct Dist {
+            avail_blocks_in_chunk: Vec<u8>,
+            avail_pages_in_block: Vec<u8>,
+            avail_lines_in_block: Vec<u8>,
+            contig_avail_lines: Vec<u8>,
+            rc_live_words_in_block: Vec<u16>,
+            live_chunks: usize,
+            live_blocks: usize,
+            live_pages: usize,
+            live_lines: usize,
+            rc_live_bytes: usize,
+        }
+        let mut dist = Dist::default();
+        for chunk in self.chunk_map.all_chunks() {
+            if !self.address_in_space(chunk.start()) {
+                continue;
+            }
+            dist.live_chunks += 1;
+            let mut avail_blocks_in_chunk = 0u8;
+            for block in chunk
+                .iter_region::<Block>()
+                .filter(|b| b.get_state() != BlockState::Unallocated)
+            {
+                dist.live_blocks += 1;
+                avail_blocks_in_chunk += 1;
+                // Get avail_pages_in_block and avail_lines_in_block
+                let rc_array = RCArray::of(block);
+                let mut avail_lines_in_block = 0u8;
+                let mut avail_pages_in_block = 0u8;
+                for page in block.iter_region::<Page>() {
+                    let mut avail_lines_in_page = 0;
+                    for line in page.iter_region::<Line>() {
+                        let i = line.get_index_within_block();
+                        if rc_array.is_dead(i) {
+                            avail_lines_in_page += 1;
+                        } else {
+                            dist.live_lines += 1;
+                        }
+                    }
+                    avail_lines_in_block += avail_lines_in_page;
+                    if avail_lines_in_page == (Page::BYTES / Line::BYTES) as u8 {
+                        avail_pages_in_block += 1;
+                    } else {
+                        dist.live_pages += 1;
+                    }
+                }
+                dist.avail_pages_in_block.push(avail_pages_in_block);
+                dist.avail_lines_in_block.push(avail_lines_in_block);
+                // Get contig_avail_lines
+                block.iter_holes(|lines| dist.contig_avail_lines.push(lines as u8));
+                // Get rc_live_bytes_in_block
+                let mut rc_live_size: usize = 0;
+                let mut cursor = block.start();
+                let limit = block.end();
+                while cursor < limit {
+                    let o: ObjectReference = cursor.to_object_reference::<VM>();
+                    cursor = cursor + crate::util::rc::MIN_OBJECT_SIZE;
+                    let c = self.rc.count(o);
+                    if c != 0 {
+                        if Line::is_aligned(o.to_address::<VM>())
+                            && self.rc.is_straddle_line(Line::from(o.to_address::<VM>()))
+                        {
+                            continue;
+                        }
+                        rc_live_size += o.get_size::<VM>();
+                    }
+                }
+                dist.rc_live_words_in_block.push((rc_live_size >> 3) as u16);
+                dist.rc_live_bytes += rc_live_size;
+            }
+            dist.avail_blocks_in_chunk.push(avail_blocks_in_chunk);
+        }
+
+        fn dump_bins<T: Copy + Ord + std::ops::Add<Output = T> + Into<usize>>(
+            name: &str,
+            v: &mut Vec<T>,
+            max: usize,
+        ) {
+            assert!(max <= u16::MAX as usize);
+            let max = max as u16;
+            v.sort();
+            let mut bins = vec![0u16; max as usize + 1];
+            for x in v.iter() {
+                let x: usize = (*x).into();
+                bins[x] += 1;
+            }
+            print!("  {}: ", name);
+            // let mut sum = 0usize;
+            for i in 0..=max {
+                if i == 0 {
+                    print!("[");
+                } else {
+                    print!(",");
+                }
+                print!("{}", bins[i as usize]);
+                // sum += cdf[i as usize] as usize;
+                // print!("{}", sum);
+            }
+            println!("]");
+        }
+        // owned chunks
+        let mut owned_chunks = 0usize;
+        let mut a = self.pr.common().get_head_discontiguous_region();
+        while !a.is_zero() {
+            owned_chunks += self.common.vm_map().get_contiguous_region_chunks(a);
+            a = self.common.vm_map().get_next_contiguous_region(a);
+        }
+        println!("immix:");
+        println!("  owned-chunks: {}", owned_chunks);
+        println!("  live-chunks: {}", dist.live_chunks);
+        println!("  live-blocks: {}", dist.live_blocks);
+        println!("  live-pages: {}", dist.live_pages);
+        println!("  live-lines: {}", dist.live_lines);
+        println!("  rc-live-bytes: {}", dist.rc_live_bytes);
+        println!(
+            "  reachable-live-bytes: {}",
+            crate::SANITY_LIVE_SIZE_IX.load(Ordering::SeqCst)
+        );
+        dump_bins(
+            "avail-blocks-in-chunk",
+            &mut dist.avail_blocks_in_chunk,
+            Chunk::BYTES / Block::BYTES,
+        );
+        dump_bins(
+            "avail-pages-in-block",
+            &mut dist.avail_pages_in_block,
+            Block::BYTES / Page::BYTES,
+        );
+        dump_bins(
+            "avail-lines-in-block",
+            &mut dist.avail_lines_in_block,
+            Block::BYTES / Line::BYTES,
+        );
+        dump_bins(
+            "contig-avail-lines",
+            &mut dist.contig_avail_lines,
+            Block::BYTES / Line::BYTES,
+        );
+        dump_bins(
+            "rc-live-words-in-block",
+            &mut dist.rc_live_words_in_block,
+            Block::BYTES >> 3,
+        );
+    }
+
     /// Release a block.
     pub fn release_block(
         &self,

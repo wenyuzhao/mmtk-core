@@ -295,8 +295,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         #[cfg(feature = "analysis")]
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         // Resume mutators
-        if pause == Pause::Full || pause == Pause::FinalMark {
+        if cfg!(not(feature = "fragmentation_analysis"))
+            && (pause == Pause::Full || pause == Pause::FinalMark)
+        {
             #[cfg(feature = "sanity")]
+            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
+        }
+
+        #[cfg(feature = "sanity")]
+        if cfg!(feature = "fragmentation_analysis") && pause == Pause::RefCount {
             scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
         }
     }
@@ -500,6 +507,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }
         }
         gc_log!([3] " - released young blocks since gc start {}({}M)", self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+
+        if cfg!(feature = "fragmentation_analysis") {
+            self.dump_memory(pause);
+        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -896,6 +907,19 @@ impl<VM: VMBinding> LXR<VM> {
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
+    }
+
+    fn dump_memory(&self, pause: Pause) {
+        if pause != Pause::RefCount {
+            println!("\n\n\n@@ FRAGMENTATION DISTRUBUTION - Full\n\n");
+            return;
+        }
+        println!("\n\n\n@@ FRAGMENTATION DISTRUBUTION - RC\n");
+        println!("heap-size: {}", self.get_total_pages() << 12);
+        self.immix_space.dump_memory();
+        self.los().dump_memory();
+        println!("\n@@ FRAGMENTATION DISTRUBUTION - RC End\n\n");
+        // }
     }
 
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {

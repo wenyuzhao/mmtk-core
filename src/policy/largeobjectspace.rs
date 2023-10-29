@@ -234,6 +234,42 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    pub fn dump_memory(&self) {
+        use crate::util::heap::chunk_map::Chunk;
+        use crate::util::linear_scan::Region;
+        assert!(!self.common.contiguous);
+        // owned chunks
+        let mut owned_chunks = 0usize;
+        let mut a = self.pr.common().get_head_discontiguous_region();
+        while !a.is_zero() {
+            owned_chunks += self.common.vm_map().get_contiguous_region_chunks(a);
+            a = self.common.vm_map().get_next_contiguous_region(a);
+        }
+        // live pages and live size
+        let mut chunks = HashSet::<Address>::new();
+        let mut live_pages = 0usize;
+        let mut rc_live_bytes = 0usize;
+        let mature_objects = self.rc_mature_objects.lock();
+        for o in &*mature_objects {
+            let c = Chunk::align(o.to_address::<VM>());
+            if !chunks.contains(&c) {
+                chunks.insert(c);
+            }
+            let size = o.get_size::<VM>();
+            live_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
+            rc_live_bytes += size;
+        }
+        println!("los:");
+        println!("  owned-chunks: {}", owned_chunks);
+        println!("  live-chunks: {}", chunks.len());
+        println!("  live-pages: {}", live_pages);
+        println!("  rc-live-bytes: {}", rc_live_bytes);
+        println!(
+            "  reachable-live-bytes: {}",
+            crate::SANITY_LIVE_SIZE_LOS.load(Ordering::SeqCst)
+        );
+    }
+
     fn update_validity(&self, start: Address, pages: usize) {
         if RemSet::<VM>::NO_VALIDITY_STATE {
             return;

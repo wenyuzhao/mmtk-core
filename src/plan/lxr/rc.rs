@@ -1071,6 +1071,10 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
 
     fn process_edges(&mut self) {
         if !self.edges.is_empty() {
+            #[cfg(feature = "sanity")]
+            if self.roots && !self.mmtk().get_plan().is_in_sanity() {
+                self.cache_roots_for_sanity_gc(self.edges.clone());
+            }
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
             let roots = std::mem::take(&mut self.edges);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);

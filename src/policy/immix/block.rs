@@ -76,6 +76,24 @@ impl BlockState {
     }
 }
 
+/// Data structure to reference an OS 4K page.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+pub struct Page(Address);
+
+impl Region for Page {
+    const LOG_BYTES: usize = LOG_BYTES_IN_PAGE as usize;
+
+    fn from_aligned_address(address: Address) -> Self {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+
+    fn start(&self) -> Address {
+        self.0
+    }
+}
+
 /// Data structure to reference an immix block.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
@@ -720,6 +738,26 @@ impl Block {
             }
         }
         false
+    }
+
+    pub fn iter_holes(&self, mut f: impl FnMut(usize)) {
+        let rc_array = RCArray::of(*self);
+        let mut i = 0;
+        while i < Block::LINES {
+            if rc_array.is_dead(i) {
+                let mut j = i + 1;
+                while j < Block::LINES {
+                    if !rc_array.is_dead(j) {
+                        break;
+                    }
+                    j += 1;
+                }
+                f(j - i);
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
     }
 
     pub fn calc_holes(&self) -> usize {
