@@ -911,14 +911,14 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn dump_memory(&self, pause: Pause) {
         if pause != Pause::RefCount {
-            println!("\n\n\n@@ FRAGMENTATION DISTRUBUTION - Full\n\n");
+            println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - Full\n\n");
             return;
         }
-        println!("\n\n\n@@ FRAGMENTATION DISTRUBUTION - RC\n");
+        println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - RC\n");
         println!("heap-size: {}", self.get_total_pages() << 12);
         self.immix_space.dump_memory();
         self.los().dump_memory();
-        println!("\n@@ FRAGMENTATION DISTRUBUTION - RC End\n\n");
+        println!("\n@@ FRAGMENTATION DISTRIBUTION - RC End\n\n");
         // }
     }
 
