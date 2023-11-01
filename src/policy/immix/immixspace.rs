@@ -870,7 +870,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             assert!(max <= u16::MAX as usize);
             let max = max as u16;
             v.sort();
-            let mut bins = vec![0u16; max as usize + 1];
+            let mut bins = vec![0usize; max as usize + 1];
             for x in v.iter() {
                 let x: usize = (*x).into();
                 bins[x] += 1;
