@@ -231,6 +231,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             unreachable!();
         }
         if !crate::LazySweepingJobs::all_finished() {
+            if crate::verbose(1) {
+                eprintln!("WARNING: LXR Lazy Sweeping Not Finished");
+            }
             crate::counters()
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
