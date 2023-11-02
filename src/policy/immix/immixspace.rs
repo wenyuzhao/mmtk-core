@@ -153,6 +153,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.initial_mark_pause {
             return true;
         }
+
+        #[cfg(not(feature = "ix_no_sweeping"))]
         if self.cm_enabled {
             let block_state = Block::containing::<VM>(object).get_state();
             if block_state == BlockState::Nursery {
@@ -935,6 +937,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release a block.
+    #[cfg(not(feature = "ix_no_sweeping"))]
     pub fn release_block(
         &self,
         block: Block,
@@ -978,6 +981,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.notify_new_clean_block(copy);
         }
         let block = Block::from_aligned_address(block_address);
+        #[cfg(not(feature = "ix_no_sweeping"))]
         if !copy && self.rc_enabled {
             self.block_allocation.nursery_blocks.push(block);
         }
@@ -1082,6 +1086,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     let block = Block::containing::<VM>(object);
                     let state = block.get_state();
+                    #[cfg(feature = "ix_no_sweeping")]
+                    if state != BlockState::Marked {
+                        debug_assert_ne!(state, BlockState::Unallocated);
+                        block.set_state(BlockState::Marked);
+                    }
+                    #[cfg(not(feature = "ix_no_sweeping"))]
                     if state != BlockState::Nursery && state != BlockState::Marked {
                         block.set_state(BlockState::Marked);
                     }
@@ -1178,6 +1188,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                 new_object
             };
+            #[cfg(feature = "ix_no_sweeping")]
+            debug_assert!({
+                let state = Block::containing::<VM>(new_object).get_state();
+                state == BlockState::Marked
+            });
+            #[cfg(not(feature = "ix_no_sweeping"))]
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
                 state == BlockState::Marked || state == BlockState::Nursery

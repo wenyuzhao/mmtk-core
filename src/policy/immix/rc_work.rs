@@ -167,6 +167,10 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                 );
             }
         }
+        #[cfg(feature = "ix_no_sweeping")]
+        if count != 0 {
+            lxr.immix_space.pr.bulk_release_blocks(count);
+        }
         if count != 0
             && (lxr.current_pause().is_none()
                 || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
@@ -271,7 +275,11 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             .iter_region::<Block>()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
+            #[cfg(not(feature = "ix_no_sweeping"))]
+            if block.get_state() == BlockState::Nursery {
+                continue;
+            }
+            if block.is_defrag_source() {
                 continue;
             } else {
                 self.process_block(block, immix_space)
@@ -341,6 +349,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Clear defrag state
             assert!(!block.is_defrag_source());
             // Clear block mark data.
+            #[cfg(feature = "ix_no_sweeping")]
+            block.set_state(BlockState::Unmarked);
+            #[cfg(not(feature = "ix_no_sweeping"))]
             if block.get_state() != BlockState::Nursery {
                 block.set_state(BlockState::Unmarked);
             }
@@ -369,6 +380,8 @@ impl MatureEvacuationSet {
         if defrag_blocks.is_empty() {
             return;
         }
+        #[cfg(feature = "ix_no_sweeping")]
+        let count = defrag_blocks.len();
         while let Some(block) = defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
                 // This block has been eagerly released (probably be reused again). Skip it.
@@ -378,6 +391,10 @@ impl MatureEvacuationSet {
             block.clear_striddle_table::<VM>();
             block.rc_sweep_mature::<VM>(space, true);
             assert!(!block.is_defrag_source());
+        }
+        #[cfg(feature = "ix_no_sweeping")]
+        if count != 0 {
+            space.pr.bulk_release_blocks(count);
         }
     }
 
@@ -395,7 +412,11 @@ impl MatureEvacuationSet {
 
     fn skip_block(b: Block) -> bool {
         let s = b.get_state();
-        b.is_defrag_source() || s == BlockState::Unallocated || s == BlockState::Nursery
+        #[cfg(feature = "ix_no_sweeping")]
+        let skip = b.is_defrag_source() || s == BlockState::Unallocated;
+        #[cfg(not(feature = "ix_no_sweeping"))]
+        let skip = b.is_defrag_source() || s == BlockState::Unallocated || s == BlockState::Nursery;
+        skip
     }
 
     fn select_blocks_in_fragmented_chunks(

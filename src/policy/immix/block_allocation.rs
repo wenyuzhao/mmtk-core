@@ -1,8 +1,7 @@
 use super::block::BlockState;
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
-use crate::scheduler::WorkBucketStage;
-use crate::util::constants::{LOG_BYTES_IN_MBYTE, LOG_BYTES_IN_PAGE};
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::{
     plan::lxr::LXR,
     policy::space::Space,
@@ -31,6 +30,7 @@ impl BlockCache {
         }
     }
 
+    #[cfg(not(feature = "ix_no_sweeping"))]
     fn len(&self) -> usize {
         self.cursor.load(Ordering::SeqCst)
     }
@@ -68,18 +68,22 @@ impl BlockCache {
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: UnsafeCell<*const ImmixSpace<VM>>,
+    #[cfg(not(feature = "ix_no_sweeping"))]
     pub(super) nursery_blocks: BlockCache,
     pub(super) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
+    num_nursery_blocks: AtomicUsize,
 }
 
 impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn new() -> Self {
         Self {
             space: UnsafeCell::new(std::ptr::null()),
+            #[cfg(not(feature = "ix_no_sweeping"))]
             nursery_blocks: BlockCache::new(),
             reused_blocks: BlockCache::new(),
             lxr: None,
+            num_nursery_blocks: AtomicUsize::new(0),
         }
     }
 
@@ -88,7 +92,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub fn clean_nursery_blocks(&self) -> usize {
-        self.nursery_blocks.len()
+        self.num_nursery_blocks.load(Ordering::Relaxed)
     }
 
     pub fn clean_nursery_mb(&self) -> usize {
@@ -96,7 +100,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub fn total_young_allocation_in_bytes(&self) -> usize {
-        (self.nursery_blocks.len() << Block::LOG_BYTES)
+        (self.clean_nursery_blocks() << Block::LOG_BYTES)
             + (self.space().get_mutator_recycled_lines_in_pages() << LOG_BYTES_IN_PAGE)
     }
 
@@ -159,6 +163,16 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
+    #[cfg(feature = "ix_no_sweeping")]
+    pub fn sweep_nursery_blocks(&self, _scheduler: &GCWorkScheduler<VM>, _pause: Pause) {
+        let num_blocks = self.clean_nursery_blocks();
+        self.space().pr.bulk_release_blocks(num_blocks);
+        self.space().pr.reset();
+        self.num_nursery_blocks.store(0, Ordering::SeqCst);
+    }
+
+    /// Reset allocated_block_buffer and free nursery blocks.
+    #[cfg(not(feature = "ix_no_sweeping"))]
     pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
         const PARALLEL_STW_SWEEPING: bool = false;
         let max_stw_sweep_blocks: usize = if cfg!(feature = "lxr_no_lazy_young_sweeping")
@@ -209,10 +223,12 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         });
         self.nursery_blocks.reset();
         if !PARALLEL_STW_SWEEPING {
-            gc_log!([3] " - released young blocks since gc start {}({}M)", self.space().num_clean_blocks_released_young.load(Ordering::Relaxed), self.space().num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+            gc_log!([3] " - released young blocks since gc start {}({}M)", self.space().num_clean_blocks_released_young.load(Ordering::Relaxed), self.space().num_clean_blocks_released_young.load(Ordering::Relaxed) >> (crate::util::constants::LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
         }
+        self.num_nursery_blocks.store(0, Ordering::SeqCst);
     }
 
+    #[cfg(not(feature = "ix_no_sweeping"))]
     fn parallel_sweep_all_nursery_blocks(
         &self,
         scheduler: &GCWorkScheduler<VM>,
@@ -226,7 +242,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 Box::new(RCSTWSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
             })
             .collect();
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
+        scheduler.work_buckets[crate::scheduler::WorkBucketStage::Unconstrained].bulk_add(packets);
     }
 
     /// Notify a GC pahse has started
@@ -261,6 +277,12 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             } else {
                 // TODO: Performance? Is this necessary?
                 block.clear_mark_table::<VM>();
+            }
+            if !copy {
+                self.num_nursery_blocks.fetch_add(1, Ordering::Relaxed);
+                if cfg!(feature = "ix_no_sweeping") {
+                    block.clear_field_unlog_table::<VM>();
+                }
             }
         }
         // println!("Alloc {:?} {}", block, copy);
@@ -298,11 +320,13 @@ impl<VM: VMBinding> GCWork<VM> for RCLazySweepMutatorReusedBlocks {
     }
 }
 
-pub struct RCLazySweepNurseryBlocks {
+#[cfg(not(feature = "ix_no_sweeping"))]
+struct RCLazySweepNurseryBlocks {
     blocks: Vec<Block>,
     _counter: LazySweepingJobsCounter,
 }
 
+#[cfg(not(feature = "ix_no_sweeping"))]
 impl RCLazySweepNurseryBlocks {
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
@@ -312,6 +336,7 @@ impl RCLazySweepNurseryBlocks {
     }
 }
 
+#[cfg(not(feature = "ix_no_sweeping"))]
 impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let space = &mmtk
@@ -334,11 +359,13 @@ impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
     }
 }
 
-pub struct RCSTWSweepNurseryBlocks {
+#[cfg(not(feature = "ix_no_sweeping"))]
+struct RCSTWSweepNurseryBlocks {
     blocks: Vec<Block>,
     _counter: LazySweepingJobsCounter,
 }
 
+#[cfg(not(feature = "ix_no_sweeping"))]
 impl RCSTWSweepNurseryBlocks {
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
@@ -348,6 +375,7 @@ impl RCSTWSweepNurseryBlocks {
     }
 }
 
+#[cfg(not(feature = "ix_no_sweeping"))]
 impl<VM: VMBinding> GCWork<VM> for RCSTWSweepNurseryBlocks {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let space = &mmtk

@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering;
 pub enum BlockState {
     /// the block is not allocated.
     Unallocated,
+    #[cfg(not(feature = "ix_no_sweeping"))]
     /// the block is a young block.
     Nursery,
     /// the block is allocated but not marked.
@@ -36,8 +37,9 @@ impl BlockState {
     const MARK_UNMARKED: u8 = u8::MAX;
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
-    const MARK_NURSERY: u8 = u8::MAX - 2;
-    const MARK_REUSING: u8 = u8::MAX - 3;
+    const MARK_REUSING: u8 = u8::MAX - 2;
+    #[cfg(not(feature = "ix_no_sweeping"))]
+    const MARK_NURSERY: u8 = u8::MAX - 3;
 }
 
 impl From<u8> for BlockState {
@@ -46,8 +48,9 @@ impl From<u8> for BlockState {
             Self::MARK_UNALLOCATED => BlockState::Unallocated,
             Self::MARK_UNMARKED => BlockState::Unmarked,
             Self::MARK_MARKED => BlockState::Marked,
-            Self::MARK_NURSERY => BlockState::Nursery,
             Self::MARK_REUSING => BlockState::Reusing,
+            #[cfg(not(feature = "ix_no_sweeping"))]
+            Self::MARK_NURSERY => BlockState::Nursery,
             unavailable_lines => BlockState::Reusable { unavailable_lines },
         }
     }
@@ -59,8 +62,9 @@ impl From<BlockState> for u8 {
             BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
-            BlockState::Nursery => BlockState::MARK_NURSERY,
             BlockState::Reusing => BlockState::MARK_REUSING,
+            #[cfg(not(feature = "ix_no_sweeping"))]
+            BlockState::Nursery => BlockState::MARK_NURSERY,
             BlockState::Reusable { unavailable_lines } => {
                 assert_ne!(unavailable_lines, 0);
                 u8::min(unavailable_lines, u8::MAX - 4)
@@ -267,6 +271,14 @@ impl Block {
         MetadataByteArrayRef::<{ Block::LINES }>::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
     }
 
+    pub fn is_nursery(&self) -> bool {
+        #[cfg(not(feature = "ix_no_sweeping"))]
+        let young_block_state = BlockState::Nursery;
+        #[cfg(feature = "ix_no_sweeping")]
+        let young_block_state = BlockState::Unallocated;
+        self.get_state() == young_block_state
+    }
+
     /// Get block mark state.
     pub fn get_state(&self) -> BlockState {
         let byte = Self::MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
@@ -292,7 +304,7 @@ impl Block {
             .map_err(|x| (x as u8).into())
     }
 
-    pub fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
+    fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
         self.fetch_update_state(|s| {
             if (ignore_reusing_blocks && s == BlockState::Reusing) || s == BlockState::Unallocated {
                 None
@@ -377,18 +389,23 @@ impl Block {
                 self.clear_in_place_promoted();
                 debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
-            if !copy && reuse {
-                self.set_state(BlockState::Reusing);
-                debug_assert!(!self.is_defrag_source());
-            } else if copy {
+            if copy {
                 if reuse {
                     debug_assert!(!self.is_defrag_source());
                 }
                 self.set_state(BlockState::Unmarked);
                 self.set_as_defrag_source(false);
             } else {
-                self.set_state(BlockState::Nursery);
-                self.set_as_defrag_source(false);
+                if reuse {
+                    self.set_state(BlockState::Reusing);
+                    debug_assert!(!self.is_defrag_source());
+                } else {
+                    #[cfg(not(feature = "ix_no_sweeping"))]
+                    self.set_state(BlockState::Nursery);
+                    #[cfg(feature = "ix_no_sweeping")]
+                    self.set_state(BlockState::Unallocated);
+                    self.set_as_defrag_source(false);
+                }
             }
         } else {
             self.set_state(if copy {
@@ -559,8 +576,13 @@ impl Block {
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
                     // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self, false, false, false);
-                    true
+                    #[cfg(not(feature = "ix_no_sweeping"))]
+                    {
+                        space.release_block(*self, false, false, false);
+                        true
+                    }
+                    #[cfg(feature = "ix_no_sweeping")]
+                    unimplemented!();
                 }
                 BlockState::Marked => {
                     #[cfg(feature = "vo_bit")]
@@ -599,8 +621,13 @@ impl Block {
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
                 // Release the block if non of its lines are marked.
-                space.release_block(*self, false, false, false);
-                true
+                #[cfg(not(feature = "ix_no_sweeping"))]
+                {
+                    space.release_block(*self, false, false, false);
+                    true
+                }
+                #[cfg(feature = "ix_no_sweeping")]
+                unimplemented!();
             } else {
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -631,6 +658,7 @@ impl Block {
         }
     }
 
+    #[cfg(not(feature = "ix_no_sweeping"))]
     pub fn rc_sweep_nursery<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
@@ -664,11 +692,19 @@ impl Block {
     }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
+        #[cfg(not(feature = "ix_no_sweeping"))]
         if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
+            return false;
+        }
+        #[cfg(feature = "ix_no_sweeping")]
+        if self.get_state() == BlockState::Unallocated {
             return false;
         }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
+                #[cfg(feature = "ix_no_sweeping")]
+                self.deinit(space);
+                #[cfg(not(feature = "ix_no_sweeping"))]
                 space.release_block(*self, false, true, defrag);
                 return true;
             }
