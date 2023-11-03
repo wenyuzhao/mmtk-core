@@ -371,11 +371,15 @@ impl MatureEvacuationSet {
             return;
         }
         #[cfg(feature = "ix_no_sweeping")]
-        let count = defrag_blocks.len();
+        let mut count = 0;
         while let Some(block) = defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
                 // This block has been eagerly released (probably be reused again). Skip it.
                 continue;
+            }
+            #[cfg(feature = "ix_no_sweeping")]
+            {
+                count += 1;
             }
             block.clear_rc_table::<VM>();
             block.clear_striddle_table::<VM>();
