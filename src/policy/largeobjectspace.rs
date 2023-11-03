@@ -23,7 +23,7 @@ use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
 use spin::Mutex;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
 
 #[allow(unused)]
@@ -42,7 +42,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     treadmill: TreadMill,
     trace_in_progress: bool,
     rc_nursery_objects: SegQueue<ObjectReference>,
-    rc_mature_objects: Mutex<HashMap<ObjectReference, usize>>,
+    rc_mature_objects: Mutex<HashSet<ObjectReference>>,
     rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
@@ -250,11 +250,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let mut live_pages = 0usize;
         let mut rc_live_bytes = 0usize;
         let mature_objects = self.rc_mature_objects.lock();
-        for (_o, size) in &*mature_objects {
+        for o in &*mature_objects {
             // let c = Chunk::align(o.to_address::<VM>());
             // if !chunks.contains(&c) {
             //     chunks.insert(c);
             // }
+            let size = o.get_size::<VM>();
             live_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
             rc_live_bytes += size;
         }
@@ -321,7 +322,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if self.rc.count(o) == 0 {
                 self.release_object(o.to_address::<VM>());
             } else {
-                mature_blocks.insert(o, o.get_size::<VM>());
+                mature_blocks.insert(o);
             }
         }
     }
@@ -447,8 +448,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        self.rc_dead_objects.push(o);
-        self.release_object(o.to_address::<VM>());
+        if o.to_address::<VM>().attempt_log_field::<VM>() {
+            self.rc_dead_objects.push(o);
+        }
     }
 
     pub fn is_marked(&self, object: ObjectReference) -> bool {
@@ -535,13 +537,31 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         });
     }
 
-    pub fn sweep_rc_mature_objects_after_satb(&self, is_live: &impl Fn(ObjectReference) -> bool) {
-        let mature_objects = self.rc_mature_objects.lock();
-        for (o, _size) in mature_objects.iter() {
+    pub fn sweep_rc_mature_objects(
+        &self,
+        lazy_free: bool,
+        is_live: &impl Fn(ObjectReference) -> bool,
+    ) {
+        let mut mature_objects = self.rc_mature_objects.lock();
+        let mut dead = vec![];
+        for o in mature_objects.iter() {
             if !is_live(*o) {
                 self.update_stat_for_dead_mature_object(*o);
                 self.rc.set(*o, 0);
-                self.rc_free(*o);
+                if lazy_free {
+                    self.rc_free(*o);
+                } else {
+                    dead.push(*o);
+                }
+            }
+        }
+        if !lazy_free {
+            for o in dead {
+                let removed = mature_objects.remove(&o);
+                o.to_address::<VM>().unlog_field::<VM>();
+                if removed {
+                    self.release_object(o.to_address::<VM>());
+                }
             }
         }
     }
@@ -551,24 +571,24 @@ fn get_super_page(cell: Address) -> Address {
     cell.align_down(BYTES_IN_PAGE)
 }
 
-pub struct RCSweepMatureAfterSATBLOS {
+pub struct RCSweepMatureLOS {
     _counter: LazySweepingJobsCounter,
 }
 
-impl RCSweepMatureAfterSATBLOS {
+impl RCSweepMatureLOS {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
         Self { _counter: counter }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for RCSweepMatureAfterSATBLOS {
+impl<VM: VMBinding> GCWork<VM> for RCSweepMatureLOS {
     fn do_work(
         &mut self,
         _worker: &mut crate::scheduler::GCWorker<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
         let los = mmtk.get_plan().common().get_los();
-        los.sweep_rc_mature_objects_after_satb(&|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
+        los.sweep_rc_mature_objects(true, &|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
     }
 }
 
@@ -587,8 +607,10 @@ impl RCReleaseMatureLOS {
         let mut total_released_pages = 0;
         while let Some(o) = los.rc_dead_objects.pop() {
             let removed = mature_objects.remove(&o);
-            if let Some(size) = removed {
-                total_released_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
+            o.to_address::<VM>().unlog_field::<VM>();
+            if removed {
+                let pages = los.release_object(o.to_address::<VM>());
+                total_released_pages += pages;
             }
         }
         let lxr = mmtk

@@ -6,7 +6,7 @@ use crate::plan::immix::Pause;
 use crate::plan::lxr::RemSet;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
-use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureAfterSATBLOS};
+use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureLOS};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;
@@ -598,16 +598,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc = false;
         // This cannot be done in parallel in a separate thread
-        self.schedule_post_satb_mature_sweeping(pause);
+        self.schedule_mature_sweeping(pause);
         self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
-    fn schedule_post_satb_mature_sweeping(&self, pause: Pause) {
+    pub fn schedule_mature_sweeping(&self, pause: Pause) {
         if pause == Pause::Full || pause == Pause::FinalMark {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
+            let sweep_los = RCSweepMatureLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 debug_assert_ne!(pause, Pause::Full);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);

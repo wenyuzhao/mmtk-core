@@ -883,7 +883,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     #[cold]
-    fn process_dead_object(&mut self, o: ObjectReference, lxr: &LXR<VM>) -> bool {
+    fn process_dead_object(&mut self, o: ObjectReference, lxr: &LXR<VM>) {
         crate::stat(|s| {
             s.dead_mature_objects += 1;
             s.dead_mature_volume += o.get_size::<VM>();
@@ -964,14 +964,13 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let block = Block::containing::<VM>(o);
             lxr.immix_space
                 .add_to_possibly_dead_mature_blocks(block, false);
-            false
         } else {
             if cfg!(feature = "lxr_log_reclaim") {
                 lxr.los()
                     .rc_killed_bytes
                     .fetch_add(o.get_size::<VM>(), Ordering::Relaxed);
             }
-            true
+            lxr.los().rc_free(o);
         }
     }
 
@@ -993,11 +992,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     *o
                 };
             let mut dead = false;
-            let mut is_los = false;
-            let result = self.rc.clone().fetch_update(o, |c| {
+            let _ = self.rc.clone().fetch_update(o, |c| {
                 if c == 1 && !dead {
                     dead = true;
-                    is_los = self.process_dead_object(o, lxr);
+                    self.process_dead_object(o, lxr);
                 }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if c == 0 || c == MAX_REF_COUNT {
@@ -1006,9 +1004,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
-            if result == Ok(1) && is_los {
-                lxr.los().rc_free(o);
-            }
         }
     }
 }

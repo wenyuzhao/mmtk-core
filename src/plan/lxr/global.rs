@@ -321,7 +321,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         });
         if pause == Pause::FinalMark || pause == Pause::Full {
             self.common.los.is_end_of_satb_or_full_gc = true;
-            // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
+            // release nursery memory before mature evacuation
             self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .add(ReleaseLOSNursery);
         }
