@@ -183,7 +183,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 let block = Block::containing::<VM>(o);
                 if !copied && block.is_nursery() {
                     block.set_as_in_place_promoted();
-                }  
+                }
             }
             self.rc.promote_with_size(o, size);
             if copied {
@@ -640,7 +640,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             let over_space = mmtk.get_plan().get_used_pages()
                 - mmtk.get_plan().get_collection_reserved_pages()
                 > mmtk.get_plan().get_total_pages();
-            if !cfg!(feature = "lxr_no_sweeping") && (over_space || over_time) {
+            if !cfg!(feature = "ix_no_sweeping") && (over_space || over_time) {
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
                 gc_log!([2]
