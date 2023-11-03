@@ -26,16 +26,6 @@ use super::{
     ImmixSpace,
 };
 
-pub struct MatureSweeping;
-
-impl<VM: VMBinding> GCWork<VM> for MatureSweeping {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        lxr.immix_space
-            .schedule_mature_sweeping(lxr.current_pause().unwrap())
-    }
-}
-
 static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct SelectDefragBlocksInChunk {
