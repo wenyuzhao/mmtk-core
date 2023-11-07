@@ -494,6 +494,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
         self.block_allocation.notify_mutator_phase_end();
+        self.pr.prepare_gc();
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -1000,6 +1001,63 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 .fetch_add(Block::BYTES, Ordering::SeqCst);
         }
         Some(block)
+    }
+
+    /// Get a list of clean or reusable blocks.
+    /// For blocks in a new chunk, they should be mapped before returning.
+    /// No heap accounting should be updated. They are updated when the mutator starts to allocating into them.
+    pub fn acquire_blocks(&self, count: usize, clean: bool, buf: &mut Vec<Block>, copy: bool) {
+        self.pr.acquire_blocks(count, clean, buf, self, copy)
+    }
+
+    /// Logically acquire a clean block and poll for GC.
+    /// This does not actually allocate a block, but only updates the heap counter and do GC when necessary.
+    pub fn get_clean_block_logically(&self, tls: VMThread, copy: bool) -> Result<(), ()> {
+        let success = self.acquire_logically(tls, Block::PAGES);
+        if !success {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    pub fn initialize_new_block(&self, block: Block, clean: bool, copy: bool) {
+        // println!("new-block: {:?} clean={} copy={}", block, clean, copy);
+        if clean {
+            if !self.rc_enabled {
+                self.defrag.notify_new_clean_block(copy);
+            }
+            self.block_allocation
+                .initialize_new_clean_block(block, copy, self.cm_enabled);
+            self.chunk_map.set(block.chunk(), ChunkState::Allocated);
+            if !self.rc_enabled {
+                self.lines_consumed
+                    .fetch_add(Block::LINES, Ordering::SeqCst);
+            }
+            #[cfg(feature = "lxr_srv_ratio_counter")]
+            if !copy {
+                crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
+                    .ix_clean_alloc_vol
+                    .fetch_add(Block::BYTES, Ordering::SeqCst);
+            }
+        } else {
+            if self.rc_enabled {
+                block.set_state(BlockState::Reusing);
+                if !copy {
+                    self.block_allocation.reused_blocks.push(block);
+                }
+            } else {
+                // Get available lines. Do this before block.init which will reset block state.
+                let lines_delta = match block.get_state() {
+                    BlockState::Reusable { unavailable_lines } => {
+                        Block::LINES - unavailable_lines as usize
+                    }
+                    BlockState::Unmarked => Block::LINES,
+                    _ => unreachable!("{:?} {:?}", block, block.get_state()),
+                };
+                self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
+            }
+            block.init(copy, true, self);
+        }
     }
 
     /// Pop a reusable block from the reusable block list.

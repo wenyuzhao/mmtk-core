@@ -159,6 +159,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         }
         #[cfg(feature = "ix_no_sweeping")]
         if count != 0 {
+            // gc_log!("SweepBlocksAfterDecs");
+
             lxr.immix_space.pr.bulk_release_blocks(count);
         }
         if count != 0
@@ -265,7 +267,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             .iter_region::<Block>()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            #[cfg(not(feature = "ix_no_sweeping"))]
+            // #[cfg(not(feature = "ix_no_sweeping"))]
             if block.get_state() == BlockState::Nursery {
                 continue;
             }
@@ -339,9 +341,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Clear defrag state
             assert!(!block.is_defrag_source());
             // Clear block mark data.
-            #[cfg(feature = "ix_no_sweeping")]
-            block.set_state(BlockState::Unmarked);
-            #[cfg(not(feature = "ix_no_sweeping"))]
+            // #[cfg(feature = "ix_no_sweeping")]
+            // block.set_state(BlockState::Unmarked);
+            // #[cfg(not(feature = "ix_no_sweeping"))]
             if block.get_state() != BlockState::Nursery {
                 block.set_state(BlockState::Unmarked);
             }
@@ -388,6 +390,7 @@ impl MatureEvacuationSet {
         }
         #[cfg(feature = "ix_no_sweeping")]
         if count != 0 {
+            gc_log!("sweep_mature_evac_candidates");
             space.pr.bulk_release_blocks(count);
         }
     }
@@ -406,9 +409,9 @@ impl MatureEvacuationSet {
 
     fn skip_block(b: Block) -> bool {
         let s = b.get_state();
-        #[cfg(feature = "ix_no_sweeping")]
-        let skip = b.is_defrag_source() || s == BlockState::Unallocated;
-        #[cfg(not(feature = "ix_no_sweeping"))]
+        // #[cfg(feature = "ix_no_sweeping")]
+        // let skip = b.is_defrag_source() || s == BlockState::Unallocated;
+        // #[cfg(not(feature = "ix_no_sweeping"))]
         let skip = b.is_defrag_source() || s == BlockState::Unallocated || s == BlockState::Nursery;
         skip
     }

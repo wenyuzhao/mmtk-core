@@ -74,6 +74,40 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         false
     }
 
+    fn acquire_logically(&self, tls: VMThread, pages: usize) -> bool {
+        debug_assert!(
+            !self.will_oom_on_acquire(tls, pages << LOG_BYTES_IN_PAGE),
+            "The requested pages is larger than the max heap size. Is will_go_oom_on_acquire used before acquring memory?"
+        );
+
+        // Should we poll to attempt to GC?
+        // - If tls is collector, we cannot attempt a GC.
+        // - If gc is disabled, we cannot attempt a GC.
+        let is_mutator = VM::VMActivePlan::is_mutator(tls);
+        let should_poll =
+            is_mutator && VM::VMActivePlan::global().should_trigger_gc_when_heap_is_full();
+        // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
+        // initialize_collection() has to be called so we know GC is initialized.
+        let allow_gc = should_poll && VM::VMActivePlan::global().is_initialized();
+        let pr = self.get_page_resource();
+        let pages_reserved = pr.reserve_pages(pages);
+        if should_poll && self.get_gc_trigger().poll(false, Some(self.as_space())) {
+            assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
+
+            // Clear the request, and inform GC trigger about the pending allocation.
+            pr.clear_request(pages_reserved);
+            self.get_gc_trigger()
+                .policy
+                .on_pending_allocation(pages_reserved);
+
+            VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
+            false
+        } else {
+            pr.commit_pages(pages_reserved, pages, tls);
+            true
+        }
+    }
+
     fn acquire(&self, tls: VMThread, pages: usize) -> Address {
         trace!("Space.acquire, tls={:?}", tls);
 

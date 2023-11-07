@@ -17,7 +17,6 @@ use std::sync::atomic::Ordering;
 pub enum BlockState {
     /// the block is not allocated.
     Unallocated,
-    #[cfg(not(feature = "ix_no_sweeping"))]
     /// the block is a young block.
     Nursery,
     /// the block is allocated but not marked.
@@ -38,7 +37,6 @@ impl BlockState {
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
     const MARK_REUSING: u8 = u8::MAX - 2;
-    #[cfg(not(feature = "ix_no_sweeping"))]
     const MARK_NURSERY: u8 = u8::MAX - 3;
 }
 
@@ -49,7 +47,6 @@ impl From<u8> for BlockState {
             Self::MARK_UNMARKED => BlockState::Unmarked,
             Self::MARK_MARKED => BlockState::Marked,
             Self::MARK_REUSING => BlockState::Reusing,
-            #[cfg(not(feature = "ix_no_sweeping"))]
             Self::MARK_NURSERY => BlockState::Nursery,
             unavailable_lines => BlockState::Reusable { unavailable_lines },
         }
@@ -63,7 +60,6 @@ impl From<BlockState> for u8 {
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
             BlockState::Reusing => BlockState::MARK_REUSING,
-            #[cfg(not(feature = "ix_no_sweeping"))]
             BlockState::Nursery => BlockState::MARK_NURSERY,
             BlockState::Reusable { unavailable_lines } => {
                 assert_ne!(unavailable_lines, 0);
@@ -272,11 +268,14 @@ impl Block {
     }
 
     pub fn is_nursery(&self) -> bool {
-        #[cfg(not(feature = "ix_no_sweeping"))]
-        let young_block_state = BlockState::Nursery;
-        #[cfg(feature = "ix_no_sweeping")]
-        let young_block_state = BlockState::Unallocated;
-        self.get_state() == young_block_state
+        self.get_state() == BlockState::Nursery
+    }
+
+    pub fn is_reusable(&self) -> bool {
+        if crate::args::RC_MATURE_EVACUATION && self.is_defrag_source() {
+            return false;
+        }
+        self.get_state().is_reusable()
     }
 
     /// Get block mark state.
@@ -400,10 +399,7 @@ impl Block {
                     self.set_state(BlockState::Reusing);
                     debug_assert!(!self.is_defrag_source());
                 } else {
-                    #[cfg(not(feature = "ix_no_sweeping"))]
                     self.set_state(BlockState::Nursery);
-                    #[cfg(feature = "ix_no_sweeping")]
-                    self.set_state(BlockState::Unallocated);
                     self.set_as_defrag_source(false);
                 }
             }
@@ -692,14 +688,14 @@ impl Block {
     }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        #[cfg(not(feature = "ix_no_sweeping"))]
+        // #[cfg(not(feature = "ix_no_sweeping"))]
         if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
             return false;
         }
-        #[cfg(feature = "ix_no_sweeping")]
-        if self.get_state() == BlockState::Unallocated {
-            return false;
-        }
+        // #[cfg(feature = "ix_no_sweeping")]
+        // if self.get_state() == BlockState::Unallocated {
+        //     return false;
+        // }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
                 #[cfg(feature = "ix_no_sweeping")]
