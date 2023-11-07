@@ -129,7 +129,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let Some(work) = self.process_edges(mmtk) else {
-            return
+            return;
         };
         // transitive closure
         worker.add_boxed_work(WorkBucketStage::Closure, work)

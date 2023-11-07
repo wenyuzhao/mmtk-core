@@ -621,3 +621,10 @@ fn verbose(level: usize) -> bool {
 
 static SANITY_LIVE_SIZE_IX: AtomicUsize = AtomicUsize::new(0);
 static SANITY_LIVE_SIZE_LOS: AtomicUsize = AtomicUsize::new(0);
+static FRAG_EXP_ENABLED: AtomicBool = AtomicBool::new(false);
+fn frag_exp_enabled() -> bool {
+    if !cfg!(feature = "periodic_fragmentation_analysis") {
+        return true;
+    }
+    FRAG_EXP_ENABLED.load(Ordering::Relaxed)
+}
