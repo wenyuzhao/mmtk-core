@@ -1233,7 +1233,7 @@ impl<VM: VMBinding> LXR<VM> {
             return;
         }
         let hrs = self.hours_since_monday_0am() % 6;
-        if hrs < 2 {
+        if hrs < 1 {
             crate::FRAG_EXP_ENABLED.store(true, Ordering::SeqCst)
         } else {
             crate::FRAG_EXP_ENABLED.store(false, Ordering::SeqCst)
