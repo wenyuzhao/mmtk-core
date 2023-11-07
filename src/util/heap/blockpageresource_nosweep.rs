@@ -122,14 +122,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     ) -> bool {
         // linear scan the chunks to find a reusable block
         let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
-        let b_index = self.reuse_block_cursor.load(Ordering::Relaxed);
+        let b_index = self.clean_block_cursor.load(Ordering::Relaxed);
         // Bail out if we don't have any blocks to allocate
         if b_index >= max_b_index {
             return false;
         }
         // Grab 1~N Blocks
         let old = self
-            .reuse_block_cursor
+            .clean_block_cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
                 if c >= max_b_index {
                     None

@@ -353,7 +353,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     && state != BlockState::Nursery
                     && state != BlockState::Reusing
                     && !block.is_defrag_source()
-                    && block.rc_partially_dead()
                 {
                     self.space.initialize_new_block(block, false, self.copy);
                     return Some(block);
