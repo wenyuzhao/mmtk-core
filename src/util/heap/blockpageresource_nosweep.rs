@@ -113,95 +113,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    fn acquire_clean_blocks_fast(
+    fn acquire_blocks_fast(
         &self,
         count: usize,
         buf: &mut Vec<B>,
         chunks: &Vec<Chunk>,
         copy: bool,
-    ) -> bool {
-        // linear scan the chunks to find a reusable block
-        let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
-        let b_index = self.clean_block_cursor.load(Ordering::Relaxed);
-        // Bail out if we don't have any blocks to allocate
-        if b_index >= max_b_index {
-            return false;
-        }
-        // println!("acquire_clean_blocks_fast {} {}", b_index, max_b_index);
-        let get_block = |i: usize| {
-            let c_index = i >> (Chunk::LOG_BYTES - B::LOG_BYTES);
-            let chunk = chunks[c_index];
-            let block = B::from_aligned_address(
-                chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
-            );
-            block
-        };
-        let block_is_avail = |b: B| {
-            let block = Block::from_aligned_address(b.start());
-            let state = block.get_state();
-            if copy {
-                state == BlockState::Unallocated
-            } else {
-                (state == BlockState::Unallocated || state == BlockState::Nursery)
-                    && BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
-            }
-        };
-        // Grab 1~N Blocks
-        let old =
-            self.clean_block_cursor
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut i| {
-                    let mut dead_blocks = 0;
-                    while i < max_b_index {
-                        let b = get_block(i);
-                        if block_is_avail(b) {
-                            dead_blocks += 1;
-                            if dead_blocks == count {
-                                break;
-                            }
-                        }
-                        i += 1
-                    }
-                    if dead_blocks == 0 {
-                        None
-                    } else {
-                        Some(usize::min(i + 1, max_b_index))
-                    }
-                });
-        // gc_log!(
-        //     "acquire_clean_blocks_fast {:?} {:?} {}",
-        //     old,
-        //     self.clean_block_cursor.load(Ordering::SeqCst),
-        //     max_b_index
-        // );
-        if let Ok(old) = old {
-            let mut dead_blocks = 0;
-            let mut i = old;
-            while i < max_b_index {
-                let block = get_block(i);
-                if block_is_avail(block) {
-                    dead_blocks += 1;
-                    if !copy {
-                        BLOCK_IN_TLS.store_atomic(block.start(), 1u8, Ordering::SeqCst);
-                    }
-                    buf.push(block);
-
-                    if dead_blocks == count {
-                        break;
-                    }
-                }
-                i += 1
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    fn acquire_reuse_blocks_fast(
-        &self,
-        count: usize,
-        buf: &mut Vec<B>,
-        chunks: &Vec<Chunk>,
     ) -> bool {
         // linear scan the chunks to find a reusable block
         let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
@@ -227,6 +144,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 let block = B::from_aligned_address(
                     chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
                 );
+                if !copy {
+                    if BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed) != 0 {
+                        continue;
+                    }
+                    BLOCK_IN_TLS.store_atomic(block.start(), 1u8, Ordering::SeqCst);
+                }
                 buf.push(block);
             }
             true
@@ -242,21 +165,20 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         space: &dyn Space<VM>,
         copy: bool,
-    ) {
+    ) -> bool {
         let chunks = self.chunks.read().unwrap();
         if !clean {
-            self.acquire_reuse_blocks_fast(count, buf, &*chunks);
-            return;
+            return self.acquire_blocks_fast(count, buf, &*chunks, copy);
         }
-        if self.acquire_clean_blocks_fast(count, buf, &*chunks, copy) {
-            return;
+        if self.acquire_blocks_fast(count, buf, &*chunks, copy) {
+            return true;
         }
         // Slow path
         // println!("slow path");
         std::mem::drop(chunks);
         let mut chunks = self.chunks.write().unwrap();
-        if self.acquire_clean_blocks_fast(count, buf, &*chunks, copy) {
-            return;
+        if self.acquire_blocks_fast(count, buf, &*chunks, copy) {
+            return true;
         }
         // assert_eq!(
         //     self.clean_block_cursor.load(Ordering::Relaxed),
@@ -280,6 +202,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         chunks.push(chunk);
         self.clean_block_cursor
             .store(total_blocks + count, Ordering::SeqCst);
+        true
     }
 
     fn alloc_chunk(&self, space: &dyn Space<VM>) -> Option<Chunk> {

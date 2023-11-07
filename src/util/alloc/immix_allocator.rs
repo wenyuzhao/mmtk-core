@@ -325,37 +325,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    fn acquire_block_gc(&mut self, clean: bool) -> Option<Block> {
-        // Clean blocks: Check for GC
-        if clean {
-            self.space
-                .get_clean_block_logically(self.tls, self.copy)
-                .unwrap();
-        }
-        // Try find a block
-        if let Some(block) = self.try_acquire_block(clean) {
-            return Some(block);
-        }
-        // Pull N blocks from page resource
-        if clean {
-            // println!("copy acquire_blocks: {}", clean);
-            self.space
-                .acquire_blocks(16, clean, &mut self.local_clean_blocks, self.copy);
-        } else {
-            self.space
-                .acquire_blocks(16, clean, &mut self.local_reuse_blocks, self.copy);
-        }
-        // Search for the block again
-        if clean {
-            if let Some(b) = self.try_acquire_block(clean) {
-                return Some(b);
-            }
-            self.acquire_block_gc(clean)
-        } else {
-            self.try_acquire_block(clean)
-        }
-    }
-
     fn try_acquire_block(&mut self, clean: bool) -> Option<Block> {
         if clean {
             while self.local_clean_blocks_cursor < self.local_clean_blocks.len() {
@@ -370,7 +339,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state() == BlockState::Unallocated
                         || block.get_state() == BlockState::Nursery
                     {
-                        // gc_log!("{:?}: acquire block {:?}", self.tls, block);
                         self.space.initialize_new_block(block, true, self.copy);
                         return Some(block);
                     }
@@ -380,7 +348,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
                 let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
                 self.local_reuse_blocks_cursor += 1;
-                if block.is_reusable() {
+                let state = block.get_state();
+                if state != BlockState::Unallocated
+                    && state != BlockState::Nursery
+                    && state != BlockState::Reusing
+                    && !block.is_defrag_source()
+                    && block.rc_partially_dead()
+                {
                     self.space.initialize_new_block(block, false, self.copy);
                     return Some(block);
                 }
@@ -390,34 +364,34 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     fn acquire_block(&mut self, clean: bool) -> Option<Block> {
-        if self.copy {
-            return self.acquire_block_gc(clean);
-        }
         // Clean blocks: Check for GC
         if clean {
             self.space
                 .get_clean_block_logically(self.tls, self.copy)
                 .ok()?;
         }
-        // Try find a block
-        if let Some(block) = self.try_acquire_block(clean) {
-            return Some(block);
-        }
-        // Pull N blocks from page resource
-        // eprintln!("Aself.local_clean_block {}", self.local_clean_blocks.len());
-        if clean {
-            self.space
-                .acquire_blocks(16, clean, &mut self.local_clean_blocks, self.copy);
-        } else {
-            self.space
-                .acquire_blocks(16, clean, &mut self.local_reuse_blocks, self.copy);
-        }
-        // eprintln!("Bself.local_clean_block {}", self.local_clean_blocks.len());
-        // Search for the block again
-        if clean {
-            Some(self.try_acquire_block(clean).unwrap())
-        } else {
-            self.try_acquire_block(clean)
+        loop {
+            // Try find a block
+            if let Some(block) = self.try_acquire_block(clean) {
+                return Some(block);
+            }
+            // Pull N blocks from page resource
+            // eprintln!("Aself.local_clean_block {}", self.local_clean_blocks.len());
+            let result = if clean {
+                self.space
+                    .acquire_blocks(16, clean, &mut self.local_clean_blocks, self.copy)
+            } else {
+                self.space
+                    .acquire_blocks(16, clean, &mut self.local_reuse_blocks, self.copy)
+            };
+            if !result {
+                return None;
+            }
+            // eprintln!("Bself.local_clean_block {}", self.local_clean_blocks.len());
+            // Search for the block again
+            if let Some(b) = self.try_acquire_block(clean) {
+                return Some(b);
+            }
         }
     }
 

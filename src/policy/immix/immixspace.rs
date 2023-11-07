@@ -1006,7 +1006,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Get a list of clean or reusable blocks.
     /// For blocks in a new chunk, they should be mapped before returning.
     /// No heap accounting should be updated. They are updated when the mutator starts to allocating into them.
-    pub fn acquire_blocks(&self, count: usize, clean: bool, buf: &mut Vec<Block>, copy: bool) {
+    pub fn acquire_blocks(
+        &self,
+        count: usize,
+        clean: bool,
+        buf: &mut Vec<Block>,
+        copy: bool,
+    ) -> bool {
         self.pr.acquire_blocks(count, clean, buf, self, copy)
     }
 
