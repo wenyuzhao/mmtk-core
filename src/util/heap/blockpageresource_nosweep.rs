@@ -139,8 +139,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let block_is_avail = |b: B| {
             let block = Block::from_aligned_address(b.start());
             let state = block.get_state();
-            (state == BlockState::Unallocated || state == BlockState::Nursery)
-                && BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
+            if copy {
+                state == BlockState::Unallocated
+            } else {
+                (state == BlockState::Unallocated || state == BlockState::Nursery)
+                    && BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
+            }
         };
         // Grab 1~N Blocks
         let old =
@@ -176,21 +180,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 let block = get_block(i);
                 if block_is_avail(block) {
                     dead_blocks += 1;
-
-                    // gc_log!("@acquire_clean_blocks_fast {:?} ", block.start());
-                    // gc_log!(
-                    //     "@acquire_clean_blocks_fast {:?} {}",
-                    //     block.start(),
-                    //     BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed)
-                    // );
                     if !copy {
                         BLOCK_IN_TLS.store_atomic(block.start(), 1u8, Ordering::SeqCst);
                     }
-                    // gc_log!(
-                    //     "@acquire_clean_blocks_fast {:?} {}",
-                    //     block.start(),
-                    //     BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed)
-                    // );
                     buf.push(block);
 
                     if dead_blocks == count {
@@ -309,7 +301,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
-        // println!("chunk: {:?}", start);
+        println!("chunk: {:?}", start);
         Some(Chunk::from_aligned_address(start))
     }
 
@@ -344,10 +336,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         //     self.clean_block_cursor.load(Ordering::SeqCst),
         //     self.reuse_block_cursor.load(Ordering::SeqCst)
         // );
+        self.clean_block_cursor.store(0, Ordering::SeqCst);
+        self.reuse_block_cursor.store(0, Ordering::SeqCst);
     }
 
     pub fn reset(&self) {
-        // let _guard = self.chunks.write().unwrap();
         // gc_log!(
         //     "BPR reset {} {}",
         //     self.clean_block_cursor.load(Ordering::SeqCst),
@@ -355,17 +348,25 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // );
         self.clean_block_cursor.store(0, Ordering::SeqCst);
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
-    }
 
-    // pub fn update_clean_block_cursor(&self, block: B) {
-    //     // let _guard = self.chunks.write().unwrap();
-    //     let b_index = block.to_address().align_down(B::BYTES) >> B::LOG_BYTES;
-    //     self.clean_block_cursor.fetch_min(0, Ordering::SeqCst);
-    //     self.reuse_block_cursor.store(0, Ordering::SeqCst);
-    //     gc_log!(
-    //         "BPR reset {} {}",
-    //         self.clean_block_cursor.load(Ordering::SeqCst),
-    //         self.reuse_block_cursor.load(Ordering::SeqCst)
-    //     );
-    // }
+        let t = std::time::SystemTime::now();
+        let chunks = self.chunks.write().unwrap();
+        let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
+        let get_block = |i: usize| {
+            let c_index = i >> (Chunk::LOG_BYTES - B::LOG_BYTES);
+            let chunk = chunks[c_index];
+            let block = Block::from_aligned_address(
+                chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
+            );
+            block
+        };
+        for i in 0..max_b_index {
+            let b = get_block(i);
+            if b.get_state() == BlockState::Nursery {
+                b.set_state(BlockState::Unallocated);
+            }
+        }
+        let ms = t.elapsed().unwrap().as_micros() as f64 / 1000.0;
+        gc_log!("BPR reset took {:.3}ms ({} blocks)", ms, max_b_index);
+    }
 }
