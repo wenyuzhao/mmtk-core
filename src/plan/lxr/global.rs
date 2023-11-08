@@ -232,7 +232,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         if !crate::LazySweepingJobs::all_finished() {
             if crate::verbose(1) {
-                eprintln!("WARNING: LXR Lazy Sweeping Not Finished");
+                let s = format!(
+                    "[{:.3}s][info][gc] @WARNING: LXR Lazy Sweeping Not Finished",
+                    crate::boot_time_secs()
+                );
+                eprintln!("{}", s);
             }
             crate::counters()
                 .gc_with_unfinished_lazy_jobs
