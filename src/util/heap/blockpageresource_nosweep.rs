@@ -127,14 +127,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     /// Check if a block is available for allocation
-    fn block_is_available(
-        &self,
-        block: B,
-        clean: bool,
-        _copy: bool,
-        _owner: usize,
-    ) -> bool {
-        assert!(clean);
+    fn block_is_available(&self, block: B, clean: bool, _copy: bool, _owner: usize) -> bool {
+        debug_assert!(clean);
         let state = Block::from_unaligned_address(block.start()).get_state();
         if state != BlockState::Unallocated {
             return false;
@@ -145,39 +139,26 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     /// Check if a block can be safely stolen from it's owner
-    fn block_is_stealable(
-        &self,
-        block: B,
-        clean: bool,
-        _copy: bool,
-        owner: usize,
-    ) -> bool {
+    fn block_is_stealable(&self, block: B, clean: bool, _copy: bool, owner: usize) -> bool {
         debug_assert!(clean);
-        let state = Block::from_unaligned_address(block.start()).get_state();
+        let block = Block::from_unaligned_address(block.start());
+        let state = block.get_state();
         // Don't steal non-empty blocks
         if state != BlockState::Unallocated {
             return false;
         }
         let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
+        if block_owner == 0 || block_owner == owner {
+            return false;
+        }
         // Not filled by a mutator in the last mutator phase
-        !Block::from_unaligned_address(block.start()).is_nursery()
-        // Has an owner
-            && block_owner != 0
-        // Not owned by us
-            && block_owner != owner
+        !block.is_nursery()
         // in_use state is not set
             && BLOCK_IN_USE.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
     }
 
     // We successfully allocated or stole a block. Now add it to the local block list.
-    fn append_to_buf(
-        &self,
-        buf: &mut Vec<B>,
-        block: B,
-        copy: bool,
-        steal: bool,
-        owner: usize,
-    ) {
+    fn append_to_buf(&self, buf: &mut Vec<B>, block: B, copy: bool, steal: bool, owner: usize) {
         if !copy && !steal {
             BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
         }
@@ -185,17 +166,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     // Attempt to steal a block.
-    fn attempt_to_steal(&self, buf: &mut Vec<B>, block: B, owner: usize) -> bool {
+    fn attempt_to_steal(&self, block: B, owner: usize) -> bool {
         // Attempt to set as in-use
+        let b = Block::from_unaligned_address(block.start());
         let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
             block.start(),
             Ordering::Relaxed,
             Ordering::Relaxed,
             |x| {
-                let state = Block::from_unaligned_address(block.start()).get_state();
-                if state != BlockState::Unallocated
-                    || Block::from_unaligned_address(block.start()).is_nursery()
-                {
+                if b.get_state() != BlockState::Unallocated || b.is_nursery() {
                     return None;
                 }
                 if x != 0 {
@@ -212,8 +191,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
         // clear in-use
         BLOCK_IN_USE.store_atomic(block.start(), 0u8, Ordering::Relaxed);
-        // Add to buf
-        buf.push(block);
         true
     }
 
@@ -309,7 +286,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Ok(old) = old {
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
-                if self.attempt_to_steal(buf, block, owner) {
+                if self.attempt_to_steal(block, owner) {
                     self.append_to_buf(buf, block, copy, true, owner);
                 }
             }
