@@ -1009,13 +1009,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// No heap accounting should be updated. They are updated when the mutator starts to allocating into them.
     pub fn acquire_blocks(
         &self,
-        count: usize,
+        alloc_count: usize,
+        steal_count: usize,
         clean: bool,
         buf: &mut Vec<Block>,
         copy: bool,
-        owner: Option<usize>,
+        owner: usize,
     ) -> bool {
-        self.pr.acquire_blocks(count, clean, buf, self, copy, owner)
+        debug_assert!(owner != 0);
+        self.pr.acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
     }
 
     /// Logically acquire a clean block and poll for GC.

@@ -458,26 +458,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             let result = if clean {
                 self.space.acquire_blocks(
                     16,
+                    8,
                     clean,
                     &mut self.local_clean_blocks,
                     self.copy,
-                    if self.copy {
-                        None
-                    } else {
-                        Some(self.tls.0.to_address().as_usize())
-                    },
+                    self.tls.0.to_address().as_usize(),
                 )
             } else {
                 self.space.acquire_blocks(
                     16,
+                    8,
                     clean,
                     &mut self.local_reuse_blocks,
                     self.copy,
-                    if self.copy {
-                        None
-                    } else {
-                        Some(self.tls.0.to_address().as_usize())
-                    },
+                    self.tls.0.to_address().as_usize(),
                 )
             };
             if !result {
