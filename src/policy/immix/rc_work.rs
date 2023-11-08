@@ -338,13 +338,13 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             assert!(!block.is_defrag_source());
             // Clear block mark data.
             // #[cfg(feature = "ix_no_sweeping")]
-            // block.set_state(BlockState::Unmarked);
+            block.set_state(BlockState::Unmarked);
             #[cfg(not(feature = "ix_no_sweeping"))]
             if block.get_state() != BlockState::Nursery {
                 block.set_state(BlockState::Unmarked);
             }
             debug_assert!(!block.get_state().is_reusable());
-            debug_assert_ne!(block.get_state(), BlockState::Marked);
+            // debug_assert_ne!(block.get_state(), BlockState::Marked);
             // debug_assert_ne!(block.get_state(), BlockState::Nursery);
         }
     }

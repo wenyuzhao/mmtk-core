@@ -97,7 +97,10 @@ define_side_metadata_specs!(
     CHUNK_LIVE_BLOCKS   = (global: false, log_num_of_bits: 4, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_PREV   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
     CHUNK_NEXT   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::util::heap::chunk_map::Chunk::LOG_BYTES),
-    BLOCK_IN_TLS   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
+    // The block is in a mutator allocator's local allocation buffer
+    BLOCK_OWNER   = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
+    // The block is being used by the allocator
+    BLOCK_IN_USE   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     IX_BLOCK_ALLOC_BITS   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Mark blocks by (native mimalloc) marksweep
     MS_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::marksweepspace::native_ms::Block::LOG_BYTES),

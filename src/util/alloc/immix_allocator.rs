@@ -1,3 +1,5 @@
+use atomic::Ordering;
+
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use super::BumpPointer;
 use crate::plan::Plan;
@@ -8,6 +10,7 @@ use crate::policy::space::Space;
 use crate::util::alloc::allocator::get_maximum_aligned_size;
 use crate::util::alloc::Allocator;
 use crate::util::linear_scan::Region;
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_IN_USE, BLOCK_OWNER};
 use crate::util::opaque_pointer::VMThread;
 use crate::util::Address;
 use crate::vm::*;
@@ -31,6 +34,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
+    block: Option<Block>,
     mutator_recycled_blocks: Box<Vec<Block>>,
     local_clean_blocks: Box<Vec<Block>>,
     local_reuse_blocks: Box<Vec<Block>>,
@@ -42,6 +46,10 @@ pub struct ImmixAllocator<VM: VMBinding> {
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn reset(&mut self) {
+        if let Some(b) = self.block {
+            self.retire_block_impl(b)
+        }
+        self.retire_large_block();
         self.bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.request_for_large = false;
@@ -55,26 +63,53 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.local_reuse_blocks_cursor = 0;
     }
 
-    fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        if cfg!(feature = "ix_retry_small_object_alloc_small_only")
-            && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES
-        {
-            return Address::ZERO;
+    fn set_allocating_block(&mut self, block: Block) {
+        if let Some(b) = self.block {
+            self.retire_block_impl(b)
         }
-        if self.acquire_recyclable_lines(size, align, offset) {
-            let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
-            let new_cursor = result + size;
-            if new_cursor > self.bump_pointer.limit {
-                Address::ZERO
-            } else {
-                fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
-                self.bump_pointer.cursor = new_cursor;
-                result
+        self.block = Some(block);
+    }
+    fn retire_large_block(&mut self) {
+        if self.large_bump_pointer.cursor != Address::ZERO {
+            let mut a = self.large_bump_pointer.cursor;
+            if a == self.large_bump_pointer.limit {
+                a -= 1;
             }
-        } else {
-            Address::ZERO
+            self.retire_block_impl(Block::from_unaligned_address(a))
         }
     }
+
+    fn retire_block_impl(&self, block: Block) {
+        // if bump.cursor != Address::ZERO {
+        //     let mut a = bump.cursor;
+        //     if a == bump.limit {
+        //         a -= 1;
+        //     }
+        // }
+
+        BLOCK_IN_USE.store_atomic(block.start(), 0u8, Ordering::SeqCst);
+    }
+
+    // fn retry_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+    //     if cfg!(feature = "ix_retry_small_object_alloc_small_only")
+    //         && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES
+    //     {
+    //         return Address::ZERO;
+    //     }
+    //     if self.acquire_recyclable_lines(size, align, offset) {
+    //         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
+    //         let new_cursor = result + size;
+    //         if new_cursor > self.bump_pointer.limit {
+    //             Address::ZERO
+    //         } else {
+    //             fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
+    //             self.bump_pointer.cursor = new_cursor;
+    //             result
+    //         }
+    //     } else {
+    //         Address::ZERO
+    //     }
+    // }
 }
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
@@ -137,12 +172,12 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     /// Acquire a clean block from ImmixSpace for allocation.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("{:?}: alloc_slow_once", self.tls);
-        if cfg!(feature = "ix_retry_small_object_alloc") {
-            let result = self.retry_alloc_slow_hot(size, align, offset);
-            if !result.is_zero() {
-                return result;
-            }
-        }
+        // if cfg!(feature = "ix_retry_small_object_alloc") {
+        //     let result = self.retry_alloc_slow_hot(size, align, offset);
+        //     if !result.is_zero() {
+        //         return result;
+        //     }
+        // }
         self.acquire_clean_block(size, align, offset)
     }
 
@@ -182,6 +217,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_bump_pointer: BumpPointer::new(Address::ZERO, Address::ZERO),
             request_for_large: false,
             line: None,
+            block: None,
             mutator_recycled_blocks: Box::new(vec![]),
             mutator_recycled_lines: 0,
             local_clean_blocks: Box::new(vec![]),
@@ -292,7 +328,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
+
                 self.line = Some(block.start_line());
+                self.set_allocating_block(block);
+
                 true
             }
             _ => false,
@@ -311,12 +350,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.end()
                 );
                 if self.request_for_large {
+                    self.retire_large_block();
                     self.large_bump_pointer.cursor = block.start();
                     self.large_bump_pointer.limit = block.end();
                 } else {
                     if cfg!(feature = "prefetch") {
                         crate::util::memory::prefetch(block.start(), Block::BYTES);
                     }
+                    self.set_allocating_block(block);
                     self.bump_pointer.cursor = block.start();
                     self.bump_pointer.limit = block.end();
                 }
@@ -336,9 +377,45 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         return Some(block);
                     }
                 } else {
-                    if block.get_state() == BlockState::Unallocated {
-                        self.space.initialize_new_block(block, true, self.copy);
-                        return Some(block);
+                    if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
+                        let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                            block.start(),
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                            |b| {
+                                if b == 1 {
+                                    return None;
+                                }
+                                if BLOCK_OWNER
+                                    .load_atomic::<usize>(block.start(), Ordering::Relaxed)
+                                    != self.tls.0.to_address().as_usize()
+                                {
+                                    return None;
+                                }
+                                Some(1)
+                            },
+                        );
+                        if result.is_ok() {
+                            // println!("try_acquire_block: {:?}", block,);
+                            self.space.initialize_new_block(block, true, self.copy);
+                            return Some(block);
+                        } else {
+                            // println!("try_acquire_block failed: {:?} inuse={:?} owner={:x?} curr-owner={:x?}",
+                            //     block,
+                            //     BLOCK_IN_USE.load_atomic::<u8>(block.start(), Ordering::Relaxed),
+                            //     BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed),
+                            //     self.tls.0.to_address().as_usize()
+
+                            // );
+                            continue;
+                        }
+                    } else {
+                        // println!(
+                        //     "try_acquire_block failed: {:?} state={:?} is_nursery={:?}",
+                        //     block,
+                        //     block.get_state(),
+                        //     block.is_nursery()
+                        // );
                     }
                 }
             }
@@ -373,18 +450,44 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 return Some(block);
             }
             // Pull N blocks from page resource
-            // eprintln!("Aself.local_clean_block {}", self.local_clean_blocks.len());
+            // eprintln!(
+            //     "Aself.local_clean_block {} {:?}",
+            //     self.local_clean_blocks.len(),
+            //     self.tls
+            // );
             let result = if clean {
-                self.space
-                    .acquire_blocks(16, clean, &mut self.local_clean_blocks, self.copy)
+                self.space.acquire_blocks(
+                    16,
+                    clean,
+                    &mut self.local_clean_blocks,
+                    self.copy,
+                    if self.copy {
+                        None
+                    } else {
+                        Some(self.tls.0.to_address().as_usize())
+                    },
+                )
             } else {
-                self.space
-                    .acquire_blocks(16, clean, &mut self.local_reuse_blocks, self.copy)
+                self.space.acquire_blocks(
+                    16,
+                    clean,
+                    &mut self.local_reuse_blocks,
+                    self.copy,
+                    if self.copy {
+                        None
+                    } else {
+                        Some(self.tls.0.to_address().as_usize())
+                    },
+                )
             };
             if !result {
                 return None;
             }
-            // eprintln!("Bself.local_clean_block {}", self.local_clean_blocks.len());
+            // eprintln!(
+            //     "Bself.local_clean_block {} {:?}",
+            //     self.local_clean_blocks.len(),
+            //     self.tls
+            // );
             // Search for the block again
             if let Some(b) = self.try_acquire_block(clean) {
                 return Some(b);

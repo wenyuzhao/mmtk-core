@@ -9,7 +9,7 @@ use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::linear_scan::Region;
-use crate::util::metadata::side_metadata::spec_defs::BLOCK_IN_TLS;
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_IN_USE, BLOCK_OWNER};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
@@ -24,6 +24,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     pub(crate) total_chunks: AtomicUsize,
     chunks: RwLock<Vec<Chunk>>,
     clean_block_cursor: AtomicUsize,
+    clean_block_steal_cursor: AtomicUsize,
     reuse_block_cursor: AtomicUsize,
     clean_block_cursor_before_gc: AtomicUsize,
     reuse_block_cursor_before_gc: AtomicUsize,
@@ -68,7 +69,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     const BLOCKS_IN_CHUNK: usize = 1 << (Chunk::LOG_BYTES - B::LOG_BYTES);
 
     fn append_local_metadata(metadata: &mut SideMetadataContext) {
-        metadata.local.push(BLOCK_IN_TLS);
+        metadata.local.push(BLOCK_IN_USE);
+        metadata.local.push(BLOCK_OWNER);
     }
 
     pub fn new_contiguous(
@@ -86,6 +88,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             total_chunks: AtomicUsize::new(0),
             chunks: RwLock::new(vec![]),
             clean_block_cursor: AtomicUsize::new(0),
+            clean_block_steal_cursor: AtomicUsize::new(0),
             reuse_block_cursor: AtomicUsize::new(0),
             clean_block_cursor_before_gc: AtomicUsize::new(0),
             reuse_block_cursor_before_gc: AtomicUsize::new(0),
@@ -106,11 +109,99 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             total_chunks: AtomicUsize::new(0),
             chunks: RwLock::new(vec![]),
             clean_block_cursor: AtomicUsize::new(0),
+            clean_block_steal_cursor: AtomicUsize::new(0),
             reuse_block_cursor: AtomicUsize::new(0),
             clean_block_cursor_before_gc: AtomicUsize::new(0),
             reuse_block_cursor_before_gc: AtomicUsize::new(0),
             _p: PhantomData,
         }
+    }
+
+    fn block_index_to_block(&self, chunks: &[Chunk], i: usize) -> B {
+        let c_index = i >> (Chunk::LOG_BYTES - B::LOG_BYTES);
+        let chunk = chunks[c_index];
+        let block = B::from_aligned_address(
+            chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
+        );
+        block
+    }
+
+    fn block_is_available(
+        &self,
+        block: B,
+        clean: bool,
+        copy: bool,
+        steal: bool,
+        owner: Option<usize>,
+    ) -> bool {
+        assert!(clean);
+        let state = Block::from_unaligned_address(block.start()).get_state();
+        if state != BlockState::Unallocated {
+            return false;
+        }
+        if copy {
+            return true;
+        }
+        let b_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
+        if !steal {
+            b_owner == 0
+        } else {
+            !Block::from_unaligned_address(block.start()).is_nursery()
+                && b_owner != 0
+                && b_owner != owner.unwrap()
+                && BLOCK_IN_USE.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
+        }
+    }
+
+    fn append_to_buf(
+        &self,
+        buf: &mut Vec<B>,
+        block: B,
+        copy: bool,
+        steal: bool,
+        owner: Option<usize>,
+    ) {
+        if !copy && !steal {
+            BLOCK_OWNER.store_atomic(block.start(), owner.unwrap(), Ordering::Relaxed);
+        }
+        if steal {
+            // println!("steal {} copy={}", block.start(), copy);
+        } else {
+            // println!("alloc {} copy={}", block.start(), copy);
+        }
+        buf.push(block);
+    }
+
+    fn attempt_to_steal(&self, buf: &mut Vec<B>, block: B, owner: usize) -> bool {
+        // Attempt to set as in-use
+        let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+            block.start(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |x| {
+                let state = Block::from_unaligned_address(block.start()).get_state();
+                if state != BlockState::Unallocated
+                    || Block::from_unaligned_address(block.start()).is_nursery()
+                {
+                    return None;
+                }
+                if x != 0 {
+                    None
+                } else {
+                    Some(1)
+                }
+            },
+        );
+        if result.is_err() {
+            return false;
+        }
+        // Set owner
+        BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
+        // clear in-use
+        BLOCK_IN_USE.store_atomic(block.start(), 0u8, Ordering::Relaxed);
+        // Add to buf
+        buf.push(block);
+        true
     }
 
     fn acquire_blocks_fast(
@@ -119,6 +210,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         chunks: &Vec<Chunk>,
         copy: bool,
+        owner: Option<usize>,
     ) -> bool {
         // linear scan the chunks to find a reusable block
         let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
@@ -128,32 +220,90 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return false;
         }
         // Grab 1~N Blocks
+        let mut new_cursor = 0;
         let old = self
             .clean_block_cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
-                if c >= max_b_index {
+                let mut i = c;
+                let mut curr_count = 0;
+                while i < max_b_index {
+                    let block = self.block_index_to_block(chunks, i);
+                    i += 1;
+                    if self.block_is_available(block, true, copy, false, owner) {
+                        curr_count += 1;
+                        if curr_count >= count {
+                            break;
+                        }
+                    }
+                }
+                new_cursor = i;
+                if curr_count == 0 {
                     None
                 } else {
-                    Some(usize::min(c + count, max_b_index))
+                    Some(i)
                 }
             });
         if let Ok(old) = old {
-            for i in old..usize::min(old + count, max_b_index) {
-                let c_index = i >> (Chunk::LOG_BYTES - B::LOG_BYTES);
-                let chunk = chunks[c_index];
-                let block = B::from_aligned_address(
-                    chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
-                );
-                if !copy {
-                    if BLOCK_IN_TLS.load_atomic::<u8>(block.start(), Ordering::Relaxed) != 0 {
-                        continue;
-                    }
-                    BLOCK_IN_TLS.store_atomic(block.start(), 1u8, Ordering::SeqCst);
-                }
-                buf.push(block);
+            for i in old..usize::min(new_cursor, max_b_index) {
+                let block = self.block_index_to_block(chunks, i);
+                self.append_to_buf(buf, block, copy, false, owner);
             }
             true
         } else {
+            false
+        }
+    }
+
+    fn steal_blocks_fast(
+        &self,
+        count: usize,
+        buf: &mut Vec<B>,
+        chunks: &Vec<Chunk>,
+        copy: bool,
+        owner: Option<usize>,
+    ) -> bool {
+        // linear scan the chunks to find a reusable block
+        let b_index = self.clean_block_steal_cursor.load(Ordering::Relaxed);
+        // Bail out if we don't have any blocks to allocate
+        if b_index == 0 || copy {
+            // println!("no blocks to steal owner={:x?} copy={:?}", owner, copy);
+            return false;
+        }
+        // Grab 1~N Blocks
+        let mut new_cursor = 0;
+        let old =
+            self.clean_block_steal_cursor
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+                    let mut i = c;
+                    let mut curr_count = 0;
+                    while i > 0 {
+                        let block = self.block_index_to_block(chunks, i - 1);
+                        i -= 1;
+                        if self.block_is_available(block, true, copy, true, owner) {
+                            curr_count += 1;
+                            if curr_count >= count {
+                                break;
+                            }
+                        }
+                    }
+                    new_cursor = i;
+                    if curr_count == 0 {
+                        None
+                    } else {
+                        Some(i)
+                    }
+                });
+        if let Ok(old) = old {
+            for i in new_cursor..old {
+                let block = self.block_index_to_block(chunks, i);
+                if self.attempt_to_steal(buf, block, owner.unwrap()) {
+                    self.append_to_buf(buf, block, copy, true, owner);
+                }
+            }
+            // println!("stolen some blocks owner={:x?} copy={:?}", owner, copy);
+            true
+        } else {
+            // println!("Failed to steal some blocks owner={:x?} copy={:?}", owner, copy);
             false
         }
     }
@@ -165,19 +315,27 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         space: &dyn Space<VM>,
         copy: bool,
+        owner: Option<usize>,
     ) -> bool {
         let chunks = self.chunks.read().unwrap();
         if !clean {
-            return self.acquire_blocks_fast(count, buf, &*chunks, copy);
+            unimplemented!()
+            // return self.acquire_blocks_fast(count, buf, &*chunks, copy, owner);
         }
-        if self.acquire_blocks_fast(count, buf, &*chunks, copy) {
+        if self.acquire_blocks_fast(count, buf, &*chunks, copy, owner) {
+            return true;
+        }
+        if self.steal_blocks_fast(count, buf, &*chunks, copy, owner) {
             return true;
         }
         // Slow path
         // println!("slow path");
         std::mem::drop(chunks);
         let mut chunks = self.chunks.write().unwrap();
-        if self.acquire_blocks_fast(count, buf, &*chunks, copy) {
+        if self.acquire_blocks_fast(count, buf, &*chunks, copy, owner) {
+            return true;
+        }
+        if self.steal_blocks_fast(count, buf, &*chunks, copy, owner) {
             return true;
         }
         // assert_eq!(
@@ -192,10 +350,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let block = B::from_aligned_address(
                 chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
             );
-            if !copy {
-                BLOCK_IN_TLS.store_atomic(block.start(), 1u8, Ordering::SeqCst);
-            }
-            buf.push(block);
+            self.append_to_buf(buf, block, copy, false, owner);
         }
         // 3. Add the chunk to the chunk list
         let total_blocks = chunks.len() * Self::BLOCKS_IN_CHUNK;
@@ -269,7 +424,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         //     self.clean_block_cursor.load(Ordering::SeqCst),
         //     self.reuse_block_cursor.load(Ordering::SeqCst)
         // );
+        let chunks = self.chunks.write().unwrap();
+        let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
         self.clean_block_cursor.store(0, Ordering::SeqCst);
+        self.clean_block_steal_cursor
+            .store(max_b_index, Ordering::SeqCst);
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
     }
 

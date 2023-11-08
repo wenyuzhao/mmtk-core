@@ -1013,8 +1013,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         clean: bool,
         buf: &mut Vec<Block>,
         copy: bool,
+        owner: Option<usize>,
     ) -> bool {
-        self.pr.acquire_blocks(count, clean, buf, self, copy)
+        self.pr.acquire_blocks(count, clean, buf, self, copy, owner)
     }
 
     /// Logically acquire a clean block and poll for GC.
@@ -1028,7 +1029,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn initialize_new_block(&self, block: Block, clean: bool, copy: bool) {
-        // println!("new-block: {:?} clean={} copy={}", block, clean, copy);
+        // gc_log!("new-block: {:?} clean={} copy={}", block, clean, copy);
         if clean {
             if !self.rc_enabled {
                 self.defrag.notify_new_clean_block(copy);
