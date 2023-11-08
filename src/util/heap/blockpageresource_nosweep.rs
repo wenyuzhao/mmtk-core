@@ -224,7 +224,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
-        println!("chunk: {:?}", start);
+        gc_log!("chunk: {:?}", start);
         Some(Chunk::from_aligned_address(start))
     }
 
@@ -271,25 +271,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // );
         self.clean_block_cursor.store(0, Ordering::SeqCst);
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
+    }
 
-        let t = std::time::SystemTime::now();
+    pub fn reset_nursery_state(&self) {
         let chunks = self.chunks.write().unwrap();
-        let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
-        let get_block = |i: usize| {
-            let c_index = i >> (Chunk::LOG_BYTES - B::LOG_BYTES);
-            let chunk = chunks[c_index];
-            let block = Block::from_aligned_address(
-                chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
-            );
-            block
-        };
-        for i in 0..max_b_index {
-            let b = get_block(i);
-            if b.get_state() == BlockState::Nursery {
-                b.set_state(BlockState::Unallocated);
-            }
+        for c in &*chunks {
+            Block::NURSERY_STATE_TABLE.bzero_metadata(c.start(), Chunk::BYTES);
         }
-        let ms = t.elapsed().unwrap().as_micros() as f64 / 1000.0;
-        gc_log!("BPR reset took {:.3}ms ({} blocks)", ms, max_b_index);
     }
 }

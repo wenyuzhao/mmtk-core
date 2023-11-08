@@ -331,14 +331,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
                 self.local_clean_blocks_cursor += 1;
                 if self.copy {
-                    if block.get_state() == BlockState::Unallocated {
+                    if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
                         self.space.initialize_new_block(block, true, self.copy);
                         return Some(block);
                     }
                 } else {
-                    if block.get_state() == BlockState::Unallocated
-                        || block.get_state() == BlockState::Nursery
-                    {
+                    if block.get_state() == BlockState::Unallocated {
                         self.space.initialize_new_block(block, true, self.copy);
                         return Some(block);
                     }
@@ -350,7 +348,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.local_reuse_blocks_cursor += 1;
                 let state = block.get_state();
                 if state != BlockState::Unallocated
-                    && state != BlockState::Nursery
+                    && !block.is_nursery()
                     && state != BlockState::Reusing
                     && !block.is_defrag_source()
                 {

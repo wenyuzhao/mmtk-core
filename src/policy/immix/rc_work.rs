@@ -267,10 +267,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             .iter_region::<Block>()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            // #[cfg(not(feature = "ix_no_sweeping"))]
-            if block.get_state() == BlockState::Nursery {
-                continue;
-            }
             if block.is_defrag_source() {
                 continue;
             } else {
@@ -343,7 +339,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Clear block mark data.
             // #[cfg(feature = "ix_no_sweeping")]
             // block.set_state(BlockState::Unmarked);
-            // #[cfg(not(feature = "ix_no_sweeping"))]
+            #[cfg(not(feature = "ix_no_sweeping"))]
             if block.get_state() != BlockState::Nursery {
                 block.set_state(BlockState::Unmarked);
             }
@@ -409,9 +405,9 @@ impl MatureEvacuationSet {
 
     fn skip_block(b: Block) -> bool {
         let s = b.get_state();
-        // #[cfg(feature = "ix_no_sweeping")]
-        // let skip = b.is_defrag_source() || s == BlockState::Unallocated;
-        // #[cfg(not(feature = "ix_no_sweeping"))]
+        #[cfg(feature = "ix_no_sweeping")]
+        let skip = b.is_defrag_source() || s == BlockState::Unallocated;
+        #[cfg(not(feature = "ix_no_sweeping"))]
         let skip = b.is_defrag_source() || s == BlockState::Unallocated || s == BlockState::Nursery;
         skip
     }

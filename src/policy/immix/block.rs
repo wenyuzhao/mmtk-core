@@ -10,7 +10,7 @@ use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::vo_bit;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The block allocation state.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -18,8 +18,6 @@ pub enum BlockState {
     /// the block is not allocated.
     Unallocated,
     /// the block is a young block.
-    Nursery,
-    /// the block is allocated but not marked.
     Unmarked,
     /// the block is allocated and marked.
     Marked,
@@ -37,7 +35,6 @@ impl BlockState {
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
     const MARK_REUSING: u8 = u8::MAX - 2;
-    const MARK_NURSERY: u8 = u8::MAX - 3;
 }
 
 impl From<u8> for BlockState {
@@ -47,7 +44,6 @@ impl From<u8> for BlockState {
             Self::MARK_UNMARKED => BlockState::Unmarked,
             Self::MARK_MARKED => BlockState::Marked,
             Self::MARK_REUSING => BlockState::Reusing,
-            Self::MARK_NURSERY => BlockState::Nursery,
             unavailable_lines => BlockState::Reusable { unavailable_lines },
         }
     }
@@ -60,7 +56,6 @@ impl From<BlockState> for u8 {
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
             BlockState::Reusing => BlockState::MARK_REUSING,
-            BlockState::Nursery => BlockState::MARK_NURSERY,
             BlockState::Reusable { unavailable_lines } => {
                 assert_ne!(unavailable_lines, 0);
                 u8::min(unavailable_lines, u8::MAX - 4)
@@ -136,6 +131,8 @@ impl Region for Block {
     }
 }
 
+static NURSERY_EPOCH: AtomicU8 = AtomicU8::new(1);
+
 impl Block {
     /// Log bytes in block
     pub const LOG_BYTES: usize = <Self as Region>::LOG_BYTES;
@@ -162,6 +159,8 @@ impl Block {
     pub const DEAD_WORDS: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
+    pub const NURSERY_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
 
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
@@ -268,7 +267,26 @@ impl Block {
     }
 
     pub fn is_nursery(&self) -> bool {
-        self.get_state() == BlockState::Nursery
+        Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+            == NURSERY_EPOCH.load(Ordering::Relaxed)
+    }
+
+    pub fn set_nursery(&self) {
+        Self::NURSERY_STATE_TABLE.store_atomic::<u8>(
+            self.start(),
+            NURSERY_EPOCH.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        )
+    }
+
+    pub fn update_nursery_epoch<VM: VMBinding>(space: &ImmixSpace<VM>) {
+        let old = NURSERY_EPOCH.load(Ordering::SeqCst);
+        if old == u8::MAX {
+            NURSERY_EPOCH.store(1, Ordering::SeqCst);
+            space.pr.reset_nursery_state();
+        } else {
+            NURSERY_EPOCH.store(old + 1, Ordering::Relaxed);
+        }
     }
 
     pub fn is_reusable(&self) -> bool {
@@ -399,7 +417,8 @@ impl Block {
                     self.set_state(BlockState::Reusing);
                     debug_assert!(!self.is_defrag_source());
                 } else {
-                    self.set_state(BlockState::Nursery);
+                    debug_assert_eq!(self.get_state(), BlockState::Unallocated);
+                    self.set_nursery();
                     self.set_as_defrag_source(false);
                 }
             }
@@ -688,14 +707,14 @@ impl Block {
     }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        // #[cfg(not(feature = "ix_no_sweeping"))]
+        #[cfg(not(feature = "ix_no_sweeping"))]
         if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
             return false;
         }
-        // #[cfg(feature = "ix_no_sweeping")]
-        // if self.get_state() == BlockState::Unallocated {
-        //     return false;
-        // }
+        #[cfg(feature = "ix_no_sweeping")]
+        if self.get_state() == BlockState::Unallocated {
+            return false;
+        }
         if defrag || self.rc_dead() {
             if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
                 #[cfg(feature = "ix_no_sweeping")]
