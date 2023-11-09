@@ -127,11 +127,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     /// Check if a block is available for allocation
-    fn block_is_available(&self, block: B, clean: bool, _copy: bool, _owner: usize) -> bool {
+    fn block_is_available(&self, block: B, clean: bool, copy: bool, _owner: usize) -> bool {
         debug_assert!(clean);
         let state = Block::from_unaligned_address(block.start()).get_state();
         if state != BlockState::Unallocated {
             return false;
+        }
+        if copy {
+            return true;
         }
         let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
         // We only allocate clean blocks without an owner. For owned blocks, we need to steal them.
@@ -160,6 +163,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     // We successfully allocated or stole a block. Now add it to the local block list.
     fn append_to_buf(&self, buf: &mut Vec<B>, block: B, copy: bool, steal: bool, owner: usize) {
         if !copy && !steal {
+            // println!(
+            //     "Clean set owner {:?} {:?}",
+            //     block.start(),
+            //     owner as *const ()
+            // );
             BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
         }
         buf.push(block);
@@ -188,6 +196,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return false;
         }
         // Set owner
+        // println!(
+        //     "Steal set owner {:?} {:?}",
+        //     block.start(),
+        //     owner as *const ()
+        // );
         BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
         // clear in-use
         BLOCK_IN_USE.store_atomic(block.start(), 0u8, Ordering::Relaxed);
@@ -236,7 +249,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Ok(old) = old {
             for i in old..usize::min(new_cursor, max_b_index) {
                 let block = self.block_index_to_block(chunks, i);
-                self.append_to_buf(buf, block, copy, false, owner);
+                if self.block_is_available(block, true, copy, owner) {
+                    self.append_to_buf(buf, block, copy, false, owner);
+                }
             }
             true
         } else {
@@ -255,7 +270,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // linear scan the chunks to find a reusable block
         let b_index = self.clean_block_steal_cursor.load(Ordering::Relaxed);
         // Bail out if we don't have any blocks to allocate
-        if b_index == 0 {
+        if b_index == 0 || copy {
             // println!("no blocks to steal owner={:x?} copy={:?}", owner, copy);
             return false;
         }
@@ -286,8 +301,10 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if let Ok(old) = old {
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
-                if self.attempt_to_steal(block, owner) {
-                    self.append_to_buf(buf, block, copy, true, owner);
+                if self.block_is_stealable(block, true, copy, owner) {
+                    if self.attempt_to_steal(block, owner) {
+                        self.append_to_buf(buf, block, copy, true, owner);
+                    }
                 }
             }
             // println!("stolen some blocks owner={:x?} copy={:?}", owner, copy);

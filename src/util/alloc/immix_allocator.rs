@@ -46,6 +46,27 @@ pub struct ImmixAllocator<VM: VMBinding> {
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn reset(&mut self) {
+        if !self.copy {
+            *self.local_clean_blocks = self
+                .local_clean_blocks
+                .iter()
+                .filter(|b| {
+                    BLOCK_OWNER.load_atomic::<usize>(b.start(), Ordering::SeqCst)
+                        == self.tls.0.to_address().as_usize()
+                })
+                .cloned()
+                .collect();
+        }
+        // println!(
+        //     "reset copy={:?} tls={:?} {:?}",
+        //     self.copy,
+        //     self.tls.0.to_address(),
+        //     if !self.copy {
+        //         &self.local_clean_blocks as &[Block]
+        //     } else {
+        //         &[]
+        //     }
+        // );
         if let Some(b) = self.block {
             self.retire_block_impl(b)
         }
@@ -390,6 +411,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     .load_atomic::<usize>(block.start(), Ordering::Relaxed)
                                     != self.tls.0.to_address().as_usize()
                                 {
+                                    // println!(
+                                    //     "E {:?} curr={:?} owner={:?} ",
+                                    //     block,
+                                    //     self.tls.0.to_address(),
+                                    //     BLOCK_OWNER
+                                    //         .load_atomic::<usize>(block.start(), Ordering::Relaxed)
+                                    //         as *const ()
+                                    // );
                                     return None;
                                 }
                                 Some(1)
@@ -399,23 +428,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             // println!("try_acquire_block: {:?}", block,);
                             self.space.initialize_new_block(block, true, self.copy);
                             return Some(block);
-                        } else {
-                            // println!("try_acquire_block failed: {:?} inuse={:?} owner={:x?} curr-owner={:x?}",
-                            //     block,
-                            //     BLOCK_IN_USE.load_atomic::<u8>(block.start(), Ordering::Relaxed),
-                            //     BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed),
-                            //     self.tls.0.to_address().as_usize()
-
-                            // );
-                            continue;
                         }
-                    } else {
-                        // println!(
-                        //     "try_acquire_block failed: {:?} state={:?} is_nursery={:?}",
-                        //     block,
-                        //     block.get_state(),
-                        //     block.is_nursery()
-                        // );
                     }
                 }
             }
@@ -457,8 +470,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             // );
             let result = if clean {
                 self.space.acquire_blocks(
+                    32,
                     16,
-                    8,
                     clean,
                     &mut self.local_clean_blocks,
                     self.copy,
