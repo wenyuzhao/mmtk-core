@@ -163,18 +163,21 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     // We successfully allocated or stole a block. Now add it to the local block list.
     fn append_to_buf(&self, buf: &mut Vec<B>, block: B, copy: bool, steal: bool, owner: usize) {
         if !copy && !steal {
+            // Mutator-allocated clean blocks
             // println!(
             //     "Clean set owner {:?} {:?}",
             //     block.start(),
             //     owner as *const ()
             // );
             BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
+            let block = Block::from_unaligned_address(block.start());
+            block.set_nursery();
         }
         buf.push(block);
     }
 
     // Attempt to steal a block.
-    fn attempt_to_steal(&self, block: B, owner: usize) -> bool {
+    fn attempt_to_steal(&self, block: B, owner: usize, copy: bool, clean: bool) -> bool {
         // Attempt to set as in-use
         let b = Block::from_unaligned_address(block.start());
         let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
@@ -201,6 +204,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         //     block.start(),
         //     owner as *const ()
         // );
+        if !copy && clean {
+            b.set_nursery();
+        }
         BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
         // clear in-use
         BLOCK_IN_USE.store_atomic(block.start(), 0u8, Ordering::Relaxed);
@@ -302,7 +308,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, true, copy, owner) {
-                    if self.attempt_to_steal(block, owner) {
+                    if self.attempt_to_steal(block, owner, copy, true) {
                         self.append_to_buf(buf, block, copy, true, owner);
                     }
                 }
