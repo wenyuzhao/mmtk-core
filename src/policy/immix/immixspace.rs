@@ -153,11 +153,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         if self.initial_mark_pause {
             return true;
         }
-
-        #[cfg(not(feature = "ix_no_sweeping"))]
         if self.cm_enabled {
-            let block_state = Block::containing::<VM>(object).get_state();
-            if block_state == BlockState::Nursery {
+            if Block::containing::<VM>(object).is_nursery() {
                 return true;
             }
         }
