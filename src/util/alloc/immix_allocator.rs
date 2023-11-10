@@ -52,8 +52,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 .local_clean_blocks
                 .iter()
                 .filter(|b| {
-                    BLOCK_OWNER.load_atomic::<usize>(b.start(), Ordering::SeqCst)
-                        == self.tls.0.to_address().as_usize()
+                    b.get_state() == BlockState::Unallocated
+                        && BLOCK_OWNER.load_atomic::<usize>(b.start(), Ordering::SeqCst)
+                            == self.tls.0.to_address().as_usize()
                 })
                 .cloned()
                 .collect();

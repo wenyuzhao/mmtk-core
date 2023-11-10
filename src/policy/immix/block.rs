@@ -5,6 +5,7 @@ use crate::util::constants::*;
 use crate::util::heap::blockpageresource_legacy::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
+use crate::util::metadata::side_metadata::spec_defs::BLOCK_OWNER;
 use crate::util::metadata::side_metadata::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
@@ -441,6 +442,7 @@ impl Block {
         }
         self.set_state(BlockState::Unallocated);
         if space.rc_enabled {
+            BLOCK_OWNER.store_atomic(self.start(), 0usize, Ordering::Relaxed);
             self.set_as_defrag_source(false);
             Line::update_validity::<VM>(self.lines());
         }
