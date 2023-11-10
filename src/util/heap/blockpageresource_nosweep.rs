@@ -162,16 +162,19 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     // We successfully allocated or stole a block. Now add it to the local block list.
     fn append_to_buf(&self, buf: &mut Vec<B>, block: B, copy: bool, steal: bool, owner: usize) {
-        if !copy && !steal {
+        if !steal {
             // Mutator-allocated clean blocks
             // println!(
             //     "Clean set owner {:?} {:?}",
             //     block.start(),
             //     owner as *const ()
             // );
+
             BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
-            let block = Block::from_unaligned_address(block.start());
-            block.set_nursery();
+            if !copy {
+                let block = Block::from_unaligned_address(block.start());
+                block.set_nursery();
+            }
         }
         buf.push(block);
     }
@@ -230,6 +233,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         // Grab 1~N Blocks
         let mut new_cursor = 0;
+        let mut actual_count = 0;
         let old = self
             .clean_block_cursor
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
@@ -246,13 +250,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     }
                 }
                 new_cursor = i;
-                if curr_count == 0 {
-                    None
-                } else {
+                actual_count = curr_count;
+                if i != c {
                     Some(i)
+                } else {
+                    None
                 }
             });
-        if let Ok(old) = old {
+        if actual_count != 0 {
+            let old = old.unwrap();
             for i in old..usize::min(new_cursor, max_b_index) {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_available(block, true, copy, owner) {
@@ -282,6 +288,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         // Grab 1~N Blocks
         let mut new_cursor = 0;
+        let mut actual_count = 0;
         let old =
             self.clean_block_steal_cursor
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
@@ -298,13 +305,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                         }
                     }
                     new_cursor = i;
-                    if curr_count == 0 {
-                        None
-                    } else {
+                    actual_count = curr_count;
+                    if i != c {
                         Some(i)
+                    } else {
+                        None
                     }
                 });
-        if let Ok(old) = old {
+        if actual_count != 0 {
+            let old = old.unwrap();
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, true, copy, owner) {
