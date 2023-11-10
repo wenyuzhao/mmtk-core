@@ -391,7 +391,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        let survival = if cfg!(feature = "lxr_no_srv_copy_reserve") {
+        let survival = if !cfg!(feature = "lxr_no_srv_copy_reserve") {
             let predicted_survival = (self.immix_space.block_allocation.clean_nursery_mb() as f64
                 * super::SURVIVAL_RATIO_PREDICTOR.ratio())
                 as usize;
