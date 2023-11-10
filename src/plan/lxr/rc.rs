@@ -1082,7 +1082,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             #[cfg(feature = "sanity")]
             if self.roots
                 && !self.mmtk().get_plan().is_in_sanity()
-                && (!cfg!(feature = "fragmentation_analysis") || crate::frag_exp_enabled())
+                && (cfg!(feature = "fragmentation_analysis") || crate::frag_exp_enabled())
             {
                 self.cache_roots_for_sanity_gc(self.edges.clone());
             }
