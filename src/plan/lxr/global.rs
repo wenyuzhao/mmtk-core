@@ -231,6 +231,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             unreachable!();
         }
         if !crate::LazySweepingJobs::all_finished() {
+            if crate::verbose(1) {
+                let s = format!(
+                    "[{:.3}s][info][gc] @WARNING: LXR Lazy Sweeping Not Finished",
+                    crate::boot_time_secs()
+                );
+                eprintln!("{}", s);
+            }
             crate::counters()
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
@@ -303,7 +310,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
 
         #[cfg(feature = "sanity")]
-        if cfg!(feature = "fragmentation_analysis") && pause == Pause::RefCount {
+        if cfg!(feature = "fragmentation_analysis")
+            && pause == Pause::RefCount
+            && crate::frag_exp_enabled()
+        {
             scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
         }
     }
@@ -375,6 +385,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         );
         self.immix_space.release_rc(pause);
         self.update_fixed_alloc_trigger();
+        self.update_fragmentation_analysis_experiment();
         // swap roots
         let mut prev_roots = self.prev_roots.write().unwrap();
         let mut curr_roots = self.curr_roots.write().unwrap();
@@ -508,7 +519,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         gc_log!([3] " - released young blocks since gc start {}({}M)", self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), self.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
 
-        if cfg!(feature = "fragmentation_analysis") {
+        if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
         }
     }
@@ -1209,6 +1220,28 @@ impl<VM: VMBinding> LXR<VM> {
             self.los().pr.total_chunks.load(Ordering::SeqCst) * 4,
         );
         crate::rust_mem_counter::dump(gc_start);
+    }
+
+    fn hours_since_monday_0am(&self) -> usize {
+        let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
+        let monday_20231106_aedt = std::time::SystemTime::UNIX_EPOCH + hours(471997);
+        let duration = SystemTime::now()
+            .duration_since(monday_20231106_aedt)
+            .unwrap();
+        let hrs = duration.as_secs() as usize / 3600;
+        hrs % (7 * 24)
+    }
+
+    fn update_fragmentation_analysis_experiment(&mut self) {
+        if !cfg!(feature = "periodic_fragmentation_analysis") {
+            return;
+        }
+        let hrs = self.hours_since_monday_0am() % 6;
+        if hrs < 1 {
+            crate::FRAG_EXP_ENABLED.store(true, Ordering::SeqCst)
+        } else {
+            crate::FRAG_EXP_ENABLED.store(false, Ordering::SeqCst)
+        }
     }
 
     fn update_fixed_alloc_trigger(&mut self) {
