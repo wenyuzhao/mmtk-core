@@ -130,12 +130,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn block_is_available(&self, block: B, clean: bool, copy: bool, _owner: usize) -> bool {
         debug_assert!(clean);
         let state = Block::from_unaligned_address(block.start()).get_state();
+        // Don't allocate into a non-empty block
         if state != BlockState::Unallocated {
             return false;
         }
+        // Copy allocator: Skip young blocks in the previous mutator phase
         if copy {
-            return true;
+            return !Block::from_unaligned_address(block.start()).is_nursery();
         }
+        // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
         let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
         // We only allocate clean blocks without an owner. For owned blocks, we need to steal them.
         block_owner == 0
@@ -250,7 +253,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     }
                 }
                 new_cursor = i;
-                actual_count = curr_count;
+                actual_count = curr_count;  
                 if i != c {
                     Some(i)
                 } else {
