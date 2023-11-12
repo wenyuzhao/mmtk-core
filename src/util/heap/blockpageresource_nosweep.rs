@@ -129,14 +129,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     /// Check if a block is available for allocation
     fn block_is_available(&self, block: B, clean: bool, copy: bool, _owner: usize) -> bool {
         debug_assert!(clean);
-        let state = Block::from_unaligned_address(block.start()).get_state();
+        let state = Block::from_aligned_address(block.start()).get_state();
         // Don't allocate into a non-empty block
         if state != BlockState::Unallocated {
             return false;
         }
         // Copy allocator: Skip young blocks in the previous mutator phase
         if copy {
-            return !Block::from_unaligned_address(block.start()).is_nursery();
+            return !Block::from_aligned_address(block.start()).is_nursery();
         }
         // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
         let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
@@ -147,7 +147,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     /// Check if a block can be safely stolen from it's owner
     fn block_is_stealable(&self, block: B, clean: bool, _copy: bool, owner: usize) -> bool {
         debug_assert!(clean);
-        let block = Block::from_unaligned_address(block.start());
+        let block = Block::from_aligned_address(block.start());
         let state = block.get_state();
         // Don't steal non-empty blocks
         if state != BlockState::Unallocated {
@@ -175,7 +175,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
             BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
             if !copy {
-                let block = Block::from_unaligned_address(block.start());
+                let block = Block::from_aligned_address(block.start());
                 block.set_nursery();
             }
         }
@@ -185,7 +185,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     // Attempt to steal a block.
     fn attempt_to_steal(&self, block: B, owner: usize, copy: bool, clean: bool) -> bool {
         // Attempt to set as in-use
-        let b = Block::from_unaligned_address(block.start());
+        let b = Block::from_aligned_address(block.start());
         let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
             block.start(),
             Ordering::Relaxed,
