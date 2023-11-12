@@ -268,8 +268,9 @@ impl Block {
     }
 
     pub fn is_nursery(&self) -> bool {
-        Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
-            == NURSERY_EPOCH.load(Ordering::Relaxed)
+        self.get_state() == BlockState::Unallocated
+            && Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+                == NURSERY_EPOCH.load(Ordering::Relaxed)
     }
 
     pub fn set_nursery(&self) {

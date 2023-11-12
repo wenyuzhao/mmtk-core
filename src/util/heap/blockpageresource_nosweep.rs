@@ -166,20 +166,33 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     // We successfully allocated or stole a block. Now add it to the local block list.
     fn append_to_buf(&self, buf: &mut Vec<B>, block: B, copy: bool, steal: bool, owner: usize) {
         if !steal {
-            // Mutator-allocated clean blocks
-            // println!(
-            //     "Clean set owner {:?} {:?}",
-            //     block.start(),
-            //     owner as *const ()
-            // );
-
-            BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
-            if !copy {
-                let block = Block::from_aligned_address(block.start());
-                block.set_nursery();
+            let b = Block::from_aligned_address(block.start());
+            let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                block.start(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |x| {
+                    if b.get_state() != BlockState::Unallocated || b.is_nursery() {
+                        return None;
+                    }
+                    if x != 0 {
+                        None
+                    } else {
+                        Some(1)
+                    }
+                },
+            );
+            if result.is_ok() {
+                if !copy {
+                    b.set_nursery();
+                }
+                BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
+                buf.push(block);
+                BLOCK_IN_USE.store_atomic(block.start(), 0u8, Ordering::Relaxed);
             }
+        } else {
+            buf.push(block);
         }
-        buf.push(block);
     }
 
     // Attempt to steal a block.
@@ -253,7 +266,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     }
                 }
                 new_cursor = i;
-                actual_count = curr_count;  
+                actual_count = curr_count;
                 if i != c {
                     Some(i)
                 } else {
@@ -426,11 +439,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     pub fn prepare_gc(&self) {
-        let chunks = self.chunks.write().unwrap();
-        let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
-        self.clean_block_cursor.store(0, Ordering::SeqCst);
-        self.clean_block_steal_cursor
-            .store(max_b_index, Ordering::SeqCst);
+        let _chunks = self.chunks.write().unwrap();
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
     }
 
