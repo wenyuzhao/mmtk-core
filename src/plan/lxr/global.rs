@@ -473,7 +473,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_end(&self) {
-        Block::update_nursery_epoch(&self.immix_space);
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(false, Ordering::SeqCst);
         // self.immix_space.flush_page_resource();
         let pause = self.current_pause().unwrap();
