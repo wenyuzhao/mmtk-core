@@ -440,6 +440,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     pub fn prepare_gc(&self) {
         let _chunks = self.chunks.write().unwrap();
+        self.clean_block_cursor.store(0, Ordering::SeqCst);
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
     }
 
