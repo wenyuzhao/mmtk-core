@@ -30,11 +30,6 @@ impl BlockCache {
         }
     }
 
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    fn len(&self) -> usize {
-        self.cursor.load(Ordering::SeqCst)
-    }
-
     pub fn push(&self, block: Block) {
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
         let buffer = self.buffer.read().unwrap();
@@ -68,8 +63,6 @@ impl BlockCache {
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: UnsafeCell<*const ImmixSpace<VM>>,
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    pub(super) nursery_blocks: BlockCache,
     pub(super) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
     num_nursery_blocks: AtomicUsize,
@@ -79,8 +72,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn new() -> Self {
         Self {
             space: UnsafeCell::new(std::ptr::null()),
-            #[cfg(not(feature = "ix_no_sweeping"))]
-            nursery_blocks: BlockCache::new(),
             reused_blocks: BlockCache::new(),
             lxr: None,
             num_nursery_blocks: AtomicUsize::new(0),
@@ -148,15 +139,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
             // 2. Release remaining blocks concurrently after the pause
             if total_blocks > stw_limit {
-                let packets = blocks[stw_limit..total_blocks]
-                    .chunks(1024)
-                    .map(|c| {
-                        let blocks: Vec<Block> =
-                            c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
-                        Box::new(RCLazySweepMutatorReusedBlocks::new(blocks)) as Box<dyn GCWork<VM>>
-                    })
-                    .collect();
-                scheduler.postpone_all_prioritized(packets);
+                unreachable!();
             }
         });
         self.reused_blocks.reset();
@@ -169,80 +152,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.space().pr.bulk_release_blocks(num_blocks);
         self.space().pr.reset();
         self.num_nursery_blocks.store(0, Ordering::SeqCst);
-    }
-
-    /// Reset allocated_block_buffer and free nursery blocks.
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    pub fn sweep_nursery_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        const PARALLEL_STW_SWEEPING: bool = false;
-        let max_stw_sweep_blocks: usize = if cfg!(feature = "lxr_no_lazy_young_sweeping")
-            || cfg!(feature = "lxr_no_lazy")
-            || pause == Pause::FinalMark
-            || pause == Pause::Full
-        {
-            usize::MAX
-        } else {
-            (num_cpus::get() << 20) >> Block::LOG_BYTES // 1M for each core
-        };
-        let space = self.space();
-        // Sweep nursery blocks
-        self.nursery_blocks.visit_slice(|blocks| {
-            if PARALLEL_STW_SWEEPING {
-                return self.parallel_sweep_all_nursery_blocks(scheduler, blocks);
-            }
-            let total_nursery_blocks = blocks.len();
-            let stw_limit = if pause == Pause::Full {
-                total_nursery_blocks
-            } else {
-                usize::min(total_nursery_blocks, max_stw_sweep_blocks)
-            };
-            #[cfg(feature = "lxr_release_stage_timer")]
-            gc_log!([3] "    - Process {}/{} young blocks in the pause (single-thread)", stw_limit, total_nursery_blocks);
-            // 1. STW release a limited number of blocks
-            let mut num_blocks_released = 0;
-            for b in &blocks[0..stw_limit] {
-                let block = b.load(Ordering::Relaxed);
-                debug_assert_ne!(block.get_state(), super::block::BlockState::Unallocated);
-                if block.rc_sweep_nursery(space, true) {
-                    num_blocks_released+=1;
-                }
-            }
-            self.space().num_clean_blocks_released_young.fetch_add(num_blocks_released, Ordering::Relaxed);
-            // 2. Release remaining blocks concurrently after the pause
-            if total_nursery_blocks > stw_limit {
-                let packets = blocks[stw_limit..total_nursery_blocks]
-                    .chunks(1024)
-                    .map(|c| {
-                        let blocks: Vec<Block> =
-                            c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
-                        Box::new(RCLazySweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
-                    })
-                    .collect();
-                scheduler.postpone_all_prioritized(packets);
-            }
-        });
-        self.nursery_blocks.reset();
-        if !PARALLEL_STW_SWEEPING {
-            gc_log!([3] " - released young blocks since gc start {}({}M)", self.space().num_clean_blocks_released_young.load(Ordering::Relaxed), self.space().num_clean_blocks_released_young.load(Ordering::Relaxed) >> (crate::util::constants::LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
-        }
-        self.num_nursery_blocks.store(0, Ordering::SeqCst);
-    }
-
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    fn parallel_sweep_all_nursery_blocks(
-        &self,
-        scheduler: &GCWorkScheduler<VM>,
-        blocks: &[Atomic<Block>],
-    ) {
-        let total_nursery_blocks = blocks.len();
-        let packets = blocks[..total_nursery_blocks]
-            .chunks(1024)
-            .map(|c| {
-                let blocks: Vec<Block> = c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
-                Box::new(RCSTWSweepNurseryBlocks::new(blocks)) as Box<dyn GCWork<VM>>
-            })
-            .collect();
-        scheduler.work_buckets[crate::scheduler::WorkBucketStage::Unconstrained].bulk_add(packets);
     }
 
     /// Notify a GC pahse has started
@@ -290,107 +199,5 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         if self.space().common().zeroed && !copy && cfg!(feature = "force_zeroing") {
             crate::util::memory::zero_w(block.start(), Block::BYTES);
         }
-    }
-}
-
-pub struct RCLazySweepMutatorReusedBlocks {
-    blocks: Vec<Block>,
-    _counter: LazySweepingJobsCounter,
-}
-
-impl RCLazySweepMutatorReusedBlocks {
-    pub fn new(blocks: Vec<Block>) -> Self {
-        Self {
-            blocks,
-            _counter: LazySweepingJobsCounter::new_decs(),
-        }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCLazySweepMutatorReusedBlocks {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let space = &mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap()
-            .immix_space;
-        for block in &self.blocks {
-            space.add_to_possibly_dead_mature_blocks(*block, false);
-        }
-    }
-}
-
-#[cfg(not(feature = "ix_no_sweeping"))]
-struct RCLazySweepNurseryBlocks {
-    blocks: Vec<Block>,
-    _counter: LazySweepingJobsCounter,
-}
-
-#[cfg(not(feature = "ix_no_sweeping"))]
-impl RCLazySweepNurseryBlocks {
-    pub fn new(blocks: Vec<Block>) -> Self {
-        Self {
-            blocks,
-            _counter: LazySweepingJobsCounter::new_decs(),
-        }
-    }
-}
-
-#[cfg(not(feature = "ix_no_sweeping"))]
-impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let space = &mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap()
-            .immix_space;
-        let mut released_blocks = 0;
-        for block in &self.blocks {
-            if block.rc_sweep_nursery(space, false) {
-                released_blocks += 1;
-            }
-        }
-        space
-            .num_clean_blocks_released_young
-            .fetch_add(released_blocks, Ordering::SeqCst);
-        space
-            .num_clean_blocks_released_lazy
-            .fetch_add(released_blocks, Ordering::SeqCst);
-    }
-}
-
-#[cfg(not(feature = "ix_no_sweeping"))]
-struct RCSTWSweepNurseryBlocks {
-    blocks: Vec<Block>,
-    _counter: LazySweepingJobsCounter,
-}
-
-#[cfg(not(feature = "ix_no_sweeping"))]
-impl RCSTWSweepNurseryBlocks {
-    pub fn new(blocks: Vec<Block>) -> Self {
-        Self {
-            blocks,
-            _counter: LazySweepingJobsCounter::new_decs(),
-        }
-    }
-}
-
-#[cfg(not(feature = "ix_no_sweeping"))]
-impl<VM: VMBinding> GCWork<VM> for RCSTWSweepNurseryBlocks {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let space = &mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap()
-            .immix_space;
-        let mut num_blocks_released = 0;
-        for block in &self.blocks {
-            if block.rc_sweep_nursery(space, false) {
-                num_blocks_released += 1;
-            }
-        }
-        space
-            .num_clean_blocks_released_young
-            .fetch_add(num_blocks_released, Ordering::Relaxed);
     }
 }

@@ -9,7 +9,7 @@ use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::linear_scan::Region;
-use crate::util::metadata::side_metadata::spec_defs::{BLOCK_IN_USE, BLOCK_OWNER};
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_COPY_USED, BLOCK_IN_USE, BLOCK_OWNER};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
@@ -26,6 +26,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     clean_block_cursor: AtomicUsize,
     clean_block_steal_cursor: AtomicUsize,
     reuse_block_cursor: AtomicUsize,
+    reuse_block_steal_cursor: AtomicUsize,
     clean_block_cursor_before_gc: AtomicUsize,
     reuse_block_cursor_before_gc: AtomicUsize,
     _p: PhantomData<B>,
@@ -42,10 +43,10 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
 
     fn alloc_pages(
         &self,
-        space: &dyn Space<VM>,
-        reserved_pages: usize,
-        required_pages: usize,
-        tls: VMThread,
+        _space: &dyn Space<VM>,
+        _reserved_pages: usize,
+        _required_pages: usize,
+        _tls: VMThread,
     ) -> Result<PRAllocResult, PRAllocFail> {
         unimplemented!()
     }
@@ -71,6 +72,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn append_local_metadata(metadata: &mut SideMetadataContext) {
         metadata.local.push(BLOCK_IN_USE);
         metadata.local.push(BLOCK_OWNER);
+        metadata.local.push(BLOCK_COPY_USED);
     }
 
     pub fn new_contiguous(
@@ -90,6 +92,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             clean_block_cursor: AtomicUsize::new(0),
             clean_block_steal_cursor: AtomicUsize::new(0),
             reuse_block_cursor: AtomicUsize::new(0),
+            reuse_block_steal_cursor: AtomicUsize::new(0),
             clean_block_cursor_before_gc: AtomicUsize::new(0),
             reuse_block_cursor_before_gc: AtomicUsize::new(0),
             _p: PhantomData,
@@ -111,6 +114,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             clean_block_cursor: AtomicUsize::new(0),
             clean_block_steal_cursor: AtomicUsize::new(0),
             reuse_block_cursor: AtomicUsize::new(0),
+            reuse_block_steal_cursor: AtomicUsize::new(0),
             clean_block_cursor_before_gc: AtomicUsize::new(0),
             reuse_block_cursor_before_gc: AtomicUsize::new(0),
             _p: PhantomData,
@@ -164,7 +168,15 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     // We successfully allocated or stole a block. Now add it to the local block list.
-    fn append_to_buf(&self, buf: &mut Vec<B>, block: B, copy: bool, steal: bool, owner: usize) {
+    fn append_to_buf(
+        &self,
+        buf: &mut Vec<B>,
+        block: B,
+        copy: bool,
+        steal: bool,
+        owner: usize,
+        clean: bool,
+    ) {
         if !steal {
             let b = Block::from_aligned_address(block.start());
             let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
@@ -232,7 +244,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         true
     }
 
-    fn acquire_blocks_fast(
+    fn acquire_clean_blocks_fast(
         &self,
         count: usize,
         buf: &mut Vec<B>,
@@ -278,7 +290,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             for i in old..usize::min(new_cursor, max_b_index) {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_available(block, true, copy, owner) {
-                    self.append_to_buf(buf, block, copy, false, owner);
+                    self.append_to_buf(buf, block, copy, false, owner, true);
                 }
             }
             true
@@ -287,7 +299,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    fn steal_blocks_fast(
+    fn steal_clean_blocks_fast(
         &self,
         count: usize,
         buf: &mut Vec<B>,
@@ -334,7 +346,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, true, copy, owner) {
                     if self.attempt_to_steal(block, owner, copy, true) {
-                        self.append_to_buf(buf, block, copy, true, owner);
+                        self.append_to_buf(buf, block, copy, true, owner, true);
                     }
                 }
             }
@@ -361,20 +373,20 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             unimplemented!()
             // return self.acquire_blocks_fast(count, buf, &*chunks, copy, owner);
         }
-        if self.acquire_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
+        if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
             return true;
         }
-        if self.steal_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
+        if self.steal_clean_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
             return true;
         }
         // Slow path
         // println!("slow path");
         std::mem::drop(chunks);
         let mut chunks = self.chunks.write().unwrap();
-        if self.acquire_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
+        if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
             return true;
         }
-        if self.steal_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
+        if self.steal_clean_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
             return true;
         }
         // assert_eq!(
@@ -389,7 +401,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let block = B::from_aligned_address(
                 chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
             );
-            self.append_to_buf(buf, block, copy, false, owner);
+            self.append_to_buf(buf, block, copy, false, owner, true);
         }
         // 3. Add the chunk to the chunk list
         let total_blocks = chunks.len() * Self::BLOCKS_IN_CHUNK;

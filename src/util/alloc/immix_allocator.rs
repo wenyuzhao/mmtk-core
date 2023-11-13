@@ -59,7 +59,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 .cloned()
                 .collect();
             self.local_clean_blocks_cursor_boundary = self.local_clean_blocks.len();
-            // println!()
+
+            *self.local_reuse_blocks = self
+                .local_reuse_blocks
+                .iter()
+                .filter(|b| {
+                    b.get_state() != BlockState::Unallocated
+                        && BLOCK_OWNER.load_atomic::<usize>(b.start(), Ordering::SeqCst)
+                            == self.tls.0.to_address().as_usize()
+                })
+                .cloned()
+                .collect();
         }
         // println!(
         //     "reset copy={:?} tls={:?} {} {:?}",
@@ -408,14 +418,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         self.tls.0.to_address().as_usize()
                     );
                     // Must be an nursery block
-                    debug_assert!(
-                        block.is_nursery(),
-                        "{:?} cls={:?} {} {}",
-                        block,
-                        self.tls.0.to_address().as_usize() as *const (),
-                        self.local_clean_blocks_cursor,
-                        self.local_clean_blocks_cursor_boundary
-                    );
+                    debug_assert!(block.is_nursery());
                     // Must be unallocated
                     debug_assert_eq!(block.get_state(), BlockState::Unallocated);
                     self.space.initialize_new_block(block, true, self.copy);
@@ -430,6 +433,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
                         self.space.initialize_new_block(block, true, self.copy);
                         return Some(block);
+                    } else {
+                        unreachable!()
                     }
                 } else {
                     if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
@@ -445,14 +450,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     .load_atomic::<usize>(block.start(), Ordering::Relaxed)
                                     != self.tls.0.to_address().as_usize()
                                 {
-                                    // println!(
-                                    //     "E {:?} curr={:?} owner={:?} ",
-                                    //     block,
-                                    //     self.tls.0.to_address(),
-                                    //     BLOCK_OWNER
-                                    //         .load_atomic::<usize>(block.start(), Ordering::Relaxed)
-                                    //         as *const ()
-                                    // );
                                     return None;
                                 }
                                 Some(1)
@@ -497,11 +494,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 return Some(block);
             }
             // Pull N blocks from page resource
-            // eprintln!(
-            //     "Aself.local_clean_block {} {:?}",
-            //     self.local_clean_blocks.len(),
-            //     self.tls
-            // );
             let result = if clean {
                 self.space.acquire_blocks(
                     32,
@@ -513,8 +505,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 )
             } else {
                 self.space.acquire_blocks(
+                    32,
                     16,
-                    8,
                     clean,
                     &mut self.local_reuse_blocks,
                     self.copy,
@@ -524,11 +516,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if !result {
                 return None;
             }
-            // eprintln!(
-            //     "Bself.local_clean_block {} {:?}",
-            //     self.local_clean_blocks.len(),
-            //     self.tls
-            // );
             // Search for the block again
             if let Some(b) = self.try_acquire_block(clean) {
                 return Some(b);

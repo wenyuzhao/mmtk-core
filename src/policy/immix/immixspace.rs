@@ -1015,7 +1015,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         owner: usize,
     ) -> bool {
         debug_assert!(owner != 0);
-        self.pr.acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
+        self.pr
+            .acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
     }
 
     /// Logically acquire a clean block and poll for GC.

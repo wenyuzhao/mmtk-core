@@ -323,9 +323,9 @@ impl Block {
             .map_err(|x| (x as u8).into())
     }
 
-    fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
+    fn attempt_dealloc(&self) -> bool {
         self.fetch_update_state(|s| {
-            if (ignore_reusing_blocks && s == BlockState::Reusing) || s == BlockState::Unallocated {
+            if s == BlockState::Reusing || s == BlockState::Unallocated {
                 None
             } else {
                 Some(BlockState::Unallocated)
@@ -710,26 +710,18 @@ impl Block {
     }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        #[cfg(not(feature = "ix_no_sweeping"))]
-        if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
-            return false;
-        }
-        #[cfg(feature = "ix_no_sweeping")]
         if self.get_state() == BlockState::Unallocated {
             return false;
         }
         if defrag || self.rc_dead() {
-            if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
-                #[cfg(feature = "ix_no_sweeping")]
+            if self.attempt_dealloc() {
                 self.deinit(space);
-                #[cfg(not(feature = "ix_no_sweeping"))]
-                space.release_block(*self, false, true, defrag);
                 return true;
             }
         } else if !crate::args::BLOCK_ONLY {
             // See the caller of this function.
             // At least one object is dead in the block.
-            let add_as_reusable = if !crate::args::IGNORE_REUSING_BLOCKS {
+            let add_as_reusable = if !true {
                 if !self.get_state().is_reusable() && self.has_holes() {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: 1 as _,
