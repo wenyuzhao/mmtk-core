@@ -635,6 +635,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         self.clean_block_steal_cursor
             .store(max_b_index, Ordering::SeqCst);
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
+        self.reuse_block_steal_cursor
+            .store(max_b_index, Ordering::SeqCst);
     }
 
     pub fn reset_nursery_state(&self) {
