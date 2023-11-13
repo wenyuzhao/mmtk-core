@@ -628,7 +628,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // gc_log!("Bulk release blocks {}", count);
     }
 
-    pub fn prepare_gc(&self) {}
+    pub fn prepare_gc(&self) {
+        let _chunks = self.chunks.write().unwrap();
+        self.clean_block_cursor.store(0, Ordering::SeqCst);
+        self.reuse_block_cursor.store(0, Ordering::SeqCst);
+    }
 
     pub fn reset(&self) {
         let chunks = self.chunks.write().unwrap();
