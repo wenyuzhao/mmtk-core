@@ -549,8 +549,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     .sweep_nursery_blocks(&self.scheduler, pause);
             self.flush_page_resource();
         }
-        self.block_allocation
-            .reset_block_mark_for_mutator_reused_blocks(pause);
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
@@ -574,8 +572,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "    - ({:.3}ms) sweep_mutator_reused_blocks start",
             crate::gc_start_time_ms(),
         );
-        self.block_allocation
-            .sweep_mutator_reused_blocks(&self.scheduler, pause);
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]
             "    - ({:.3}ms) sweep_mutator_reused_blocks finish",
@@ -1015,7 +1011,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         owner: usize,
     ) -> bool {
         debug_assert!(owner != 0);
-        self.pr.acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
+        self.pr
+            .acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
     }
 
     /// Logically acquire a clean block and poll for GC.
@@ -1049,10 +1046,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         } else {
             if self.rc_enabled {
-                block.set_state(BlockState::Reusing);
-                if !copy {
-                    self.block_allocation.reused_blocks.push(block);
-                }
+                // pass
             } else {
                 // Get available lines. Do this before block.init which will reset block state.
                 let lines_delta = match block.get_state() {
@@ -1069,51 +1063,48 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Pop a reusable block from the reusable block list.
-    pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
-        if super::BLOCK_ONLY {
-            return None;
-        }
-        loop {
-            if let Some(block) = self.reusable_blocks.pop() {
-                // Skip blocks that should be evacuated.
-                if copy && block.is_defrag_source() {
-                    continue;
-                }
-                if self.rc_enabled {
-                    if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
-                        continue;
-                    }
-                    // Blocks in the `reusable_blocks` queue can be released after some RC collections.
-                    // These blocks can either have `Unallocated` state, or be reallocated again.
-                    // Skip these cases and only return the truly reusable blocks.
-                    if !block.get_state().is_reusable() {
-                        continue;
-                    }
-                    if !copy && !block.attempt_mutator_reuse() {
-                        continue;
-                    }
-                    if !copy {
-                        self.block_allocation.reused_blocks.push(block);
-                    }
-                } else {
-                    // Get available lines. Do this before block.init which will reset block state.
-                    let lines_delta = match block.get_state() {
-                        BlockState::Reusable { unavailable_lines } => {
-                            Block::LINES - unavailable_lines as usize
-                        }
-                        BlockState::Unmarked => Block::LINES,
-                        _ => unreachable!("{:?} {:?}", block, block.get_state()),
-                    };
-                    self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
-                }
+    // pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
+    //     if super::BLOCK_ONLY {
+    //         return None;
+    //     }
+    //     loop {
+    //         if let Some(block) = self.reusable_blocks.pop() {
+    //             // Skip blocks that should be evacuated.
+    //             if copy && block.is_defrag_source() {
+    //                 continue;
+    //             }
+    //             if self.rc_enabled {
+    //                 if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
+    //                     continue;
+    //                 }
+    //                 // Blocks in the `reusable_blocks` queue can be released after some RC collections.
+    //                 // These blocks can either have `Unallocated` state, or be reallocated again.
+    //                 // Skip these cases and only return the truly reusable blocks.
+    //                 if !block.get_state().is_reusable() {
+    //                     continue;
+    //                 }
+    //                 if !copy && !block.attempt_mutator_reuse() {
+    //                     continue;
+    //                 }
+    //             } else {
+    //                 // Get available lines. Do this before block.init which will reset block state.
+    //                 let lines_delta = match block.get_state() {
+    //                     BlockState::Reusable { unavailable_lines } => {
+    //                         Block::LINES - unavailable_lines as usize
+    //                     }
+    //                     BlockState::Unmarked => Block::LINES,
+    //                     _ => unreachable!("{:?} {:?}", block, block.get_state()),
+    //                 };
+    //                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
+    //             }
 
-                block.init(copy, true, self);
-                return Some(block);
-            } else {
-                return None;
-            }
-        }
-    }
+    //             block.init(copy, true, self);
+    //             return Some(block);
+    //         } else {
+    //             return None;
+    //         }
+    //     }
+    // }
 
     pub fn reusable_blocks_drained(&self) -> bool {
         self.reusable_blocks.len() == 0

@@ -5,7 +5,7 @@ use crate::util::constants::*;
 use crate::util::heap::blockpageresource_legacy::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::spec_defs::BLOCK_OWNER;
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_COPY_USED, BLOCK_OWNER};
 use crate::util::metadata::side_metadata::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
@@ -22,8 +22,6 @@ pub enum BlockState {
     Unmarked,
     /// the block is allocated and marked.
     Marked,
-    /// RC mutator recycled blocks.
-    Reusing,
     /// the block is marked as reusable.
     Reusable { unavailable_lines: u8 },
 }
@@ -35,7 +33,6 @@ impl BlockState {
     const MARK_UNMARKED: u8 = u8::MAX;
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
-    const MARK_REUSING: u8 = u8::MAX - 2;
 }
 
 impl From<u8> for BlockState {
@@ -44,7 +41,6 @@ impl From<u8> for BlockState {
             Self::MARK_UNALLOCATED => BlockState::Unallocated,
             Self::MARK_UNMARKED => BlockState::Unmarked,
             Self::MARK_MARKED => BlockState::Marked,
-            Self::MARK_REUSING => BlockState::Reusing,
             unavailable_lines => BlockState::Reusable { unavailable_lines },
         }
     }
@@ -56,7 +52,6 @@ impl From<BlockState> for u8 {
             BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
-            BlockState::Reusing => BlockState::MARK_REUSING,
             BlockState::Reusable { unavailable_lines } => {
                 assert_ne!(unavailable_lines, 0);
                 u8::min(unavailable_lines, u8::MAX - 4)
@@ -267,13 +262,37 @@ impl Block {
         MetadataByteArrayRef::<{ Block::LINES }>::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
     }
 
+    pub fn is_owned_by_copy_allocator(&self) -> bool {
+        BLOCK_COPY_USED.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+            == NURSERY_EPOCH.load(Ordering::Relaxed)
+    }
+
+    pub fn set_owned_by_copy_allocator(&self) {
+        BLOCK_COPY_USED.store_atomic::<u8>(
+            self.start(),
+            NURSERY_EPOCH.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        )
+    }
+
+    pub fn is_reusing(&self) -> bool {
+        self.get_state() != BlockState::Unallocated
+            && Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+                == NURSERY_EPOCH.load(Ordering::Relaxed)
+    }
+
     pub fn is_nursery(&self) -> bool {
         self.get_state() == BlockState::Unallocated
             && Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
                 == NURSERY_EPOCH.load(Ordering::Relaxed)
     }
 
-    pub fn set_nursery(&self) {
+    pub fn is_nursery_or_reusing(&self) -> bool {
+        Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+            == NURSERY_EPOCH.load(Ordering::Relaxed)
+    }
+
+    pub fn set_nursery_or_reusing(&self) {
         Self::NURSERY_STATE_TABLE.store_atomic::<u8>(
             self.start(),
             NURSERY_EPOCH.load(Ordering::Relaxed),
@@ -323,9 +342,9 @@ impl Block {
             .map_err(|x| (x as u8).into())
     }
 
-    fn attempt_dealloc(&self, ignore_reusing_blocks: bool) -> bool {
+    fn attempt_dealloc(&self) -> bool {
         self.fetch_update_state(|s| {
-            if (ignore_reusing_blocks && s == BlockState::Reusing) || s == BlockState::Unallocated {
+            if self.is_reusing() || s == BlockState::Unallocated {
                 None
             } else {
                 Some(BlockState::Unallocated)
@@ -415,12 +434,11 @@ impl Block {
                 self.set_state(BlockState::Unmarked);
                 self.set_as_defrag_source(false);
             } else {
+                self.set_nursery_or_reusing();
                 if reuse {
-                    self.set_state(BlockState::Reusing);
                     debug_assert!(!self.is_defrag_source());
                 } else {
                     debug_assert_eq!(self.get_state(), BlockState::Unallocated);
-                    self.set_nursery();
                     self.set_as_defrag_source(false);
                 }
             }
@@ -698,71 +716,25 @@ impl Block {
         }
     }
 
-    pub fn attempt_mutator_reuse(&self) -> bool {
-        self.fetch_update_state(|s| {
-            if let BlockState::Reusable { .. } = s {
-                Some(BlockState::Reusing)
-            } else {
-                None
-            }
-        })
-        .is_ok()
-    }
+    // pub fn attempt_mutator_reuse(&self) -> bool {
+    //     self.fetch_update_state(|s| {
+    //         if let BlockState::Reusable { .. } = s {
+    //             Some(BlockState::Reusing)
+    //         } else {
+    //             None
+    //         }
+    //     })
+    //     .is_ok()
+    // }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
-        #[cfg(not(feature = "ix_no_sweeping"))]
-        if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
-            return false;
-        }
-        #[cfg(feature = "ix_no_sweeping")]
         if self.get_state() == BlockState::Unallocated {
             return false;
         }
         if defrag || self.rc_dead() {
-            if self.attempt_dealloc(crate::args::IGNORE_REUSING_BLOCKS) {
-                #[cfg(feature = "ix_no_sweeping")]
+            if self.attempt_dealloc() {
                 self.deinit(space);
-                #[cfg(not(feature = "ix_no_sweeping"))]
-                space.release_block(*self, false, true, defrag);
                 return true;
-            }
-        } else if !crate::args::BLOCK_ONLY {
-            // See the caller of this function.
-            // At least one object is dead in the block.
-            let add_as_reusable = if !crate::args::IGNORE_REUSING_BLOCKS {
-                if !self.get_state().is_reusable() && self.has_holes() {
-                    self.set_state(BlockState::Reusable {
-                        unavailable_lines: 1 as _,
-                    });
-                    true
-                } else {
-                    false
-                }
-            } else {
-                let holes = if crate::args::HOLE_COUNTING {
-                    self.calc_holes()
-                } else {
-                    1
-                };
-                let has_holes = self.has_holes();
-                self.fetch_update_state(|s| {
-                    if s == BlockState::Reusing
-                        || s == BlockState::Unallocated
-                        || s.is_reusable()
-                        || !has_holes
-                    {
-                        None
-                    } else {
-                        Some(BlockState::Reusable {
-                            unavailable_lines: usize::min(holes, u8::MAX as usize) as _,
-                        })
-                    }
-                })
-                .is_ok()
-            };
-            if add_as_reusable {
-                debug_assert!(self.get_state().is_reusable());
-                space.reusable_blocks.push(*self);
             }
         }
         false

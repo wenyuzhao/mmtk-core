@@ -68,9 +68,6 @@ impl BlockCache {
 
 pub struct BlockAllocation<VM: VMBinding> {
     space: UnsafeCell<*const ImmixSpace<VM>>,
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    pub(super) nursery_blocks: BlockCache,
-    pub(super) reused_blocks: BlockCache,
     pub(crate) lxr: Option<&'static LXR<VM>>,
     num_nursery_blocks: AtomicUsize,
 }
@@ -79,9 +76,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     pub fn new() -> Self {
         Self {
             space: UnsafeCell::new(std::ptr::null()),
-            #[cfg(not(feature = "ix_no_sweeping"))]
-            nursery_blocks: BlockCache::new(),
-            reused_blocks: BlockCache::new(),
             lxr: None,
             num_nursery_blocks: AtomicUsize::new(0),
         }
@@ -106,60 +100,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     pub fn init(&self, space: &ImmixSpace<VM>) {
         unsafe { *self.space.get() = space as *const ImmixSpace<VM> }
-    }
-
-    pub fn reset_block_mark_for_mutator_reused_blocks(&self, pause: Pause) {
-        if cfg!(feature = "block_state_reset_bug") {
-            if pause == Pause::RefCount || pause == Pause::InitialMark {
-                return;
-            }
-        }
-        // SATB sweep has problem scanning mutator recycled blocks.
-        // Remaing the block state as "reusing" and reset them here.
-        const BLOCK_STATE: BlockState = if cfg!(feature = "block_state_reset_bug") {
-            BlockState::Unmarked
-        } else {
-            BlockState::Marked
-        };
-        self.reused_blocks.visit_slice(|blocks| {
-            for b in blocks {
-                let b = b.load(Ordering::Relaxed);
-                b.set_state(BLOCK_STATE);
-            }
-        });
-    }
-
-    pub fn sweep_mutator_reused_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        if pause == Pause::Full || pause == Pause::FinalMark {
-            self.reused_blocks.reset();
-            return;
-        }
-        const MAX_STW_SWEEP_BLOCKS: usize = usize::MAX;
-        self.reused_blocks.visit_slice(|blocks| {
-            let total_blocks = blocks.len();
-            #[cfg(feature = "lxr_release_stage_timer")]
-            gc_log!([3] "    - Process {}/{} mutator-reused blocks in the pause (single-thread)", total_blocks, total_blocks);
-            let stw_limit = usize::min(total_blocks, MAX_STW_SWEEP_BLOCKS);
-            // 1. STW release a limited number of blocks
-            for b in &blocks[0..stw_limit] {
-                let block = b.load(Ordering::Relaxed);
-                self.space()
-                    .add_to_possibly_dead_mature_blocks(block, false);
-            }
-            // 2. Release remaining blocks concurrently after the pause
-            if total_blocks > stw_limit {
-                let packets = blocks[stw_limit..total_blocks]
-                    .chunks(1024)
-                    .map(|c| {
-                        let blocks: Vec<Block> =
-                            c.iter().map(|x| x.load(Ordering::Relaxed)).collect();
-                        Box::new(RCLazySweepMutatorReusedBlocks::new(blocks)) as Box<dyn GCWork<VM>>
-                    })
-                    .collect();
-                scheduler.postpone_all_prioritized(packets);
-            }
-        });
-        self.reused_blocks.reset();
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.

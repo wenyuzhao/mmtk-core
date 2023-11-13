@@ -185,9 +185,6 @@ pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 pub const INC_MAX_COPY_DEPTH: bool = false;
 
-// ---------- Derived flags ---------- //
-pub static IGNORE_REUSING_BLOCKS: bool = true;
-
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {
         eprintln!(" * {}: {:?}", $name, $value)
@@ -213,7 +210,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_evacuate_nursery_in_recycled_lines");
     dump_feature!("lxr_delayed_nursery_evacuation");
     dump_feature!("lxr_enable_initial_alloc_limit");
-    dump_feature!("ignore_reusing_blocks", IGNORE_REUSING_BLOCKS);
     dump_feature!("log_block_size", Block::LOG_BYTES);
     dump_feature!("log_line_size", Line::LOG_BYTES);
     dump_feature!("log_bytes_per_rc_lock_bit", LOG_BYTES_PER_RC_LOCK_BIT);

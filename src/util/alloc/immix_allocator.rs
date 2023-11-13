@@ -41,6 +41,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     local_clean_blocks_cursor: usize,
     local_clean_blocks_cursor_boundary: usize,
     local_reuse_blocks_cursor: usize,
+    local_reuse_blocks_cursor_boundary: usize,
     mutator_recycled_lines: usize,
     retry: bool,
 }
@@ -59,7 +60,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 .cloned()
                 .collect();
             self.local_clean_blocks_cursor_boundary = self.local_clean_blocks.len();
-            // println!()
+
+            *self.local_reuse_blocks = self
+                .local_reuse_blocks
+                .iter()
+                .filter(|b| {
+                    b.get_state() != BlockState::Unallocated
+                        && BLOCK_OWNER.load_atomic::<usize>(b.start(), Ordering::SeqCst)
+                            == self.tls.0.to_address().as_usize()
+                })
+                .cloned()
+                .collect();
+            self.local_reuse_blocks_cursor_boundary = self.local_reuse_blocks.len();
         }
         // println!(
         //     "reset copy={:?} tls={:?} {} {:?}",
@@ -251,6 +263,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             local_clean_blocks_cursor: 0,
             local_clean_blocks_cursor_boundary: 0,
             local_reuse_blocks_cursor: 0,
+            local_reuse_blocks_cursor_boundary: 0,
             retry: false,
         }
     }
@@ -350,8 +363,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         if crate::args().no_line_recycling {
             return false;
         }
-        match self.immix_space().get_reusable_block(self.copy) {
-            // match self.acquire_block(false) {
+        match self.acquire_block(false) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
@@ -408,14 +420,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         self.tls.0.to_address().as_usize()
                     );
                     // Must be an nursery block
-                    debug_assert!(
-                        block.is_nursery(),
-                        "{:?} cls={:?} {} {}",
-                        block,
-                        self.tls.0.to_address().as_usize() as *const (),
-                        self.local_clean_blocks_cursor,
-                        self.local_clean_blocks_cursor_boundary
-                    );
+                    debug_assert!(block.is_nursery());
                     // Must be unallocated
                     debug_assert_eq!(block.get_state(), BlockState::Unallocated);
                     self.space.initialize_new_block(block, true, self.copy);
@@ -445,14 +450,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     .load_atomic::<usize>(block.start(), Ordering::Relaxed)
                                     != self.tls.0.to_address().as_usize()
                                 {
-                                    // println!(
-                                    //     "E {:?} curr={:?} owner={:?} ",
-                                    //     block,
-                                    //     self.tls.0.to_address(),
-                                    //     BLOCK_OWNER
-                                    //         .load_atomic::<usize>(block.start(), Ordering::Relaxed)
-                                    //         as *const ()
-                                    // );
                                     return None;
                                 }
                                 Some(1)
@@ -467,19 +464,65 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
             }
         } else {
+            if !self.copy {
+                return None;
+            }
             while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
                 let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
                 self.local_reuse_blocks_cursor += 1;
-                let state = block.get_state();
-                if state != BlockState::Unallocated
-                    && !block.is_nursery()
-                    && state != BlockState::Reusing
-                    && !block.is_defrag_source()
-                {
-                    self.space.initialize_new_block(block, false, self.copy);
-                    return Some(block);
+                if self.copy {
+                    if block.get_state() != BlockState::Unallocated && !block.is_defrag_source() {
+                        if !block.is_owned_by_copy_allocator() {
+                            // println!("Reuse {:?}", block);
+                            self.space.initialize_new_block(block, false, self.copy);
+                            return Some(block);
+                        } else {
+                            // println!("Skip {:?}", block);
+                        }
+                    } else {
+                        // println!("Skip3 {:?} {:?}", block, block.get_state());
+                    }
+                } else {
+
+                    // if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
+                    //     let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                    //         block.start(),
+                    //         Ordering::Relaxed,
+                    //         Ordering::Relaxed,
+                    //         |b| {
+                    //             if b == 1 {
+                    //                 return None;
+                    //             }
+                    //             if BLOCK_OWNER
+                    //                 .load_atomic::<usize>(block.start(), Ordering::Relaxed)
+                    //                 != self.tls.0.to_address().as_usize()
+                    //             {
+                    //                 return None;
+                    //             }
+                    //             Some(1)
+                    //         },
+                    //     );
+                    //     if result.is_ok() {
+                    //         // println!("try_acquire_block: {:?}", block,);
+                    //         self.space.initialize_new_block(block, true, self.copy);
+                    //         return Some(block);
+                    //     }
+                    // }
                 }
             }
+            //     while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
+            //         let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
+            //         self.local_reuse_blocks_cursor += 1;
+            //         let state = block.get_state();
+            //         if state != BlockState::Unallocated
+            //             && !block.is_nursery_or_reusing()
+            //             && !block.is_defrag_source()
+            //         {
+            //             self.space.initialize_new_block(block, false, self.copy);
+            //             return Some(block);
+            //         }
+            //     }
+            // }
         }
         None
     }
@@ -497,11 +540,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 return Some(block);
             }
             // Pull N blocks from page resource
-            // eprintln!(
-            //     "Aself.local_clean_block {} {:?}",
-            //     self.local_clean_blocks.len(),
-            //     self.tls
-            // );
             let result = if clean {
                 self.space.acquire_blocks(
                     32,
@@ -512,6 +550,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.tls.0.to_address().as_usize(),
                 )
             } else {
+                if !self.copy {
+                    return None;
+                }
                 self.space.acquire_blocks(
                     16,
                     8,
@@ -524,11 +565,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if !result {
                 return None;
             }
-            // eprintln!(
-            //     "Bself.local_clean_block {} {:?}",
-            //     self.local_clean_blocks.len(),
-            //     self.tls
-            // );
             // Search for the block again
             if let Some(b) = self.try_acquire_block(clean) {
                 return Some(b);
