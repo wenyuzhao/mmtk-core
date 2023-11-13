@@ -140,7 +140,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     && !b.is_reusing()
                     && !b.is_defrag_source();
             } else {
-                return state != BlockState::Unallocated && !b.is_defrag_source();
+                let block_owner =
+                    BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
+                return state != BlockState::Unallocated
+                    && !b.is_reusing()
+                    && !b.is_defrag_source()
+                    && block_owner == 0;
             }
         }
         // Don't allocate into a non-empty block
@@ -232,10 +237,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             } else {
                 let b = Block::from_aligned_address(block.start());
                 if clean {
-                    if b.get_state() != BlockState::Unallocated
-                        || b.is_nursery()
-                        || b.is_defrag_source()
-                    {
+                    if b.get_state() != BlockState::Unallocated || b.is_nursery() {
+                        debug_assert!(!b.is_defrag_source());
                         return;
                     }
                     b.set_owned_by_copy_allocator();
@@ -247,7 +250,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                         return;
                     }
                 }
-                BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
                 buf.push(block);
             }
         } else {

@@ -435,6 +435,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
                         self.space.initialize_new_block(block, true, self.copy);
                         return Some(block);
+                    } else {
+                        unreachable!()
                     }
                 } else {
                     if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
