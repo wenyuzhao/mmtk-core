@@ -464,25 +464,23 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
             }
         } else {
-            if !self.copy {
-                return None;
-            }
             while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
                 let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
                 self.local_reuse_blocks_cursor += 1;
+                if block.get_state() == BlockState::Unallocated
+                    || block.is_reusing()
+                    || block.is_defrag_source()
+                {
+                    continue;
+                }
                 if self.copy {
-                    if block.get_state() != BlockState::Unallocated && !block.is_defrag_source() {
-                        if !block.is_owned_by_copy_allocator() {
-                            // println!("Reuse {:?}", block);
-                            self.space.initialize_new_block(block, false, self.copy);
-                            return Some(block);
-                        } else {
-                            // println!("Skip {:?}", block);
-                        }
-                    } else {
-                        // println!("Skip3 {:?} {:?}", block, block.get_state());
+                    if !block.is_owned_by_copy_allocator() {
+                        self.space.initialize_new_block(block, false, self.copy);
+                        return Some(block);
                     }
                 } else {
+                    self.space.initialize_new_block(block, false, self.copy);
+                    return Some(block);
 
                     // if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
                     //     let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
@@ -550,12 +548,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.tls.0.to_address().as_usize(),
                 )
             } else {
-                if !self.copy {
-                    return None;
-                }
                 self.space.acquire_blocks(
+                    32,
                     16,
-                    8,
                     clean,
                     &mut self.local_reuse_blocks,
                     self.copy,

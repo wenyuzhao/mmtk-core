@@ -134,19 +134,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn block_is_available(&self, block: B, clean: bool, copy: bool, _owner: usize) -> bool {
         let state = Block::from_aligned_address(block.start()).get_state();
         if !clean {
-            assert!(copy);
-            let x = state != BlockState::Unallocated
-                && !Block::from_aligned_address(block.start()).is_reusing();
-            // if !x {
-            //     println!(
-            //         "SKIP2 {} {:?} {} {}",
-            //         block.start(),
-            //         state,
-            //         Block::from_aligned_address(block.start()).is_nursery_or_reusing(),
-            //         Block::from_aligned_address(block.start()).is_owned_by_copy_allocator()
-            //     );
-            // }
-            return x;
+            let b = Block::from_aligned_address(block.start());
+            if copy {
+                return state != BlockState::Unallocated
+                    && !b.is_reusing()
+                    && !b.is_defrag_source();
+            } else {
+                return state != BlockState::Unallocated && !b.is_defrag_source();
+            }
         }
         // Don't allocate into a non-empty block
         if state != BlockState::Unallocated {
@@ -164,21 +159,34 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     /// Check if a block can be safely stolen from it's owner
     fn block_is_stealable(&self, block: B, clean: bool, _copy: bool, owner: usize) -> bool {
-        debug_assert!(clean);
-        let block = Block::from_aligned_address(block.start());
-        let state = block.get_state();
-        // Don't steal non-empty blocks
-        if state != BlockState::Unallocated {
-            return false;
-        }
-        let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
-        if block_owner == 0 || block_owner == owner {
-            return false;
-        }
-        // Not filled by a mutator in the last mutator phase
-        !block.is_nursery()
+        if clean {
+            let block = Block::from_aligned_address(block.start());
+            let state = block.get_state();
+            // Don't steal non-empty blocks
+            if state != BlockState::Unallocated {
+                return false;
+            }
+            let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
+            if block_owner == 0 || block_owner == owner {
+                return false;
+            }
+            // Not filled by a mutator in the last mutator phase
+            !block.is_nursery()
         // in_use state is not set
             && BLOCK_IN_USE.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
+        } else {
+            let block = Block::from_aligned_address(block.start());
+            let state = block.get_state();
+            // Don't steal non-empty blocks
+            if state == BlockState::Unallocated || block.is_reusing() || block.is_defrag_source() {
+                return false;
+            }
+            let block_owner = BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed);
+            if block_owner == 0 || block_owner == owner {
+                return false;
+            }
+            BLOCK_IN_USE.load_atomic::<u8>(block.start(), Ordering::Relaxed) == 0
+        }
     }
 
     // We successfully allocated or stole a block. Now add it to the local block list.
@@ -224,12 +232,18 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             } else {
                 let b = Block::from_aligned_address(block.start());
                 if clean {
-                    if b.get_state() != BlockState::Unallocated || b.is_nursery() {
+                    if b.get_state() != BlockState::Unallocated
+                        || b.is_nursery()
+                        || b.is_defrag_source()
+                    {
                         return;
                     }
                     b.set_owned_by_copy_allocator();
                 } else {
-                    if b.get_state() == BlockState::Unallocated || b.is_reusing() {
+                    if b.get_state() == BlockState::Unallocated
+                        || b.is_reusing()
+                        || b.is_defrag_source()
+                    {
                         return;
                     }
                 }
@@ -250,8 +264,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             Ordering::Relaxed,
             Ordering::Relaxed,
             |x| {
-                if b.get_state() != BlockState::Unallocated || b.is_nursery() {
-                    return None;
+                if clean {
+                    if b.get_state() != BlockState::Unallocated || b.is_nursery() {
+                        return None;
+                    }
+                } else {
+                    if b.get_state() == BlockState::Unallocated
+                        || b.is_nursery()
+                        || b.is_defrag_source()
+                    {
+                        return None;
+                    }
                 }
                 if x != 0 {
                     None
@@ -269,7 +292,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         //     block.start(),
         //     owner as *const ()
         // );
-        if !copy && clean {
+        if !copy {
             b.set_nursery_or_reusing();
         }
         BLOCK_OWNER.store_atomic(block.start(), owner, Ordering::Relaxed);
@@ -388,7 +411,66 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    fn steal_blocks_fast(
+    fn steal_reusable_blocks_fast(
+        &self,
+        count: usize,
+        buf: &mut Vec<B>,
+        chunks: &Vec<Chunk>,
+        copy: bool,
+        owner: usize,
+    ) -> bool {
+        // linear scan the chunks to find a reusable block
+        let b_index = self.reuse_block_steal_cursor.load(Ordering::Relaxed);
+        // Bail out if we don't have any blocks to allocate
+        if b_index == 0 || copy {
+            // println!("no blocks to steal owner={:x?} copy={:?}", owner, copy);
+            return false;
+        }
+        // Grab 1~N Blocks
+        let mut new_cursor = 0;
+        let mut actual_count = 0;
+        let old =
+            self.reuse_block_steal_cursor
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+                    let mut i = c;
+                    let mut curr_count = 0;
+                    while i > 0 {
+                        let block = self.block_index_to_block(chunks, i - 1);
+                        i -= 1;
+                        if self.block_is_stealable(block, false, copy, owner) {
+                            curr_count += 1;
+                            if curr_count >= count {
+                                break;
+                            }
+                        }
+                    }
+                    new_cursor = i;
+                    actual_count = curr_count;
+                    if i != c {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                });
+        if actual_count != 0 {
+            let old = old.unwrap();
+            for i in new_cursor..old {
+                let block = self.block_index_to_block(chunks, i);
+                if self.block_is_stealable(block, false, copy, owner) {
+                    if self.attempt_to_steal(block, owner, copy, false) {
+                        self.append_to_buf(buf, block, copy, true, owner, false);
+                    }
+                }
+            }
+            // println!("stolen some blocks owner={:x?} copy={:?}", owner, copy);
+            true
+        } else {
+            // println!("Failed to steal some blocks owner={:x?} copy={:?}", owner, copy);
+            false
+        }
+    }
+
+    fn steal_clean_blocks_fast(
         &self,
         count: usize,
         buf: &mut Vec<B>,
@@ -459,12 +541,18 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     ) -> bool {
         let chunks = self.chunks.read().unwrap();
         if !clean {
-            return self.acquire_reusable_blocks_fast(alloc_count, buf, &*chunks, copy, owner);
+            if self.acquire_reusable_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
+                return true;
+            }
+            if copy {
+                return false;
+            }
+            return self.steal_reusable_blocks_fast(steal_count, buf, &*chunks, copy, owner);
         }
         if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
             return true;
         }
-        if self.steal_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
+        if self.steal_clean_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
             return true;
         }
         // Slow path
@@ -474,7 +562,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
             return true;
         }
-        if self.steal_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
+        if self.steal_clean_blocks_fast(steal_count, buf, &*chunks, copy, owner) {
             return true;
         }
         // assert_eq!(
@@ -538,10 +626,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // gc_log!("Bulk release blocks {}", count);
     }
 
-    pub fn prepare_gc(&self) {
-        let _chunks = self.chunks.write().unwrap();
-        self.reuse_block_cursor.store(0, Ordering::SeqCst);
-    }
+    pub fn prepare_gc(&self) {}
 
     pub fn reset(&self) {
         let chunks = self.chunks.write().unwrap();
