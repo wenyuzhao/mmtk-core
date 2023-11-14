@@ -201,8 +201,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         clean: bool,
     ) {
         if !steal {
+            let b = Block::from_aligned_address(block.start());
             if !copy {
-                let b = Block::from_aligned_address(block.start());
                 let locked = b.try_lock_with_condition(|| {
                     if clean {
                         b.get_state() == BlockState::Unallocated && !b.is_nursery()
@@ -217,7 +217,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     b.unlock();
                 }
             } else {
-                let b = Block::from_aligned_address(block.start());
                 if clean {
                     if b.get_state() != BlockState::Unallocated || b.is_nursery() {
                         debug_assert!(!b.is_defrag_source());
