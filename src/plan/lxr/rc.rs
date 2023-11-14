@@ -179,11 +179,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
 
         if !los {
-            if cfg!(not(feature = "ix_no_sweeping")) {
-                let block = Block::containing::<VM>(o);
-                if !copied && block.is_nursery() {
-                    block.set_as_in_place_promoted();
-                }
+            let block = Block::containing::<VM>(o);
+            if !copied && block.is_nursery() {
+                block.set_as_in_place_promoted(&self.lxr.immix_space);
             }
             self.rc.promote_with_size(o, size);
             if copied {
@@ -370,9 +368,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         {
             return true;
         }
-        if cfg!(not(feature = "ix_no_sweeping"))
-            && o.get_size::<VM>() >= crate::args().max_young_evac_size
-        {
+        if o.get_size::<VM>() >= crate::args().max_young_evac_size {
             return true;
         }
         false
@@ -392,16 +388,19 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         });
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let los = self.lxr.los().in_space(o);
+        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
+            while object_forwarding::is_being_forwarded::<VM>(o) {
+                std::thread::yield_now();
+            }
+            let new = object_forwarding::read_forwarding_pointer::<VM>(o);
+            self.inc(new, stick);
+            return new;
+        }
         if self.dont_evacuate(o, los) {
             if self.inc(o, stick) {
                 self.promote(o, false, los, depth);
             }
             return o;
-        }
-        if object_forwarding::is_forwarded::<VM>(o) {
-            let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            self.inc(new, stick);
-            return new;
         }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(o);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
@@ -640,7 +639,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             let over_space = mmtk.get_plan().get_used_pages()
                 - mmtk.get_plan().get_collection_reserved_pages()
                 > mmtk.get_plan().get_total_pages();
-            if !cfg!(feature = "ix_no_sweeping") && (over_space || over_time) {
+            if over_space || over_time {
                 self.no_evac = true;
                 crate::NO_EVAC.store(true, Ordering::Relaxed);
                 gc_log!([2]

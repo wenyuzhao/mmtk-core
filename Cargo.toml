@@ -67,13 +67,7 @@ built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
 # default = ["sanity"]
-default = [
-    "perf_counter",
-    "ix_no_sweeping",
-    "dep:sysinfo",
-    "dep:regex",
-    "dep:env_logger",
-]
+default = ["perf_counter", "dep:sysinfo", "dep:regex", "dep:env_logger"]
 # default = []
 nontemporal = []
 satb_timer = []
@@ -116,7 +110,6 @@ ix_block_only = []
 ix_no_defrag = []
 ix_retry_small_object_alloc = []
 ix_retry_small_object_alloc_small_only = []
-ix_no_sweeping = []
 
 # LXR Parameters
 lxr_los_16k = []

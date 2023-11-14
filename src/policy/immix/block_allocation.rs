@@ -10,6 +10,7 @@ pub struct BlockAllocation<VM: VMBinding> {
     space: UnsafeCell<*const ImmixSpace<VM>>,
     pub(crate) lxr: Option<&'static LXR<VM>>,
     num_nursery_blocks: AtomicUsize,
+    pub(crate) in_place_promoted_nursery_blocks: AtomicUsize,
 }
 
 impl<VM: VMBinding> BlockAllocation<VM> {
@@ -18,6 +19,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             space: UnsafeCell::new(std::ptr::null()),
             lxr: None,
             num_nursery_blocks: AtomicUsize::new(0),
+            in_place_promoted_nursery_blocks: Default::default(),
         }
     }
 
@@ -44,10 +46,17 @@ impl<VM: VMBinding> BlockAllocation<VM> {
 
     /// Reset allocated_block_buffer and free nursery blocks.
     pub fn sweep_nursery_blocks(&self, _scheduler: &GCWorkScheduler<VM>, _pause: Pause) {
+        let in_place_promoted_nursery_blocks = self
+            .in_place_promoted_nursery_blocks
+            .load(Ordering::Relaxed);
         let num_blocks = self.clean_nursery_blocks();
-        self.space().pr.bulk_release_blocks(num_blocks);
+        self.space()
+            .pr
+            .bulk_release_blocks(num_blocks - in_place_promoted_nursery_blocks);
         self.space().pr.reset();
         self.num_nursery_blocks.store(0, Ordering::SeqCst);
+        self.in_place_promoted_nursery_blocks
+            .store(0, Ordering::SeqCst);
     }
 
     /// Notify a GC pahse has started

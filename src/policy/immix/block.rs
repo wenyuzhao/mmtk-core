@@ -157,7 +157,7 @@ impl Block {
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
     pub const NURSERY_STATE_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
+        crate::util::metadata::side_metadata::spec_defs::NURSERY_STATE;
 
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
         let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
@@ -582,11 +582,28 @@ impl Block {
         }
     }
 
-    pub fn set_as_in_place_promoted(&self) {
+    pub fn set_as_in_place_promoted<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         if self.is_in_place_promoted() {
             return;
         }
-        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 1u8) };
+        loop {
+            let old_value: u8 =
+                Self::NURSERY_PROMOTION_STATE_TABLE.load_atomic(self.start(), Ordering::Relaxed);
+            if old_value == 1 {
+                return;
+            }
+            if Self::NURSERY_PROMOTION_STATE_TABLE
+                .compare_exchange_atomic(self.start(), 0u8, 1u8, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                space
+                    .block_allocation
+                    .in_place_promoted_nursery_blocks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.set_state(BlockState::Unmarked);
+                return;
+            }
+        }
     }
 
     pub fn is_in_place_promoted(&self) -> bool {

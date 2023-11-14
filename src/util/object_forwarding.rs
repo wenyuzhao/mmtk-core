@@ -140,7 +140,7 @@ pub fn is_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     get_forwarding_status::<VM>(object) == FORWARDED
 }
 
-fn is_being_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
+pub fn is_being_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     get_forwarding_status::<VM>(object) == BEING_FORWARDED
 }
 
