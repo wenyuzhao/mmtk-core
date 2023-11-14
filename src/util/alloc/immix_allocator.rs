@@ -432,37 +432,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
                 self.local_clean_blocks_cursor += 1;
                 if self.copy {
-                    if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
-                        self.space.initialize_new_block(block, true, self.copy);
-                        return Some(block);
-                    } else {
-                        unreachable!()
-                    }
+                    debug_assert!(
+                        block.get_state() == BlockState::Unallocated && !block.is_nursery()
+                    );
+                    self.space.initialize_new_block(block, true, self.copy);
+                    return Some(block);
                 } else {
-                    if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
-                        let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
-                            block.start(),
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                            |b| {
-                                if b == 1 {
-                                    return None;
-                                }
-                                if BLOCK_OWNER
-                                    .load_atomic::<usize>(block.start(), Ordering::Relaxed)
-                                    != self.tls.0.to_address().as_usize()
-                                {
-                                    return None;
-                                }
-                                Some(1)
-                            },
-                        );
-                        if result.is_ok() {
-                            // println!("try_acquire_block: {:?}", block,);
-                            self.space.initialize_new_block(block, true, self.copy);
-                            return Some(block);
-                        }
+                    let locked = block.try_lock_with_condition(|| {
+                        block.get_state() == BlockState::Unallocated
+                            && !block.is_nursery()
+                            && block.get_owner() == Some(self.tls)
+                    });
+                    if !locked {
+                        continue;
                     }
+                    self.space.initialize_new_block(block, true, self.copy);
+                    return Some(block);
                 }
             }
         } else {
@@ -473,44 +458,28 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     continue;
                 }
                 if self.copy {
-                    if !block.is_reusing() && !block.is_owned_by_copy_allocator() {
-                        self.space.initialize_new_block(block, false, self.copy);
-                        return Some(block);
+                    let locked = block.try_lock_with_condition(|| {
+                        block.get_state() != BlockState::Unallocated
+                            && !block.is_defrag_source()
+                            && !block.is_reusing()
+                            && !block.is_owned_by_copy_allocator()
+                    });
+                    if !locked {
+                        continue;
                     }
+                    self.space.initialize_new_block(block, false, self.copy);
+                    return Some(block);
                 } else {
-                    let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
-                        block.start(),
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                        |b| {
-                            if b == 1 {
-                                return None;
-                            }
-                            if block.get_state() == BlockState::Unallocated
-                                || block.is_defrag_source()
-                            {
-                                return None;
-                            }
-                            if BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed)
-                                != self.tls.0.to_address().as_usize()
-                            {
-                                return None;
-                            }
-                            Some(1)
-                        },
-                    );
-                    if block.get_state() == BlockState::Unallocated || block.is_defrag_source() {
+                    let locked = block.try_lock_with_condition(|| {
+                        block.get_state() != BlockState::Unallocated
+                            && !block.is_defrag_source()
+                            && block.get_owner() == Some(self.tls)
+                    });
+                    if !locked {
                         continue;
                     }
-                    if BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed)
-                        != self.tls.0.to_address().as_usize()
-                    {
-                        continue;
-                    }
-                    if result.is_ok() {
-                        self.space.initialize_new_block(block, false, self.copy);
-                        return Some(block);
-                    }
+                    self.space.initialize_new_block(block, false, self.copy);
+                    return Some(block);
                 }
             }
         }
@@ -537,7 +506,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     clean,
                     &mut self.local_clean_blocks,
                     self.copy,
-                    self.tls.0.to_address().as_usize(),
+                    self.tls,
                 )
             } else {
                 self.space.acquire_blocks(
@@ -546,7 +515,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     clean,
                     &mut self.local_reuse_blocks,
                     self.copy,
-                    self.tls.0.to_address().as_usize(),
+                    self.tls,
                 )
             };
             if !result {

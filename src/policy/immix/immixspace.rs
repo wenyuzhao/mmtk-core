@@ -1008,9 +1008,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         clean: bool,
         buf: &mut Vec<Block>,
         copy: bool,
-        owner: usize,
+        owner: VMThread,
     ) -> bool {
-        debug_assert!(owner != 0);
+        debug_assert!(!owner.0.to_address().is_zero());
         self.pr
             .acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
     }

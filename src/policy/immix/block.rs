@@ -1,14 +1,14 @@
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
-use crate::util::constants::*;
 use crate::util::heap::blockpageresource_legacy::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::spec_defs::{BLOCK_COPY_USED, BLOCK_OWNER};
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_COPY_USED, BLOCK_IN_USE, BLOCK_OWNER};
 use crate::util::metadata::side_metadata::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
+use crate::util::{constants::*, OpaquePointer, VMThread};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -260,6 +260,62 @@ impl Block {
     pub fn line_mark_table(&self) -> MetadataByteArrayRef<{ Block::LINES }> {
         debug_assert!(!super::BLOCK_ONLY);
         MetadataByteArrayRef::<{ Block::LINES }>::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
+    }
+
+    fn try_lock(&self) -> bool {
+        let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+            self.start(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |b| {
+                if b == 1 {
+                    return None;
+                }
+                Some(1)
+            },
+        );
+        result == Ok(0)
+    }
+
+    pub fn try_lock_with_condition(&self, predicate: impl Fn() -> bool) -> bool {
+        if !predicate() {
+            return false;
+        }
+        let locked = self.try_lock();
+        if !locked {
+            return false;
+        }
+        if !predicate() {
+            self.unlock();
+            return false;
+        }
+        true
+    }
+
+    pub fn is_locked(&self) -> bool {
+        BLOCK_IN_USE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
+    }
+
+    pub fn unlock(&self) {
+        BLOCK_IN_USE.store_atomic::<u8>(self.start(), 0u8, Ordering::Relaxed);
+    }
+
+    pub fn get_owner(&self) -> Option<VMThread> {
+        let ptr = BLOCK_OWNER.load_atomic::<usize>(self.start(), Ordering::Relaxed);
+        if ptr == 0 {
+            None
+        } else {
+            Some(VMThread(OpaquePointer::from_mut_ptr(ptr as *mut ())))
+        }
+    }
+
+    pub fn set_owner(&self, owner: Option<VMThread>) {
+        let ptr = if let Some(owner) = owner {
+            owner.0.to_address().as_usize()
+        } else {
+            0
+        };
+        BLOCK_OWNER.store_atomic(self.start(), ptr, Ordering::Relaxed);
     }
 
     pub fn is_owned_by_copy_allocator(&self) -> bool {
