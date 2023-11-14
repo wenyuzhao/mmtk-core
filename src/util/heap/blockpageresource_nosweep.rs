@@ -175,7 +175,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         copy: bool,
         steal: bool,
         owner: usize,
-        clean: bool,
+        _clean: bool,
     ) {
         if !steal {
             let b = Block::from_aligned_address(block.start());

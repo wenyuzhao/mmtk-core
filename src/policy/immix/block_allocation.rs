@@ -2,13 +2,7 @@ use super::block::BlockState;
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
-use crate::{
-    plan::lxr::LXR,
-    policy::space::Space,
-    scheduler::{GCWork, GCWorkScheduler, GCWorker},
-    vm::*,
-    LazySweepingJobsCounter, MMTK,
-};
+use crate::{plan::lxr::LXR, policy::space::Space, scheduler::GCWorkScheduler, vm::*};
 use atomic::{Atomic, Ordering};
 use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
@@ -120,7 +114,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         });
     }
 
-    pub fn sweep_mutator_reused_blocks(&self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
+    pub fn sweep_mutator_reused_blocks(&self, _scheduler: &GCWorkScheduler<VM>, pause: Pause) {
         if pause == Pause::Full || pause == Pause::FinalMark {
             self.reused_blocks.reset();
             return;
