@@ -932,41 +932,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
     }
 
-    /// Release a block.
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    pub fn release_block(
-        &self,
-        block: Block,
-        nursery: bool,
-        zero_unlog_table: bool,
-        single_thread: bool,
-    ) {
-        // println!(
-        //     "Release {:?} nursery={} defrag={}",
-        //     block,
-        //     nursery,
-        //     block.is_defrag_source()
-        // );
-        if crate::verbose(2) {
-            if nursery {
-                RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
-            }
-            RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
-        }
-        if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
-            block.clear_field_unlog_table::<VM>();
-        }
-        block.deinit(self);
-        crate::stat(|s| {
-            if nursery {
-                s.reclaimed_blocks_nursery += 1;
-            } else {
-                s.reclaimed_blocks_mature += 1;
-            }
-        });
-        self.pr.release_block(block, single_thread);
-    }
-
     /// Allocate a clean block.
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
         let block_address = self.acquire(tls, Block::PAGES);
@@ -977,10 +942,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.notify_new_clean_block(copy);
         }
         let block = Block::from_aligned_address(block_address);
-        #[cfg(not(feature = "ix_no_sweeping"))]
-        if !copy && self.rc_enabled {
-            self.block_allocation.nursery_blocks.push(block);
-        }
         self.block_allocation
             .initialize_new_clean_block(block, copy, self.cm_enabled);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
@@ -1143,13 +1104,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     let block = Block::containing::<VM>(object);
                     let state = block.get_state();
-                    #[cfg(feature = "ix_no_sweeping")]
                     if state != BlockState::Marked {
                         debug_assert_ne!(state, BlockState::Unallocated);
-                        block.set_state(BlockState::Marked);
-                    }
-                    #[cfg(not(feature = "ix_no_sweeping"))]
-                    if state != BlockState::Nursery && state != BlockState::Marked {
                         block.set_state(BlockState::Marked);
                     }
                 }
@@ -1245,15 +1201,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                 new_object
             };
-            #[cfg(feature = "ix_no_sweeping")]
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
                 state == BlockState::Marked
-            });
-            #[cfg(not(feature = "ix_no_sweeping"))]
-            debug_assert!({
-                let state = Block::containing::<VM>(new_object).get_state();
-                state == BlockState::Marked || state == BlockState::Nursery
             });
             queue.enqueue(new_object);
             debug_assert!(new_object.is_live());

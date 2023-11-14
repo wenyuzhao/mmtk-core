@@ -14,9 +14,6 @@ pub(crate) mod space_descriptor;
 mod vmrequest;
 
 pub(crate) use self::accounting::PageAccounting;
-#[cfg(not(feature = "ix_no_sweeping"))]
-pub(crate) use self::blockpageresource::BlockPageResource;
-#[cfg(feature = "ix_no_sweeping")]
 pub(crate) use self::blockpageresource_nosweep::BlockPageResource;
 pub(crate) use self::freelistpageresource::FreeListPageResource;
 pub(crate) use self::heap_meta::HeapMeta;

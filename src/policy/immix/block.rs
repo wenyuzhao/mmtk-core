@@ -666,14 +666,6 @@ impl Block {
                 BlockState::Unmarked => {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                    // Release the block if it is allocated but not marked by the current GC.
-                    #[cfg(not(feature = "ix_no_sweeping"))]
-                    {
-                        space.release_block(*self, false, false, false);
-                        true
-                    }
-                    #[cfg(feature = "ix_no_sweeping")]
                     unimplemented!();
                 }
                 BlockState::Marked => {
@@ -713,12 +705,6 @@ impl Block {
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
                 // Release the block if non of its lines are marked.
-                #[cfg(not(feature = "ix_no_sweeping"))]
-                {
-                    space.release_block(*self, false, false, false);
-                    true
-                }
-                #[cfg(feature = "ix_no_sweeping")]
                 unimplemented!();
             } else {
                 // There are some marked lines. Keep the block live.
@@ -749,39 +735,6 @@ impl Block {
             }
         }
     }
-
-    #[cfg(not(feature = "ix_no_sweeping"))]
-    pub fn rc_sweep_nursery<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        single_thread: bool,
-    ) -> bool {
-        let is_in_place_promoted = self.is_in_place_promoted();
-        self.clear_in_place_promoted();
-        if is_in_place_promoted {
-            self.set_state(BlockState::Reusable {
-                unavailable_lines: 1 as _,
-            });
-            space.reusable_blocks.push(*self);
-            false
-        } else {
-            debug_assert!(self.rc_dead(), "{:?} has non-zero rc value", self);
-            debug_assert_ne!(self.get_state(), super::block::BlockState::Unallocated);
-            space.release_block(*self, true, false, single_thread);
-            true
-        }
-    }
-
-    // pub fn attempt_mutator_reuse(&self) -> bool {
-    //     self.fetch_update_state(|s| {
-    //         if let BlockState::Reusable { .. } = s {
-    //             Some(BlockState::Reusing)
-    //         } else {
-    //             None
-    //         }
-    //     })
-    //     .is_ok()
-    // }
 
     pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
         if self.get_state() == BlockState::Unallocated {

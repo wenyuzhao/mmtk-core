@@ -43,7 +43,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
-    #[cfg(feature = "ix_no_sweeping")]
     pub fn sweep_nursery_blocks(&self, _scheduler: &GCWorkScheduler<VM>, _pause: Pause) {
         let num_blocks = self.clean_nursery_blocks();
         self.space().pr.bulk_release_blocks(num_blocks);
@@ -86,9 +85,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             }
             if !copy {
                 self.num_nursery_blocks.fetch_add(1, Ordering::Relaxed);
-                if cfg!(feature = "ix_no_sweeping") {
-                    block.clear_field_unlog_table::<VM>();
-                }
+                block.clear_field_unlog_table::<VM>();
             }
         }
         // println!("Alloc {:?} {}", block, copy);

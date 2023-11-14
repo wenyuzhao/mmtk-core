@@ -242,7 +242,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_meta_counting");
     dump_feature!("lxr_no_srv_copy_reserve");
     dump_feature!("lxr_abort_on_trace");
-    dump_feature!("ix_no_sweeping");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
