@@ -469,20 +469,48 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
                 let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
                 self.local_reuse_blocks_cursor += 1;
-                if block.get_state() == BlockState::Unallocated
-                    || block.is_reusing()
-                    || block.is_defrag_source()
-                {
+                if block.get_state() == BlockState::Unallocated || block.is_defrag_source() {
                     continue;
                 }
                 if self.copy {
-                    if !block.is_owned_by_copy_allocator() {
+                    if !block.is_reusing() && !block.is_owned_by_copy_allocator() {
                         self.space.initialize_new_block(block, false, self.copy);
                         return Some(block);
                     }
                 } else {
-                    self.space.initialize_new_block(block, false, self.copy);
-                    return Some(block);
+                    let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                        block.start(),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                        |b| {
+                            if b == 1 {
+                                return None;
+                            }
+                            if block.get_state() == BlockState::Unallocated
+                                || block.is_defrag_source()
+                            {
+                                return None;
+                            }
+                            if BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed)
+                                != self.tls.0.to_address().as_usize()
+                            {
+                                return None;
+                            }
+                            Some(1)
+                        },
+                    );
+                    if block.get_state() == BlockState::Unallocated || block.is_defrag_source() {
+                        continue;
+                    }
+                    if BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed)
+                        != self.tls.0.to_address().as_usize()
+                    {
+                        continue;
+                    }
+                    if result.is_ok() {
+                        self.space.initialize_new_block(block, false, self.copy);
+                        return Some(block);
+                    }
                 }
             }
         }
