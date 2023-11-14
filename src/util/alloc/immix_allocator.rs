@@ -483,46 +483,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     self.space.initialize_new_block(block, false, self.copy);
                     return Some(block);
-
-                    // if block.get_state() == BlockState::Unallocated && !block.is_nursery() {
-                    //     let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
-                    //         block.start(),
-                    //         Ordering::Relaxed,
-                    //         Ordering::Relaxed,
-                    //         |b| {
-                    //             if b == 1 {
-                    //                 return None;
-                    //             }
-                    //             if BLOCK_OWNER
-                    //                 .load_atomic::<usize>(block.start(), Ordering::Relaxed)
-                    //                 != self.tls.0.to_address().as_usize()
-                    //             {
-                    //                 return None;
-                    //             }
-                    //             Some(1)
-                    //         },
-                    //     );
-                    //     if result.is_ok() {
-                    //         // println!("try_acquire_block: {:?}", block,);
-                    //         self.space.initialize_new_block(block, true, self.copy);
-                    //         return Some(block);
-                    //     }
-                    // }
                 }
             }
-            //     while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
-            //         let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
-            //         self.local_reuse_blocks_cursor += 1;
-            //         let state = block.get_state();
-            //         if state != BlockState::Unallocated
-            //             && !block.is_nursery_or_reusing()
-            //             && !block.is_defrag_source()
-            //         {
-            //             self.space.initialize_new_block(block, false, self.copy);
-            //             return Some(block);
-            //         }
-            //     }
-            // }
         }
         None
     }
