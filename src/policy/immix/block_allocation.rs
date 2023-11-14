@@ -1,13 +1,7 @@
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
-use crate::{
-    plan::lxr::LXR,
-    policy::space::Space,
-    scheduler::{GCWork, GCWorkScheduler, GCWorker},
-    vm::*,
-    LazySweepingJobsCounter, MMTK,
-};
+use crate::{plan::lxr::LXR, policy::space::Space, scheduler::GCWorkScheduler, vm::*};
 use atomic::Ordering;
 use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;

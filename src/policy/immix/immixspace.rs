@@ -1017,7 +1017,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Logically acquire a clean block and poll for GC.
     /// This does not actually allocate a block, but only updates the heap counter and do GC when necessary.
-    pub fn get_clean_block_logically(&self, tls: VMThread, copy: bool) -> Result<(), ()> {
+    pub fn get_clean_block_logically(&self, tls: VMThread, _copy: bool) -> Result<(), ()> {
         let success = self.acquire_logically(tls, Block::PAGES);
         if !success {
             return Err(());
