@@ -144,7 +144,6 @@ pub const MARK_LINE_AT_SCAN_TIME: bool = true;
 pub const EAGER_INCREMENTS: bool = false;
 pub const LAZY_DECREMENTS: bool = !cfg!(feature = "lxr_no_lazy");
 pub const NO_LAZY_DEC_THRESHOLD: usize = 100;
-pub const RC_NURSERY_EVACUATION: bool = !cfg!(feature = "lxr_no_nursery_evac");
 pub const RC_MATURE_EVACUATION: bool = !cfg!(feature = "lxr_no_mature_evac");
 pub const ENABLE_INITIAL_ALLOC_LIMIT: bool = cfg!(feature = "lxr_enable_initial_alloc_limit");
 
@@ -251,6 +250,4 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
 pub fn validate_features(active_barrier: BarrierSelector, options: &Options) {
     dump_features(active_barrier, options);
     validate!(DEFRAG => !BLOCK_ONLY);
-    validate!(EAGER_INCREMENTS => !RC_NURSERY_EVACUATION);
-    validate!(RC_NURSERY_EVACUATION => !EAGER_INCREMENTS);
 }

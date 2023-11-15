@@ -227,7 +227,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         {
             self.plan
                 .immix_space
-                .remset
+                .mature_evac_remset
                 .record(e, t, &self.plan.immix_space);
         }
         self.trace_object(t);

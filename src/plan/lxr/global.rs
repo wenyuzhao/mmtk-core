@@ -95,6 +95,7 @@ pub struct LXR<VM: VMBinding> {
     pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub rc: RefCountHelper<VM>,
     gc_cause: Atomic<GCCause>,
+    current_pause_should_do_promotion: AtomicBool,
 }
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -430,10 +431,18 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
-        // self.immix_space.flush_page_resource();
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
+
+        let do_promotion = if pause == Pause::RefCount {
+            let epoch = crate::GC_EPOCH.load(Ordering::SeqCst);
+            epoch & 0b111 == 0
+        } else {
+            true
+        };
+        self.current_pause_should_do_promotion
+            .store(do_promotion, Ordering::SeqCst);
 
         super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
             self.immix_space
@@ -638,6 +647,7 @@ impl<VM: VMBinding> LXR<VM> {
             curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
             gc_cause: Atomic::new(GCCause::Unknown),
+            current_pause_should_do_promotion: Default::default(),
         });
 
         lxr.update_fixed_alloc_trigger();
@@ -1281,5 +1291,10 @@ impl<VM: VMBinding> LXR<VM> {
                 self.young_alloc_trigger = new_value;
             }
         }
+    }
+
+    pub fn current_pause_should_do_promotion(&self) -> bool {
+        self.current_pause_should_do_promotion
+            .load(Ordering::Relaxed)
     }
 }

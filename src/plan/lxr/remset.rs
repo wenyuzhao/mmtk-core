@@ -25,17 +25,25 @@ impl RemSetEntry {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum RSKind {
+    MatureEvac,
+    Aging,
+}
+
 pub struct RemSet<VM: VMBinding> {
     pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
     local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
+    pub kind: RSKind,
     _p: PhantomData<VM>,
 }
 
 impl<VM: VMBinding> RemSet<VM> {
-    pub fn new(workers: usize) -> Self {
+    pub fn new(kind: RSKind, workers: usize) -> Self {
         let mut rs = RemSet {
             gc_buffers: vec![],
             local_packets: vec![],
+            kind,
             _p: PhantomData,
         };
         rs.gc_buffers
@@ -50,6 +58,9 @@ impl<VM: VMBinding> RemSet<VM> {
     }
 
     fn flush_all(&self, space: &ImmixSpace<VM>) {
+        if self.kind == RSKind::Aging {
+            return;
+        }
         let mut mature_evac_remsets = space.mature_evac_remsets.lock().unwrap();
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
@@ -105,7 +116,7 @@ impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
             .downcast_ref::<LXR<VM>>()
             .unwrap()
             .immix_space;
-        immix_space.remset.flush_all(immix_space);
+        immix_space.mature_evac_remset.flush_all(immix_space);
         immix_space.process_mature_evacuation_remset();
     }
 }

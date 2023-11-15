@@ -337,10 +337,14 @@ impl Block {
                 == NURSERY_EPOCH.load(Ordering::Relaxed)
     }
 
+    fn nursery_epoch(&self) -> u8 {
+        Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+    }
+
     pub fn is_nursery(&self) -> bool {
+        let epoch = NURSERY_EPOCH.load(Ordering::Relaxed) as usize;
         self.get_state() == BlockState::Unallocated
-            && Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
-                == NURSERY_EPOCH.load(Ordering::Relaxed)
+            && self.nursery_epoch() as usize + crate::MAX_NURSERY_EPOCH >= epoch
     }
 
     pub fn is_nursery_or_reusing(&self) -> bool {

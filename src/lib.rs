@@ -628,3 +628,5 @@ fn frag_exp_enabled() -> bool {
     }
     FRAG_EXP_ENABLED.load(Ordering::Relaxed)
 }
+
+const MAX_NURSERY_EPOCH: usize = 8;
