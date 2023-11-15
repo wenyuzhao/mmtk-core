@@ -1023,50 +1023,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    /// Pop a reusable block from the reusable block list.
-    // pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
-    //     if super::BLOCK_ONLY {
-    //         return None;
-    //     }
-    //     loop {
-    //         if let Some(block) = self.reusable_blocks.pop() {
-    //             // Skip blocks that should be evacuated.
-    //             if copy && block.is_defrag_source() {
-    //                 continue;
-    //             }
-    //             if self.rc_enabled {
-    //                 if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
-    //                     continue;
-    //                 }
-    //                 // Blocks in the `reusable_blocks` queue can be released after some RC collections.
-    //                 // These blocks can either have `Unallocated` state, or be reallocated again.
-    //                 // Skip these cases and only return the truly reusable blocks.
-    //                 if !block.get_state().is_reusable() {
-    //                     continue;
-    //                 }
-    //                 if !copy && !block.attempt_mutator_reuse() {
-    //                     continue;
-    //                 }
-    //             } else {
-    //                 // Get available lines. Do this before block.init which will reset block state.
-    //                 let lines_delta = match block.get_state() {
-    //                     BlockState::Reusable { unavailable_lines } => {
-    //                         Block::LINES - unavailable_lines as usize
-    //                     }
-    //                     BlockState::Unmarked => Block::LINES,
-    //                     _ => unreachable!("{:?} {:?}", block, block.get_state()),
-    //                 };
-    //                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
-    //             }
-
-    //             block.init(copy, true, self);
-    //             return Some(block);
-    //         } else {
-    //             return None;
-    //         }
-    //     }
-    // }
-
     pub fn reusable_blocks_drained(&self) -> bool {
         self.reusable_blocks.len() == 0
     }
