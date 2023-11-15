@@ -519,7 +519,6 @@ impl Block {
         if space.rc_enabled {
             BLOCK_OWNER.store_atomic(self.start(), 0usize, Ordering::Relaxed);
             self.set_as_defrag_source(false);
-            Line::update_validity::<VM>(self.lines());
         }
     }
 
@@ -536,10 +535,6 @@ impl Block {
     pub fn lines(&self) -> RegionIterator<Line> {
         debug_assert!(!super::BLOCK_ONLY);
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
-    }
-
-    pub fn clear_line_validity_states(&self) {
-        Line::VALIDITY_STATE.bzero_metadata(self.start(), Block::BYTES);
     }
 
     pub fn clear_rc_table<VM: VMBinding>(&self) {

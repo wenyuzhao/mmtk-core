@@ -1,6 +1,5 @@
 use atomic::Ordering;
 
-use crate::plan::lxr::RemSet;
 use crate::plan::ObjectQueue;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
@@ -13,7 +12,6 @@ use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
-use crate::util::metadata::side_metadata::spec_defs::LOS_PAGE_VALIDITY;
 use crate::util::opaque_pointer::*;
 use crate::util::rc::RefCountHelper;
 use crate::util::treadmill::TreadMill;
@@ -102,10 +100,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
             self.test_and_mark(object, self.mark_state);
-            self.update_validity(
-                object.to_address::<VM>(),
-                (bytes + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE,
-            );
             #[cfg(feature = "lxr_srv_ratio_counter")]
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
                 .los_alloc_vol
@@ -267,37 +261,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "  reachable-live-bytes: {}",
             crate::SANITY_LIVE_SIZE_LOS.load(Ordering::SeqCst)
         );
-    }
-
-    fn update_validity(&self, start: Address, pages: usize) {
-        if RemSet::<VM>::NO_VALIDITY_STATE {
-            return;
-        }
-        if !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
-            LOS_PAGE_VALIDITY.bzero_metadata(start, pages << LOG_BYTES_IN_PAGE);
-            return;
-        }
-        let mut has_invalid_state = false;
-        for i in 0..pages {
-            let page = start + (i << LOG_BYTES_IN_PAGE);
-            unsafe {
-                let old = LOS_PAGE_VALIDITY.load::<u8>(page);
-                has_invalid_state = has_invalid_state || (old >= u8::MAX);
-                LOS_PAGE_VALIDITY.store(page, old + 1);
-            }
-        }
-        assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
-    }
-
-    pub fn currrent_validity_state(e: Address) -> u8 {
-        let page = e.align_down(BYTES_IN_PAGE);
-        unsafe { LOS_PAGE_VALIDITY.load::<u8>(page) }
-    }
-
-    pub fn pointer_is_valid(&self, e: Address, epoch: u8) -> bool {
-        let page = e.align_down(BYTES_IN_PAGE);
-        let recorded = unsafe { LOS_PAGE_VALIDITY.load::<u8>(page) };
-        epoch == recorded
     }
 
     fn release_object(&self, start: Address) -> usize {

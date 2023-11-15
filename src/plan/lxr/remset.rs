@@ -1,10 +1,9 @@
 use std::{cell::UnsafeCell, marker::PhantomData};
 
-use crate::policy::immix::{line::Line, ImmixSpace};
+use crate::policy::immix::ImmixSpace;
 use crate::util::ObjectReference;
 use crate::{
     plan::lxr::LXR,
-    policy::{largeobjectspace::LargeObjectSpace, space::Space},
     scheduler::{GCWork, GCWorker},
     util::Address,
     vm::{edge_shape::Edge, VMBinding},
@@ -14,17 +13,15 @@ use crate::{
 use super::mature_evac::EvacuateMatureObjects;
 
 #[repr(C)]
-pub(super) struct RemSetEntry(usize, ObjectReference);
+pub(super) struct RemSetEntry(Address, ObjectReference);
 
 impl RemSetEntry {
-    fn encode<VM: VMBinding>(edge: VM::VMEdge, epoch: u8, o: ObjectReference) -> Self {
-        Self(edge.raw_address().as_usize() | ((epoch as usize) << 48), o)
+    fn encode<VM: VMBinding>(edge: VM::VMEdge, o: ObjectReference) -> Self {
+        Self(edge.raw_address(), o)
     }
 
-    pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, u8, ObjectReference) {
-        let v = ((self.0 >> 48) & 0xff) as u8;
-        let p = unsafe { Address::from_usize(self.0 & 0xff00_ffff_ffff_ffff_usize) };
-        (VM::VMEdge::from_address(p), v, self.1)
+    pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, ObjectReference) {
+        (VM::VMEdge::from_address(self.0), self.1)
     }
 }
 
@@ -35,8 +32,6 @@ pub struct RemSet<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> RemSet<VM> {
-    pub const NO_VALIDITY_STATE: bool = true;
-
     pub fn new(workers: usize) -> Self {
         let mut rs = RemSet {
             gc_buffers: vec![],
@@ -89,41 +84,15 @@ impl<VM: VMBinding> RemSet<VM> {
         }
     }
 
-    pub fn get_currrent_validity_state(&self, e: VM::VMEdge, space: &ImmixSpace<VM>) -> u8 {
-        if Self::NO_VALIDITY_STATE {
-            return 0;
-        }
-        // FIXME: performance?
-        if !e.to_address().is_mapped() {
-            0
-        } else if space.address_in_space(e.to_address()) {
-            Line::of(e.to_address()).currrent_validity_state()
-        } else {
-            LargeObjectSpace::<VM>::currrent_validity_state(e.to_address())
-        }
-    }
-
-    pub fn record_with_validity_state(
-        &self,
-        e: VM::VMEdge,
-        o: ObjectReference,
-        space: &ImmixSpace<VM>,
-        validity_state: u8,
-    ) {
+    pub fn record(&self, e: VM::VMEdge, o: ObjectReference, space: &ImmixSpace<VM>) {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.add(1);
         }
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffer(id)
-            .push(RemSetEntry::encode::<VM>(e, validity_state, o));
+        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, o));
         if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush(id, space)
         }
-    }
-
-    pub fn record(&self, e: VM::VMEdge, o: ObjectReference, space: &ImmixSpace<VM>) {
-        let validity_state = self.get_currrent_validity_state(e, space);
-        self.record_with_validity_state(e, o, space, validity_state);
     }
 }
 

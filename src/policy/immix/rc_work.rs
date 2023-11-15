@@ -4,10 +4,7 @@ use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 
 use crate::{
-    plan::{
-        immix::Pause,
-        lxr::{RemSet, LXR},
-    },
+    plan::{immix::Pause, lxr::LXR},
     scheduler::{GCWork, GCWorker, WorkBucketStage},
     util::{
         constants::LOG_BYTES_IN_PAGE,
@@ -319,9 +316,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
             let state = block.get_state();
-            if !RemSet::<VM>::NO_VALIDITY_STATE && self.rc_enabled {
-                block.clear_line_validity_states();
-            }
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {
                 continue;

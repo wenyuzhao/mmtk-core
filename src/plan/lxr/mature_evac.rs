@@ -5,10 +5,7 @@ use crate::vm::edge_shape::Edge;
 use crate::{
     plan::{immix::Pause, lxr::cm::LXRStopTheWorldProcessEdges},
     policy::{
-        immix::{
-            block::{Block, BlockState},
-            line::Line,
-        },
+        immix::block::{Block, BlockState},
         space::Space,
     },
     scheduler::{GCWork, GCWorker, WorkBucketStage},
@@ -16,7 +13,7 @@ use crate::{
     MMTK,
 };
 
-use super::remset::{RemSet, RemSetEntry};
+use super::remset::RemSetEntry;
 use super::LXR;
 
 pub struct EvacuateMatureObjects<VM: VMBinding> {
@@ -35,7 +32,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    fn address_is_valid_oop_edge(&self, e: VM::VMEdge, epoch: u8, lxr: &LXR<VM>) -> bool {
+    fn address_is_valid_oop_edge(&self, e: VM::VMEdge, lxr: &LXR<VM>) -> bool {
         // Keep edges not in the mmtk heap
         // These should be edges in the c++ `ClassLoaderData` objects. We remember these edges
         // in the remembered-set to avoid expensive CLD scanning.
@@ -57,28 +54,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
-            if RemSet::<VM>::NO_VALIDITY_STATE || Line::of(e.to_address()).pointer_is_valid(epoch) {
-                return true;
-            }
-            false
-        } else {
-            if RemSet::<VM>::NO_VALIDITY_STATE || lxr.los().pointer_is_valid(e.to_address(), epoch)
-            {
-                return true;
-            }
-            false
         }
+        true
     }
 
-    fn process_edge(
-        &mut self,
-        e: VM::VMEdge,
-        epoch: u8,
-        old_ref: ObjectReference,
-        lxr: &LXR<VM>,
-    ) -> bool {
+    fn process_edge(&mut self, e: VM::VMEdge, old_ref: ObjectReference, lxr: &LXR<VM>) -> bool {
         // Skip edges that does not contain a real oop
-        if !self.address_is_valid_oop_edge(e, epoch, lxr) {
+        if !self.address_is_valid_oop_edge(e, lxr) {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
@@ -110,8 +92,8 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         let mut edges = vec![];
         let mut refs = vec![];
         for entry in remset {
-            let (e, epoch, o) = entry.decode::<VM>();
-            if self.process_edge(e, epoch, o, lxr) {
+            let (e, o) = entry.decode::<VM>();
+            if self.process_edge(e, o, lxr) {
                 edges.push(e);
                 refs.push(o);
             }

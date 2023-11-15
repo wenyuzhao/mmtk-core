@@ -3,7 +3,6 @@ use std::ops::Range;
 use atomic::Ordering;
 
 use super::block::Block;
-use crate::plan::lxr::RemSet;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD, LOG_MIN_OBJECT_SIZE};
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
@@ -49,9 +48,6 @@ impl Line {
     /// Line mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
-
-    pub const VALIDITY_STATE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_LINE_VALIDITY;
 
     /// Align the give address to the line boundary.
     pub fn align(address: Address) -> Address {
@@ -137,27 +133,6 @@ impl Line {
             line.mark(state)
         }
         marked_lines
-    }
-
-    pub fn currrent_validity_state(&self) -> u8 {
-        Self::VALIDITY_STATE.load_atomic(self.start(), Ordering::Relaxed)
-    }
-
-    pub fn pointer_is_valid(&self, pointer_epoch: u8) -> bool {
-        pointer_epoch == self.currrent_validity_state()
-    }
-
-    pub fn update_validity<VM: VMBinding>(lines: RegionIterator<Line>) {
-        if RemSet::<VM>::NO_VALIDITY_STATE || !crate::REMSET_RECORDING.load(Ordering::SeqCst) {
-            return;
-        }
-        let mut has_invalid_state = false;
-        for line in lines {
-            let old = line.currrent_validity_state();
-            has_invalid_state = has_invalid_state || (old >= u8::MAX);
-            Self::VALIDITY_STATE.store_atomic(line.start(), old + 1, Ordering::Relaxed);
-        }
-        assert!(!has_invalid_state, "Over 255 RC pauses during SATB");
     }
 
     pub fn clear_field_unlog_table<VM: VMBinding>(lines: Range<Line>) {

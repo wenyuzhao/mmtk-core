@@ -16,7 +16,7 @@ use crate::util::copy::*;
 use crate::util::heap::chunk_map::*;
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::PageResource;
-use crate::util::linear_scan::{Region, RegionIterator};
+use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
@@ -325,7 +325,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Get side metadata specs
     fn side_metadata_specs(rc_enabled: bool) -> Vec<SideMetadataSpec> {
         if rc_enabled {
-            let mut meta = vec![
+            let meta = vec![
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
@@ -336,9 +336,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::NURSERY_STATE_TABLE),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
             ];
-            if !RemSet::<VM>::NO_VALIDITY_STATE {
-                meta.push(MetadataSpec::OnSide(Line::VALIDITY_STATE));
-            }
             return metadata::extract_side_metadata(&meta);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -1444,7 +1441,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
             }
-            Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
         let num_lines = Line::steps_between(&start, &end).unwrap();
         if !copy {

@@ -207,7 +207,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         object: ObjectReference,
         e: VM::VMEdge,
         t: ObjectReference,
-        validity: u8,
         should_check_remset: bool,
     ) {
         if t.is_null() || self.rc.count(t) == 0 {
@@ -226,12 +225,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             && (should_check_remset || !e.to_address().is_mapped())
             && self.plan.in_defrag(t)
         {
-            self.plan.immix_space.remset.record_with_validity_state(
-                e,
-                t,
-                &self.plan.immix_space,
-                validity,
-            );
+            self.plan
+                .immix_space
+                .remset
+                .record(e, t, &self.plan.immix_space);
         }
         self.trace_object(t);
     }
@@ -257,13 +254,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 if t.is_null() {
                     return;
                 }
-                let validity = self
-                    .plan
-                    .immix_space
-                    .remset
-                    .get_currrent_validity_state(e, &self.plan.immix_space);
                 if self.rc.count(object) != 0 {
-                    self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
+                    self.process_edge_after_obj_scan(object, e, t, should_check_remset);
                 }
             },
         );
@@ -296,13 +288,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if t.is_null() {
                 continue;
             }
-            let validity = self
-                .plan
-                .immix_space
-                .remset
-                .get_currrent_validity_state(e, &self.plan.immix_space);
             if self.rc.count(object) != 0 {
-                self.process_edge_after_obj_scan(object, e, t, validity, should_check_remset);
+                self.process_edge_after_obj_scan(object, e, t, should_check_remset);
             }
         }
     }
