@@ -388,12 +388,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         });
         debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let los = self.lxr.los().in_space(o);
-        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
+        if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
                 std::thread::yield_now();
             }
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            self.inc(new, stick);
+            let promoted = self.inc(new, stick);
+            if promoted && new == o {
+                self.promote(o, false, los, depth);
+            }
             return new;
         }
         if self.dont_evacuate(o, los) {
