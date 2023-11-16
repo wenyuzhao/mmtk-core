@@ -390,6 +390,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let los = self.lxr.los().in_space(o);
         if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
+                std::hint::spin_loop();
                 std::thread::yield_now();
             }
             let new = object_forwarding::read_forwarding_pointer::<VM>(o);
