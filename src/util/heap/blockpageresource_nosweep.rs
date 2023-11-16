@@ -9,7 +9,7 @@ use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::linear_scan::Region;
-use crate::util::metadata::side_metadata::spec_defs::{BLOCK_COPY_USED, BLOCK_IN_USE, BLOCK_OWNER};
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_IN_USE, BLOCK_OWNER};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::*;
@@ -72,7 +72,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn append_local_metadata(metadata: &mut SideMetadataContext) {
         metadata.local.push(BLOCK_IN_USE);
         metadata.local.push(BLOCK_OWNER);
-        metadata.local.push(BLOCK_COPY_USED);
     }
 
     pub fn new_contiguous(
@@ -200,8 +199,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         owner: VMThread,
         clean: bool,
     ) {
+        let b = Block::from_aligned_address(block.start());
         if !steal {
-            let b = Block::from_aligned_address(block.start());
             if !copy {
                 let locked = b.try_lock_with_condition(|| {
                     if clean {
@@ -211,7 +210,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     }
                 });
                 if locked {
-                    b.set_nursery_or_reusing();
+                    b.update_phase_epoch();
                     b.set_owner(Some(owner));
                     buf.push(block);
                     b.unlock();
@@ -222,7 +221,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                         debug_assert!(!b.is_defrag_source());
                         return;
                     }
-                    b.set_owned_by_copy_allocator();
                 } else {
                     if b.get_state() == BlockState::Unallocated
                         || b.is_reusing()
@@ -231,15 +229,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                         return;
                     }
                 }
+                b.update_phase_epoch();
                 buf.push(block);
             }
         } else {
+            b.update_phase_epoch();
             buf.push(block);
         }
     }
 
     // Attempt to steal a block.
-    fn attempt_to_steal(&self, block: B, owner: VMThread, copy: bool, clean: bool) -> bool {
+    fn attempt_to_steal(&self, block: B, owner: VMThread, clean: bool) -> bool {
         // Attempt to set as in-use
         let b = Block::from_aligned_address(block.start());
         let locked = b.try_lock_with_condition(|| {
@@ -253,9 +253,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return false;
         }
         // Set owner
-        if !copy {
-            b.set_nursery_or_reusing();
-        }
+        b.update_phase_epoch();
         b.set_owner(Some(owner));
         // clear in-use
         b.unlock();
@@ -418,7 +416,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, false, copy, owner) {
-                    if self.attempt_to_steal(block, owner, copy, false) {
+                    if self.attempt_to_steal(block, owner, false) {
                         self.append_to_buf(buf, block, copy, true, owner, false);
                     }
                 }
@@ -477,7 +475,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, true, copy, owner) {
-                    if self.attempt_to_steal(block, owner, copy, true) {
+                    if self.attempt_to_steal(block, owner, true) {
                         self.append_to_buf(buf, block, copy, true, owner, true);
                     }
                 }
@@ -607,10 +605,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     pub fn reset_nursery_state(&self) {
         let chunks = self.chunks.write().unwrap();
         for c in &*chunks {
-            Block::NURSERY_STATE_TABLE.bzero_metadata(c.start(), Chunk::BYTES);
-        }
-        for c in &*chunks {
-            BLOCK_COPY_USED.bzero_metadata(c.start(), Chunk::BYTES);
+            Block::PHASE_EPOCH.bzero_metadata(c.start(), Chunk::BYTES);
         }
     }
 }

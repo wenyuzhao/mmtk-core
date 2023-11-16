@@ -333,7 +333,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::NURSERY_PROMOTION_STATE_TABLE),
-                MetadataSpec::OnSide(Block::NURSERY_STATE_TABLE),
+                MetadataSpec::OnSide(Block::PHASE_EPOCH),
                 MetadataSpec::OnSide(Block::DEAD_WORDS),
             ];
             return metadata::extract_side_metadata(&meta);
@@ -563,7 +563,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert_ne!(pause, Pause::FullDefrag);
         self.block_allocation
             .sweep_nursery_blocks(&self.scheduler, pause);
-        Block::update_nursery_epoch(&self);
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]
             "    - ({:.3}ms) sweep_mutator_reused_blocks start",

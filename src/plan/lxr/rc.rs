@@ -643,15 +643,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             let over_space = mmtk.get_plan().get_used_pages()
                 - mmtk.get_plan().get_collection_reserved_pages()
                 > mmtk.get_plan().get_total_pages();
-            if over_space || over_time {
-                self.no_evac = true;
-                crate::NO_EVAC.store(true, Ordering::Relaxed);
-                gc_log!([2]
-                    " - Stop evacuation. over_space={} over_time={}",
-                    over_space,
-                    over_time
-                );
-            }
+            // if over_space || over_time {
+            //     self.no_evac = true;
+            //     crate::NO_EVAC.store(true, Ordering::Relaxed);
+            //     gc_log!([2]
+            //         " - Stop evacuation. over_space={} over_time={}",
+            //         over_space,
+            //         over_time
+            //     );
+            // }
         }
         // Process main buffer
         let root_edges = if KIND == EDGE_KIND_ROOT
