@@ -56,6 +56,7 @@ pub fn spin_and_get_forwarded_object<VM: VMBinding>(
 ) -> ObjectReference {
     let mut forwarding_bits = forwarding_bits;
     while forwarding_bits == BEING_FORWARDED {
+        std::hint::spin_loop();
         forwarding_bits = get_forwarding_status::<VM>(object);
     }
 
@@ -170,7 +171,7 @@ pub fn clear_forwarding_bits<VM: VMBinding>(object: ObjectReference) {
 /// Read the forwarding pointer of an object.
 /// This function is called on forwarded/being_forwarded objects.
 pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> ObjectReference {
-    debug_assert!(
+    assert!(
         is_forwarded_or_being_forwarded::<VM>(object),
         "read_forwarding_pointer called for object {:?} that has not started forwarding!",
         object,

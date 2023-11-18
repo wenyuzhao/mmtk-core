@@ -363,9 +363,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return true;
         }
         // Skip recycled lines
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-            && !Block::containing::<VM>(o).is_nursery()
-        {
+        let block = Block::containing::<VM>(o);
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_nursery() {
             return true;
         }
         if o.get_size::<VM>() >= crate::args().max_young_evac_size {
@@ -391,9 +390,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
                 std::hint::spin_loop();
-                std::thread::yield_now();
             }
-            let new = object_forwarding::read_forwarding_pointer::<VM>(o);
+            let new = if object_forwarding::is_forwarded::<VM>(o) {
+                object_forwarding::read_forwarding_pointer::<VM>(o)
+            } else {
+                o
+            };
             let promoted = self.inc(new, stick);
             if promoted && new == o {
                 self.promote(o, false, los, depth);
@@ -643,15 +645,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             let over_space = mmtk.get_plan().get_used_pages()
                 - mmtk.get_plan().get_collection_reserved_pages()
                 > mmtk.get_plan().get_total_pages();
-            // if over_space || over_time {
-            //     self.no_evac = true;
-            //     crate::NO_EVAC.store(true, Ordering::Relaxed);
-            //     gc_log!([2]
-            //         " - Stop evacuation. over_space={} over_time={}",
-            //         over_space,
-            //         over_time
-            //     );
-            // }
+            if over_space || over_time {
+                self.no_evac = true;
+                crate::NO_EVAC.store(true, Ordering::Relaxed);
+                gc_log!([2]
+                    " - Stop evacuation. over_space={} over_time={}",
+                    over_space,
+                    over_time
+                );
+            }
         }
         // Process main buffer
         let root_edges = if KIND == EDGE_KIND_ROOT

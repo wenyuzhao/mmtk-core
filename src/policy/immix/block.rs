@@ -496,6 +496,7 @@ impl Block {
                 self.clear_in_place_promoted();
                 debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
+            self.clear_in_place_promoted();
             self.update_phase_epoch();
             if copy {
                 if reuse {
@@ -529,6 +530,7 @@ impl Block {
             self.reset_dead_bytes();
         }
         self.set_state(BlockState::Unallocated);
+        self.clear_in_place_promoted();
         if space.rc_enabled {
             BLOCK_OWNER.store_atomic(self.start(), 0usize, Ordering::Relaxed);
             self.set_as_defrag_source(false);
@@ -609,6 +611,7 @@ impl Block {
                     .in_place_promoted_nursery_blocks
                     .fetch_add(1, Ordering::Relaxed);
                 self.set_state(BlockState::Unmarked);
+                self.update_phase_epoch();
                 return;
             }
         }
@@ -619,7 +622,7 @@ impl Block {
     }
 
     pub fn clear_in_place_promoted(&self) {
-        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 0u8) };
+        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
     pub fn unlog(&self) {
