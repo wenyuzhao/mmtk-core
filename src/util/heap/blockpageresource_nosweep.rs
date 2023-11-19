@@ -153,7 +153,13 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     /// Check if a block can be safely stolen from it's owner
-    fn block_is_stealable(&self, block: B, clean: bool, owner: VMThread) -> bool {
+    fn block_is_stealable(
+        &self,
+        block: B,
+        clean: bool,
+        owner: VMThread,
+        skip_lock_check: bool,
+    ) -> bool {
         let block = Block::from_aligned_address(block.start());
         if clean {
             let state = block.get_state();
@@ -168,7 +174,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             // Not filled by a mutator in the last mutator phase
             !block.is_nursery()
         // in_use state is not set
-            && !block.is_locked()
+            && (skip_lock_check || !block.is_locked())
         } else {
             let state = block.get_state();
             // Don't steal empty, used, or defrag blocks
@@ -179,7 +185,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             if block_owner.is_none() || block_owner == Some(owner) {
                 return false;
             }
-            !block.is_locked()
+            skip_lock_check || !block.is_locked()
         }
     }
 
@@ -231,7 +237,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn attempt_to_steal(&self, block: B, owner: VMThread, clean: bool) -> bool {
         // Attempt to set as in-use
         let b = Block::from_aligned_address(block.start());
-        let locked = b.try_lock_with_condition(|| self.block_is_stealable(block, clean, owner));
+        let locked =
+            b.try_lock_with_condition(|| self.block_is_stealable(block, clean, owner, true));
         if !locked {
             return false;
         }
@@ -378,7 +385,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     while i > 0 {
                         let block = self.block_index_to_block(chunks, i - 1);
                         i -= 1;
-                        if self.block_is_stealable(block, false, owner) {
+                        if self.block_is_stealable(block, false, owner, false) {
                             curr_count += 1;
                             if curr_count >= count {
                                 break;
@@ -397,7 +404,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let old = old.unwrap();
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
-                if self.block_is_stealable(block, false, owner) {
+                if self.block_is_stealable(block, false, owner, false) {
                     if self.attempt_to_steal(block, owner, false) {
                         self.append_to_buf(buf, block, copy, true, owner, false);
                     }
@@ -434,7 +441,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     while i > 0 {
                         let block = self.block_index_to_block(chunks, i - 1);
                         i -= 1;
-                        if self.block_is_stealable(block, true, owner) {
+                        if self.block_is_stealable(block, true, owner, false) {
                             curr_count += 1;
                             if curr_count >= count {
                                 break;
@@ -453,7 +460,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let old = old.unwrap();
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
-                if self.block_is_stealable(block, true, owner) {
+                if self.block_is_stealable(block, true, owner, false) {
                     if self.attempt_to_steal(block, owner, true) {
                         self.append_to_buf(buf, block, copy, true, owner, true);
                     }
