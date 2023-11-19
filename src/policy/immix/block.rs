@@ -4,7 +4,7 @@ use super::ImmixSpace;
 use crate::util::heap::blockpageresource_legacy::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::spec_defs::{BLOCK_COPY_USED, BLOCK_IN_USE, BLOCK_OWNER};
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_IN_USE, BLOCK_OWNER};
 use crate::util::metadata::side_metadata::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
@@ -127,7 +127,7 @@ impl Region for Block {
     }
 }
 
-static NURSERY_EPOCH: AtomicU8 = AtomicU8::new(1);
+static GLOBAL_PHASE_EPOCH: AtomicU8 = AtomicU8::new(1);
 
 impl Block {
     /// Log bytes in block
@@ -156,8 +156,8 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
-    pub const NURSERY_STATE_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::NURSERY_STATE;
+    pub const PHASE_EPOCH: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::PHASE_EPOCH;
 
     fn inc_dead_bytes_sloppy(&self, bytes: u32) {
         let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
@@ -318,55 +318,66 @@ impl Block {
         BLOCK_OWNER.store_atomic(self.start(), ptr, Ordering::Relaxed);
     }
 
+    /// The block is in one of the copy allocator's local block list.
     pub fn is_owned_by_copy_allocator(&self) -> bool {
-        BLOCK_COPY_USED.load_atomic::<u8>(self.start(), Ordering::Relaxed)
-            == NURSERY_EPOCH.load(Ordering::Relaxed)
+        let ge = Self::global_phase_epoch();
+        assert_eq!(ge & 1, 0);
+        let e: u8 = self.phase_epoch();
+        ge == e
     }
 
-    pub fn set_owned_by_copy_allocator(&self) {
-        BLOCK_COPY_USED.store_atomic::<u8>(
+    /// The global phase epoch.
+    /// This counter is bumped by one at the end of every mutator and GC phase.
+    /// Any block matching this epoch are used for allocation in the current phase.
+    pub fn global_phase_epoch() -> u8 {
+        GLOBAL_PHASE_EPOCH.load(Ordering::Relaxed)
+    }
+
+    /// Get the current block phase epoch.
+    /// This indicates the last phase that this block is used for object allocation.
+    /// Either as a clean block or a partially-free block.
+    ///
+    /// Odd epoch means the block is in a mutator phase.
+    /// Even epoch means the block is allocated in a GC phase.
+    pub fn phase_epoch(&self) -> u8 {
+        Self::PHASE_EPOCH.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+    }
+
+    pub fn update_phase_epoch(&self) {
+        Self::PHASE_EPOCH.store_atomic::<u8>(
             self.start(),
-            NURSERY_EPOCH.load(Ordering::Relaxed),
+            Self::global_phase_epoch(),
             Ordering::Relaxed,
-        )
+        );
     }
 
     pub fn is_reusing(&self) -> bool {
-        self.get_state() != BlockState::Unallocated
-            && Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
-                == NURSERY_EPOCH.load(Ordering::Relaxed)
-    }
-
-    fn nursery_epoch(&self) -> u8 {
-        Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+        self.get_state() != BlockState::Unallocated && self.is_nursery_or_reusing()
     }
 
     pub fn is_nursery(&self) -> bool {
-        let epoch = NURSERY_EPOCH.load(Ordering::Relaxed) as usize;
+        let epoch = Self::global_phase_epoch();
         self.get_state() == BlockState::Unallocated
             && self.nursery_epoch() as usize + crate::MAX_NURSERY_EPOCH >= epoch
     }
 
     pub fn is_nursery_or_reusing(&self) -> bool {
-        Self::NURSERY_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed)
-            == NURSERY_EPOCH.load(Ordering::Relaxed)
+        let ge = Self::global_phase_epoch();
+        let e = self.phase_epoch();
+        if (ge & 1) == 1 {
+            return e == ge;
+        } else {
+            return e == ge - 1;
+        }
     }
 
-    pub fn set_nursery_or_reusing(&self) {
-        Self::NURSERY_STATE_TABLE.store_atomic::<u8>(
-            self.start(),
-            NURSERY_EPOCH.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        )
-    }
-
-    pub fn update_nursery_epoch<VM: VMBinding>(space: &ImmixSpace<VM>) {
-        let old = NURSERY_EPOCH.load(Ordering::SeqCst);
-        if old == u8::MAX {
-            NURSERY_EPOCH.store(1, Ordering::SeqCst);
+    pub fn update_global_phase_epoch<VM: VMBinding>(space: &ImmixSpace<VM>) {
+        let old = GLOBAL_PHASE_EPOCH.load(Ordering::SeqCst);
+        if old == 254 {
+            GLOBAL_PHASE_EPOCH.store(1, Ordering::SeqCst);
             space.pr.reset_nursery_state();
         } else {
-            NURSERY_EPOCH.store(old + 1, Ordering::Relaxed);
+            GLOBAL_PHASE_EPOCH.store(old + 1, Ordering::SeqCst);
         }
     }
 
@@ -487,6 +498,8 @@ impl Block {
                 self.clear_in_place_promoted();
                 debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
+            self.clear_in_place_promoted();
+            self.update_phase_epoch();
             if copy {
                 if reuse {
                     debug_assert!(!self.is_defrag_source());
@@ -494,7 +507,6 @@ impl Block {
                 self.set_state(BlockState::Unmarked);
                 self.set_as_defrag_source(false);
             } else {
-                self.set_nursery_or_reusing();
                 if reuse {
                     debug_assert!(!self.is_defrag_source());
                 } else {
@@ -520,6 +532,7 @@ impl Block {
             self.reset_dead_bytes();
         }
         self.set_state(BlockState::Unallocated);
+        self.clear_in_place_promoted();
         if space.rc_enabled {
             BLOCK_OWNER.store_atomic(self.start(), 0usize, Ordering::Relaxed);
             self.set_as_defrag_source(false);
@@ -600,6 +613,7 @@ impl Block {
                     .in_place_promoted_nursery_blocks
                     .fetch_add(1, Ordering::Relaxed);
                 self.set_state(BlockState::Unmarked);
+                self.update_phase_epoch();
                 return;
             }
         }
@@ -610,7 +624,7 @@ impl Block {
     }
 
     pub fn clear_in_place_promoted(&self) {
-        unsafe { Self::NURSERY_PROMOTION_STATE_TABLE.store(self.start(), 0u8) };
+        Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
     pub fn unlog(&self) {
@@ -757,7 +771,7 @@ impl Block {
             return false;
         }
         if defrag || self.rc_dead() {
-            if self.attempt_dealloc() {
+            if defrag || self.attempt_dealloc() {
                 self.deinit(space);
                 return true;
             }

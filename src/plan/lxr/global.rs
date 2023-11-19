@@ -400,6 +400,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "lxr_precise_incs_counter") {
             self.rc.reset_and_report_inc_counters();
         }
+        Block::update_global_phase_epoch(&self.immix_space);
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -431,6 +432,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+        Block::update_global_phase_epoch(&self.immix_space);
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();

@@ -385,9 +385,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return true;
         }
         // Skip recycled lines
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
-            && !Block::containing::<VM>(o).is_nursery()
-        {
+        let block = Block::containing::<VM>(o);
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_nursery() {
             return true;
         }
         if o.get_size::<VM>() >= crate::args().max_young_evac_size {
@@ -408,12 +407,19 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_volume += o.get_size::<VM>();
         });
         let los = self.lxr.los().in_space(o);
-        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
+        if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
-                std::thread::yield_now();
+                std::hint::spin_loop();
             }
-            let new = object_forwarding::read_forwarding_pointer::<VM>(o);
-            self.inc(new, stick);
+            let new = if object_forwarding::is_forwarded::<VM>(o) {
+                object_forwarding::read_forwarding_pointer::<VM>(o)
+            } else {
+                o
+            };
+            let promoted = self.inc(new, stick);
+            if promoted && new == o {
+                self.promote(o, false, los, depth);
+            }
             return new;
         }
         if self.dont_evacuate(o, los) {
