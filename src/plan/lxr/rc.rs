@@ -216,10 +216,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if !edge_in_defrag && self.lxr.in_defrag(o) {
-            self.lxr
-                .immix_space
-                .mature_evac_remset
-                .record(e, o, &self.lxr.immix_space);
+            self.lxr.immix_space.mature_evac_remset.record(e, o);
             self.counters.remset_inserts += 1;
         }
     }
@@ -231,15 +228,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
     }
 
-    fn record_aging_remset(&mut self, src: ObjectReference, slot: VM::VMEdge, o: ObjectReference) {
+    fn record_young_remset(&mut self, src: ObjectReference, slot: VM::VMEdge, o: ObjectReference) {
         if self.lxr.current_pause_should_do_promotion() {
             return;
         }
         if self.rc.count(src) > 0 && self.rc.count(o) == 0 {
-            self.lxr
-                .immix_space
-                .aging_remset
-                .record(slot, o, &self.lxr.immix_space);
+            self.lxr.immix_space.young_remset.record(slot, o);
         }
     }
 
@@ -882,9 +876,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             return;
         }
         if !lxr.address_in_defrag(e.to_address()) && lxr.in_defrag(o) {
-            lxr.immix_space
-                .mature_evac_remset
-                .record(e, o, &lxr.immix_space);
+            lxr.immix_space.mature_evac_remset.record(e, o);
         }
     }
 

@@ -225,10 +225,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             && (should_check_remset || !e.to_address().is_mapped())
             && self.plan.in_defrag(t)
         {
-            self.plan
-                .immix_space
-                .mature_evac_remset
-                .record(e, t, &self.plan.immix_space);
+            self.plan.immix_space.mature_evac_remset.record(e, t);
         }
         self.trace_object(t);
     }

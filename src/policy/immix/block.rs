@@ -356,9 +356,9 @@ impl Block {
     }
 
     pub fn is_nursery(&self) -> bool {
-        let epoch = Self::global_phase_epoch();
+        let epoch = Self::global_phase_epoch() as usize;
         self.get_state() == BlockState::Unallocated
-            && self.nursery_epoch() as usize + crate::MAX_NURSERY_EPOCH >= epoch
+            && self.phase_epoch() as usize + crate::MAX_NURSERY_EPOCH >= epoch
     }
 
     pub fn is_nursery_or_reusing(&self) -> bool {

@@ -3,8 +3,7 @@ use super::line::*;
 use super::rc_work::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::immix::Pause;
-use crate::plan::lxr::RSKind;
-use crate::plan::lxr::RemSet;
+use crate::plan::lxr::{RemSet, YoungRemSet};
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureAfterSATBLOS};
@@ -75,7 +74,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub copy_alloc_bytes: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
     pub mature_evac_remset: RemSet<VM>,
-    pub aging_remset: RemSet<VM>,
+    pub young_remset: YoungRemSet<VM>,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
     pub is_end_of_satb_or_full_gc: bool,
@@ -421,8 +420,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
             mark_state: Self::MARKED_STATE,
-            mature_evac_remset: RemSet::new(RSKind::MatureEvac, scheduler.num_workers()),
-            aging_remset: RemSet::new(RSKind::MatureEvac, scheduler.num_workers()),
+            mature_evac_remset: RemSet::new(scheduler.num_workers()),
+            young_remset: YoungRemSet::new(scheduler.num_workers()),
             scheduler,
             space_args,
             block_allocation: BlockAllocation::new(),
