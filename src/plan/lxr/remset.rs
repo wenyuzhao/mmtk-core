@@ -25,15 +25,15 @@ impl RemSetEntry {
     }
 }
 
-pub struct RemSet<VM: VMBinding> {
+pub struct MatureEvecRemSet<VM: VMBinding> {
     pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
     local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> RemSet<VM> {
+impl<VM: VMBinding> MatureEvecRemSet<VM> {
     pub fn new(workers: usize) -> Self {
-        let mut rs = RemSet {
+        let mut rs = Self {
             gc_buffers: vec![],
             local_packets: vec![],
             _p: PhantomData,

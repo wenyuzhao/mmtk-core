@@ -14,7 +14,7 @@ use std::time::SystemTime;
 
 pub use self::global::LXR;
 pub use self::global::LXR_CONSTRAINTS;
-pub use self::remset::{RemSet, YoungRemSet};
+pub use self::remset::{MatureEvecRemSet, YoungRemSet};
 
 use atomic::Atomic;
 use atomic::Ordering;
