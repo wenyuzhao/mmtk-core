@@ -171,7 +171,7 @@ pub fn clear_forwarding_bits<VM: VMBinding>(object: ObjectReference) {
 /// Read the forwarding pointer of an object.
 /// This function is called on forwarded/being_forwarded objects.
 pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> ObjectReference {
-    assert!(
+    debug_assert!(
         is_forwarded_or_being_forwarded::<VM>(object),
         "read_forwarding_pointer called for object {:?} that has not started forwarding!",
         object,
