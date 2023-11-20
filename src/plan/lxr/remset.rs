@@ -25,15 +25,15 @@ impl RemSetEntry {
     }
 }
 
-pub struct RemSet<VM: VMBinding> {
+pub struct MatureEvecRemSet<VM: VMBinding> {
     pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
     local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> RemSet<VM> {
+impl<VM: VMBinding> MatureEvecRemSet<VM> {
     pub fn new(workers: usize) -> Self {
-        let mut rs = RemSet {
+        let mut rs = Self {
             gc_buffers: vec![],
             local_packets: vec![],
             _p: PhantomData,
@@ -72,7 +72,7 @@ impl<VM: VMBinding> RemSet<VM> {
     }
 
     #[cold]
-    fn flush(&self, id: usize, _space: &ImmixSpace<VM>) {
+    fn flush(&self, id: usize) {
         if self.gc_buffer(id).len() > 0 {
             let remset = std::mem::take(self.gc_buffer(id));
             if cfg!(feature = "rust_mem_counter") {
@@ -84,14 +84,14 @@ impl<VM: VMBinding> RemSet<VM> {
         }
     }
 
-    pub fn record(&self, e: VM::VMEdge, o: ObjectReference, space: &ImmixSpace<VM>) {
+    pub fn record(&self, e: VM::VMEdge, o: ObjectReference) {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.add(1);
         }
         let id = crate::gc_worker_id().unwrap();
         self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, o));
         if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
-            self.flush(id, space)
+            self.flush(id)
         }
     }
 }
@@ -105,7 +105,7 @@ impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
             .downcast_ref::<LXR<VM>>()
             .unwrap()
             .immix_space;
-        immix_space.remset.flush_all(immix_space);
+        immix_space.mature_evac_remset.flush_all(immix_space);
         immix_space.process_mature_evacuation_remset();
     }
 }
