@@ -351,12 +351,18 @@ impl Block {
         );
     }
 
-    pub fn update_phase_epoch_to_next_mutator_phase(&self) {
-        Self::PHASE_EPOCH.store_atomic::<u8>(
-            self.start(),
-            Self::global_phase_epoch() + 1,
-            Ordering::Relaxed,
-        );
+    pub fn update_phase_epoch_to_one(&self) {
+        Self::PHASE_EPOCH.store_atomic::<u8>(self.start(), 1, Ordering::Relaxed);
+    }
+
+    pub fn update_phase_epoch_to_next_mutator_phase<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        let ge = Self::global_phase_epoch();
+        assert!((ge & 1) == 0);
+        let next = if ge == 254 { 1 } else { ge + 1 };
+        Self::PHASE_EPOCH.store_atomic::<u8>(self.start(), next, Ordering::Relaxed);
+        if next == 1 {
+            space.one_epoch_blocks.lock().unwrap().push(*self);
+        }
     }
 
     pub fn is_reusing(&self) -> bool {
@@ -381,12 +387,14 @@ impl Block {
         let old = GLOBAL_PHASE_EPOCH.load(Ordering::SeqCst);
         if old == 254 {
             GLOBAL_PHASE_EPOCH.store(1, Ordering::SeqCst);
-            space.pr.reset_nursery_state();
+            let mut one_epoch_blocks = space.one_epoch_blocks.lock().unwrap();
+            space.pr.reset_nursery_state(&one_epoch_blocks);
+            one_epoch_blocks.clear();
         } else {
             GLOBAL_PHASE_EPOCH.store(old + 1, Ordering::SeqCst);
         }
-        println!(
-            "Update global phase epoch: {}",
+        gc_log!([3]
+            "GC Update global phase epoch: {}",
             GLOBAL_PHASE_EPOCH.load(Ordering::SeqCst)
         );
     }
@@ -498,7 +506,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
-        println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        // gc_log!([3] "Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         // #[cfg(feature = "sanity")]
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
@@ -515,7 +523,7 @@ impl Block {
                     debug_assert!(!self.is_defrag_source());
                 }
                 if !space.do_promotion() {
-                    self.update_phase_epoch_to_next_mutator_phase();
+                    self.update_phase_epoch_to_next_mutator_phase(space);
                     if !reuse {
                         self.set_state(BlockState::Unallocated);
                     } else {
@@ -547,7 +555,7 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        println!("Dealloc block {:?}", self);
+        // println!("Dealloc block {:?}", self);
         if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
         }
@@ -790,12 +798,12 @@ impl Block {
         if self.get_state() == BlockState::Unallocated {
             return false;
         }
-        println!(
-            "SWEEP {:?} defrag={} dead={}",
-            self.start(),
-            defrag,
-            self.rc_dead()
-        );
+        // println!(
+        //     "SWEEP {:?} defrag={} dead={}",
+        //     self.start(),
+        //     defrag,
+        //     self.rc_dead()
+        // );
         if defrag || self.rc_dead() {
             if defrag || self.attempt_dealloc() {
                 self.deinit(space);

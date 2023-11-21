@@ -195,7 +195,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 block.set_as_in_place_promoted(&self.lxr.immix_space);
             }
             if self.rc.count(o) != 0 {
-                assert!(self.lxr.current_pause_should_do_promotion());
+                assert!(
+                    self.lxr.current_pause_should_do_promotion(),
+                    "{:?} copied={} rc={}",
+                    o,
+                    copied,
+                    self.rc.count(o)
+                );
                 self.rc.promote_with_size(o, size);
             }
             if copied {
@@ -242,6 +248,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
     }
 
+    // FIXME: Skip updating if it is already in remset
     fn record_young_remset(&mut self, slot: VM::VMEdge, o: ObjectReference) {
         if self.lxr.current_pause_should_do_promotion() {
             return;
@@ -283,6 +290,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
             o.to_address::<VM>().unlog_field_relaxed::<VM>();
         } else if in_place_promotion && !is_val_array {
+            assert!(self.lxr.current_pause_should_do_promotion());
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                 12usize
             } else {
@@ -385,6 +393,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn dont_evacuate(&self, o: ObjectReference, los: bool) -> bool {
         if los {
+            // println!("No Evac LOS {:?}", o);
             return true;
         }
         // Skip mature object
@@ -393,7 +402,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         // Force evacuate nursery objects
         let block = Block::containing::<VM>(o);
-        if self.lxr.current_pause_should_do_promotion()
+        if !self.lxr.current_pause_should_do_promotion()
             && (block.is_nursery() || block.is_reusing())
         {
             return false;
@@ -424,6 +433,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             } else {
                 o
             };
+            assert!(new.is_in_any_space(), "old={:?} new={:?}(unmapped)", o, new);
             let promoted = self.inc(new);
             if promoted && new == o {
                 unreachable!();
@@ -498,11 +508,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
         let o = e.load();
         // unlog edge
-        if K == EDGE_KIND_MATURE
-            && e.to_address().is_mapped()
-            && (self.lxr.los().address_in_space(e.to_address())
-                || self.lxr.current_pause_should_do_promotion())
-        {
+        if K == EDGE_KIND_MATURE && e.to_address().is_mapped() {
             e.to_address().unlog_field_relaxed::<VM>();
         }
         if o.is_null() {

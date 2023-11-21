@@ -82,6 +82,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub rc: RefCountHelper<VM>,
     pub(super) evac_set: MatureEvacuationSet,
     pub do_promotion: AtomicBool,
+    pub one_epoch_blocks: Mutex<Vec<Block>>,
 }
 
 /// Some arguments for Immix Space.
@@ -445,6 +446,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             rc: RefCountHelper::NEW,
             evac_set: MatureEvacuationSet::default(),
             do_promotion: Default::default(),
+            one_epoch_blocks: Default::default(),
         }
     }
 
@@ -1447,7 +1449,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             };
         }
         if self.common.needs_log_bit {
-            if !copy {
+            if !copy || !self.do_promotion() {
                 Line::clear_field_unlog_table::<VM>(start..end);
             } else {
                 Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);

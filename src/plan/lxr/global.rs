@@ -257,7 +257,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         } else {
             self.gc_cause.load(Ordering::SeqCst)
         };
-        gc_log!([3] "GC({}) GC Cause {:?}", crate::GC_EPOCH.load(Ordering::SeqCst), gc_cause);
+        gc_log!([2] "GC({}) GC Cause {:?}", crate::GC_EPOCH.load(Ordering::SeqCst), gc_cause);
         let alloc_ix = self
             .immix_space
             .block_allocation
@@ -434,12 +434,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
         let do_promotion = if pause == Pause::RefCount {
             let epoch = crate::GC_EPOCH.load(Ordering::SeqCst);
-            epoch & 0b111 == 0
+            (epoch % crate::MAX_NURSERY_EPOCH) == 0
         } else {
             true
         };
         if do_promotion {
-            println!("Do Promotion!");
+            gc_log!([2] "GC Do Promotion!");
         }
         self.immix_space
             .do_promotion

@@ -142,23 +142,21 @@ impl<VM: VMBinding> YoungRemSet<VM> {
     pub fn flush_all(&self, scheduler: &GCWorkScheduler<VM>, lxr: &LXR<VM>, clear: bool) {
         let lxr = unsafe { &*(lxr as *const LXR<VM>) };
         for id in 0..self.gc_buffers.len() {
-            if self.gc_buffer(id).len() > 0 {
-                for remset in self.gc_buffer(id) {
-                    *remset = remset
-                        .iter()
-                        .filter(|entry| entry.is_valid::<VM>())
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    let edges = remset
-                        .iter()
-                        .map(|e| VM::VMEdge::from_address(e.0))
-                        .collect::<Vec<_>>();
-                    let mut w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
-                    // w.skip_young_remset = true;
-                    scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
-                    if clear {
-                        remset.clear();
-                    }
+            for remset in self.gc_buffer(id) {
+                *remset = remset
+                    .iter()
+                    .filter(|entry| entry.is_valid::<VM>())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let edges = remset
+                    .iter()
+                    .map(|e| VM::VMEdge::from_address(e.0))
+                    .collect::<Vec<_>>();
+                let mut w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
+                // w.skip_young_remset = true;
+                scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
+                if clear {
+                    remset.clear();
                 }
             }
         }

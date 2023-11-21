@@ -574,10 +574,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             .store(max_b_index, Ordering::SeqCst);
     }
 
-    pub fn reset_nursery_state(&self) {
+    pub fn reset_nursery_state(&self, blocks: &[Block]) {
         let chunks = self.chunks.write().unwrap();
         for c in &*chunks {
             Block::PHASE_EPOCH.bzero_metadata(c.start(), Chunk::BYTES);
+        }
+        // FIXME: Performance
+        for b in blocks {
+            b.update_phase_epoch_to_one()
         }
     }
 }
