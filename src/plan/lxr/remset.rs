@@ -139,7 +139,7 @@ impl<VM: VMBinding> YoungRemSet<VM> {
         unsafe { &mut *self.gc_buffers[id].get() }
     }
 
-    pub fn flush_all(&self, scheduler: &GCWorkScheduler<VM>, lxr: &LXR<VM>) {
+    pub fn flush_all(&self, scheduler: &GCWorkScheduler<VM>, lxr: &LXR<VM>, clear: bool) {
         let lxr = unsafe { &*(lxr as *const LXR<VM>) };
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
@@ -156,6 +156,9 @@ impl<VM: VMBinding> YoungRemSet<VM> {
                     let mut w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
                     // w.skip_young_remset = true;
                     scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
+                    if clear {
+                        remset.clear();
+                    }
                 }
             }
         }

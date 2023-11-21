@@ -790,6 +790,12 @@ impl Block {
         if self.get_state() == BlockState::Unallocated {
             return false;
         }
+        println!(
+            "SWEEP {:?} defrag={} dead={}",
+            self.start(),
+            defrag,
+            self.rc_dead()
+        );
         if defrag || self.rc_dead() {
             if defrag || self.attempt_dealloc() {
                 self.deinit(space);

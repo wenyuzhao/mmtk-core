@@ -11,6 +11,8 @@ pub struct BlockAllocation<VM: VMBinding> {
     pub(crate) lxr: Option<&'static LXR<VM>>,
     num_nursery_blocks: AtomicUsize,
     pub(crate) in_place_promoted_nursery_blocks: AtomicUsize,
+    pub(crate) copy_allocated_nursery_blocks: AtomicUsize,
+    pub(crate) prev_copy_allocated_nursery_blocks: AtomicUsize,
 }
 
 impl<VM: VMBinding> BlockAllocation<VM> {
@@ -20,6 +22,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             lxr: None,
             num_nursery_blocks: AtomicUsize::new(0),
             in_place_promoted_nursery_blocks: Default::default(),
+            copy_allocated_nursery_blocks: Default::default(),
+            prev_copy_allocated_nursery_blocks: Default::default(),
         }
     }
 
@@ -45,14 +49,35 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     /// Reset allocated_block_buffer and free nursery blocks.
-    pub fn sweep_nursery_blocks(&self, _scheduler: &GCWorkScheduler<VM>, _pause: Pause) {
+    pub fn sweep_nursery_blocks(&self, space: &ImmixSpace<VM>, _pause: Pause) {
         let in_place_promoted_nursery_blocks = self
             .in_place_promoted_nursery_blocks
             .load(Ordering::Relaxed);
+        let copy_allocated_nursery_blocks = self
+            .prev_copy_allocated_nursery_blocks
+            .load(Ordering::Relaxed);
+        if space.do_promotion() {
+            self.prev_copy_allocated_nursery_blocks
+                .store(0, Ordering::Relaxed);
+        } else {
+            self.prev_copy_allocated_nursery_blocks.store(
+                self.copy_allocated_nursery_blocks.load(Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
+        }
+        self.copy_allocated_nursery_blocks
+            .store(0, Ordering::Relaxed);
         let num_blocks = self.clean_nursery_blocks();
-        self.space()
-            .pr
-            .bulk_release_blocks(num_blocks - in_place_promoted_nursery_blocks);
+        println!(
+            "Sweeping {} blocks, copy_allocated_nursery_blocks: {}, total young: {}, in_place_promoted_nursery_blocks: {}",
+            num_blocks - in_place_promoted_nursery_blocks + copy_allocated_nursery_blocks,
+            copy_allocated_nursery_blocks,
+            num_blocks,
+            in_place_promoted_nursery_blocks
+        );
+        self.space().pr.bulk_release_blocks(
+            num_blocks - in_place_promoted_nursery_blocks + copy_allocated_nursery_blocks,
+        );
         self.space().pr.reset();
         self.num_nursery_blocks.store(0, Ordering::SeqCst);
         self.in_place_promoted_nursery_blocks
@@ -82,8 +107,13 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             || (crate::args::BARRIER_MEASUREMENT && !crate::args::BARRIER_MEASUREMENT_NO_SLOW))
             && copy
         {
-            // block.initialize_field_unlog_table_as_unlogged::<VM>();
-            block.clear_field_unlog_table::<VM>();
+            if self.space().do_promotion() {
+                block.initialize_field_unlog_table_as_unlogged::<VM>();
+            } else {
+                self.copy_allocated_nursery_blocks
+                    .fetch_add(1, Ordering::Relaxed);
+                block.clear_field_unlog_table::<VM>();
+            }
         }
         // Initialize mark table
         if self.space().rc_enabled {

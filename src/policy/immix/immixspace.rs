@@ -574,8 +574,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             crate::gc_start_time_ms(),
         );
         debug_assert_ne!(pause, Pause::FullDefrag);
-        self.block_allocation
-            .sweep_nursery_blocks(&self.scheduler, pause);
+        self.block_allocation.sweep_nursery_blocks(self, pause);
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]
             "    - ({:.3}ms) sweep_mutator_reused_blocks start",

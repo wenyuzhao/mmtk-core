@@ -195,7 +195,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 block.set_as_in_place_promoted(&self.lxr.immix_space);
             }
             if self.rc.count(o) != 0 {
-                unreachable!();
+                assert!(self.lxr.current_pause_should_do_promotion());
                 self.rc.promote_with_size(o, size);
             }
             if copied {
@@ -379,7 +379,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.no_inc(o) {
             return false;
         }
-        assert!(self.lxr.los().in_space(o));
+        // assert!(self.lxr.current_pause_should_do_promotion() || self.lxr.los().in_space(o));
         self.rc.inc(o) == Ok(0)
     }
 
@@ -498,7 +498,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
         let o = e.load();
         // unlog edge
-        if K == EDGE_KIND_MATURE && e.to_address().is_mapped() {
+        if K == EDGE_KIND_MATURE
+            && e.to_address().is_mapped()
+            && (self.lxr.los().address_in_space(e.to_address())
+                || self.lxr.current_pause_should_do_promotion())
+        {
             e.to_address().unlog_field_relaxed::<VM>();
         }
         if o.is_null() {

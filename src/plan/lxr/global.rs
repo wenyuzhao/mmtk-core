@@ -438,6 +438,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         } else {
             true
         };
+        if do_promotion {
+            println!("Do Promotion!");
+        }
         self.immix_space
             .do_promotion
             .store(do_promotion, Ordering::SeqCst);
@@ -482,7 +485,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
         self.immix_space
             .young_remset
-            .flush_all(&self.immix_space.scheduler(), &self);
+            .flush_all(&self.immix_space.scheduler(), &self, do_promotion);
     }
 
     fn gc_pause_end(&self) {
