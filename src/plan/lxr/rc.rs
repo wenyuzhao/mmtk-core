@@ -227,8 +227,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference) {
+    fn record_mature_evac_remset(
+        &mut self,
+        e: VM::VMEdge,
+        o: ObjectReference,
+        is_incomplete_root: bool,
+    ) {
         if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
+            return;
+        }
+        if self.pause == Pause::FinalMark && is_incomplete_root {
             return;
         }
         self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
@@ -367,16 +375,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             && self.rc.count(o) == 0
     }
 
-    fn inc(&self, o: ObjectReference, stick: bool) -> bool {
+    fn inc(&self, o: ObjectReference) -> bool {
         if self.no_inc(o) {
             return false;
         }
         assert!(self.lxr.los().in_space(o));
-        if stick {
-            self.rc.stick(o) == Ok(0)
-        } else {
-            self.rc.inc(o) == Ok(0)
-        }
+        self.rc.inc(o) == Ok(0)
     }
 
     fn dont_evacuate(&self, o: ObjectReference, los: bool) -> bool {
@@ -404,12 +408,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         false
     }
 
-    fn process_inc_and_evacuate(
-        &mut self,
-        o: ObjectReference,
-        depth: u32,
-        stick: bool,
-    ) -> ObjectReference {
+    fn process_inc_and_evacuate(&mut self, o: ObjectReference, depth: u32) -> ObjectReference {
         o.verify::<VM>();
         crate::stat(|s| {
             s.inc_objects += 1;
@@ -425,7 +424,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             } else {
                 o
             };
-            let promoted = self.inc(new, stick);
+            let promoted = self.inc(new);
             if promoted && new == o {
                 unreachable!();
                 self.promote(o, false, los, depth);
@@ -433,7 +432,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return new;
         }
         if self.dont_evacuate(o, los) {
-            if self.inc(o, stick) {
+            if self.inc(o) {
                 self.promote(o, false, los, depth);
             }
             return o;
@@ -442,7 +441,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // Object is moved to a new location.
             let new = object_forwarding::spin_and_get_forwarded_object::<VM>(o, forwarding_status);
-            self.inc(new, stick);
+            self.inc(new);
             new
         } else {
             let is_nursery = self.rc.count(o) == 0;
@@ -461,14 +460,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                             Ordering::Relaxed,
                         );
                     }
-                    self.inc(new, stick);
+                    self.inc(new);
                     self.promote(new, true, false, depth);
                     new
                 } else {
                     unreachable!();
                     gc_log!([1] "to-space overflow");
                     // Object is not moved.
-                    let promoted = self.inc(o, stick);
+                    let promoted = self.inc(o);
                     object_forwarding::clear_forwarding_bits::<VM>(o);
                     if promoted {
                         self.promote(o, false, los, depth);
@@ -480,7 +479,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             } else {
                 //
                 // Object is not moved.
-                let promoted = self.inc(o, stick);
+                let promoted = self.inc(o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
                 if promoted {
                     unreachable!();
@@ -512,7 +511,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         e: VM::VMEdge,
         depth: u32,
-        stick: bool,
+        is_incomplete_root: bool,
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
@@ -539,19 +538,21 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             println!("ERRIR - inc {:?}: {:?} ", e, o);
         }
         o.verify::<VM>();
-        let new = self.process_inc_and_evacuate(o, depth, stick);
+        let new = self.process_inc_and_evacuate(o, depth);
         if !self.lxr.current_pause_should_do_promotion()
             && self.rc.count(new) == 0
-            && (K == EDGE_KIND_MATURE || self.lxr.los().address_in_space(e.to_address()) || stick)
+            && (K == EDGE_KIND_MATURE
+                || self.lxr.los().address_in_space(e.to_address())
+                || is_incomplete_root)
             && !self.skip_young_remset
         {
             self.record_young_remset(e, new);
         } else {
             // println!(" -- skip young remset {:?} -> {:?}", e, new)
         }
-        // Put this into remset if this is a young or weak root
-        if K != EDGE_KIND_ROOT || stick {
-            self.record_mature_evac_remset(e, new);
+        // Put this into remset if this is a mature edge, or a weak root
+        if K != EDGE_KIND_ROOT || is_incomplete_root {
+            self.record_mature_evac_remset(e, new, is_incomplete_root);
         }
         if new != o {
             // println!(
@@ -580,13 +581,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         mut incs: AddressBuffer<'_, VM::VMEdge>,
         depth: u32,
-        stick: bool,
+        is_incomplete_root: bool,
     ) -> Option<Vec<ObjectReference>> {
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
             for e in &mut *incs {
-                if let Some(new) = self.process_edge::<K>(*e, depth, stick) {
+                if let Some(new) = self.process_edge::<K>(*e, depth, is_incomplete_root) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
@@ -604,7 +605,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         } else {
             for e in &mut *incs {
-                self.process_edge::<K>(*e, depth, stick);
+                self.process_edge::<K>(*e, depth, false);
             }
             None
         }
@@ -701,33 +702,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             vec![]
         };
-        let is_weak_root = self
+        let is_incomplete_root = self
             .root_kind
-            .map(|r| r == RootKind::Weak)
-            .unwrap_or_default();
-        let is_young_or_weak_root = self
-            .root_kind
-            .map(|r| r.is_young_or_weak())
+            .map(|r| r.is_incomplete())
             .unwrap_or_default();
         let roots = {
             let incs = std::mem::take(&mut self.incs);
-            self.process_incs::<KIND>(
-                AddressBuffer::Owned(incs),
-                self.depth,
-                is_young_or_weak_root,
-            )
+            self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, is_incomplete_root)
         };
         if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
-            assert!(!is_young_or_weak_root);
+            assert!(!is_incomplete_root);
         }
         for s in std::mem::take(&mut self.inc_slices) {
             self.process_incs_for_obj_array::<KIND>(s, self.depth);
         }
         if let Some(roots) = roots {
-            if self.lxr.concurrent_marking_enabled()
-                && self.pause == Pause::InitialMark
-                && self.root_kind != Some(RootKind::Weak)
-            {
+            if self.lxr.concurrent_marking_enabled() && self.pause == Pause::InitialMark {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
                     for r in &roots {
                         assert!(
@@ -752,7 +742,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     w.root_kind = self.root_kind;
                     worker.add_work(WorkBucketStage::Closure, w)
                 }
-            } else if !is_young_or_weak_root {
+            } else if !is_incomplete_root {
                 self.lxr.curr_roots.read().unwrap().push(roots);
             }
         }
