@@ -560,20 +560,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let _ = self.rc.inc(referent);
     }
 
-    /// Collect all the CLD roots only at initial mark pause or full gc pause, as marking roots.
-    /// For RC and final mark pauses, only collect modified CLD roots for increments.
-    ///
-    /// Note:
-    ///  - Full/FinalMark pause: Use mark bit as liveness test when updating WeakProcessor
-    ///  - Do not apply decs to all CLD roots
-    ///
-    /// TODO:
-    ///  - Remset for CLDs. So we don't need to scan them all during RC pauses
-    fn current_gc_should_scan_all_classloader_strong_roots(&self) -> bool {
-        let pause = self.current_pause().unwrap();
-        pause == Pause::InitialMark || pause == Pause::FinalMark || pause == Pause::Full
-    }
-
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
         let pause = self.current_pause().unwrap();
         pause == Pause::InitialMark || pause == Pause::Full

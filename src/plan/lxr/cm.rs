@@ -555,7 +555,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         self.should_record_forwarded_roots = self.roots
             && !self
                 .root_kind
-                .map(|r| r.is_young_or_weak())
+                .map(|r| r.is_incomplete())
                 .unwrap_or_default();
         self.pause = self.lxr.current_pause().unwrap();
         if self.should_record_forwarded_roots {

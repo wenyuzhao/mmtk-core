@@ -154,10 +154,6 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
         Some(self)
     }
 
-    fn current_gc_should_scan_all_classloader_strong_roots(&self) -> bool {
-        self.gen.gc_full_heap.load(Ordering::SeqCst)
-    }
-
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
         self.gen.gc_full_heap.load(Ordering::SeqCst)
     }
