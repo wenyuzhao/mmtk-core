@@ -615,15 +615,15 @@ impl<VM: VMBinding> BasePlan<VM> {
 
     /// The application code has requested a collection.
     pub fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
-        if force || !*self.options.ignore_system_gc {
-            info!("User triggering collection");
-            self.user_triggered_collection
-                .store(true, Ordering::Relaxed);
-            self.gc_requester.request(false);
-            if !tls.0 .0.is_null() {
-                VM::VMCollection::block_for_gc(tls);
-            }
-        }
+        // if force || !*self.options.ignore_system_gc {
+        //     info!("User triggering collection");
+        //     self.user_triggered_collection
+        //         .store(true, Ordering::Relaxed);
+        //     self.gc_requester.request(false);
+        //     if !tls.0 .0.is_null() {
+        //         VM::VMCollection::block_for_gc(tls);
+        //     }
+        // }
     }
 
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).

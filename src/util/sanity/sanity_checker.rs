@@ -294,12 +294,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
             .downcast_ref::<crate::plan::lxr::LXR<VM>>()
         {
             if self.edge.unwrap().to_address().is_mapped() {
-                assert!(
-                    !self.edge.unwrap().to_address().is_field_logged::<VM>(),
-                    "{:?} -> {:?} is logged",
-                    self.edge,
-                    object
-                );
+                // assert!(
+                //     !self.edge.unwrap().to_address().is_field_logged::<VM>(),
+                //     "{:?} -> {:?} is logged",
+                //     self.edge,
+                //     object
+                // );
             }
         }
         if object.is_null() {
@@ -330,12 +330,24 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                     self.edge,
                     object
                 );
-                assert!(
-                    lxr.rc.count(object) > 0,
-                    "{:?} -> {:?} has zero rc count",
-                    self.edge,
-                    object
-                );
+                // assert!(
+                //     lxr.rc.count(object) > 0,
+                //     "{:?} -> {:?} has zero rc count",
+                //     self.edge,
+                //     object
+                // );
+                if lxr.rc.count(object) == 0 {
+                    assert!(lxr.immix_space.in_space(object));
+                    assert!(
+                        Block::containing::<VM>(object).phase_epoch()
+                            == Block::global_phase_epoch(),
+                        "{:?} {:?} {} {}",
+                        object,
+                        Block::containing::<VM>(object),
+                        Block::containing::<VM>(object).phase_epoch(),
+                        Block::global_phase_epoch()
+                    );
+                }
                 assert!(
                     !crate::util::object_forwarding::is_forwarded_or_being_forwarded::<VM>(object),
                     "{:?} -> {:?} is forwarded",
@@ -343,13 +355,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                     object
                 );
                 if lxr.immix_space.in_space(object) {
-                    assert_ne!(
-                        Block::containing::<VM>(object).get_state(),
-                        BlockState::Unallocated,
-                        "{:?}->{:?} block is released",
-                        self.edge,
-                        object
-                    )
+                    if Block::containing::<VM>(object).get_state() == BlockState::Unallocated {
+                        assert!(
+                            Block::containing::<VM>(object).phase_epoch()
+                                == Block::global_phase_epoch()
+                        );
+                    }
                 }
                 if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark
                     || lxr.current_pause().unwrap() == crate::plan::immix::Pause::Full

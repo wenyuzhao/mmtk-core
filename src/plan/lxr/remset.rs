@@ -1,6 +1,8 @@
 use std::{cell::UnsafeCell, marker::PhantomData};
 
+use crate::plan::lxr::rc::{ProcessIncs, EDGE_KIND_MATURE};
 use crate::policy::immix::ImmixSpace;
+use crate::scheduler::{GCWorkScheduler, WorkBucketStage};
 use crate::util::ObjectReference;
 use crate::{
     plan::lxr::LXR,
@@ -13,6 +15,7 @@ use crate::{
 use super::mature_evac::EvacuateMatureObjects;
 
 #[repr(C)]
+#[derive(Clone)]
 pub(super) struct RemSetEntry(Address, ObjectReference);
 
 impl RemSetEntry {
@@ -22,6 +25,12 @@ impl RemSetEntry {
 
     pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, ObjectReference) {
         (VM::VMEdge::from_address(self.0), self.1)
+    }
+
+    fn is_valid<VM: VMBinding>(&self) -> bool {
+        let e = VM::VMEdge::from_address(self.0);
+        let curr: ObjectReference = e.load();
+        !self.1.is_null() && curr == self.1
     }
 }
 
@@ -130,18 +139,26 @@ impl<VM: VMBinding> YoungRemSet<VM> {
         unsafe { &mut *self.gc_buffers[id].get() }
     }
 
-    fn flush_all(&self, space: &ImmixSpace<VM>) {
-        // let mut mature_evac_remsets = space.mature_evac_remsets.lock().unwrap();
-        // for id in 0..self.gc_buffers.len() {
-        //     if self.gc_buffer(id).len() > 0 {
-        //         let remset = std::mem::take(self.gc_buffer(id));
-        //         if cfg!(feature = "rust_mem_counter") {
-        //             crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
-        //         }
-        //         mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
-        //     }
-        // }
-        unimplemented!()
+    pub fn flush_all(&self, scheduler: &GCWorkScheduler<VM>, lxr: &LXR<VM>) {
+        let lxr = unsafe { &*(lxr as *const LXR<VM>) };
+        for id in 0..self.gc_buffers.len() {
+            if self.gc_buffer(id).len() > 0 {
+                for remset in self.gc_buffer(id) {
+                    *remset = remset
+                        .iter()
+                        .filter(|entry| entry.is_valid::<VM>())
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let edges = remset
+                        .iter()
+                        .map(|e| VM::VMEdge::from_address(e.0))
+                        .collect::<Vec<_>>();
+                    let mut w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
+                    // w.skip_young_remset = true;
+                    scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
+                }
+            }
+        }
     }
 
     pub fn record(&self, e: VM::VMEdge, o: ObjectReference) {

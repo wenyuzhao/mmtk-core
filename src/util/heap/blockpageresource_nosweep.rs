@@ -143,13 +143,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         if state != BlockState::Unallocated {
             return false;
         }
-        // Copy allocator: Skip young blocks in the previous mutator phase
-        if copy {
-            return !b.is_nursery();
-        }
         // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
         // We only allocate clean blocks without an owner. For owned blocks, we need to steal them.
-        b.get_owner().is_none()
+        !b.is_nursery() && b.get_owner().is_none()
     }
 
     /// Check if a block can be safely stolen from it's owner

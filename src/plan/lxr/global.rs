@@ -303,20 +303,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         #[cfg(feature = "analysis")]
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
         // Resume mutators
-        if cfg!(not(feature = "fragmentation_analysis"))
-            && (pause == Pause::Full || pause == Pause::FinalMark)
-        {
-            #[cfg(feature = "sanity")]
-            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
-        }
+        // if cfg!(not(feature = "fragmentation_analysis"))
+        //     && (pause == Pause::Full || pause == Pause::FinalMark)
+        // {
+        //     #[cfg(feature = "sanity")]
+        //     scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
+        // }
 
         #[cfg(feature = "sanity")]
-        if cfg!(feature = "fragmentation_analysis")
-            && pause == Pause::RefCount
-            && crate::frag_exp_enabled()
-        {
-            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
-        }
+        scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -443,6 +438,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         } else {
             true
         };
+        self.immix_space
+            .do_promotion
+            .store(do_promotion, Ordering::SeqCst);
         self.current_pause_should_do_promotion
             .store(do_promotion, Ordering::SeqCst);
 
@@ -481,6 +479,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .as_nanos();
             crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
+
+        self.immix_space
+            .young_remset
+            .flush_all(&self.immix_space.scheduler(), &self);
     }
 
     fn gc_pause_end(&self) {
@@ -610,6 +612,7 @@ impl<VM: VMBinding> LXR<VM> {
                     .as_spec()
                     .extract_side_spec(),
             ),
+            // MetadataSpec::OnSide(RC_YOUNG_MARK_TABLE),
         ]);
         let global_side_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let options = args.options.clone();

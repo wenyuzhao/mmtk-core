@@ -32,6 +32,7 @@ use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
 use std::mem;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::sync::{atomic::AtomicU8, Arc};
@@ -80,6 +81,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
     pub(super) evac_set: MatureEvacuationSet,
+    pub do_promotion: AtomicBool,
 }
 
 /// Some arguments for Immix Space.
@@ -149,7 +151,11 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
                     return false;
                 }
             }
-            return self.rc.count(object) > 0 || ForwardingWord::is_forwarded::<VM>(object);
+            let x = self.rc.count(object) > 0 || ForwardingWord::is_forwarded::<VM>(object);
+            if !x {
+                println!("object {:?} is dead", object);
+            }
+            return x;
         }
         if self.initial_mark_pause {
             return true;
@@ -438,6 +444,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
             evac_set: MatureEvacuationSet::default(),
+            do_promotion: Default::default(),
         }
     }
 
@@ -456,6 +463,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Check if current GC is a defrag GC.
     pub fn in_defrag(&self) -> bool {
         self.defrag.in_defrag()
+    }
+
+    pub fn do_promotion(&self) -> bool {
+        self.do_promotion.load(Ordering::SeqCst)
     }
 
     /// check if the current GC should do defragmentation.

@@ -351,14 +351,20 @@ impl Block {
         );
     }
 
+    pub fn update_phase_epoch_to_next_mutator_phase(&self) {
+        Self::PHASE_EPOCH.store_atomic::<u8>(
+            self.start(),
+            Self::global_phase_epoch() + 1,
+            Ordering::Relaxed,
+        );
+    }
+
     pub fn is_reusing(&self) -> bool {
         self.get_state() != BlockState::Unallocated && self.is_nursery_or_reusing()
     }
 
     pub fn is_nursery(&self) -> bool {
-        let epoch = Self::global_phase_epoch() as usize;
-        self.get_state() == BlockState::Unallocated
-            && self.phase_epoch() as usize + crate::MAX_NURSERY_EPOCH >= epoch
+        self.get_state() == BlockState::Unallocated && self.is_nursery_or_reusing()
     }
 
     pub fn is_nursery_or_reusing(&self) -> bool {
@@ -379,6 +385,10 @@ impl Block {
         } else {
             GLOBAL_PHASE_EPOCH.store(old + 1, Ordering::SeqCst);
         }
+        println!(
+            "Update global phase epoch: {}",
+            GLOBAL_PHASE_EPOCH.load(Ordering::SeqCst)
+        );
     }
 
     pub fn is_reusable(&self) -> bool {
@@ -488,7 +498,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
-        // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         // #[cfg(feature = "sanity")]
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
@@ -504,7 +514,16 @@ impl Block {
                 if reuse {
                     debug_assert!(!self.is_defrag_source());
                 }
-                self.set_state(BlockState::Unmarked);
+                if !space.do_promotion() {
+                    self.update_phase_epoch_to_next_mutator_phase();
+                    if !reuse {
+                        self.set_state(BlockState::Unallocated);
+                    } else {
+                        self.set_state(BlockState::Unmarked);
+                    }
+                } else {
+                    self.set_state(BlockState::Unmarked);
+                }
                 self.set_as_defrag_source(false);
             } else {
                 if reuse {
@@ -528,6 +547,7 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        println!("Dealloc block {:?}", self);
         if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
         }

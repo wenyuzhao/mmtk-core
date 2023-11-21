@@ -82,7 +82,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             || (crate::args::BARRIER_MEASUREMENT && !crate::args::BARRIER_MEASUREMENT_NO_SLOW))
             && copy
         {
-            block.initialize_field_unlog_table_as_unlogged::<VM>();
+            // block.initialize_field_unlog_table_as_unlogged::<VM>();
+            block.clear_field_unlog_table::<VM>();
         }
         // Initialize mark table
         if self.space().rc_enabled {
