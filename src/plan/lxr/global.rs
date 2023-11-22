@@ -432,13 +432,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
 
+        let epoch = crate::NURSERY_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
         let do_promotion = if pause == Pause::RefCount {
-            let epoch = crate::GC_EPOCH.load(Ordering::SeqCst);
             (epoch % crate::MAX_NURSERY_EPOCH) == 0
         } else {
             true
         };
         if do_promotion {
+            crate::NURSERY_EPOCH.store(0, Ordering::SeqCst);
             gc_log!([2] "GC Do Promotion!");
         }
         self.immix_space

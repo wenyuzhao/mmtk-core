@@ -213,6 +213,7 @@ static GC_TRIGGER_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH)
 static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
 static BOOT_TIME: spin::Lazy<SystemTime> = spin::Lazy::new(SystemTime::now);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
+static NURSERY_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_END: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
