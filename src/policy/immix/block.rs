@@ -343,6 +343,10 @@ impl Block {
         Self::PHASE_EPOCH.load_atomic::<u8>(self.start(), Ordering::Relaxed)
     }
 
+    fn reset_phase_epoch(&self) {
+        Self::PHASE_EPOCH.store_atomic::<u8>(self.start(), 0, Ordering::Relaxed);
+    }
+
     pub fn update_phase_epoch(&self) {
         Self::PHASE_EPOCH.store_atomic::<u8>(
             self.start(),
@@ -561,6 +565,7 @@ impl Block {
         }
         self.set_state(BlockState::Unallocated);
         self.clear_in_place_promoted();
+        self.reset_phase_epoch();
         if space.rc_enabled {
             BLOCK_OWNER.store_atomic(self.start(), 0usize, Ordering::Relaxed);
             self.set_as_defrag_source(false);

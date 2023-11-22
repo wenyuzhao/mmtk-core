@@ -1,8 +1,11 @@
 use std::{cell::UnsafeCell, marker::PhantomData};
 
 use crate::plan::lxr::rc::{ProcessIncs, EDGE_KIND_MATURE};
+use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpace;
+use crate::policy::space::Space;
 use crate::scheduler::{GCWorkScheduler, WorkBucketStage};
+use crate::util::rc::RefCountHelper;
 use crate::util::ObjectReference;
 use crate::{
     plan::lxr::LXR,
@@ -27,9 +30,26 @@ impl RemSetEntry {
         (VM::VMEdge::from_address(self.0), self.1)
     }
 
-    fn is_valid<VM: VMBinding>(&self) -> bool {
+    fn is_valid<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
         let e = VM::VMEdge::from_address(self.0);
         let curr: ObjectReference = e.load();
+        // println!("rs: {:?} {:?} {:?}", self.0, self.1, curr);
+        if curr == self.1 {
+            let rc = RefCountHelper::<VM>::NEW;
+            // println!(
+            //     "rs: {:?} {:?} rc={:?} n={}",
+            //     self.0,
+            //     curr,
+            //     rc.count(curr),
+            //     Block::containing::<VM>(curr).is_nursery_or_reusing()
+            // );
+            if rc.count(curr) == 0 {
+                assert!(space.in_space(curr));
+                if !Block::containing::<VM>(curr).is_nursery_or_reusing() {
+                    return false;
+                }
+            }
+        }
         !self.1.is_null() && curr == self.1
     }
 }
@@ -145,7 +165,7 @@ impl<VM: VMBinding> YoungRemSet<VM> {
             for remset in self.gc_buffer(id) {
                 *remset = remset
                     .iter()
-                    .filter(|entry| entry.is_valid::<VM>())
+                    .filter(|entry| entry.is_valid::<VM>(&lxr.immix_space))
                     .cloned()
                     .collect::<Vec<_>>();
                 let edges = remset

@@ -545,7 +545,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         if !o.is_in_any_space() {
-            println!("ERRIR - inc {:?}: {:?} ", e, o);
+            panic!("ERROR - inc {:?}: {:?} K={}", e, o, K);
         }
         o.verify::<VM>();
         let new = self.process_inc_and_evacuate(o, depth);
@@ -565,7 +565,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             self.record_mature_evac_remset(e, new, is_incomplete_root);
         }
         if new != o {
-            // println!(
+            // gc_log!([3]
             //     " -- inc {:?}: {:?} => {:?} rc={} {:?}",
             //     e,
             //     o,
@@ -575,7 +575,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             // );
             e.store(new)
         } else {
-            // println!(
+            // gc_log!([3]
             //     " -- inc {:?}: {:?} rc={} {:?}",
             //     e,
             //     o.range::<VM>(),
@@ -938,7 +938,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 crate::record_live_bytes(o.get_size::<VM>());
             }
         }
-        // println!(" - dead {:?}", o);
+        // println!(" - dead {:?}", o.range::<VM>());
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         if false
@@ -976,6 +976,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                         }
                     }
                 }
+                edge.store(ObjectReference::NULL);
             });
         }
         let in_ix_space = lxr.immix_space.in_space(o);
@@ -1059,28 +1060,28 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         } else {
             0
         };
-        // if let Some(decs) = std::mem::take(&mut self.decs) {
-        //     self.process_decs(&decs, lxr);
-        // } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
-        //     self.process_decs(&decs, lxr);
-        // }
-        // let mut decs = vec![];
-        // while !self.new_decs.is_empty() {
-        //     decs.clear();
-        //     self.new_decs.swap(&mut decs);
-        //     let c = decs.len();
-        //     if cfg!(feature = "rust_mem_counter") {
-        //         crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(c);
-        //     }
-        //     self.process_decs(&decs, lxr);
-        //     if cfg!(feature = "rust_mem_counter") {
-        //         crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(c);
-        //     }
-        // }
-        // self.flush();
-        // if cfg!(feature = "rust_mem_counter") {
-        //     crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(count);
-        // }
+        if let Some(decs) = std::mem::take(&mut self.decs) {
+            self.process_decs(&decs, lxr);
+        } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
+            self.process_decs(&decs, lxr);
+        }
+        let mut decs = vec![];
+        while !self.new_decs.is_empty() {
+            decs.clear();
+            self.new_decs.swap(&mut decs);
+            let c = decs.len();
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(c);
+            }
+            self.process_decs(&decs, lxr);
+            if cfg!(feature = "rust_mem_counter") {
+                crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(c);
+            }
+        }
+        self.flush();
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(count);
+        }
     }
 }
 
