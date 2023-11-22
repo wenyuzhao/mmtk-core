@@ -142,7 +142,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         let mut count = 0;
         for (block, defrag) in &self.blocks {
             block.unlog();
-            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
+            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag, false) {
                 count += 1;
             } else {
                 assert!(
@@ -218,8 +218,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         self.rc.set(o, 0);
     }
 
-    fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
-        let mut has_dead_object = false;
+    fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) -> bool {
         let mut has_live = false;
         let mut cursor = block.start();
         let limit = block.end();
@@ -239,23 +238,21 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                     }
                 }
                 self.process_dead_object(o);
-                has_dead_object = true;
             } else {
                 if c != 0 {
                     has_live = true;
                 }
             }
         }
-        if has_dead_object || !has_live {
-            immix_space.add_to_possibly_dead_mature_blocks(block, false);
-        }
+        !has_live
     }
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        let lxr: &LXR<VM> = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
+        let mut dead_blocks = 0;
         for block in self
             .chunk
             .iter_region::<Block>()
@@ -264,9 +261,13 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             if block.is_defrag_source() {
                 continue;
             } else {
-                self.process_block(block, immix_space)
+                let dead = self.process_block(block, immix_space);
+                if dead && block.rc_sweep_mature(immix_space, false, true) {
+                    dead_blocks += 1;
+                }
             }
         }
+        immix_space.pr.bulk_release_blocks(dead_blocks);
     }
 }
 
@@ -363,7 +364,7 @@ impl MatureEvacuationSet {
             count += 1;
             block.clear_rc_table::<VM>();
             block.clear_striddle_table::<VM>();
-            block.rc_sweep_mature::<VM>(space, true);
+            block.rc_sweep_mature::<VM>(space, true, true);
             assert!(!block.is_defrag_source());
         }
         if count != 0 {
