@@ -208,6 +208,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
         if ObjectReference::STRICT_VERIFICATION {
+            // println!("deadx {:?} rc={}", o, self.rc.count(o));
             unsafe {
                 o.to_address::<VM>().store(0xdeadusize);
             }

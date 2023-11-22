@@ -160,6 +160,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if object.is_null() {
             return object;
         }
+        // println!("M {:?} rc={}", object, self.rc.count(object));
         if cfg!(any(feature = "sanity", debug_assertions)) {
             assert!(
                 object.to_address::<VM>().is_mapped(),
@@ -607,7 +608,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        assert_ne!(self.lxr.rc.count(object), 0);
+        assert_ne!(self.lxr.rc.count(object), 0, "ERR {:?}", object);
         assert!(object.is_in_any_space());
         assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());

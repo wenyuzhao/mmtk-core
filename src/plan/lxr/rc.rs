@@ -194,6 +194,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 unreachable!();
                 block.set_as_in_place_promoted(&self.lxr.immix_space);
             }
+            if !copied
+                && self.lxr.current_pause_should_do_promotion()
+                && (self.in_cm || self.pause == Pause::FinalMark)
+            {
+                self.lxr.mark(o);
+            }
             if self.rc.count(o) != 0 {
                 assert!(
                     self.lxr.current_pause_should_do_promotion(),
@@ -213,7 +219,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.in_cm || self.pause == Pause::FinalMark {
-            debug_assert!(self.lxr.is_marked(o));
+            if self.lxr.current_pause_should_do_promotion() || los {
+                assert!(
+                    self.lxr.is_marked(o),
+                    "{:?} rc={} los={} copied={}",
+                    o,
+                    self.rc.count(o),
+                    los,
+                    copied
+                );
+            } else {
+                assert!(
+                    !self.lxr.is_marked(o),
+                    "{:?} rc={} los={} copied={}",
+                    o,
+                    self.rc.count(o),
+                    los,
+                    copied
+                );
+            }
         }
         self.scan_nursery_object(o, los, !copied, depth, size);
     }
@@ -547,6 +571,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if !o.is_in_any_space() {
             panic!("ERROR - inc {:?}: {:?} K={}", e, o, K);
         }
+        assert_ne!(
+            unsafe { o.to_address::<VM>().load::<usize>() },
+            0xdead,
+            "object {:?} is dead K={}",
+            o,
+            K
+        );
         o.verify::<VM>();
         let new = self.process_inc_and_evacuate(o, depth);
         if !self.lxr.current_pause_should_do_promotion()
@@ -566,21 +597,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         if new != o {
             // gc_log!([3]
-            //     " -- inc {:?}: {:?} => {:?} rc={} {:?}",
-            //     e,
+            //     " -- inc {:?}: {:?} => {:?} rc={} K={:?} m={}",
+            //     e.to_address(),
             //     o,
             //     new.range::<VM>(),
             //     self.rc.count(new),
-            //     K
+            //     K,
+            //     self.lxr.is_marked(o) as u8,
             // );
             e.store(new)
         } else {
             // gc_log!([3]
-            //     " -- inc {:?}: {:?} rc={} {:?}",
-            //     e,
+            //     " -- inc {:?}: {:?} rc={} K={:?} m={}",
+            //     e.to_address(),
             //     o.range::<VM>(),
             //     self.rc.count(o),
-            //     K
+            //     K,
+            //     self.lxr.is_marked(o) as u8,
             // );
         }
         super::record_edge_for_validation(e, new);
