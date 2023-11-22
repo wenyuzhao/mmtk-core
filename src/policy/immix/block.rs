@@ -764,11 +764,16 @@ impl Block {
         }
     }
 
-    pub fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
+    pub fn rc_sweep_mature<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        defrag: bool,
+        rc_dead: bool,
+    ) -> bool {
         if self.get_state() == BlockState::Unallocated {
             return false;
         }
-        if defrag || self.rc_dead() {
+        if defrag || rc_dead || self.rc_dead() {
             if defrag || self.attempt_dealloc() {
                 self.deinit(space);
                 return true;
