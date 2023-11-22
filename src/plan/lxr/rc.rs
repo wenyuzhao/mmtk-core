@@ -975,8 +975,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                             self.flush();
                         }
                     }
+                    if edge.to_address().is_mapped() {
+                        edge.store(ObjectReference::NULL);
+                    }
                 }
-                edge.store(ObjectReference::NULL);
             });
         }
         let in_ix_space = lxr.immix_space.in_space(o);
