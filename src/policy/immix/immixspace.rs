@@ -1243,6 +1243,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.attempt_mark(new);
             self.unmark(object);
             queue.enqueue(new);
+            debug_assert_ne!(
+                self.rc.count(new),
+                0,
+                "ERROR Invalid {:?} rc={}",
+                new,
+                self.rc.count(new)
+            );
             new
         }
     }

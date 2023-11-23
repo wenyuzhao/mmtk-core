@@ -277,6 +277,26 @@ impl Block {
         result == Ok(0)
     }
 
+    fn lock(&self) {
+        loop {
+            std::hint::spin_loop();
+            let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                self.start(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |b| {
+                    if b == 1 {
+                        return None;
+                    }
+                    Some(1)
+                },
+            );
+            if result == Ok(0) {
+                return;
+            }
+        }
+    }
+
     pub fn try_lock_with_condition(&self, predicate: impl Fn() -> bool) -> bool {
         if !predicate() {
             return false;
@@ -498,6 +518,11 @@ impl Block {
             }
             self.clear_in_place_promoted();
             self.update_phase_epoch();
+            if copy {
+                debug_assert!((self.phase_epoch() & 1) == 0);
+            } else {
+                debug_assert!((self.phase_epoch() & 1) != 0);
+            }
             if copy {
                 if reuse {
                     debug_assert!(!self.is_defrag_source());
@@ -774,10 +799,15 @@ impl Block {
             return false;
         }
         if defrag || rc_dead || self.rc_dead() {
-            if defrag || self.attempt_dealloc() {
+            self.lock();
+            let dead = if defrag || self.attempt_dealloc() {
                 self.deinit(space);
-                return true;
-            }
+                true
+            } else {
+                false
+            };
+            self.unlock();
+            return dead;
         }
         false
     }

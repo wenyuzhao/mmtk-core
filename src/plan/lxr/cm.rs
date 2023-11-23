@@ -607,7 +607,6 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        debug_assert_ne!(self.lxr.rc.count(object), 0);
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());
@@ -623,7 +622,16 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 worker,
             )
         } else {
-            self.lxr.los().trace_object(self, object)
+            let x = self.lxr.los().trace_object(self, object);
+            debug_assert_ne!(
+                self.lxr.rc.count(x),
+                0,
+                "ERROR Invalid {:?} los={} rc={}",
+                x,
+                self.lxr.los().in_space(x),
+                self.lxr.rc.count(x)
+            );
+            x
         };
         if self.should_record_forwarded_roots {
             self.forwarded_roots.push(x)

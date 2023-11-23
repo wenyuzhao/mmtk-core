@@ -369,6 +369,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_nursery() {
             return true;
         }
+        if cfg!(debug_assertions) {
+            let cls = unsafe { (o.to_address::<VM>() + 8usize).load::<u32>() };
+            assert!(cls != 0, "ERROR {:?} rc={}", o, self.rc.count(o));
+        }
         if o.get_size::<VM>() >= crate::args().max_young_evac_size {
             return true;
         }

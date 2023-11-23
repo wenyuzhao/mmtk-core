@@ -447,6 +447,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         continue;
                     }
                     self.space.initialize_new_block(block, true, self.copy);
+                    block.unlock();
                     return Some(block);
                 }
             }
@@ -468,6 +469,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         continue;
                     }
                     self.space.initialize_new_block(block, false, self.copy);
+                    block.unlock();
                     return Some(block);
                 } else {
                     let locked = block.try_lock_with_condition(|| {
@@ -479,6 +481,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         continue;
                     }
                     self.space.initialize_new_block(block, false, self.copy);
+                    block.unlock();
                     return Some(block);
                 }
             }
