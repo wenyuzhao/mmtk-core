@@ -536,7 +536,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Release nursery blocks
         if pause != Pause::RefCount {
             self.pr.reset_before_mature_evac();
-            if pause == Pause::Full {
+            if pause == Pause::Full || pause == Pause::FinalMark {
                 // Reset worker TLABs.
                 // The block of the current worker TLAB may be selected as part of the mature evacuation set.
                 // So the copied mature objects might be copied into defrag blocks, and get copied out again.
