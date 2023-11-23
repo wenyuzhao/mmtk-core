@@ -142,7 +142,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let state = b.get_state();
         if !clean {
             return state != BlockState::Unallocated
-                && (mature_evac || !b.is_reusing())
+                && !b.is_reusing()
+                && (!copy || !b.is_gc_reusing())
                 && !b.is_defrag_source()
                 && (copy || b.get_owner().is_none());
         }
@@ -230,7 +231,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     }
                 } else {
                     if b.get_state() == BlockState::Unallocated
-                        || (!mature_evac && b.is_reusing())
+                        || b.is_reusing()
                         || b.is_defrag_source()
                     {
                         return;

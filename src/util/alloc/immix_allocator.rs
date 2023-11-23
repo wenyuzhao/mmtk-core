@@ -443,7 +443,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
             }
         } else {
-            let is_mature_evac = self.space.in_mature_evac();
             while self.local_reuse_blocks_cursor < self.local_reuse_blocks.len() {
                 let block = self.local_reuse_blocks[self.local_reuse_blocks_cursor];
                 self.local_reuse_blocks_cursor += 1;
@@ -454,13 +453,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     let locked = block.try_lock_with_condition(|| {
                         block.get_state() != BlockState::Unallocated
                             && !block.is_defrag_source()
-                            && (is_mature_evac || !block.is_reusing())
-                            && !block.is_owned_by_copy_allocator()
+                            && !block.is_reusing()
+                            && !block.is_gc_reusing()
                     });
                     if !locked {
                         continue;
                     }
-                    unreachable!();
                     self.space.initialize_new_block(block, false, self.copy);
                     return Some(block);
                 } else {
