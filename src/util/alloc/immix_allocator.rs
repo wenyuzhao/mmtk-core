@@ -426,7 +426,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
                 self.local_clean_blocks_cursor += 1;
                 if self.copy {
-                    assert_eq!(block.get_state(), BlockState::Unallocated);
+                    debug_assert_eq!(block.get_state(), BlockState::Unallocated);
                     self.space.initialize_new_block(block, true, self.copy);
                     return Some(block);
                 } else {

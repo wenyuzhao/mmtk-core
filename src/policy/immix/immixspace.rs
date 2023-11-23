@@ -984,10 +984,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         )
     }
 
-    pub(crate) fn in_mature_evac(&self) -> bool {
-        self.scheduler().work_buckets[WorkBucketStage::Closure].is_activated()
-    }
-
     /// Logically acquire a clean block and poll for GC.
     /// This does not actually allocate a block, but only updates the heap counter and do GC when necessary.
     pub fn get_clean_block_logically(&self, tls: VMThread, _copy: bool) -> Result<(), ()> {
