@@ -277,9 +277,13 @@ impl Block {
         result == Ok(0)
     }
 
-    fn lock(&self) {
+    fn lock_skip_reusing_or_unallocated(&self) -> bool {
         loop {
             std::hint::spin_loop();
+            let state = self.get_state();
+            if state == BlockState::Unallocated || (Self::in_mutatar_phase() && self.is_reusing()) {
+                return false;
+            }
             let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
                 self.start(),
                 Ordering::Relaxed,
@@ -292,7 +296,7 @@ impl Block {
                 },
             );
             if result == Ok(0) {
-                return;
+                return true;
             }
         }
     }
@@ -389,6 +393,11 @@ impl Block {
         }
     }
 
+    fn in_mutatar_phase() -> bool {
+        let ge = Self::global_phase_epoch();
+        (ge & 1) == 1
+    }
+
     pub fn update_global_phase_epoch<VM: VMBinding>(space: &ImmixSpace<VM>) {
         let old = GLOBAL_PHASE_EPOCH.load(Ordering::SeqCst);
         if old == 254 {
@@ -433,7 +442,7 @@ impl Block {
 
     fn attempt_dealloc(&self) -> bool {
         self.fetch_update_state(|s| {
-            if self.is_reusing() || s == BlockState::Unallocated {
+            if (Self::in_mutatar_phase() && self.is_reusing()) || s == BlockState::Unallocated {
                 None
             } else {
                 Some(BlockState::Unallocated)
@@ -799,7 +808,9 @@ impl Block {
             return false;
         }
         if defrag || rc_dead || self.rc_dead() {
-            self.lock();
+            if !self.lock_skip_reusing_or_unallocated() {
+                return false;
+            }
             let dead = if defrag || self.attempt_dealloc() {
                 self.deinit(space);
                 true
