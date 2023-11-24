@@ -426,7 +426,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
                 self.local_clean_blocks_cursor += 1;
                 if self.copy {
-                    debug_assert_eq!(block.get_state(), BlockState::Unallocated);
+                    debug_assert!(
+                        block.get_state() == BlockState::Unallocated && !block.is_nursery()
+                    );
                     self.space.initialize_new_block(block, true, self.copy);
                     return Some(block);
                 } else {
@@ -454,7 +456,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         block.get_state() != BlockState::Unallocated
                             && !block.is_defrag_source()
                             && !block.is_reusing()
-                            && !block.is_gc_reusing()
+                            && !block.is_owned_by_copy_allocator()
                     });
                     if !locked {
                         continue;

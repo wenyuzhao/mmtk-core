@@ -130,32 +130,18 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     /// Check if a block is available for allocation
-    fn block_is_available(
-        &self,
-        block: B,
-        clean: bool,
-        copy: bool,
-        mature_evac: bool,
-        _owner: VMThread,
-    ) -> bool {
+    fn block_is_available(&self, block: B, clean: bool, copy: bool, _owner: VMThread) -> bool {
         let b = Block::from_aligned_address(block.start());
         let state = b.get_state();
         if !clean {
             return state != BlockState::Unallocated
                 && !b.is_reusing()
-                && (!copy || !b.is_gc_reusing())
                 && !b.is_defrag_source()
                 && (copy || b.get_owner().is_none());
         }
         // Don't allocate into a non-empty block
         if state != BlockState::Unallocated {
             return false;
-        }
-        // Copy allocator: Skip young blocks in the previous mutator phase
-        if copy && !mature_evac {
-            return !b.is_nursery() && b.get_owner().is_none();
-        } else if copy {
-            return b.get_owner().is_none();
         }
         // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
         // We only allocate clean blocks without an owner. For owned blocks, we need to steal them.
@@ -205,7 +191,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         block: B,
         copy: bool,
-        mature_evac: bool,
         steal: bool,
         owner: VMThread,
         clean: bool,
@@ -213,9 +198,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let b = Block::from_aligned_address(block.start());
         if !steal {
             if !copy {
-                let locked = b.try_lock_with_condition(|| {
-                    self.block_is_available(block, clean, copy, mature_evac, owner)
-                });
+                let locked = b
+                    .try_lock_with_condition(|| self.block_is_available(block, clean, copy, owner));
                 if locked {
                     b.update_phase_epoch();
                     b.set_owner(Some(owner));
@@ -224,8 +208,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 }
             } else {
                 if clean {
-                    if b.get_state() != BlockState::Unallocated || (!mature_evac && b.is_nursery())
-                    {
+                    if b.get_state() != BlockState::Unallocated || b.is_nursery() {
                         debug_assert!(!b.is_defrag_source());
                         return;
                     }
@@ -269,7 +252,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         chunks: &Vec<Chunk>,
         copy: bool,
-        mature_evac: bool,
         owner: VMThread,
     ) -> bool {
         // linear scan the chunks to find a reusable block
@@ -290,7 +272,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 while i < max_b_index {
                     let block = self.block_index_to_block(chunks, i);
                     i += 1;
-                    if self.block_is_available(block, true, copy, mature_evac, owner) {
+                    if self.block_is_available(block, true, copy, owner) {
                         curr_count += 1;
                         if curr_count >= count {
                             break;
@@ -309,8 +291,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let old = old.unwrap();
             for i in old..usize::min(new_cursor, max_b_index) {
                 let block = self.block_index_to_block(chunks, i);
-                if self.block_is_available(block, true, copy, mature_evac, owner) {
-                    self.append_to_buf(buf, block, copy, mature_evac, false, owner, true);
+                if self.block_is_available(block, true, copy, owner) {
+                    self.append_to_buf(buf, block, copy, false, owner, true);
                 }
             }
             true
@@ -325,7 +307,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         chunks: &Vec<Chunk>,
         copy: bool,
-        mature_evac: bool,
         owner: VMThread,
     ) -> bool {
         // linear scan the chunks to find a reusable block
@@ -346,7 +327,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 while i < max_b_index {
                     let block = self.block_index_to_block(chunks, i);
                     i += 1;
-                    if self.block_is_available(block, false, copy, mature_evac, owner) {
+                    if self.block_is_available(block, false, copy, owner) {
                         curr_count += 1;
                         if curr_count >= count {
                             break;
@@ -365,8 +346,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let old = old.unwrap();
             for i in old..usize::min(new_cursor, max_b_index) {
                 let block = self.block_index_to_block(chunks, i);
-                if self.block_is_available(block, false, copy, mature_evac, owner) {
-                    self.append_to_buf(buf, block, copy, mature_evac, false, owner, false);
+                if self.block_is_available(block, false, copy, owner) {
+                    self.append_to_buf(buf, block, copy, false, owner, false);
                 }
             }
             true
@@ -421,7 +402,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, false, owner, false) {
                     if self.attempt_to_steal(block, owner, false) {
-                        self.append_to_buf(buf, block, copy, false, true, owner, false);
+                        self.append_to_buf(buf, block, copy, true, owner, false);
                     }
                 }
             }
@@ -477,7 +458,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 let block = self.block_index_to_block(chunks, i);
                 if self.block_is_stealable(block, true, owner, false) {
                     if self.attempt_to_steal(block, owner, true) {
-                        self.append_to_buf(buf, block, copy, false, true, owner, true);
+                        self.append_to_buf(buf, block, copy, true, owner, true);
                     }
                 }
             }
@@ -495,24 +476,16 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         buf: &mut Vec<B>,
         space: &dyn Space<VM>,
         copy: bool,
-        mature_evac: bool,
         owner: VMThread,
     ) -> bool {
         let chunks = self.chunks.read().unwrap();
         if !clean {
-            if self.acquire_reusable_blocks_fast(
-                alloc_count,
-                buf,
-                &*chunks,
-                copy,
-                mature_evac,
-                owner,
-            ) {
+            if self.acquire_reusable_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
                 return true;
             }
             return self.steal_reusable_blocks(steal_count, buf, &*chunks, copy, owner);
         }
-        if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, mature_evac, owner) {
+        if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
             return true;
         }
         if self.steal_clean_blocks(steal_count, buf, &*chunks, copy, owner) {
@@ -521,7 +494,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // Slow path
         std::mem::drop(chunks);
         let mut chunks = self.chunks.write().unwrap();
-        if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, mature_evac, owner) {
+        if self.acquire_clean_blocks_fast(alloc_count, buf, &*chunks, copy, owner) {
             return true;
         }
         if self.steal_clean_blocks(steal_count, buf, &*chunks, copy, owner) {
@@ -529,14 +502,13 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         // 1. Get a new chunk
         let chunk = self.alloc_chunk(space).unwrap();
-        gc_log!([3] "new-chunk: {:?} (total={})", chunk.start(), chunks.len());
         // 2. Take the first N blocks in the chunk as the allocation result
         let count = usize::min(alloc_count, Self::BLOCKS_IN_CHUNK);
         for i in 0..count {
             let block = B::from_aligned_address(
                 chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
             );
-            self.append_to_buf(buf, block, copy, mature_evac, false, owner, true);
+            self.append_to_buf(buf, block, copy, false, owner, true);
         }
         // 3. Add the chunk to the chunk list
         let total_blocks = chunks.len() * Self::BLOCKS_IN_CHUNK;
@@ -565,6 +537,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);
+        // gc_log!("chunk: {:?}", start);
         Some(Chunk::from_aligned_address(start))
     }
 
@@ -599,12 +572,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         self.reuse_block_cursor.store(0, Ordering::SeqCst);
         self.reuse_block_steal_cursor
             .store(max_b_index, Ordering::SeqCst);
-    }
-
-    pub fn reset_before_mature_evac(&self) {
-        let _chunks = self.chunks.write().unwrap();
-        self.clean_block_cursor.store(0, Ordering::SeqCst);
-        self.reuse_block_cursor.store(0, Ordering::SeqCst);
     }
 
     pub fn reset_nursery_state(&self, blocks: &[Block]) {

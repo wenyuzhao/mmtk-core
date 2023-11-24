@@ -397,16 +397,6 @@ impl Block {
         self.get_state() != BlockState::Unallocated && self.is_nursery_or_reusing()
     }
 
-    pub fn is_gc_reusing(&self) -> bool {
-        if self.get_state() == BlockState::Unallocated {
-            return false;
-        }
-        let ge = Self::global_phase_epoch();
-        assert_eq!(ge & 1, 0);
-        let e = self.phase_epoch();
-        e == ge
-    }
-
     pub fn is_nursery(&self) -> bool {
         self.get_state() == BlockState::Unallocated && self.is_nursery_or_reusing()
     }
