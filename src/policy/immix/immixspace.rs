@@ -550,7 +550,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Release nursery blocks
         if pause != Pause::RefCount {
-            if pause == Pause::Full {
+            self.pr.reset_before_mature_evac();
+            if pause == Pause::Full || pause == Pause::FinalMark {
                 // Reset worker TLABs.
                 // The block of the current worker TLAB may be selected as part of the mature evacuation set.
                 // So the copied mature objects might be copied into defrag blocks, and get copied out again.
@@ -982,8 +983,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         owner: VMThread,
     ) -> bool {
         debug_assert!(!owner.0.to_address().is_zero());
-        self.pr
-            .acquire_blocks(alloc_count, steal_count, clean, buf, self, copy, owner)
+        let mature_evac = copy
+            && self.rc_enabled
+            && self.scheduler().work_buckets[WorkBucketStage::Closure].is_activated();
+        self.pr.acquire_blocks(
+            alloc_count,
+            steal_count,
+            clean,
+            buf,
+            self,
+            copy,
+            mature_evac,
+            owner,
+        )
     }
 
     /// Logically acquire a clean block and poll for GC.
@@ -1257,6 +1269,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.attempt_mark(new);
             self.unmark(object);
             queue.enqueue(new);
+            debug_assert_ne!(
+                self.rc.count(new),
+                0,
+                "ERROR Invalid {:?} rc={}",
+                new,
+                self.rc.count(new)
+            );
             new
         }
     }

@@ -277,6 +277,30 @@ impl Block {
         result == Ok(0)
     }
 
+    fn lock_skip_reusing_or_unallocated(&self) -> bool {
+        loop {
+            std::hint::spin_loop();
+            let state = self.get_state();
+            if state == BlockState::Unallocated || (Self::in_mutatar_phase() && self.is_reusing()) {
+                return false;
+            }
+            let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                self.start(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |b| {
+                    if b == 1 {
+                        return None;
+                    }
+                    Some(1)
+                },
+            );
+            if result == Ok(0) {
+                return true;
+            }
+        }
+    }
+
     pub fn try_lock_with_condition(&self, predicate: impl Fn() -> bool) -> bool {
         if !predicate() {
             return false;
@@ -373,6 +397,16 @@ impl Block {
         self.get_state() != BlockState::Unallocated && self.is_nursery_or_reusing()
     }
 
+    pub fn is_gc_reusing(&self) -> bool {
+        if self.get_state() == BlockState::Unallocated {
+            return false;
+        }
+        let ge = Self::global_phase_epoch();
+        assert_eq!(ge & 1, 0);
+        let e = self.phase_epoch();
+        e == ge
+    }
+
     pub fn is_nursery(&self) -> bool {
         self.get_state() == BlockState::Unallocated && self.is_nursery_or_reusing()
     }
@@ -385,6 +419,11 @@ impl Block {
         } else {
             return e == ge - 1;
         }
+    }
+
+    fn in_mutatar_phase() -> bool {
+        let ge = Self::global_phase_epoch();
+        (ge & 1) == 1
     }
 
     pub fn update_global_phase_epoch<VM: VMBinding>(space: &ImmixSpace<VM>) {
@@ -437,7 +476,7 @@ impl Block {
 
     fn attempt_dealloc(&self) -> bool {
         self.fetch_update_state(|s| {
-            if self.is_reusing() || s == BlockState::Unallocated {
+            if (Self::in_mutatar_phase() && self.is_reusing()) || s == BlockState::Unallocated {
                 None
             } else {
                 Some(BlockState::Unallocated)
@@ -522,6 +561,11 @@ impl Block {
             }
             self.clear_in_place_promoted();
             self.update_phase_epoch();
+            if copy {
+                debug_assert!((self.phase_epoch() & 1) == 0);
+            } else {
+                debug_assert!((self.phase_epoch() & 1) != 0);
+            }
             if copy {
                 if reuse {
                     debug_assert!(!self.is_defrag_source());
@@ -809,10 +853,17 @@ impl Block {
             return false;
         }
         if defrag || rc_dead || self.rc_dead() {
-            if defrag || self.attempt_dealloc() {
-                self.deinit(space);
-                return true;
+            if !self.lock_skip_reusing_or_unallocated() {
+                return false;
             }
+            let dead = if defrag || self.attempt_dealloc() {
+                self.deinit(space);
+                true
+            } else {
+                false
+            };
+            self.unlock();
+            return dead;
         }
         false
     }
