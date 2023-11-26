@@ -347,7 +347,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 if target.is_null() {
                     return;
                 }
-                println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                gc_log!([3] " -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                 debug_assert!(
                     target.to_address::<VM>().is_mapped(),
                     "Unmapped obj {:?}.{:?} -> {:?}",
@@ -983,7 +983,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 crate::record_live_bytes(o.get_size::<VM>());
             }
         }
-        gc_log!(" - dead {:?}", o.range::<VM>());
+        gc_log!([3] " - dead {:?}", o.range::<VM>());
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         if false
@@ -996,7 +996,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge| {
                 let x = edge.load();
                 if !x.is_null() {
-                    gc_log!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                    gc_log!([3] " -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
                     if edge.to_address().is_mapped() {
                         let rc = self.rc.count(x);
                         if rc != MAX_REF_COUNT && rc != 0 {
@@ -1058,7 +1058,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
         for o in decs {
-            gc_log!("dec {:?}", o);
+            gc_log!([3] "dec {:?}", o);
             if o.is_null() {
                 continue;
             }

@@ -265,7 +265,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             } else {
                 let dead = self.process_block(block, immix_space);
                 if dead && block.rc_sweep_mature(immix_space, false, true) {
-                    println!("M sweep block {:?}  ", block);
+                    gc_log!([3] "M sweep block {:?}  ", block);
                     dead_blocks += 1;
                 }
             }

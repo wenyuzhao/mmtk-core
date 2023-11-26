@@ -1270,7 +1270,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.attempt_mark(new);
             self.unmark(object);
             queue.enqueue(new);
-            gc_log!(
+            gc_log!([3]
                 "M {:?} -> {:?} rc={}",
                 object,
                 new.range::<VM>(),

@@ -736,7 +736,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                 if o.is_null() {
                     return;
                 }
-                println!("M {:?}.{:?} -> {:?}", object, e.to_address(), o);
+                // println!("M {:?}.{:?} -> {:?}", object, e.to_address(), o);
                 if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                     return;
                 }
