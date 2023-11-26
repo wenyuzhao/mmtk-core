@@ -143,7 +143,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         for (block, defrag) in &self.blocks {
             block.unlog();
             if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag, false) {
-                println!("RC sweep block {:?} defrag={}", block, defrag);
                 count += 1;
             } else {
                 assert!(

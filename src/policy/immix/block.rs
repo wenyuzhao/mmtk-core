@@ -549,7 +549,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
-        gc_log!([3] "Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        // gc_log!([3] "Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         // #[cfg(feature = "sanity")]
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
@@ -603,7 +603,7 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        gc_log!([3] "Dealloc block {:?}", self);
+        // gc_log!([3] "Dealloc block {:?}", self);
         if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
         }

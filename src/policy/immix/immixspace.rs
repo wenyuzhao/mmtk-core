@@ -1270,19 +1270,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.attempt_mark(new);
             self.unmark(object);
             queue.enqueue(new);
-            gc_log!([3]
-                "M {:?} -> {:?} rc={}",
-                object,
-                new.range::<VM>(),
-                self.rc.count(new)
-            );
-            debug_assert_ne!(
-                self.rc.count(new),
-                0,
-                "ERROR Invalid {:?} rc={}",
-                new,
-                self.rc.count(new)
-            );
             new
         }
     }
