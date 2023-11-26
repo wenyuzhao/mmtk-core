@@ -141,25 +141,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let b = Block::from_aligned_address(block.start());
         let state = b.get_state();
         if !clean {
-            // return state != BlockState::Unallocated
-            //     && !b.is_reusing()
-            //     && (!copy || !b.is_gc_reusing())
-            //     && !b.is_defrag_source()
-            //     && (copy || b.get_owner().is_none());
-            return false;
+            return state != BlockState::Unallocated
+                && !b.is_reusing()
+                && (!copy || !b.is_gc_reusing())
+                && !b.is_defrag_source()
+                && (copy || b.get_owner().is_none());
         }
         // Don't allocate into a non-empty block
         if state != BlockState::Unallocated {
             return false;
         }
-        // Copy allocator: Skip young blocks in the previous mutator phase
-        // if copy && !mature_evac {
-        //     return !b.is_nursery() && b.get_owner().is_none();
-        // } else if copy {
-        //     return b.get_owner().is_none();
-        // }
         if copy && mature_evac {
-            // println!("block_is_available {:?}", block.start());
             return true;
         }
         // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
@@ -191,7 +183,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // in_use state is not set
             && (skip_lock_check || !block.is_locked())
         } else {
-            return false;
             let state = block.get_state();
             // Don't steal empty, used, or defrag blocks
             if state == BlockState::Unallocated || block.is_reusing() || block.is_defrag_source() {
