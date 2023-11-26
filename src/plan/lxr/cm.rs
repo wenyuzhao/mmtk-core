@@ -715,7 +715,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if VM::VMScanning::is_val_array(object) {
             return;
         }
-        if VM::VMScanning::is_obj_array(object) {
+        if VM::VMScanning::is_obj_array(object) && false {
             let data = VM::VMScanning::obj_array_data(object);
             if data.len() > 0 {
                 for chunk in data.chunks(Self::CAPACITY) {
@@ -736,6 +736,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                 if o.is_null() {
                     return;
                 }
+                println!("M {:?}.{:?} -> {:?}", object, e.to_address(), o);
                 if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                     return;
                 }

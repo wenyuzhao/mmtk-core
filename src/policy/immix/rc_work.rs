@@ -143,6 +143,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         for (block, defrag) in &self.blocks {
             block.unlog();
             if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag, false) {
+                println!("RC sweep block {:?} defrag={}", block, defrag);
                 count += 1;
             } else {
                 assert!(
@@ -264,6 +265,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             } else {
                 let dead = self.process_block(block, immix_space);
                 if dead && block.rc_sweep_mature(immix_space, false, true) {
+                    println!("M sweep block {:?}  ", block);
                     dead_blocks += 1;
                 }
             }

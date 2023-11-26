@@ -397,6 +397,16 @@ impl Block {
         self.get_state() != BlockState::Unallocated && self.is_nursery_or_reusing()
     }
 
+    pub fn is_gc_reusing(&self) -> bool {
+        if self.get_state() == BlockState::Unallocated {
+            return false;
+        }
+        let ge = Self::global_phase_epoch();
+        assert_eq!(ge & 1, 0);
+        let e = self.phase_epoch();
+        e == ge
+    }
+
     pub fn is_nursery(&self) -> bool {
         self.get_state() == BlockState::Unallocated && self.is_nursery_or_reusing()
     }
@@ -539,7 +549,7 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
-        // gc_log!([3] "Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        gc_log!([3] "Alloc block {:?} copy={} reuse={}", self, copy, reuse);
         // #[cfg(feature = "sanity")]
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
@@ -593,7 +603,7 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        // println!("Dealloc block {:?}", self);
+        gc_log!([3] "Dealloc block {:?}", self);
         if !crate::args::HOLE_COUNTING && space.rc_enabled {
             self.reset_dead_bytes();
         }

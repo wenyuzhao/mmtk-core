@@ -27,6 +27,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use itertools::Itertools;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -346,7 +347,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 if target.is_null() {
                     return;
                 }
-                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                 debug_assert!(
                     target.to_address::<VM>().is_mapped(),
                     "Unmapped obj {:?}.{:?} -> {:?}",
@@ -600,25 +601,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             self.record_mature_evac_remset(e, new, is_incomplete_root);
         }
         if new != o {
-            // gc_log!([3]
-            //     " -- inc {:?}: {:?} => {:?} rc={} K={:?} m={}",
-            //     e.to_address(),
-            //     o,
-            //     new.range::<VM>(),
-            //     self.rc.count(new),
-            //     K,
-            //     self.lxr.is_marked(o) as u8,
-            // );
+            gc_log!([3]
+                " -- inc {:?}: {:?} => {:?} rc={} K={:?} m={}",
+                e.to_address(),
+                o,
+                new.range::<VM>(),
+                self.rc.count(new),
+                K,
+                self.lxr.is_marked(o) as u8,
+            );
             e.store(new)
         } else {
-            // gc_log!([3]
-            //     " -- inc {:?}: {:?} rc={} K={:?} m={}",
-            //     e.to_address(),
-            //     o.range::<VM>(),
-            //     self.rc.count(o),
-            //     K,
-            //     self.lxr.is_marked(o) as u8,
-            // );
+            gc_log!([3]
+                " -- inc {:?}: {:?} rc={} K={:?} m={}",
+                e.to_address(),
+                o.range::<VM>(),
+                self.rc.count(o),
+                K,
+                self.lxr.is_marked(o) as u8,
+            );
         }
         super::record_edge_for_validation(e, new);
         Some(new)
@@ -763,7 +764,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         for s in std::mem::take(&mut self.inc_slices) {
             self.process_incs_for_obj_array::<KIND>(s, self.depth);
         }
-        if let Some(roots) = roots {
+        if let Some(mut roots) = roots {
+            if !self.lxr.current_pause_should_do_promotion() {
+                roots = roots
+                    .iter()
+                    .filter(|o| !self.rc.is_dead(**o))
+                    .cloned()
+                    .collect();
+            }
             if self.lxr.concurrent_marking_enabled() && self.pause == Pause::InitialMark {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
                     for r in &roots {
@@ -975,7 +983,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 crate::record_live_bytes(o.get_size::<VM>());
             }
         }
-        // println!(" - dead {:?}", o.range::<VM>());
+        gc_log!(" - dead {:?}", o.range::<VM>());
         // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
         if false
@@ -988,7 +996,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge| {
                 let x = edge.load();
                 if !x.is_null() {
-                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                    gc_log!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
                     if edge.to_address().is_mapped() {
                         let rc = self.rc.count(x);
                         if rc != MAX_REF_COUNT && rc != 0 {
@@ -1050,7 +1058,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
         for o in decs {
-            // println!("dec {:?}", o);
+            gc_log!("dec {:?}", o);
             if o.is_null() {
                 continue;
             }
@@ -1088,6 +1096,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        // return;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
