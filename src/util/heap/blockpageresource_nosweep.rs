@@ -153,6 +153,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         if copy && mature_evac {
             return true;
+        } else if copy {
+            return !b.is_nursery();
         }
         // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
         // We only allocate clean blocks without an owner. For owned blocks, we need to steal them.
