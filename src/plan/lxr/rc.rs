@@ -369,20 +369,19 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 //     target
                 // );
                 let rc = self.rc.count(target);
-                // if rc == 0 {
-                // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                self.add_new_edge(edge);
-                // } else {
-                //     assert!(self.lxr.los().in_space(target));
-                //     if rc != crate::util::rc::MAX_REF_COUNT {
-                //         let _ = self.rc.inc(target);
-                //         if cfg!(feature = "lxr_precise_incs_counter") {
-                //             self.counters.total_incs += 1;
-                //             self.counters.fast_nursery_incs += 1;
-                //         }
-                //     }
-                //     self.record_mature_evac_remset2(obj_in_defrag, edge, target);
-                // }
+                if rc == 0 {
+                    // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
+                    self.add_new_edge(edge);
+                } else {
+                    if rc != crate::util::rc::MAX_REF_COUNT {
+                        let _ = self.rc.inc(target);
+                        if cfg!(feature = "lxr_precise_incs_counter") {
+                            self.counters.total_incs += 1;
+                            self.counters.fast_nursery_incs += 1;
+                        }
+                    }
+                    self.record_mature_evac_remset2(obj_in_defrag, edge, target);
+                }
                 super::record_edge_for_validation(edge, target);
             });
         }
@@ -515,7 +514,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     o
                 }
             } else {
-                //
                 // Object is not moved.
                 let promoted = self.inc(o);
                 object_forwarding::clear_forwarding_bits::<VM>(o);
@@ -537,7 +535,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE && e.to_address().is_mapped() {
-            e.to_address().unlog_field_relaxed::<VM>();
+            e.to_address().unlog_field::<VM>();
         }
         if o.is_null() {
             return None;
