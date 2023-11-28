@@ -220,7 +220,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
         if self.in_cm || self.pause == Pause::FinalMark {
             if self.lxr.current_pause_should_do_promotion() {
-                debugassert!(
+                assert!(
                     self.lxr.is_marked(o),
                     "{:?} rc={} los={} copied={}",
                     o,
