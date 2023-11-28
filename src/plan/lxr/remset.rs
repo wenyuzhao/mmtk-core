@@ -171,7 +171,7 @@ impl<VM: VMBinding> YoungRemSet<VM> {
                     .iter()
                     .map(|e| VM::VMEdge::from_address(e.0))
                     .collect::<Vec<_>>();
-                let mut w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
+                let w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
                 // w.skip_young_remset = true;
                 scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
                 if clear {

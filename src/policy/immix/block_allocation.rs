@@ -110,10 +110,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         // Initialize mark table
         if self.space().rc_enabled {
-            if self.concurrent_marking_in_progress_or_final_mark()
-                && copy
-                && self.lxr.unwrap().current_pause_should_do_promotion()
-            {
+            if self.concurrent_marking_in_progress_or_final_mark() {
                 block.initialize_mark_table_as_marked::<VM>();
             }
             if !copy {
