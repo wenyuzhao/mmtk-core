@@ -1477,6 +1477,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if self
             .block_allocation
             .concurrent_marking_in_progress_or_final_mark()
+            && (!copy || self.do_promotion())
         {
             Line::initialize_mark_table_as_marked::<VM>(start..end);
         }
