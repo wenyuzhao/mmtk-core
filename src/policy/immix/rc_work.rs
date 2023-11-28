@@ -208,7 +208,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }
         if ObjectReference::STRICT_VERIFICATION {
-            // println!("deadx {:?} rc={}", o, self.rc.count(o));
             unsafe {
                 o.to_address::<VM>().store(0xdeadusize);
             }
@@ -264,7 +263,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             } else {
                 let dead = self.process_block(block, immix_space);
                 if dead && block.rc_sweep_mature(immix_space, false, true) {
-                    // gc_log!([3] "M sweep block {:?}  ", block);
                     dead_blocks += 1;
                 }
             }

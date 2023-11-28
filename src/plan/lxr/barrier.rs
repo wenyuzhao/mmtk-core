@@ -142,7 +142,6 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         //     edge,
         //     old
         // );
-        // println!("B {:?}.{:?} -> old={:?}", _src, edge, old);
         if cfg!(feature = "field_barrier_validation") {
             let o = super::LAST_REFERENTS
                 .lock()

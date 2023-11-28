@@ -160,7 +160,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if object.is_null() {
             return object;
         }
-        // println!("M {:?} rc={}", object, self.rc.count(object));
         if cfg!(any(feature = "sanity", debug_assertions)) {
             assert!(
                 object.to_address::<VM>().is_mapped(),

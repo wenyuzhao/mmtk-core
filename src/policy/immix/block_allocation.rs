@@ -68,13 +68,6 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.copy_allocated_nursery_blocks
             .store(0, Ordering::Relaxed);
         let num_blocks = self.clean_nursery_blocks();
-        // println!(
-        //     "Sweeping {} blocks, copy_allocated_nursery_blocks: {}, total young: {}, in_place_promoted_nursery_blocks: {}",
-        //     num_blocks - in_place_promoted_nursery_blocks + copy_allocated_nursery_blocks,
-        //     copy_allocated_nursery_blocks,
-        //     num_blocks,
-        //     in_place_promoted_nursery_blocks
-        // );
         self.space().pr.bulk_release_blocks(
             num_blocks - in_place_promoted_nursery_blocks + copy_allocated_nursery_blocks,
         );

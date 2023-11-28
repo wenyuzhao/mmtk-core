@@ -606,7 +606,6 @@ impl<VM: VMBinding> LXR<VM> {
                     .as_spec()
                     .extract_side_spec(),
             ),
-            // MetadataSpec::OnSide(RC_YOUNG_MARK_TABLE),
         ]);
         let global_side_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let options = args.options.clone();

@@ -153,11 +153,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
                     return false;
                 }
             }
-            let x = self.rc.count(object) > 0 || ForwardingWord::is_forwarded::<VM>(object);
-            if !x {
-                println!("object {:?} is dead", object);
-            }
-            return x;
+            return self.rc.count(object) > 0 || ForwardingWord::is_forwarded::<VM>(object);
         }
         if self.initial_mark_pause {
             return true;
@@ -1488,7 +1484,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // Line::clear_mark_table::<VM>(start..end);
         }
         // if !_copy {
-        // println!("reuse {:?} copy={}", start..end, copy);
+        //     println!("reuse {:?} copy={}", start..end, copy);
         // }
         Some((start, end))
     }
