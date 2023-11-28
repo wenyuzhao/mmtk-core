@@ -44,8 +44,7 @@ impl RemSetEntry {
             //     Block::containing::<VM>(curr).is_nursery_or_reusing()
             // );
             if rc.count(curr) == 0 {
-                assert!(space.in_space(curr));
-                if !Block::containing::<VM>(curr).is_nursery_or_reusing() {
+                if space.in_space(curr) && !Block::containing::<VM>(curr).is_nursery_or_reusing() {
                     return false;
                 }
             }

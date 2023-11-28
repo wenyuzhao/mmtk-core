@@ -298,21 +298,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         };
         let is_val_array = VM::VMScanning::is_val_array(o);
         if los {
-            if !is_val_array {
-                let start =
-                    side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address::<VM>())
-                        .to_mut_ptr::<u8>();
-                let limit = side_metadata::address_to_meta_address(
-                    &Self::UNLOG_BITS,
-                    (o.to_address::<VM>() + size).align_up(heap_bytes_per_unlog_byte),
-                )
-                .to_mut_ptr::<u8>();
-                unsafe {
-                    let bytes = limit.offset_from(start) as usize;
-                    std::ptr::write_bytes(start, 0xffu8, bytes);
+            if self.lxr.current_pause_should_do_promotion() {
+                if !is_val_array {
+                    let start = side_metadata::address_to_meta_address(
+                        &Self::UNLOG_BITS,
+                        o.to_address::<VM>(),
+                    )
+                    .to_mut_ptr::<u8>();
+                    let limit = side_metadata::address_to_meta_address(
+                        &Self::UNLOG_BITS,
+                        (o.to_address::<VM>() + size).align_up(heap_bytes_per_unlog_byte),
+                    )
+                    .to_mut_ptr::<u8>();
+                    unsafe {
+                        let bytes = limit.offset_from(start) as usize;
+                        std::ptr::write_bytes(start, 0xffu8, bytes);
+                    }
                 }
+                o.to_address::<VM>().unlog_field_relaxed::<VM>();
             }
-            o.to_address::<VM>().unlog_field_relaxed::<VM>();
         } else if in_place_promotion && !is_val_array {
             assert!(self.lxr.current_pause_should_do_promotion());
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
@@ -401,9 +405,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     fn no_inc(&self, o: ObjectReference) -> bool {
-        !self.lxr.los().in_space(o)
-            && !self.lxr.current_pause_should_do_promotion()
-            && self.rc.count(o) == 0
+        !self.lxr.current_pause_should_do_promotion() && self.rc.count(o) == 0
     }
 
     fn inc(&self, o: ObjectReference) -> bool {
@@ -469,7 +471,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return new;
         }
         if self.dont_evacuate(o, los) {
-            if self.inc(o) {
+            if self.no_inc(o) {
+                if self.lxr.los().in_space(o) && self.lxr.los().aging_mark(o) {
+                    self.promote(o, false, los, depth);
+                }
+            } else if self.inc(o) {
                 self.promote(o, false, los, depth);
             }
             return o;
@@ -584,9 +590,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let new = self.process_inc_and_evacuate(o, depth);
         if !self.lxr.current_pause_should_do_promotion()
             && self.rc.count(new) == 0
-            && (K == EDGE_KIND_MATURE
-                || self.lxr.los().address_in_space(e.to_address())
-                || is_incomplete_root)
+            && (K == EDGE_KIND_MATURE || is_incomplete_root)
             && !self.skip_young_remset
         {
             self.record_young_remset(e, new);

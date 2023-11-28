@@ -445,6 +445,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.immix_space
             .do_promotion
             .store(do_promotion, Ordering::SeqCst);
+        self.los()
+            .do_promotion
+            .store(do_promotion, Ordering::SeqCst);
         self.current_pause_should_do_promotion
             .store(do_promotion, Ordering::SeqCst);
 
@@ -457,6 +460,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .pause_start
             .store(SystemTime::now(), Ordering::SeqCst);
         self.immix_space.rc_eager_prepare(pause);
+        self.los().aging_mark_state.fetch_add(1, Ordering::SeqCst);
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
             mutator.flush();

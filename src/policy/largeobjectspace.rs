@@ -12,6 +12,8 @@ use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
+use crate::util::metadata::side_metadata::spec_defs::LOS_AGING_MARK_TABLE;
+use crate::util::metadata::MetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::util::rc::RefCountHelper;
 use crate::util::treadmill::TreadMill;
@@ -22,6 +24,7 @@ use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
 use spin::Mutex;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 
 #[allow(unused)]
@@ -48,6 +51,8 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     pub rc_enabled: bool,
     rc: RefCountHelper<VM>,
     pub is_end_of_satb_or_full_gc: bool,
+    pub aging_mark_state: AtomicUsize,
+    pub do_promotion: AtomicBool,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -199,7 +204,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let policy_args = args.into_policy_args(
             false,
             false,
-            metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC]),
+            metadata::extract_side_metadata(&[
+                *VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
+                MetadataSpec::OnSide(LOS_AGING_MARK_TABLE),
+            ]),
         );
         let metadata = policy_args.metadata();
         let common = CommonSpace::new(policy_args);
@@ -225,7 +233,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_enabled: false,
             rc: RefCountHelper::NEW,
             is_end_of_satb_or_full_gc: false,
+            aging_mark_state: AtomicUsize::new(0),
+            do_promotion: AtomicBool::new(false),
         }
+    }
+
+    fn do_promotion(&self) -> bool {
+        self.do_promotion.load(Ordering::Relaxed)
     }
 
     pub fn dump_memory(&self) {
@@ -280,12 +294,18 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         debug_assert!(self.rc_enabled);
         // promote nursery objects or release dead nursery
         let mut mature_blocks = self.rc_mature_objects.lock();
+        let mut unpromoted_nursery = vec![];
         while let Some(o) = self.rc_nursery_objects.pop() {
-            if self.rc.count(o) == 0 {
+            if !self.do_promotion() && self.is_aging_marked(o) {
+                unpromoted_nursery.push(o);
+            } else if self.rc.count(o) == 0 {
                 self.release_object(o.to_address::<VM>());
             } else {
                 mature_blocks.insert(o, o.get_size::<VM>());
             }
+        }
+        for o in unpromoted_nursery {
+            self.rc_nursery_objects.push(o);
         }
     }
 
@@ -407,6 +427,40 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         self.test_and_mark(object, self.mark_state)
+    }
+
+    pub fn is_aging_marked(&self, object: ObjectReference) -> bool {
+        let mark = self.aging_mark_state.load(Ordering::Relaxed);
+        assert!(self.in_space(object));
+        let old_value =
+            LOS_AGING_MARK_TABLE.load_atomic::<usize>(object.to_address::<VM>(), Ordering::Relaxed);
+        old_value == mark
+    }
+
+    pub fn aging_mark(&self, object: ObjectReference) -> bool {
+        let mark = self.aging_mark_state.load(Ordering::Relaxed);
+        assert!(self.in_space(object));
+        loop {
+            let old_value = LOS_AGING_MARK_TABLE
+                .load_atomic::<usize>(object.to_address::<VM>(), Ordering::Relaxed);
+            if old_value == mark {
+                return false;
+            }
+            // using LOS_BIT_MASK have side effects of clearing nursery bit
+            if LOS_AGING_MARK_TABLE
+                .compare_exchange_atomic::<usize>(
+                    object.to_address::<VM>(),
+                    old_value,
+                    mark,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        true
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
