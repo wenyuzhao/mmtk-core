@@ -190,7 +190,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
         if !los {
             let block = Block::containing::<VM>(o);
-            if !copied && block.is_nursery() {
+            if !copied && block.is_just_born_clean() {
                 unreachable!();
                 block.set_as_in_place_promoted(&self.lxr.immix_space);
             }
@@ -259,7 +259,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if self.rc.count(o) == 0 {
-            // println!(" -- rec young remset {:?} -> {:?}", slot, o);
+            // println!(" -- + young remset {:?} -> {:?}", slot, o);
             self.lxr.immix_space.young_remset.record(slot, o);
         }
     }
@@ -279,25 +279,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         };
         let is_val_array = VM::VMScanning::is_val_array(o);
         if los {
-            if self.do_promotion {
-                if !is_val_array {
-                    let start = side_metadata::address_to_meta_address(
-                        &Self::UNLOG_BITS,
-                        o.to_address::<VM>(),
-                    )
-                    .to_mut_ptr::<u8>();
-                    let limit = side_metadata::address_to_meta_address(
-                        &Self::UNLOG_BITS,
-                        (o.to_address::<VM>() + size).align_up(heap_bytes_per_unlog_byte),
-                    )
-                    .to_mut_ptr::<u8>();
-                    unsafe {
-                        let bytes = limit.offset_from(start) as usize;
-                        std::ptr::write_bytes(start, 0xffu8, bytes);
-                    }
+            // if self.do_promotion {
+            if !is_val_array {
+                let start =
+                    side_metadata::address_to_meta_address(&Self::UNLOG_BITS, o.to_address::<VM>())
+                        .to_mut_ptr::<u8>();
+                let limit = side_metadata::address_to_meta_address(
+                    &Self::UNLOG_BITS,
+                    (o.to_address::<VM>() + size).align_up(heap_bytes_per_unlog_byte),
+                )
+                .to_mut_ptr::<u8>();
+                unsafe {
+                    let bytes = limit.offset_from(start) as usize;
+                    std::ptr::write_bytes(start, 0xffu8, bytes);
                 }
-                o.to_address::<VM>().unlog_field_relaxed::<VM>();
             }
+            o.to_address::<VM>().unlog_field_relaxed::<VM>();
+            // }
         } else if in_place_promotion && !is_val_array {
             debug_assert!(self.do_promotion);
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
@@ -406,18 +404,35 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.rc.count(o) != 0 {
             return true;
         }
-        // Force evacuate nursery objects
+        // Force evacuate just-born objects
         let block = Block::containing::<VM>(o);
-        if !self.do_promotion && (block.is_nursery() || block.is_reusing()) {
+        if !self.do_promotion && block.has_just_born_objects() {
             return false;
         }
-        // Skip recycled lines
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_nursery() {
+        // Skip young blocks
+        if !self.do_promotion && block.has_young_objects() {
+            return !self.do_promotion;
+        }
+        if block.is_allocated_in_current_epoch() {
             return true;
         }
+        // Skip recycled lines
+        // if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_just_born_clean() {
+        //     unreachable!(
+        //         "{:?} {:?} {} {}",
+        //         block,
+        //         block.get_state(),
+        //         block.phase_epoch(),
+        //         block.is_allocated_in_current_epoch()
+        //     );
+        //     return true;
+        // }
         if cfg!(debug_assertions) {
             let cls = unsafe { (o.to_address::<VM>() + 8usize).load::<u32>() };
-            assert!(cls != 0, "ERROR {:?} rc={}", o, self.rc.count(o));
+            if cls <= 1000 {
+                flush_logs!();
+            }
+            assert!(cls > 1000, "ERROR {:?} rc={}", o, self.rc.count(o));
         }
         if o.get_size::<VM>() >= crate::args().max_young_evac_size {
             return true;
@@ -451,8 +466,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         if self.dont_evacuate(o, los) {
             if self.no_inc(o) {
-                if self.lxr.los().in_space(o) && self.lxr.los().aging_mark(o) {
-                    self.promote(o, false, los, depth);
+                if self.lxr.los().in_space(o) {
+                    if self.lxr.los().aging_mark(o) {
+                        // println!(" -- Mark JustBorn LO {:?}", o);
+                        self.promote(o, false, los, depth);
+                    } else {
+                        // println!(" -- Skip JustBorn LO {:?}", o);
+                    }
                 }
             } else if self.inc(o) {
                 self.promote(o, false, los, depth);
@@ -470,19 +490,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let copy_depth_reached = crate::args::INC_MAX_COPY_DEPTH && depth > 16;
             if is_nursery && !self.no_evac && !copy_depth_reached {
                 // Evacuate the object
-                let new = object_forwarding::try_forward_object::<VM>(
-                    o,
-                    CopySemantics::DefaultCopy,
-                    self.copy_context(),
-                );
+                let new: Option<ObjectReference> =
+                    object_forwarding::try_forward_object_no_updating_status::<VM>(
+                        o,
+                        CopySemantics::DefaultCopy,
+                        self.copy_context(),
+                    );
                 if let Some(new) = new {
-                    if crate::should_record_copy_bytes() {
-                        crate::SLOPPY_COPY_BYTES.store(
-                            crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
-                            Ordering::Relaxed,
-                        );
-                    }
                     self.inc(new);
+                    object_forwarding::set_forwarded::<VM>(o, new);
                     self.promote(new, true, false, depth);
                     new
                 } else {
@@ -554,7 +570,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 self.counters.los_incs += 1;
             }
         }
-        // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
+        // gc_log!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         if cfg!(debug_assertions) {
             if !o.is_in_any_space() {
                 panic!("ERROR - inc {:?}: {:?} K={}", e, o, K);
@@ -1076,6 +1092,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        return;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
         self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)

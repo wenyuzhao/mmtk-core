@@ -611,7 +611,7 @@ impl<VM: VMBinding> BasePlan<VM> {
 
     /// The application code has requested a collection.
     pub fn handle_user_collection_request(&self, tls: VMMutatorThread, force: bool) {
-        if force || !*self.options.ignore_system_gc {
+        if force  {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);

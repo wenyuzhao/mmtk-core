@@ -159,9 +159,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             return true;
         }
         if self.cm_enabled {
-            if Block::containing::<VM>(object).is_nursery() {
-                return true;
-            }
+            unimplemented!()
         }
 
         // If the mark bit is set, it is live.
@@ -1458,7 +1456,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             };
         }
         if self.common.needs_log_bit {
-            if !copy || !self.do_promotion() {
+            if !copy {
                 Line::clear_field_unlog_table::<VM>(start..end);
             } else {
                 Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
@@ -1477,7 +1475,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if self
             .block_allocation
             .concurrent_marking_in_progress_or_final_mark()
-            && (!copy || self.do_promotion())
         {
             Line::initialize_mark_table_as_marked::<VM>(start..end);
         }

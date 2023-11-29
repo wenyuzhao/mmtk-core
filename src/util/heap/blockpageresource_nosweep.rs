@@ -142,23 +142,36 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let state = b.get_state();
         if !clean {
             return state != BlockState::Unallocated
-                && !b.is_reusing()
+                && !b.is_just_born_reused()
+                && !b.is_young_reused()
                 && (!copy || !b.is_gc_reusing())
                 && !b.is_defrag_source()
                 && (copy || b.get_owner().is_none());
         }
         // Don't allocate into a non-empty block
         if state != BlockState::Unallocated {
+            // println!("Skip {:?} {:?}", b, state);
+
             return false;
         }
         if copy && mature_evac {
             return true;
         } else if copy {
-            return !b.is_nursery();
+            return !b.is_just_born_clean() && !b.is_young_clean();
         }
         // Mutator allocator: Skip blocks owned by other mutators. We need to steal instead.
         // We only allocate clean blocks without an owner. For owned blocks, we need to steal them.
-        !b.is_nursery() && b.get_owner().is_none()
+        let x = !b.is_just_born_clean() && !b.is_young_clean() && b.get_owner().is_none();
+        if !x {
+            // println!(
+            //     "Skip {:?} {} {} {}",
+            //     b,
+            //     b.is_just_born_clean(),
+            //     b.is_young_clean(),
+            //     b.get_owner().is_none()
+            // )
+        }
+        x
     }
 
     /// Check if a block can be safely stolen from it's owner
@@ -181,13 +194,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 return false;
             }
             // Not filled by a mutator in the last mutator phase
-            !block.is_nursery()
+            !block.is_just_born_clean() && !block.is_young_clean()
         // in_use state is not set
             && (skip_lock_check || !block.is_locked())
         } else {
             let state = block.get_state();
             // Don't steal empty, used, or defrag blocks
-            if state == BlockState::Unallocated || block.is_reusing() || block.is_defrag_source() {
+            if state == BlockState::Unallocated
+                || block.is_just_born_reused()
+                || block.is_young_reused()
+                || block.is_defrag_source()
+            {
                 return false;
             }
             let block_owner = block.get_owner();
@@ -217,19 +234,22 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 });
                 if locked {
                     b.set_owner(Some(owner));
+                    // println!("Push {:?}", block.start());
                     buf.push(block);
                     b.unlock();
                 }
             } else {
                 if clean {
-                    if b.get_state() != BlockState::Unallocated || (!mature_evac && b.is_nursery())
+                    if b.get_state() != BlockState::Unallocated
+                        || (!mature_evac && (b.is_just_born_clean() || b.is_young_clean()))
                     {
                         debug_assert!(!b.is_defrag_source());
                         return;
                     }
                 } else {
                     if b.get_state() == BlockState::Unallocated
-                        || b.is_reusing()
+                        || b.is_just_born_reused()
+                        || b.is_young_reused()
                         || b.is_defrag_source()
                     {
                         return;
@@ -524,7 +544,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         // 1. Get a new chunk
         let chunk = self.alloc_chunk(space).unwrap();
-        gc_log!([3] "new-chunk: {:?} (total={})", chunk.start(), chunks.len());
+        println!("new-chunk: {:?} (total={})", chunk.start(), chunks.len());
         // 2. Take the first N blocks in the chunk as the allocation result
         let count = usize::min(alloc_count, Self::BLOCKS_IN_CHUNK);
         for i in 0..count {

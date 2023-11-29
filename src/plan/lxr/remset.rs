@@ -36,15 +36,8 @@ impl RemSetEntry {
         // println!("rs: {:?} {:?} {:?}", self.0, self.1, curr);
         if curr == self.1 {
             let rc = RefCountHelper::<VM>::NEW;
-            // println!(
-            //     "rs: {:?} {:?} rc={:?} n={}",
-            //     self.0,
-            //     curr,
-            //     rc.count(curr),
-            //     Block::containing::<VM>(curr).is_nursery_or_reusing()
-            // );
             if rc.count(curr) == 0 {
-                if space.in_space(curr) && !Block::containing::<VM>(curr).is_nursery_or_reusing() {
+                if space.in_space(curr) && !Block::containing::<VM>(curr).has_young_objects() {
                     return false;
                 }
             }
@@ -158,7 +151,10 @@ impl<VM: VMBinding> YoungRemSet<VM> {
         unsafe { &mut *self.gc_buffers[id].get() }
     }
 
-    pub fn flush_all(&self, scheduler: &GCWorkScheduler<VM>, lxr: &LXR<VM>, clear: bool) {
+    pub fn flush_all(&self, scheduler: &GCWorkScheduler<VM>, lxr: &LXR<VM>, do_promotion: bool) {
+        if !do_promotion {
+            return;
+        }
         let lxr = unsafe { &*(lxr as *const LXR<VM>) };
         for id in 0..self.gc_buffers.len() {
             for remset in self.gc_buffer(id) {
@@ -174,7 +170,7 @@ impl<VM: VMBinding> YoungRemSet<VM> {
                 let w = ProcessIncs::<VM, EDGE_KIND_MATURE>::new(edges, lxr);
                 // w.skip_young_remset = true;
                 scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
-                if clear {
+                if do_promotion {
                     remset.clear();
                 }
             }

@@ -409,6 +409,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     fn try_acquire_block(&mut self, clean: bool) -> Option<Block> {
+        if !clean {
+            return None;
+        }
+        // println!(
+        //     "try_acquire_block {:?} {}",
+        //     self.tls, self.local_clean_blocks_cursor
+        // );
         if clean {
             while self.local_clean_blocks_cursor < self.local_clean_blocks.len() {
                 let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
@@ -420,13 +427,21 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     let locked = block.try_lock_with_condition(|| {
                         block.get_state() == BlockState::Unallocated
-                            && !block.is_nursery()
+                            && !block.is_young_clean()
                             && block.get_owner() == Some(self.tls)
                     });
                     if !locked {
                         continue;
                     }
                     self.space.initialize_new_block(block, true, self.copy);
+                    // println!("alloc2 {:?} {:?}", block.start(), self.tls);
+                    // println!(
+                    //     "alloc2 {:?} {:?} {} {:?}",
+                    //     block.start(),
+                    //     self.tls,
+                    //     self.local_clean_blocks_cursor,
+                    //     self.local_clean_blocks,
+                    // );
                     return Some(block);
                 }
             }
@@ -441,7 +456,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     let locked = block.try_lock_with_condition(|| {
                         block.get_state() != BlockState::Unallocated
                             && !block.is_defrag_source()
-                            && !block.is_reusing()
+                            && !block.is_just_born_reused()
+                            && !block.is_young_reused()
                             && !block.is_gc_reusing()
                     });
                     if !locked {

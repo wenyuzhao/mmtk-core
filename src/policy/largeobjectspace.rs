@@ -99,6 +99,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
         if self.rc_enabled {
+            println!(
+                "LOS: {:?}",
+                object.to_address::<VM>()..(object.to_address::<VM>() + bytes)
+            );
             self.young_alloc_size.fetch_add(bytes, Ordering::Relaxed);
             debug_assert!(alloc);
             // Add to object set
@@ -233,7 +237,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_enabled: false,
             rc: RefCountHelper::NEW,
             is_end_of_satb_or_full_gc: false,
-            aging_mark_state: AtomicUsize::new(0),
+            aging_mark_state: AtomicUsize::new(1),
             do_promotion: AtomicBool::new(false),
         }
     }

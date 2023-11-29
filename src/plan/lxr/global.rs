@@ -395,7 +395,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "lxr_precise_incs_counter") {
             self.rc.reset_and_report_inc_counters();
         }
-        Block::update_global_phase_epoch(&self.immix_space);
+        Block::update_global_phase_epoch(
+            &self.immix_space,
+            self.current_pause_should_do_promotion(),
+        );
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -427,7 +430,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
-        Block::update_global_phase_epoch(&self.immix_space);
+        Block::update_global_phase_epoch(&self.immix_space, false);
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
@@ -460,7 +463,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .pause_start
             .store(SystemTime::now(), Ordering::SeqCst);
         self.immix_space.rc_eager_prepare(pause);
-        self.los().aging_mark_state.fetch_add(1, Ordering::SeqCst);
+        if do_promotion {
+            self.los().aging_mark_state.fetch_add(1, Ordering::SeqCst);
+        }
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
             mutator.flush();

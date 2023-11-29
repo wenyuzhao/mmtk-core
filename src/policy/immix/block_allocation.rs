@@ -1,7 +1,7 @@
 use super::{block::Block, ImmixSpace};
 use crate::plan::immix::Pause;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
-use crate::{plan::lxr::LXR, policy::space::Space, scheduler::GCWorkScheduler, vm::*};
+use crate::{plan::lxr::LXR, policy::space::Space, vm::*};
 use atomic::Ordering;
 use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicUsize;
@@ -9,7 +9,8 @@ use std::sync::atomic::AtomicUsize;
 pub struct BlockAllocation<VM: VMBinding> {
     space: UnsafeCell<*const ImmixSpace<VM>>,
     pub(crate) lxr: Option<&'static LXR<VM>>,
-    num_nursery_blocks: AtomicUsize,
+    num_just_born_blocks: AtomicUsize,
+    num_young_blocks: AtomicUsize,
     pub(crate) in_place_promoted_nursery_blocks: AtomicUsize,
     pub(crate) copy_allocated_nursery_blocks: AtomicUsize,
     pub(crate) prev_copy_allocated_nursery_blocks: AtomicUsize,
@@ -20,7 +21,8 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         Self {
             space: UnsafeCell::new(std::ptr::null()),
             lxr: None,
-            num_nursery_blocks: AtomicUsize::new(0),
+            num_just_born_blocks: AtomicUsize::new(0),
+            num_young_blocks: AtomicUsize::new(0),
             in_place_promoted_nursery_blocks: Default::default(),
             copy_allocated_nursery_blocks: Default::default(),
             prev_copy_allocated_nursery_blocks: Default::default(),
@@ -32,7 +34,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     }
 
     pub fn clean_nursery_blocks(&self) -> usize {
-        self.num_nursery_blocks.load(Ordering::Relaxed)
+        self.num_just_born_blocks.load(Ordering::Relaxed)
     }
 
     pub fn clean_nursery_mb(&self) -> usize {
@@ -53,26 +55,36 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         let in_place_promoted_nursery_blocks = self
             .in_place_promoted_nursery_blocks
             .load(Ordering::Relaxed);
-        let copy_allocated_nursery_blocks = self
-            .prev_copy_allocated_nursery_blocks
-            .load(Ordering::Relaxed);
-        if space.do_promotion() {
-            self.prev_copy_allocated_nursery_blocks
-                .store(0, Ordering::Relaxed);
+        // let copy_allocated_nursery_blocks = self
+        //     .prev_copy_allocated_nursery_blocks
+        //     .load(Ordering::Relaxed);
+        // if space.do_promotion() {
+        //     self.prev_copy_allocated_nursery_blocks
+        //         .store(0, Ordering::Relaxed);
+        // } else {
+        //     self.prev_copy_allocated_nursery_blocks.store(
+        //         self.copy_allocated_nursery_blocks.load(Ordering::Relaxed),
+        //         Ordering::Relaxed,
+        //     );
+        // }
+        // self.copy_allocated_nursery_blocks
+        //     .store(0, Ordering::Relaxed);
+
+        let young_blocks = if space.do_promotion() {
+            self.num_young_blocks.load(Ordering::SeqCst)
         } else {
-            self.prev_copy_allocated_nursery_blocks.store(
-                self.copy_allocated_nursery_blocks.load(Ordering::Relaxed),
-                Ordering::Relaxed,
-            );
-        }
-        self.copy_allocated_nursery_blocks
-            .store(0, Ordering::Relaxed);
+            0
+        };
+        println!("Young blocks: {:?}", young_blocks);
         let num_blocks = self.clean_nursery_blocks();
-        self.space().pr.bulk_release_blocks(
-            num_blocks - in_place_promoted_nursery_blocks + copy_allocated_nursery_blocks,
-        );
+        self.space()
+            .pr
+            .bulk_release_blocks(num_blocks - in_place_promoted_nursery_blocks + young_blocks);
         self.space().pr.reset();
-        self.num_nursery_blocks.store(0, Ordering::SeqCst);
+        self.num_just_born_blocks.store(0, Ordering::SeqCst);
+        if space.do_promotion() {
+            self.num_young_blocks.store(0, Ordering::SeqCst);
+        }
         self.in_place_promoted_nursery_blocks
             .store(0, Ordering::SeqCst);
     }
@@ -100,13 +112,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             || (crate::args::BARRIER_MEASUREMENT && !crate::args::BARRIER_MEASUREMENT_NO_SLOW))
             && copy
         {
-            if self.space().do_promotion() {
-                block.initialize_field_unlog_table_as_unlogged::<VM>();
-            } else {
-                self.copy_allocated_nursery_blocks
-                    .fetch_add(1, Ordering::Relaxed);
-                block.clear_field_unlog_table::<VM>();
-            }
+            block.initialize_field_unlog_table_as_unlogged::<VM>();
         }
         // Initialize mark table
         if self.space().rc_enabled {
@@ -119,8 +125,10 @@ impl<VM: VMBinding> BlockAllocation<VM> {
                 block.clear_mark_table::<VM>();
             }
             if !copy {
-                self.num_nursery_blocks.fetch_add(1, Ordering::Relaxed);
+                self.num_just_born_blocks.fetch_add(1, Ordering::Relaxed);
                 block.clear_field_unlog_table::<VM>();
+            } else if copy && !self.space().do_promotion() {
+                self.num_young_blocks.fetch_add(1, Ordering::Relaxed);
             }
         }
         // println!("Alloc {:?} {}", block, copy);

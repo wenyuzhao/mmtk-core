@@ -103,6 +103,34 @@ pub fn try_forward_object<VM: VMBinding>(
     Some(new_object)
 }
 
+pub fn try_forward_object_no_updating_status<VM: VMBinding>(
+    object: ObjectReference,
+    semantics: CopySemantics,
+    copy_context: &mut GCWorkerCopyContext<VM>,
+) -> Option<ObjectReference> {
+    let new_object = VM::VMObjectModel::try_copy(object, semantics, copy_context)?;
+    Some(new_object)
+}
+
+pub fn set_forwarded<VM: VMBinding>(object: ObjectReference, forwarded: ObjectReference) {
+    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
+            object,
+            forwarded.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
+            None,
+            Ordering::SeqCst,
+        )
+    } else {
+        write_forwarding_pointer::<VM>(object, forwarded);
+        VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store_atomic::<VM, u8>(
+            object,
+            FORWARDED,
+            None,
+            Ordering::SeqCst,
+        );
+    }
+}
+
 pub fn forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
