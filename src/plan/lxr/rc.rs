@@ -65,7 +65,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
     counters: RCIncCounters,
     copy_context: *mut GCWorkerCopyContext<VM>,
-    pub skip_young_remset: bool,
+    do_promotion: bool,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -102,7 +102,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             counters: Default::default(),
             mark_objects: vec![],
             copy_context: std::ptr::null_mut(),
-            skip_young_remset: false,
+            do_promotion: false,
         }
     }
 
@@ -194,20 +194,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 unreachable!();
                 block.set_as_in_place_promoted(&self.lxr.immix_space);
             }
-            if !copied
-                && self.lxr.current_pause_should_do_promotion()
-                && (self.in_cm || self.pause == Pause::FinalMark)
-            {
+            if !copied && self.do_promotion && (self.in_cm || self.pause == Pause::FinalMark) {
                 self.lxr.mark(o);
             }
             if self.rc.count(o) != 0 {
-                assert!(
-                    self.lxr.current_pause_should_do_promotion(),
-                    "{:?} copied={} rc={}",
-                    o,
-                    copied,
-                    self.rc.count(o)
-                );
                 self.rc.promote_with_size(o, size);
             }
             if copied {
@@ -218,8 +208,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             // println!("promote los {:?} {}", o, self.immix().is_marked(o));
         }
         // Don't mark copied objects in initial mark pause. The concurrent marker will do it (and can also resursively mark the old objects).
-        if self.in_cm || self.pause == Pause::FinalMark {
-            if self.lxr.current_pause_should_do_promotion() {
+        if cfg!(debug_assertions) && (self.in_cm || self.pause == Pause::FinalMark) {
+            if self.do_promotion {
                 assert!(
                     self.lxr.is_marked(o),
                     "{:?} rc={} los={} copied={}",
@@ -265,7 +255,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     // FIXME: Skip updating if it is already in remset
     fn record_young_remset(&mut self, slot: VM::VMEdge, o: ObjectReference) {
-        if self.lxr.current_pause_should_do_promotion() {
+        if self.do_promotion {
             return;
         }
         if self.rc.count(o) == 0 {
@@ -289,7 +279,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         };
         let is_val_array = VM::VMScanning::is_val_array(o);
         if los {
-            if self.lxr.current_pause_should_do_promotion() {
+            if self.do_promotion {
                 if !is_val_array {
                     let start = side_metadata::address_to_meta_address(
                         &Self::UNLOG_BITS,
@@ -309,7 +299,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 o.to_address::<VM>().unlog_field_relaxed::<VM>();
             }
         } else if in_place_promotion && !is_val_array {
-            assert!(self.lxr.current_pause_should_do_promotion());
+            debug_assert!(self.do_promotion);
             let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
                 12usize
             } else {
@@ -396,7 +386,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     fn no_inc(&self, o: ObjectReference) -> bool {
-        !self.lxr.current_pause_should_do_promotion() && self.rc.count(o) == 0
+        !self.do_promotion && self.rc.count(o) == 0
     }
 
     fn inc(&self, o: ObjectReference) -> bool {
@@ -418,9 +408,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         // Force evacuate nursery objects
         let block = Block::containing::<VM>(o);
-        if !self.lxr.current_pause_should_do_promotion()
-            && (block.is_nursery() || block.is_reusing())
-        {
+        if !self.do_promotion && (block.is_nursery() || block.is_reusing()) {
             return false;
         }
         // Skip recycled lines
@@ -453,7 +441,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             } else {
                 o
             };
-            assert!(new.is_in_any_space(), "old={:?} new={:?}(unmapped)", o, new);
+            debug_assert!(new.is_in_any_space(), "old={:?} new={:?}(unmapped)", o, new);
             let promoted = self.inc(new);
             if promoted && new == o {
                 unreachable!();
@@ -532,7 +520,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = e.load();
         // unlog edge
         if K == EDGE_KIND_MATURE && e.to_address().is_mapped() {
-            e.to_address().unlog_field::<VM>();
+            e.to_address().unlog_field_relaxed::<VM>();
         }
         if o.is_null() {
             return None;
@@ -567,26 +555,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
-        if !o.is_in_any_space() {
-            panic!("ERROR - inc {:?}: {:?} K={}", e, o, K);
+        if cfg!(debug_assertions) {
+            if !o.is_in_any_space() {
+                panic!("ERROR - inc {:?}: {:?} K={}", e, o, K);
+            }
+            assert_ne!(
+                unsafe { o.to_address::<VM>().load::<usize>() },
+                0xdead,
+                "object {:?} is dead K={}",
+                o,
+                K
+            );
         }
-        assert_ne!(
-            unsafe { o.to_address::<VM>().load::<usize>() },
-            0xdead,
-            "object {:?} is dead K={}",
-            o,
-            K
-        );
         o.verify::<VM>();
         let new = self.process_inc_and_evacuate(o, depth);
-        if !self.lxr.current_pause_should_do_promotion()
+        if !self.do_promotion
             && self.rc.count(new) == 0
             && (K == EDGE_KIND_MATURE || is_incomplete_root)
-            && !self.skip_young_remset
         {
             self.record_young_remset(e, new);
-        } else {
-            // println!(" -- skip young remset {:?} -> {:?}", e, new)
         }
         // Put this into remset if this is a mature edge, or a weak root
         if K != EDGE_KIND_ROOT || is_incomplete_root {
@@ -701,6 +688,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         self.lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.pause = self.lxr.current_pause().unwrap();
         self.in_cm = self.lxr.concurrent_marking_in_progress();
+        self.do_promotion = self.lxr.current_pause_should_do_promotion();
         self.copy_context = self.worker().get_copy_context_mut() as *mut GCWorkerCopyContext<VM>;
         let count = if cfg!(feature = "rust_mem_counter") {
             self.incs.len()

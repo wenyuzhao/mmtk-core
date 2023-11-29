@@ -184,10 +184,11 @@ impl<VM: VMBinding> YoungRemSet<VM> {
     pub fn record(&self, e: VM::VMEdge, o: ObjectReference) {
         let id = crate::gc_worker_id().unwrap();
         let buffers = self.gc_buffer(id);
-        if buffers.is_empty() || buffers.last().unwrap().len() >= 1024 {
+        if buffers.is_empty() || buffers.last().unwrap().len() >= 4096 {
             buffers.push(vec![])
         }
         let last_buffer = buffers.last_mut().unwrap();
+        last_buffer.reserve(4096);
         last_buffer.push(RemSetEntry::encode::<VM>(e, o));
     }
 }
