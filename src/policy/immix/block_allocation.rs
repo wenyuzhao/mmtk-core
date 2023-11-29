@@ -75,7 +75,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         } else {
             0
         };
-        println!("Young blocks: {:?}", young_blocks);
+        // println!("Young blocks: {:?}", young_blocks);
         let num_blocks = self.clean_nursery_blocks();
         self.space()
             .pr
