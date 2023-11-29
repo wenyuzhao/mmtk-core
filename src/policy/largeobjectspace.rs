@@ -99,10 +99,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool) {
         if self.rc_enabled {
-            println!(
-                "LOS: {:?}",
-                object.to_address::<VM>()..(object.to_address::<VM>() + bytes)
-            );
+            // println!(
+            //     "LOS: {:?}",
+            //     object.to_address::<VM>()..(object.to_address::<VM>() + bytes)
+            // );
             self.young_alloc_size.fetch_add(bytes, Ordering::Relaxed);
             debug_assert!(alloc);
             // Add to object set
