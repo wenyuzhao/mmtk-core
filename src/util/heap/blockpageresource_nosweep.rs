@@ -142,8 +142,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         let state = b.get_state();
         if !clean {
             return state != BlockState::Unallocated
-                && !b.is_just_born_reused()
-                && !b.is_young_reused()
+                && !b.has_just_born_or_young_objects()
                 && (!copy || !b.is_gc_reusing())
                 && !b.is_defrag_source()
                 && (copy || b.get_owner().is_none());
@@ -201,8 +200,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let state = block.get_state();
             // Don't steal empty, used, or defrag blocks
             if state == BlockState::Unallocated
-                || block.is_just_born_reused()
-                || block.is_young_reused()
+                || block.has_just_born_or_young_objects()
                 || block.is_defrag_source()
             {
                 return false;
@@ -248,8 +246,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     }
                 } else {
                     if b.get_state() == BlockState::Unallocated
-                        || b.is_just_born_reused()
-                        || b.is_young_reused()
+                        || b.has_just_born_or_young_objects()
                         || b.is_defrag_source()
                     {
                         return;

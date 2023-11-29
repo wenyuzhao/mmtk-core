@@ -409,9 +409,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     fn try_acquire_block(&mut self, clean: bool) -> Option<Block> {
-        if !clean {
-            return None;
-        }
         // println!(
         //     "try_acquire_block {:?} {}",
         //     self.tls, self.local_clean_blocks_cursor
@@ -427,7 +424,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     let locked = block.try_lock_with_condition(|| {
                         block.get_state() == BlockState::Unallocated
-                            && !block.is_young_clean()
+                            && !block.has_just_born_or_young_objects()
                             && block.get_owner() == Some(self.tls)
                     });
                     if !locked {
@@ -456,8 +453,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     let locked = block.try_lock_with_condition(|| {
                         block.get_state() != BlockState::Unallocated
                             && !block.is_defrag_source()
-                            && !block.is_just_born_reused()
-                            && !block.is_young_reused()
+                            && !block.has_just_born_or_young_objects()
                             && !block.is_gc_reusing()
                     });
                     if !locked {
@@ -469,6 +465,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     let locked = block.try_lock_with_condition(|| {
                         block.get_state() != BlockState::Unallocated
                             && !block.is_defrag_source()
+                            && !block.has_just_born_or_young_objects()
                             && block.get_owner() == Some(self.tls)
                     });
                     if !locked {

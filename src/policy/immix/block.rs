@@ -3,6 +3,7 @@ use portable_atomic::AtomicUsize;
 use super::defrag::Histogram;
 use super::line::{Line, RCArray};
 use super::ImmixSpace;
+use crate::scheduler::WorkBucketStage;
 use crate::util::heap::blockpageresource_legacy::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
@@ -585,7 +586,20 @@ impl Block {
 
     /// Initialize a clean block after acquired from page-resource.
     pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
-        println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        // println!(
+        //     "Alloc block {:?} copy={} reuse={} prev-epoch={} curr-epoch={} is-young={}",
+        //     self,
+        //     copy,
+        //     reuse,
+        //     self.phase_epoch(),
+        //     Self::global_phase_epoch(),
+        //     self.has_young_objects()
+        // );
+        if !space.scheduler().work_buckets[WorkBucketStage::Closure].is_activated() {
+            assert!(!self.has_young_objects(), "ERROR: {:?}", self);
+            assert!(!self.has_just_born_objects(), "ERROR: {:?}", self);
+        }
         // #[cfg(feature = "sanity")]
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
