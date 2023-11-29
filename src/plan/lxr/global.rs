@@ -446,9 +446,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(SystemTime::now(), Ordering::SeqCst);
         self.immix_space.rc_eager_prepare(pause);
 
-        for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            mutator.flush();
-        }
+        // for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+        //     mutator.flush();
+        // }
 
         if pause == Pause::FinalMark {
             self.set_concurrent_marking_state(false);
