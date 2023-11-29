@@ -216,7 +216,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     self.block_is_available(block, clean, copy, mature_evac, owner)
                 });
                 if locked {
-                    b.update_phase_epoch();
                     b.set_owner(Some(owner));
                     buf.push(block);
                     b.unlock();
@@ -236,11 +235,9 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                         return;
                     }
                 }
-                b.update_phase_epoch();
                 buf.push(block);
             }
         } else {
-            b.update_phase_epoch();
             buf.push(block);
         }
     }
@@ -255,7 +252,6 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return false;
         }
         // Set owner
-        b.update_phase_epoch();
         b.set_owner(Some(owner));
         // clear in-use
         b.unlock();

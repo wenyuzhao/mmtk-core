@@ -48,6 +48,15 @@ pub struct ImmixAllocator<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
+    fn reset_bump_pointers(&mut self) {
+        self.retire_block();
+        self.retire_large_block();
+        self.bump_pointer.reset(Address::ZERO, Address::ZERO);
+        self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
+        self.request_for_large = false;
+        self.line = None;
+    }
+
     pub fn reset(&mut self) {
         if !self.copy {
             *self.local_clean_blocks = self
@@ -261,7 +270,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     pub fn flush(&mut self) {
-        self.reset();
+        self.reset_bump_pointers();
     }
 
     pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
@@ -401,27 +410,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     fn try_acquire_block(&mut self, clean: bool) -> Option<Block> {
         if clean {
-            if !self.copy
-                && self.local_clean_blocks_cursor >= self.local_clean_blocks_cursor_boundary
-            {
-                // These blocks can never be stolen
-                if self.local_clean_blocks_cursor < self.local_clean_blocks.len() {
-                    let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
-                    self.local_clean_blocks_cursor += 1;
-                    // We must be the owner of the block
-                    debug_assert_eq!(
-                        BLOCK_OWNER.load_atomic::<usize>(block.start(), Ordering::Relaxed),
-                        self.tls.0.to_address().as_usize()
-                    );
-                    // Must be an nursery block
-                    debug_assert!(block.is_nursery());
-                    // Must be unallocated
-                    debug_assert_eq!(block.get_state(), BlockState::Unallocated);
-                    self.space.initialize_new_block(block, true, self.copy);
-                    return Some(block);
-                }
-                return None;
-            }
             while self.local_clean_blocks_cursor < self.local_clean_blocks.len() {
                 let block = self.local_clean_blocks[self.local_clean_blocks_cursor];
                 self.local_clean_blocks_cursor += 1;
