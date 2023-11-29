@@ -436,7 +436,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let pause = self.current_pause().unwrap();
 
         let epoch = crate::NURSERY_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
-        let do_promotion = if pause == Pause::RefCount {
+        let do_promotion = if Block::global_phase_epoch() == 254 {
+            true
+        } else if pause == Pause::RefCount {
             (epoch % crate::MAX_NURSERY_EPOCH) == 0
         } else {
             true

@@ -390,16 +390,6 @@ impl Block {
         Self::PHASE_EPOCH.store_atomic::<u8>(self.start(), 1, Ordering::Relaxed);
     }
 
-    // pub fn update_phase_epoch_to_next_mutator_phase<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-    //     let ge = Self::global_phase_epoch();
-    //     assert!((ge & 1) == 0);
-    //     let next = if ge == 254 { 1 } else { ge + 1 };
-    //     Self::PHASE_EPOCH.store_atomic::<u8>(self.start(), next, Ordering::Relaxed);
-    //     if next == 1 {
-    //         space.one_epoch_blocks.lock().unwrap().push(*self);
-    //     }
-    // }
-
     pub fn is_gc_reusing(&self) -> bool {
         if self.get_state() == BlockState::Unallocated {
             return false;
