@@ -309,7 +309,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
 
             let pause_time = pause_time.as_micros() as f64 / 1000f64;
-            let pause = match pause {
+            let pause_s = match pause {
                 Pause::RefCount => "RefCount",
                 Pause::InitialMark => "InitialMark",
                 Pause::FinalMark => "FinalMark",
@@ -318,13 +318,16 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             gc_log!([2]
                 "GC({}) {} finished. {}M->{}M({}M) used={}M pause-time={:.3}ms",
                 crate::GC_EPOCH.load(Ordering::SeqCst),
-                pause,
+                pause_s,
                 crate::RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,
                 mmtk.get_plan().get_reserved_pages() / 256,
                 mmtk.get_plan().get_total_pages() / 256,
                 mmtk.get_plan().get_used_pages() / 256,
                 pause_time
             );
+            if cfg!(feature = "lxr_precise_incs_counter") {
+                crate::RC_STAT.dump(pause, pause_time);
+            }
             crate::RESERVED_PAGES_AT_GC_END
                 .store(mmtk.get_plan().get_reserved_pages(), Ordering::SeqCst);
         }

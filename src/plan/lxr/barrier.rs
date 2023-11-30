@@ -317,6 +317,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn object_probable_write_slow(&mut self, obj: ObjectReference) {
+        // assert_eq!(self.lxr.rc.count(obj), 1);
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {

@@ -519,9 +519,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
         }
-        if cfg!(feature = "lxr_precise_incs_counter") {
-            crate::RC_STAT.dump(pause);
-        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]

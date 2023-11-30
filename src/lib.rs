@@ -668,12 +668,13 @@ impl RCStat {
         *local = Default::default();
     }
 
-    fn dump(&self, pause: Pause) {
+    fn dump(&self, pause: Pause, pause_time: f64) {
         if pause != Pause::RefCount {
             return;
         }
         eprintln!(
-            "<<<RC-STAT>>> {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            "<<<RC-STAT>>> {:.3} {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            pause_time,
             self.total_incs.load(Ordering::SeqCst),
             self.los_incs.load(Ordering::SeqCst),
             self.ac_incs.load(Ordering::SeqCst),
