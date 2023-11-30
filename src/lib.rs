@@ -688,6 +688,19 @@ impl RCStat {
             self.los_rec_incs.load(Ordering::SeqCst),
             self.roots.load(Ordering::SeqCst),
         );
+        self.total_incs.store(0, Ordering::SeqCst);
+        self.los_incs.store(0, Ordering::SeqCst);
+        self.ac_incs.store(0, Ordering::SeqCst);
+        self.los_ac_incs.store(0, Ordering::SeqCst);
+        self.ac_calls.store(0, Ordering::SeqCst);
+        self.los_ac_calls.store(0, Ordering::SeqCst);
+        self.opw_incs.store(0, Ordering::SeqCst);
+        self.opw_calls.store(0, Ordering::SeqCst);
+        self.los_opw_incs.store(0, Ordering::SeqCst);
+        self.los_opw_calls.store(0, Ordering::SeqCst);
+        self.rec_incs.store(0, Ordering::SeqCst);
+        self.los_rec_incs.store(0, Ordering::SeqCst);
+        self.roots.store(0, Ordering::SeqCst);
     }
 }
 
