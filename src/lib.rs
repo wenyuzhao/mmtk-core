@@ -469,28 +469,6 @@ fn stat(f: impl Fn(&mut GCStat)) {
     f(&mut STAT.lock())
 }
 
-fn should_record_copy_bytes() -> bool {
-    false
-}
-
-static SLOPPY_COPY_BYTES: AtomicUsize = AtomicUsize::new(0);
-
-fn add_copy_bytes(bytes: usize) {
-    if should_record_copy_bytes() {
-        COPY_BYTES.push(bytes);
-        SLOPPY_COPY_BYTES.store(0, Ordering::Relaxed);
-    }
-}
-
-fn add_incs(incs: usize) {
-    if should_record_copy_bytes() {
-        INCS.push(incs);
-    }
-}
-
-static COPY_BYTES: SegQueue<usize> = SegQueue::new();
-static INCS: SegQueue<usize> = SegQueue::new();
-
 fn should_record_pause_time() -> bool {
     cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
 }
@@ -628,3 +606,103 @@ fn frag_exp_enabled() -> bool {
     }
     FRAG_EXP_ENABLED.load(Ordering::Relaxed)
 }
+
+#[derive(Default)]
+#[allow(unused)]
+struct LocalRCStat {
+    pub total_incs: usize,
+    pub los_incs: usize,
+    pub ac_incs: usize,
+    pub los_ac_incs: usize,
+    pub ac_calls: usize,
+    pub los_ac_calls: usize,
+    pub opw_incs: usize,
+    pub opw_calls: usize,
+    pub los_opw_incs: usize,
+    pub los_opw_calls: usize,
+    pub rec_incs: usize,
+    pub los_rec_incs: usize,
+    pub roots: usize,
+}
+
+#[derive(Default)]
+#[allow(unused)]
+struct RCStat {
+    pub total_incs: AtomicUsize,
+    pub los_incs: AtomicUsize,
+    pub ac_incs: AtomicUsize,
+    pub los_ac_incs: AtomicUsize,
+    pub ac_calls: AtomicUsize,
+    pub los_ac_calls: AtomicUsize,
+    pub opw_incs: AtomicUsize,
+    pub opw_calls: AtomicUsize,
+    pub los_opw_incs: AtomicUsize,
+    pub los_opw_calls: AtomicUsize,
+    pub rec_incs: AtomicUsize,
+    pub los_rec_incs: AtomicUsize,
+    pub roots: AtomicUsize,
+}
+
+#[allow(unused)]
+impl RCStat {
+    fn merge(&self, local: &mut LocalRCStat) {
+        self.total_incs
+            .fetch_add(local.total_incs, Ordering::SeqCst);
+        self.los_incs.fetch_add(local.los_incs, Ordering::SeqCst);
+        self.ac_incs.fetch_add(local.ac_incs, Ordering::SeqCst);
+        self.los_ac_incs
+            .fetch_add(local.los_ac_incs, Ordering::SeqCst);
+        self.ac_calls.fetch_add(local.ac_calls, Ordering::SeqCst);
+        self.los_ac_calls
+            .fetch_add(local.los_ac_calls, Ordering::SeqCst);
+        self.opw_incs.fetch_add(local.opw_incs, Ordering::SeqCst);
+        self.opw_calls.fetch_add(local.opw_calls, Ordering::SeqCst);
+        self.los_opw_incs
+            .fetch_add(local.los_opw_incs, Ordering::SeqCst);
+        self.los_opw_calls
+            .fetch_add(local.los_opw_calls, Ordering::SeqCst);
+        self.rec_incs.fetch_add(local.rec_incs, Ordering::SeqCst);
+        self.los_rec_incs
+            .fetch_add(local.los_rec_incs, Ordering::SeqCst);
+        self.roots.fetch_add(local.roots, Ordering::SeqCst);
+        *local = Default::default();
+    }
+
+    fn dump(&self, pause: Pause) {
+        if pause != Pause::RefCount {
+            return;
+        }
+        eprintln!(
+            "<<<RC-STAT>>> {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            self.total_incs.load(Ordering::SeqCst),
+            self.los_incs.load(Ordering::SeqCst),
+            self.ac_incs.load(Ordering::SeqCst),
+            self.los_ac_incs.load(Ordering::SeqCst),
+            self.ac_calls.load(Ordering::SeqCst),
+            self.los_ac_calls.load(Ordering::SeqCst),
+            self.opw_incs.load(Ordering::SeqCst),
+            self.opw_calls.load(Ordering::SeqCst),
+            self.los_opw_incs.load(Ordering::SeqCst),
+            self.los_opw_calls.load(Ordering::SeqCst),
+            self.rec_incs.load(Ordering::SeqCst),
+            self.los_rec_incs.load(Ordering::SeqCst),
+            self.roots.load(Ordering::SeqCst),
+        );
+    }
+}
+
+static RC_STAT: RCStat = RCStat {
+    total_incs: AtomicUsize::new(0),
+    los_incs: AtomicUsize::new(0),
+    ac_incs: AtomicUsize::new(0),
+    los_ac_incs: AtomicUsize::new(0),
+    ac_calls: AtomicUsize::new(0),
+    los_ac_calls: AtomicUsize::new(0),
+    opw_incs: AtomicUsize::new(0),
+    opw_calls: AtomicUsize::new(0),
+    los_opw_incs: AtomicUsize::new(0),
+    los_opw_calls: AtomicUsize::new(0),
+    rec_incs: AtomicUsize::new(0),
+    los_rec_incs: AtomicUsize::new(0),
+    roots: AtomicUsize::new(0),
+};

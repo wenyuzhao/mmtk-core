@@ -9,7 +9,6 @@ use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArg
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
 use crate::plan::AllocationSemantics;
-use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
@@ -32,7 +31,7 @@ use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
-use crate::vm::{ActivePlan, Collection, ObjectModel, VMBinding};
+use crate::vm::{Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
 use atomic::{Atomic, Ordering};
@@ -396,9 +395,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.current_pause().unwrap() == Pause::FullDefrag,
             Ordering::Relaxed,
         );
-        if cfg!(feature = "lxr_precise_incs_counter") {
-            self.rc.reset_and_report_inc_counters();
-        }
         Block::update_global_phase_epoch(&self.immix_space);
     }
 
@@ -522,6 +518,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
+        }
+        if cfg!(feature = "lxr_precise_incs_counter") {
+            crate::RC_STAT.dump(pause);
         }
     }
 

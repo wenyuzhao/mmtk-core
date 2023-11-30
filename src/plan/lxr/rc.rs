@@ -3,7 +3,6 @@ use super::cm::LXRStopTheWorldProcessEdges;
 use super::SurvivalRatioPredictorLocal;
 use super::LXR;
 use crate::plan::VectorQueue;
-use crate::policy::immix::line::Line;
 use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
@@ -11,7 +10,6 @@ use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
-use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
 use crate::util::Address;
@@ -30,22 +28,6 @@ use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-#[derive(Default, Debug)]
-pub struct RCIncCounters {
-    pub promoted_objs: u32,
-    pub promoted_scalars: (u32, u32, u32),
-    pub promoted_prim_arrays: (u32, u32, u32),
-    pub promoted_object_arrays: (u32, u32, u32),
-    pub total_incs: u32,
-    pub mature_incs: u32,
-    pub nursery_incs: u32,
-    pub fast_nursery_incs: u32,
-    pub root_incs: u32,
-    pub los_incs: u32,
-    pub remset_inserts: u32,
-    pub mark_queue_inserts: u32,
-}
-
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
@@ -63,8 +45,9 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     lxr: &'static LXR<VM>,
     rc: RefCountHelper<VM>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
-    counters: RCIncCounters,
     copy_context: *mut GCWorkerCopyContext<VM>,
+    #[cfg(feature = "lxr_precise_incs_counter")]
+    stat: crate::LocalRCStat,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -98,9 +81,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             rc: RefCountHelper::NEW,
             root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            counters: Default::default(),
             mark_objects: vec![],
             copy_context: std::ptr::null_mut(),
+            #[cfg(feature = "lxr_precise_incs_counter")]
+            stat: crate::LocalRCStat::default(),
         }
     }
 
@@ -157,35 +141,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             .record_total_promotion(o.get_size::<VM>(), los);
         let size = o.get_size::<VM>();
 
-        if cfg!(feature = "lxr_precise_incs_counter") {
-            self.counters.promoted_objs += 1;
-            if VM::VMScanning::is_val_array(o) {
-                if size <= Line::BYTES {
-                    self.counters.promoted_prim_arrays.0 += 1;
-                } else if size <= Block::BYTES {
-                    self.counters.promoted_prim_arrays.1 += 1;
-                } else {
-                    self.counters.promoted_prim_arrays.2 += 1;
-                }
-            } else if VM::VMScanning::is_obj_array(o) {
-                if size <= Line::BYTES {
-                    self.counters.promoted_object_arrays.0 += 1;
-                } else if size <= Block::BYTES {
-                    self.counters.promoted_object_arrays.1 += 1;
-                } else {
-                    self.counters.promoted_object_arrays.2 += 1;
-                }
-            } else {
-                if size <= Line::BYTES {
-                    self.counters.promoted_scalars.0 += 1;
-                } else if size <= Block::BYTES {
-                    self.counters.promoted_scalars.1 += 1;
-                } else {
-                    self.counters.promoted_scalars.2 += 1;
-                }
-            }
-        }
-
         if !los {
             let block = Block::containing::<VM>(o);
             if !copied && block.is_nursery() {
@@ -217,7 +172,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         if !edge_in_defrag && self.lxr.in_defrag(o) {
             self.lxr.immix_space.mature_evac_remset.record(e, o);
-            self.counters.remset_inserts += 1;
         }
     }
 
@@ -288,12 +242,26 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let data = VM::VMScanning::obj_array_data(o);
             if data.len() > 0 {
                 for chunk in data.chunks(Self::CAPACITY) {
+                    #[cfg(feature = "lxr_precise_incs_counter")]
+                    {
+                        self.stat.rec_incs += chunk.len();
+                        if los {
+                            self.stat.los_rec_incs += chunk.len();
+                        }
+                    }
                     self.add_new_slice(chunk);
                 }
             }
         } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
             o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
+                #[cfg(feature = "lxr_precise_incs_counter")]
+                {
+                    self.stat.rec_incs += 1;
+                    if los {
+                        self.stat.los_rec_incs += 1;
+                    }
+                }
                 let target = edge.load();
                 if target.is_null() {
                     return;
@@ -327,10 +295,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 } else {
                     if rc != crate::util::rc::MAX_REF_COUNT {
                         let _ = self.rc.inc(target);
-                        if cfg!(feature = "lxr_precise_incs_counter") {
-                            self.counters.total_incs += 1;
-                            self.counters.fast_nursery_incs += 1;
-                        }
                     }
                     self.record_mature_evac_remset2(obj_in_defrag, edge, target);
                 }
@@ -424,12 +388,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     self.copy_context(),
                 );
                 if let Some(new) = new {
-                    if crate::should_record_copy_bytes() {
-                        crate::SLOPPY_COPY_BYTES.store(
-                            crate::SLOPPY_COPY_BYTES.load(Ordering::Relaxed) + new.get_size::<VM>(),
-                            Ordering::Relaxed,
-                        );
-                    }
                     self.inc(new);
                     self.promote(new, true, false, depth);
                     new
@@ -487,19 +445,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 return None;
             }
         };
-        if cfg!(feature = "lxr_precise_incs_counter") {
-            self.counters.total_incs += 1;
-            if K == EDGE_KIND_MATURE {
-                self.counters.mature_incs += 1;
-            } else if K == EDGE_KIND_ROOT {
-                self.counters.root_incs += 1;
-            } else {
-                self.counters.nursery_incs += 1;
-            }
-            if self.lxr.los().address_in_space(e.to_address()) {
-                self.counters.los_incs += 1;
-            }
-        }
         // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
         o.verify::<VM>();
         let new = self.process_inc_and_evacuate(o, depth);
@@ -648,6 +593,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         // Process main buffer
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        if KIND == EDGE_KIND_ROOT {
+            self.stat.roots = self.incs.len();
+        }
         let root_edges = if KIND == EDGE_KIND_ROOT
             && (self.pause == Pause::FinalMark || self.pause == Pause::Full)
         {
@@ -731,8 +680,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
         }
-        if cfg!(feature = "lxr_precise_incs_counter") {
-            self.rc.flush_inc_counters(&self.counters);
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        {
+            crate::RC_STAT.merge(&mut self.stat);
         }
 
         #[cfg(feature = "log_outstanding_packets")]

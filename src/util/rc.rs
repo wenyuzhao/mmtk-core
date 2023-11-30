@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, AtomicUsize};
 
-use crate::plan::lxr::rc::RCIncCounters;
 use crate::util::linear_scan::Region;
 use crate::util::metadata::MetadataSpec;
 use crate::util::{metadata::side_metadata::address_to_meta_address, Address};
@@ -68,69 +67,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         INC_BUFFER_SIZE.load(Ordering::Relaxed)
     }
 
-    pub fn reset_and_report_inc_counters(&self) {
-        gc_log!([3] " - INCS-PACKETS: {}", TOTAL_INCS_PACKETS.load(Ordering::Relaxed));
-        gc_log!([3] " - INCS: total={} roots={} barrier={} rec={} rec-no-enqueue={} los={}",
-            TOTAL_INCS.load(Ordering::Relaxed),
-            ROOT_INCS.load(Ordering::Relaxed),
-            MATURE_INCS.load(Ordering::Relaxed),
-            NURSERY_INCS.load(Ordering::Relaxed),
-            FAST_NURSERY_INCS.load(Ordering::Relaxed),
-            LOS_INCS.load(Ordering::Relaxed),
-        );
-        gc_log!([3] " - SRV-OBJS: total={} scalar=({}, {}, {}) primitive-arrays=({}, {}, {}) object-arrays=({}, {}, {})",
-            PROMOTED_OBJECTS.load(Ordering::Relaxed),
-            PROMOTED_SCALARS[0].load(Ordering::Relaxed),
-            PROMOTED_SCALARS[1].load(Ordering::Relaxed),
-            PROMOTED_SCALARS[2].load(Ordering::Relaxed),
-            PROMOTED_PRIM_ARRAYS[0].load(Ordering::Relaxed),
-            PROMOTED_PRIM_ARRAYS[1].load(Ordering::Relaxed),
-            PROMOTED_PRIM_ARRAYS[2].load(Ordering::Relaxed),
-            PROMOTED_OBJECT_ARRAYS[0].load(Ordering::Relaxed),
-            PROMOTED_OBJECT_ARRAYS[1].load(Ordering::Relaxed),
-            PROMOTED_OBJECT_ARRAYS[2].load(Ordering::Relaxed),
-        );
-        TOTAL_INCS_PACKETS.store(0, Ordering::Relaxed);
-        TOTAL_INCS.store(0, Ordering::Relaxed);
-        ROOT_INCS.store(0, Ordering::Relaxed);
-        MATURE_INCS.store(0, Ordering::Relaxed);
-        NURSERY_INCS.store(0, Ordering::Relaxed);
-        LOS_INCS.store(0, Ordering::Relaxed);
-        FAST_NURSERY_INCS.store(0, Ordering::Relaxed);
-        PROMOTED_OBJECTS.store(0, Ordering::Relaxed);
-        PROMOTED_SCALARS[0].store(0, Ordering::Relaxed);
-        PROMOTED_SCALARS[1].store(0, Ordering::Relaxed);
-        PROMOTED_SCALARS[2].store(0, Ordering::Relaxed);
-        PROMOTED_PRIM_ARRAYS[0].store(0, Ordering::Relaxed);
-        PROMOTED_PRIM_ARRAYS[1].store(0, Ordering::Relaxed);
-        PROMOTED_PRIM_ARRAYS[2].store(0, Ordering::Relaxed);
-        PROMOTED_OBJECT_ARRAYS[0].store(0, Ordering::Relaxed);
-        PROMOTED_OBJECT_ARRAYS[1].store(0, Ordering::Relaxed);
-        PROMOTED_OBJECT_ARRAYS[2].store(0, Ordering::Relaxed);
-    }
-
-    pub fn flush_inc_counters(&self, counters: &RCIncCounters) {
-        TOTAL_INCS_PACKETS.fetch_add(1, Ordering::Relaxed);
-
-        TOTAL_INCS.fetch_add(counters.total_incs, Ordering::Relaxed);
-        ROOT_INCS.fetch_add(counters.root_incs, Ordering::Relaxed);
-        MATURE_INCS.fetch_add(counters.mature_incs, Ordering::Relaxed);
-        NURSERY_INCS.fetch_add(counters.nursery_incs, Ordering::Relaxed);
-        FAST_NURSERY_INCS.fetch_add(counters.fast_nursery_incs, Ordering::Relaxed);
-        LOS_INCS.fetch_add(counters.los_incs, Ordering::Relaxed);
-
-        PROMOTED_OBJECTS.fetch_add(counters.promoted_objs, Ordering::Relaxed);
-        PROMOTED_SCALARS[0].fetch_add(counters.promoted_scalars.0, Ordering::Relaxed);
-        PROMOTED_SCALARS[1].fetch_add(counters.promoted_scalars.1, Ordering::Relaxed);
-        PROMOTED_SCALARS[2].fetch_add(counters.promoted_scalars.2, Ordering::Relaxed);
-        PROMOTED_PRIM_ARRAYS[0].fetch_add(counters.promoted_prim_arrays.0, Ordering::Relaxed);
-        PROMOTED_PRIM_ARRAYS[1].fetch_add(counters.promoted_prim_arrays.1, Ordering::Relaxed);
-        PROMOTED_PRIM_ARRAYS[2].fetch_add(counters.promoted_prim_arrays.2, Ordering::Relaxed);
-        PROMOTED_OBJECT_ARRAYS[0].fetch_add(counters.promoted_object_arrays.0, Ordering::Relaxed);
-        PROMOTED_OBJECT_ARRAYS[1].fetch_add(counters.promoted_object_arrays.1, Ordering::Relaxed);
-        PROMOTED_OBJECT_ARRAYS[2].fetch_add(counters.promoted_object_arrays.2, Ordering::Relaxed);
-    }
-
     pub fn increase_inc_buffer_size(&self, delta: usize) {
         if cfg!(feature = "lxr_precise_incs_counter") {
             INC_BUFFER_SIZE.fetch_add(delta, Ordering::Relaxed);
@@ -145,7 +81,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn reset_inc_buffer_size(&self) {
-        crate::add_incs(self.inc_buffer_size());
         INC_BUFFER_SIZE.store(0, Ordering::Relaxed)
     }
 

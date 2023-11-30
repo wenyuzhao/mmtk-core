@@ -14,6 +14,8 @@ use crate::plan::lxr::rc::ProcessDecs;
 use crate::plan::lxr::rc::ProcessIncs;
 use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::VectorQueue;
+#[cfg(feature = "lxr_precise_incs_counter")]
+use crate::policy::space::Space;
 use crate::scheduler::WorkBucketStage;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
@@ -39,6 +41,8 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
     lxr: &'static LXR<VM>,
+    #[cfg(feature = "lxr_precise_incs_counter")]
+    stat: crate::LocalRCStat,
 }
 
 impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
@@ -55,6 +59,8 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             decs: VectorQueue::default(),
             refs: VectorQueue::default(),
             lxr: mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap(),
+            #[cfg(feature = "lxr_precise_incs_counter")]
+            stat: crate::LocalRCStat::default(),
         }
     }
 
@@ -173,6 +179,13 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             }
         }
         self.incs.push(edge);
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        {
+            self.stat.total_incs += 1;
+            if self.lxr.los().address_in_space(edge.to_address()) {
+                self.stat.los_incs += 1;
+            }
+        }
         if self.incs.is_full() {
             self.flush_incs();
         }
@@ -183,7 +196,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         src: ObjectReference,
         edge: VM::VMEdge,
         _new: Option<ObjectReference>,
-    ) {
+    ) -> bool {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
@@ -191,7 +204,10 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            self.slow(src, edge, old)
+            self.slow(src, edge, old);
+            true
+        } else {
+            false
         }
     }
 
@@ -254,6 +270,10 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         self.flush_weak_refs();
         self.flush_incs();
         self.flush_decs_and_satb();
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        {
+            crate::RC_STAT.merge(&mut self.stat);
+        }
     }
 
     fn object_reference_write_slow(
@@ -266,8 +286,23 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        let mut slots = 0;
         for e in dst.iter_edges() {
-            self.enqueue_node(ObjectReference::NULL, e, None);
+            let _succ = self.enqueue_node(ObjectReference::NULL, e, None);
+            #[cfg(feature = "lxr_precise_incs_counter")]
+            if _succ {
+                slots += 1;
+            }
+        }
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        {
+            self.stat.ac_incs += slots;
+            self.stat.ac_calls += 1;
+            if self.lxr.los().address_in_space(dst.start()) {
+                self.stat.los_ac_incs += slots;
+                self.stat.los_ac_calls += 1;
+            }
         }
     }
 
@@ -282,8 +317,24 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn object_probable_write_slow(&mut self, obj: ObjectReference) {
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        let mut slots = 0;
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
-            self.enqueue_node(obj, e, None);
-        })
+            let _succ = self.enqueue_node(obj, e, None);
+            #[cfg(feature = "lxr_precise_incs_counter")]
+            {
+                assert!(_succ);
+                slots += 1;
+            }
+        });
+        #[cfg(feature = "lxr_precise_incs_counter")]
+        {
+            self.stat.opw_calls += 1;
+            self.stat.opw_incs += slots;
+            if self.lxr.los().in_space(obj) {
+                self.stat.los_opw_calls += 1;
+                self.stat.los_opw_incs += slots;
+            }
+        }
     }
 }
