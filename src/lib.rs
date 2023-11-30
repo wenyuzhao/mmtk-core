@@ -673,7 +673,7 @@ impl RCStat {
             return;
         }
         eprintln!(
-            "<<<RC-STAT>>> {:.3} {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            "<<<RC-STAT>>> {:.3}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
             pause_time,
             self.total_incs.load(Ordering::SeqCst),
             self.los_incs.load(Ordering::SeqCst),
