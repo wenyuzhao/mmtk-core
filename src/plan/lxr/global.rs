@@ -9,6 +9,7 @@ use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArg
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
 use crate::plan::AllocationSemantics;
+use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
@@ -31,6 +32,7 @@ use crate::util::rc::{RefCountHelper, RC_LOCK_BIT_SPEC, RC_TABLE};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
+use crate::vm::ActivePlan;
 use crate::vm::{Collection, ObjectModel, VMBinding};
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use crate::{BarrierSelector, LazySweepingJobsCounter};
@@ -442,11 +444,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(SystemTime::now(), Ordering::SeqCst);
         self.immix_space.rc_eager_prepare(pause);
 
-        // for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-        //     mutator.flush();
-        // }
-
         if pause == Pause::FinalMark {
+            // Flush barrier buffers before FinishConcurrentWork bucket
+            for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                mutator.flush();
+            }
             self.set_concurrent_marking_state(false);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START
