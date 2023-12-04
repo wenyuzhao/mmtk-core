@@ -453,7 +453,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             self.record_mature_evac_remset(e, new, is_incomplete_root);
         }
         if new != o {
-            // println!(
+            // gc_log!(
             //     " -- inc {:?}: {:?} => {:?} rc={} {:?}",
             //     e,
             //     o,
@@ -463,7 +463,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             // );
             e.store(new)
         } else {
-            // println!(
+            // gc_log!(
             //     " -- inc {:?}: {:?} rc={} {:?}",
             //     e,
             //     o.range::<VM>(),
@@ -762,7 +762,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
     }
 
-    pub fn recursive_dec(&mut self, o: ObjectReference) {
+    fn recursive_dec(&mut self, o: ObjectReference) {
         self.new_decs.push(o);
         if self.new_decs.is_full() {
             self.flush()
@@ -778,7 +778,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
     }
 
-    pub fn flush(&mut self) {
+    fn flush(&mut self) {
         let mmtk = GCWorker::<VM>::current().mmtk;
         if !self.new_decs.is_empty() {
             let new_decs = self.new_decs.take();
@@ -942,9 +942,15 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress();
-        self.mature_sweeping_in_progress = lxr.previous_pause() == Some(Pause::FinalMark)
-            || lxr.previous_pause() == Some(Pause::Full);
+        self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress()
+            || (!crate::args::LAZY_DECREMENTS && lxr.current_pause() == Some(Pause::InitialMark));
+        self.mature_sweeping_in_progress = if crate::args::LAZY_DECREMENTS {
+            lxr.previous_pause() == Some(Pause::FinalMark)
+                || lxr.current_pause() == Some(Pause::Full)
+        } else {
+            lxr.current_pause() == Some(Pause::FinalMark)
+                || lxr.current_pause() == Some(Pause::Full)
+        };
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         let count = if cfg!(feature = "rust_mem_counter") {
             self.decs.as_ref().map(|x| x.len()).unwrap_or(0)
