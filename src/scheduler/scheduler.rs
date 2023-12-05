@@ -42,6 +42,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
     bucket_update_progress: AtomicUsize,
+    conc_threads: usize,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -52,7 +53,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
 
 impl<VM: VMBinding> GCWorkScheduler<VM> {
-    pub fn new(num_workers: usize, affinity: AffinityKind) -> Arc<Self> {
+    pub fn new(num_workers: usize, num_conc_workers: usize, affinity: AffinityKind) -> Arc<Self> {
         let worker_monitor: Arc<(Mutex<()>, Condvar)> = Default::default();
         let worker_group = WorkerGroup::new(num_workers);
 
@@ -100,6 +101,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             pending_coordinator_packets: AtomicUsize::new(0),
             affinity,
             bucket_update_progress: AtomicUsize::new(0),
+            conc_threads: num_conc_workers,
         })
     }
 
@@ -564,7 +566,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if let Some(w) = worker.shared.designated_work.pop() {
             return Steal::Success(w);
         }
-        if self.in_concurrent() && !worker.is_concurrent_worker() {
+        if self.in_concurrent() && !worker.is_concurrent_worker(self.conc_threads) {
             return Steal::Empty;
         }
         // Try get a packet from a work bucket.
@@ -596,6 +598,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Get a schedulable work packet.
     fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
         // Loop until we successfully get a packet.
+        if self.in_concurrent() && !worker.is_concurrent_worker(self.conc_threads) {
+            return None;
+        }
         loop {
             match self.poll_schedulable_work_once(worker) {
                 Steal::Success(w) => {

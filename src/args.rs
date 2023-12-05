@@ -19,7 +19,6 @@ pub(crate) struct RuntimeArgs {
     pub(crate) young_limit_mb: Option<usize>,
     pub(crate) nursery_ratio: Option<usize>,
     pub(crate) lower_concurrent_worker_priority: bool,
-    pub(crate) concurrent_worker_ratio: usize,
     #[allow(unused)]
     pub(crate) max_mature_defrag_percent: usize,
     pub(crate) max_pause_millis: Option<usize>,
@@ -71,7 +70,6 @@ impl Default for RuntimeArgs {
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
-            concurrent_worker_ratio: env_arg("CONCURRENT_WORKER_RATIO").unwrap_or(100),
             max_mature_defrag_percent: env_arg("MAX_MATURE_DEFRAG_PERCENT").unwrap_or(15),
             max_pause_millis: env_arg("MAX_PAUSE_MILLIS"),
             max_young_evac_size: env_arg("MAX_YOUNG_EVAC_SIZE").unwrap_or(usize::MAX),
@@ -222,6 +220,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_finalizer", *options.no_finalizer);
     dump_feature!("no_reference_types", *options.no_reference_types);
     dump_feature!("workers", *options.threads);
+    dump_feature!("conc_workers", *options.conc_threads);
     dump_feature!(
         "force_use_contiguous_spaces",
         vm_layout().force_use_contiguous_spaces

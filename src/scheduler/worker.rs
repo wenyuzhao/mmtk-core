@@ -270,13 +270,8 @@ impl<VM: VMBinding> GCWorker<VM> {
         }
     }
 
-    pub fn is_concurrent_worker(&self) -> bool {
-        self.ordinal
-            < usize::max(
-                1,
-                (self.scheduler().num_workers() * crate::args().concurrent_worker_ratio / 100)
-                    as usize,
-            )
+    pub fn is_concurrent_worker(&self, conc_workers: usize) -> bool {
+        self.ordinal < conc_workers
     }
 }
 
