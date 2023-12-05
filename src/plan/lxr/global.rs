@@ -68,6 +68,7 @@ enum GCCause {
     Survival,
     Increments,
     ImmixSpaceFull,
+    FinalMark,
 }
 
 #[derive(HasSpaces, PlanTraceObject)]
@@ -117,6 +118,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
+            return true;
+        }
+        // SATB is finished
+        if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
+            self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
             return true;
         }
         // Survival limits
