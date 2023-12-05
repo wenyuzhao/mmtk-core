@@ -1042,6 +1042,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
     }
 
+    pub fn trace_object_without_moving_rc(
+        &self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        if self.attempt_mark(object) {
+            let straddle = self
+                .rc
+                .is_straddle_line(Line::from(Line::align(object.to_address::<VM>())));
+            if !straddle {
+                // Visit node
+                queue.enqueue(object);
+            }
+        }
+        object
+    }
+
     /// Trace and mark objects without evacuation.
     pub fn trace_object_without_moving(
         &self,

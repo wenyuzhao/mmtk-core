@@ -157,8 +157,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
+    fn trace_object<const NULL_AND_RC_CHECK: bool>(
+        &mut self,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        if NULL_AND_RC_CHECK && object.is_null() {
             return object;
         }
         if cfg!(any(feature = "sanity", debug_assertions)) {
@@ -169,7 +172,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             );
         }
 
-        let no_trace = self.rc.count(object) == 0;
+        let no_trace = NULL_AND_RC_CHECK && self.rc.count(object) == 0;
         if no_trace || self.plan.is_marked(object) {
             return object;
         }
@@ -190,7 +193,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if self.plan.immix_space.in_space(object) {
             self.plan
                 .immix_space
-                .trace_object_without_moving(self, object);
+                .trace_object_without_moving_rc(self, object);
         } else if self.plan.los().in_space(object) {
             self.plan.los().trace_object(self, object);
         }
@@ -199,7 +202,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 
     fn trace_objects(&mut self, objects: &[ObjectReference]) {
         for o in objects {
-            self.trace_object(*o);
+            self.trace_object::<true>(*o);
         }
     }
 
@@ -210,9 +213,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         t: ObjectReference,
         should_check_remset: bool,
     ) {
-        if t.is_null() || self.rc.count(t) == 0 {
-            return;
-        }
         if cfg!(feature = "sanity") {
             assert!(
                 t.to_address::<VM>().is_mapped(),
@@ -228,7 +228,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         {
             self.plan.immix_space.mature_evac_remset.record(e, t);
         }
-        self.trace_object(t);
+        self.trace_object::<false>(t);
     }
 
     fn scan_object(&mut self, object: ObjectReference, klass: Address) {
@@ -355,18 +355,22 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
             self.scan_large_ref_array(o, k, size, s)
         }
         // CM: Decrease counter
-        if self.plan.current_pause() == Some(Pause::FinalMark) {
+        let pause_opt = self.plan.current_pause();
+        if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
             let mut grey_objects = vec![];
             while !self.next_grey_objects.is_empty() {
+                let pause_opt = self.plan.current_pause();
+                if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+                    break;
+                }
                 grey_objects.clear();
                 self.next_grey_objects.swap(&mut grey_objects);
                 for (o, k) in &grey_objects {
                     self.scan_object(*o, *k);
                 }
             }
-        } else {
-            self.flush();
         }
+        self.flush();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
     }
