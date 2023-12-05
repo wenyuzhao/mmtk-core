@@ -88,7 +88,11 @@ impl Default for RuntimeArgs {
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .or_else(|| env_arg("CM_THRESHOLD"))
-                .unwrap_or(20),
+                .unwrap_or(if cfg!(feature = "lxr_simple_satb_trigger") {
+                    60
+                } else {
+                    20
+                }),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
             no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
             chunk_defarg_percent: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
