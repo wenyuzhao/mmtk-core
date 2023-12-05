@@ -645,6 +645,57 @@ impl<VM: VMBinding> LXR<VM> {
         self.concurrent_marking_enabled() && self.in_concurrent_marking.load(Ordering::Relaxed)
     }
 
+    fn next_gc_is_emergency_gc(
+        &self,
+        total_pages: usize,
+        mature_space_pages: usize,
+        emergency_threshold: usize,
+    ) -> bool {
+        let min_avail_pages = usize::min(total_pages * emergency_threshold / 100, 1 << 30 >> 12);
+        total_pages < min_avail_pages + mature_space_pages
+    }
+
+    fn next_gc_is_cycle_gc(
+        &self,
+        total_pages: usize,
+        mature_space_pages: usize,
+        cm_threshold: usize,
+        pause: Pause,
+    ) -> bool {
+        if cfg!(feature = "lxr_simple_satb_trigger") {
+            // Do cycle collection if mature space is over 60% of the heap
+            return if !self.concurrent_marking_in_progress() {
+                if self.concurrent_marking_enabled() {
+                    mature_space_pages * 100 >= cm_threshold * total_pages
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+        }
+        if pause == Pause::FinalMark || pause == Pause::Full {
+            let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(mature_space_pages);
+            gc_log!([3] " - predicted live mature pages: {}", live_mature_pages)
+        }
+        let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
+        let garbage = mature_space_pages.saturating_sub(live_mature_pages);
+        let total_pages = self.get_total_pages();
+        let stop_pages = total_pages * crate::args().rc_stop_percent / 100;
+        let available_pages = total_pages.saturating_sub(mature_space_pages);
+        gc_log!(
+            " - total_pages={} stop_pages={} mature_space_pages={} available_pages={}",
+            total_pages,
+            stop_pages,
+            mature_space_pages,
+            available_pages
+        );
+        !cfg!(feature = "lxr_fixed_satb_trigger")
+            && !self.concurrent_marking_in_progress()
+            && (self.concurrent_marking_enabled()
+                && garbage * 100 >= crate::args().trace_threshold as usize * total_pages)
+    }
+
     fn decide_next_gc_may_perform_cycle_collection(&self, pause: Pause) {
         let (lock, cvar) = &self.next_gc_selected;
         let notify = || {
@@ -652,63 +703,50 @@ impl<VM: VMBinding> LXR<VM> {
             *gc_selection_done = true;
             cvar.notify_one();
         };
-        let released_los_pages = self.los().num_pages_released_lazy.load(Ordering::SeqCst);
-        let pages_after_gc = HEAP_AFTER_GC
-            .load(Ordering::SeqCst)
-            .saturating_sub(
-                self.immix_space
-                    .num_clean_blocks_released_lazy
-                    .load(Ordering::SeqCst)
-                    << Block::LOG_PAGES,
-            )
-            .saturating_sub(released_los_pages);
-        if pause == Pause::FinalMark || pause == Pause::Full {
-            let live_mature_pages = super::MATURE_LIVE_PREDICTOR.update(pages_after_gc);
-            gc_log!([3] " - predicted live mature pages: {}", live_mature_pages)
-        }
-        let live_mature_pages = super::MATURE_LIVE_PREDICTOR.live_pages() as usize;
-        let garbage = pages_after_gc.saturating_sub(live_mature_pages);
-        let total_pages = self.get_total_pages();
-        let stop_pages = total_pages * crate::args().rc_stop_percent / 100;
-        let available_pages = total_pages.saturating_sub(pages_after_gc);
-        gc_log!(
-            " - total_pages={} stop_pages={} pages_after_gc={} available_pages={}",
-            total_pages,
-            stop_pages,
-            pages_after_gc,
-            available_pages
-        );
+        // Reset states
+        self.next_gc_may_perform_cycle_collection
+            .store(false, Ordering::SeqCst);
         self.next_gc_may_perform_emergency_collection
             .store(false, Ordering::SeqCst);
-        if !cfg!(feature = "lxr_fixed_satb_trigger")
-            && !self.concurrent_marking_in_progress()
-            && ((self.concurrent_marking_enabled()
-                && garbage * 100 >= crate::args().trace_threshold as usize * total_pages)
-                || available_pages < stop_pages)
-        {
-            self.next_gc_may_perform_cycle_collection
-                .store(true, Ordering::SeqCst);
-            if available_pages < stop_pages {
-                self.next_gc_may_perform_emergency_collection
-                    .store(true, Ordering::SeqCst);
-            }
-            if self.concurrent_marking_enabled()
-                && !self.concurrent_marking_in_progress()
-                && !cfg!(feature = "sanity")
-            {
-                self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
-                self.immix_space
-                    .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
-            }
-        } else {
-            self.next_gc_may_perform_cycle_collection
-                .store(false, Ordering::SeqCst);
+        let cm_threshold = crate::args().trace_threshold;
+        let emergency_threshold = crate::args().rc_stop_percent;
+        // Calculate mature space size
+        let total_pages = self.get_total_pages();
+        let mature_space_pages = {
+            let released_los_pages = self.los().num_pages_released_lazy.load(Ordering::SeqCst);
+            let pages_after_gc = HEAP_AFTER_GC
+                .load(Ordering::SeqCst)
+                .saturating_sub(
+                    self.immix_space
+                        .num_clean_blocks_released_lazy
+                        .load(Ordering::SeqCst)
+                        << Block::LOG_PAGES,
+                )
+                .saturating_sub(released_los_pages);
+            pages_after_gc
+        };
+        // Decide next GC kind
+        let should_do_emergency_collection =
+            self.next_gc_is_emergency_gc(total_pages, mature_space_pages, emergency_threshold);
+        let should_do_cycle_collection =
+            self.next_gc_is_cycle_gc(total_pages, mature_space_pages, cm_threshold, pause);
+        // Update states
+        self.next_gc_may_perform_cycle_collection
+            .store(should_do_cycle_collection, Ordering::SeqCst);
+        self.next_gc_may_perform_emergency_collection
+            .store(should_do_emergency_collection, Ordering::SeqCst);
+        // Eager mark-table zeroing
+        if !cfg!(feature = "sanity") && should_do_cycle_collection {
+            self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
+            self.immix_space
+                .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
         }
         notify();
     }
 
     fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
         {
+            // Wait for the kind of next GC pause is decided
             let (lock, cvar) = &self.next_gc_selected;
             let mut gc_selection_done = lock.lock().unwrap();
             while !*gc_selection_done {

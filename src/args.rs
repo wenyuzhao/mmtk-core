@@ -89,6 +89,7 @@ impl Default for RuntimeArgs {
                 .unwrap_or(false),
             trace_threshold: env_arg("TRACE_THRESHOLD2")
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
+                .or_else(|| env_arg("CM_THRESHOLD"))
                 .unwrap_or(20),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
             no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
@@ -242,6 +243,7 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("no_meta_counting");
     dump_feature!("lxr_no_srv_copy_reserve");
     dump_feature!("lxr_abort_on_trace");
+    dump_feature!("lxr_simple_satb_trigger");
 
     eprintln!("\n{:#?}", RuntimeArgs::get());
 
