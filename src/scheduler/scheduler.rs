@@ -663,7 +663,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             // Wait
             if cfg!(feature = "report_worker_sleep_events")
                 && self.in_gc_pause.load(Ordering::Relaxed)
-                && self.work_buckets[WorkBucketStage::RCProcessIncs].is_activated()
+                && self.work_buckets[WorkBucketStage::FinishConcurrentWork].is_activated()
             {
                 gc_log!([3]
                     "    - ({:.3}ms) worker#{} sleep",
@@ -732,6 +732,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         mmtk.get_plan().base().gc_requester.clear_request();
         let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
         first_stw_bucket.activate();
+        gc_log!([3]
+            " - ({:.3}ms) Start GC Stage: {:?}",
+            crate::gc_start_time_ms(),
+            WorkBucketStage::from_usize(1)
+        );
         if first_stw_bucket.is_empty()
             && self.worker_group.parked_workers() + 1 == self.worker_group.worker_count()
             && crate::concurrent_marking_packets_drained()

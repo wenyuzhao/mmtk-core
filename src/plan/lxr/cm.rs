@@ -16,6 +16,7 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
@@ -305,18 +306,11 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
         if self.rc.count(object) == 0 || VM::VMScanning::is_val_array(object) {
             return;
         }
-        if object.get_size::<VM>() <= 256 {
-            // Small objects: enqueue
-            self.next_grey_objects.push((object, self.klass));
-            if self.next_grey_objects.len() >= 128 {
-                self.flush();
-            }
-        } else if VM::VMScanning::is_obj_array(object)
-            && VM::VMScanning::obj_array_data(object).len() >= 128
-        // && false
+        if VM::VMScanning::is_obj_array(object)
+            && VM::VMScanning::obj_array_data(object).len() >= 1024
         {
             let data = VM::VMScanning::obj_array_data(object);
-            for chunk in data.chunks(128) {
+            for chunk in data.chunks(4096) {
                 self.create_scan_large_ref_array_packet(
                     object,
                     self.klass,
@@ -325,8 +319,11 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 );
             }
         } else {
-            // Large objects: create a separate packet
-            self.create_scan_objects_packet(vec![(object, self.klass)])
+            // Small objects: enqueue
+            self.next_grey_objects.push((object, self.klass));
+            if self.next_grey_objects.len() >= 4096 {
+                self.flush();
+            }
         }
     }
 }
@@ -340,6 +337,9 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        if crate::verbose(3) && self.plan.current_pause().is_some() {
+            STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
+        }
         // mark objects
         if let Some(objects) = self.white_objects.take() {
             self.trace_objects(&objects)
@@ -355,7 +355,18 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
             self.scan_large_ref_array(o, k, size, s)
         }
         // CM: Decrease counter
-        self.flush();
+        if self.plan.current_pause() == Some(Pause::FinalMark) {
+            let mut grey_objects = vec![];
+            while !self.next_grey_objects.is_empty() {
+                grey_objects.clear();
+                self.next_grey_objects.swap(&mut grey_objects);
+                for (o, k) in &grey_objects {
+                    self.scan_object(*o, *k);
+                }
+            }
+        } else {
+            self.flush();
+        }
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
     }
@@ -368,12 +379,14 @@ pub struct ProcessModBufSATB {
 
 impl ProcessModBufSATB {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             nodes: Some(nodes),
             nodes_arc: None,
         }
     }
     pub fn new_arc(nodes: Arc<Vec<ObjectReference>>) -> Self {
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             nodes: None,
             nodes_arc: Some(nodes),
@@ -381,9 +394,26 @@ impl ProcessModBufSATB {
     }
 }
 
+pub static STW_CM_PACKETS: AtomicUsize = AtomicUsize::new(0);
+pub static STW_MODBUF_PACKETS: AtomicUsize = AtomicUsize::new(0);
+
+pub fn dump_stw_cm_packet_counters() {
+    gc_log!(
+        " - STW_CM_PACKETS={} STW_MODBUF_PACKETS={}",
+        STW_CM_PACKETS.load(Ordering::SeqCst),
+        STW_MODBUF_PACKETS.load(Ordering::SeqCst),
+    );
+    STW_CM_PACKETS.store(0, Ordering::SeqCst);
+    STW_MODBUF_PACKETS.store(0, Ordering::SeqCst);
+}
+
 impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        if crate::verbose(3) && lxr.current_pause().is_some() {
+            STW_MODBUF_PACKETS.fetch_add(1, Ordering::SeqCst);
+        }
         let mut w = if let Some(nodes) = self.nodes.take() {
             if nodes.is_empty() {
                 return;
@@ -415,13 +445,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
         } else {
             return;
         };
-        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        let pause = lxr.current_pause().unwrap();
-        if pause == Pause::FinalMark {
-            GCWork::do_work(&mut w, worker, mmtk);
-        } else {
-            worker.scheduler().postpone(w);
-        }
+        GCWork::do_work(&mut w, worker, mmtk);
+
+        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

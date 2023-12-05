@@ -236,7 +236,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.decs.is_empty() {
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork]
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
                     .add(ProcessModBufSATB::new_arc(decs.clone()));
                 ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
@@ -256,7 +256,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork]
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(ProcessModBufSATB::new(nodes));
         }
     }

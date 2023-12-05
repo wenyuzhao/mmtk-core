@@ -324,6 +324,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
+        if crate::verbose(3) {
+            super::cm::dump_stw_cm_packet_counters();
+        }
         let pause = self.current_pause().unwrap();
         crate::stat(|s| {
             if pause == Pause::RefCount {
