@@ -42,7 +42,6 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
     bucket_update_progress: AtomicUsize,
-    conc_threads: usize,
     parked_workers: Arc<AtomicUsize>,
 }
 
@@ -63,14 +62,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             parked_workers.clone(),
             0,
             num_conc_workers,
-            num_workers + num_conc_workers,
+            num_workers,
             lock.clone(),
         );
         let stw_worker_group = WorkerGroup::new(
             parked_workers.clone(),
             num_conc_workers,
+            num_workers - num_conc_workers,
             num_workers,
-            num_workers + num_conc_workers,
             lock.clone(),
         );
 
@@ -118,7 +117,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             pending_coordinator_packets: AtomicUsize::new(0),
             affinity,
             bucket_update_progress: AtomicUsize::new(0),
-            conc_threads: num_conc_workers,
             parked_workers,
         })
     }
@@ -511,7 +509,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 if new_packets {
                     new_progress = i;
                     // Quit the loop. A sentinel packet is added to the newly opened buckets.
-                    println!("Sentinel is scheduled at stage {:?}.  Break.", id);
+                    // println!("Sentinel is scheduled at stage {:?}.  Break.", id);
                     break;
                 }
             }
@@ -621,7 +619,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if should_retry {
             Steal::Retry
         } else {
-            println!("poll_schedulable_work_once empty #{}", worker.ordinal);
             Steal::Empty
         }
     }
@@ -634,7 +631,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ) -> Option<Box<dyn GCWork<VM>>> {
         // Loop until we successfully get a packet.
         if self.in_concurrent() && worker.is_stw() {
-            println!("Skip STW worker #{}", worker.ordinal);
             return None;
         }
         loop {
@@ -722,16 +718,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             //     && self.in_gc_pause.load(Ordering::Relaxed)
             //     && self.work_buckets[WorkBucketStage::FinishConcurrentWork].is_activated()
             // {
-            gc_log!(
-                "    - ({:.3}ms) worker#{} sleep stw={}",
-                crate::gc_start_time_ms(),
-                worker.ordinal,
-                worker.is_stw(),
-            );
+            // gc_log!(
+            //     "    - ({:.3}ms) worker#{} sleep stw={}",
+            //     crate::gc_start_time_ms(),
+            //     worker.ordinal,
+            //     worker.is_stw(),
+            // );
 
-            if self.all_parked() {
-                gc_log!("    - ({:.3}ms) ALL PARKED", crate::gc_start_time_ms());
-            }
+            // if self.all_parked() {
+            //     gc_log!("    - ({:.3}ms) ALL PARKED", crate::gc_start_time_ms());
+            // }
             // }
             flush_logs!();
             loop {
@@ -741,23 +737,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     break;
                 }
             }
-            gc_log!(
-                "    - ({:.3}ms) worker#{} wakeup stw={}",
-                crate::gc_start_time_ms(),
-                worker.ordinal,
-                worker.is_stw(),
-            );
+            // gc_log!(
+            //     "    - ({:.3}ms) worker#{} wakeup stw={}",
+            //     crate::gc_start_time_ms(),
+            //     worker.ordinal,
+            //     worker.is_stw(),
+            // );
             flush_logs!();
             // The worker is unparked here where `parking_guard` goes out of scope.
         }
         flush_logs!();
 
         // We guarantee that we can at least fetch one packet when we reach here.
-        let work = self.poll_schedulable_work(worker, group);
-        if work.is_none() {
-            println!("worker#{} cannot fetch new work", worker.ordinal);
-        }
-        let work = work.unwrap();
+        let work = self.poll_schedulable_work(worker, group).unwrap();
         // Optimize for the case that a newly opened bucket only has one packet.
         // We only notify_all if there're more than one packets available.
         if !self.all_activated_buckets_are_empty() {
@@ -839,8 +831,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             );
         }
         let _guard = self.conc_worker_group.monitor.0.lock().unwrap();
+        // println!("notify_mutators_paused notify all");
         self.conc_worker_group.monitor.1.notify_all();
-        // let _guard = self.stw_worker_group.monitor.0.lock().unwrap();
         self.stw_worker_group.monitor.1.notify_all();
     }
 
@@ -881,6 +873,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn wakeup_all_conc_workers(&self) {
         let _guard: std::sync::MutexGuard<'_, ()> =
             self.conc_worker_group.monitor.0.lock().unwrap();
+        // println!("wakeup_all_conc_workers notify all");
         self.conc_worker_group.monitor.1.notify_all();
     }
 }
