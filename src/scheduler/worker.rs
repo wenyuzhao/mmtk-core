@@ -13,7 +13,7 @@ use crossbeam::queue::ArrayQueue;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
@@ -61,16 +61,18 @@ pub struct GCWorkerShared<VM: VMBinding> {
     pub designated_work: ArrayQueue<Box<dyn GCWork<VM>>>,
     /// Handle for stealing packets from the current worker
     pub stealer: Option<Stealer<Box<dyn GCWork<VM>>>>,
+    is_stw_worker: bool,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
-    pub fn new(stealer: Option<Stealer<Box<dyn GCWork<VM>>>>) -> Self {
+    pub fn new(stealer: Option<Stealer<Box<dyn GCWork<VM>>>>, is_stw_worker: bool) -> Self {
         Self {
             stat: Default::default(),
             #[cfg(feature = "count_live_bytes_in_gc")]
             live_bytes: AtomicUsize::new(0),
             designated_work: ArrayQueue::new(16),
             stealer,
+            is_stw_worker,
         }
     }
 
@@ -149,6 +151,10 @@ impl<VM: VMBinding> GCWorker<VM> {
             shared,
             local_work_buffer,
         }
+    }
+
+    pub fn is_stw(&self) -> bool {
+        self.shared.is_stw_worker
     }
 
     /// Get current worker.
@@ -269,10 +275,6 @@ impl<VM: VMBinding> GCWorker<VM> {
             flush_logs!();
         }
     }
-
-    pub fn is_concurrent_worker(&self, conc_workers: usize) -> bool {
-        self.ordinal < conc_workers
-    }
 }
 
 /// A worker group to manage all the GC workers (except the coordinator worker).
@@ -281,20 +283,23 @@ pub struct WorkerGroup<VM: VMBinding> {
     pub workers_shared: Vec<Arc<GCWorkerShared<VM>>>,
     parked_workers: AtomicUsize,
     unspawned_local_work_queues: Mutex<Vec<deque::Worker<Box<dyn GCWork<VM>>>>>,
+    ordinal_base: usize,
+    pub monitor: Arc<(Mutex<()>, Condvar)>,
 }
 
 impl<VM: VMBinding> WorkerGroup<VM> {
     /// Create a WorkerGroup
-    pub fn new(num_workers: usize) -> Arc<Self> {
+    pub fn new(ordinal_base: usize, num_workers: usize) -> Arc<Self> {
         let unspawned_local_work_queues = (0..num_workers)
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
 
         let workers_shared = (0..num_workers)
             .map(|i| {
-                Arc::new(GCWorkerShared::<VM>::new(Some(
-                    unspawned_local_work_queues[i].stealer(),
-                )))
+                Arc::new(GCWorkerShared::<VM>::new(
+                    Some(unspawned_local_work_queues[i].stealer()),
+                    ordinal_base != 0,
+                ))
             })
             .collect::<Vec<_>>();
 
@@ -302,6 +307,8 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             workers_shared,
             parked_workers: Default::default(),
             unspawned_local_work_queues: Mutex::new(unspawned_local_work_queues),
+            ordinal_base,
+            monitor: Default::default(),
         })
     }
 
@@ -317,7 +324,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
         for (ordinal, shared) in self.workers_shared.iter().enumerate() {
             let worker = Box::new(GCWorker::new(
                 mmtk,
-                ordinal,
+                self.ordinal_base + ordinal,
                 mmtk.scheduler.clone(),
                 false,
                 sender.clone(),

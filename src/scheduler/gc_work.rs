@@ -64,10 +64,8 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             }
         }
         if !plan_mut.no_worker_prepare() {
-            for w in &mmtk.scheduler.worker_group.workers_shared {
-                let result = w.designated_work.push(Box::new(PrepareCollector));
-                debug_assert!(result.is_ok());
-            }
+            mmtk.scheduler
+                .push_designated_work(|| Box::new(PrepareCollector));
         }
     }
 }
@@ -148,10 +146,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             }
         }
         if !plan_mut.fast_worker_release() {
-            for w in &mmtk.scheduler.worker_group.workers_shared {
-                let result = w.designated_work.push(Box::new(ReleaseCollector));
-                debug_assert!(result.is_ok());
-            }
+            mmtk.scheduler
+                .push_designated_work(|| Box::new(ReleaseCollector));
         } else {
             crate::scheduler::worker::reset_workers::<C::VM>();
         }
@@ -249,7 +245,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         );
         gc_log!([3] "Discovered {} mutators", n);
         if BULK_THREAD_SCAN {
-            let n_workers: usize = mmtk.scheduler.worker_group.worker_count();
+            let n_workers: usize = mmtk.scheduler.num_workers();
             for ms in mutators.chunks(std::cmp::max(mutators.len() / n_workers / 2, 1)) {
                 mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
                     .add(ScanMultipleStacks::<C>(ms.to_vec(), PhantomData));

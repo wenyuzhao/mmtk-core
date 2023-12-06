@@ -4,7 +4,7 @@ use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 struct BucketQueue<VM: VMBinding> {
     // FIXME: Performance!
@@ -47,7 +47,6 @@ pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     queue: BucketQueue<VM>,
     prioritized_queue: Option<BucketQueue<VM>>,
-    monitor: Arc<(Mutex<()>, Condvar)>,
     can_open: Option<BucketOpenCondition<VM>>,
     /// After this bucket is activated and all pending work packets (including the packets in this
     /// bucket) are drained, this work packet, if exists, will be added to this bucket.  When this
@@ -61,25 +60,32 @@ pub struct WorkBucket<VM: VMBinding> {
     /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
     /// can be used repeatedly to discover and process more such objects.
     sentinel: Mutex<Option<Box<dyn GCWork<VM>>>>,
-    group: Arc<WorkerGroup<VM>>,
+    stw_group: Arc<WorkerGroup<VM>>,
+    conc_group: Arc<WorkerGroup<VM>>,
+    in_concurrent: AtomicBool,
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
     pub fn new(
         active: bool,
-        monitor: Arc<(Mutex<()>, Condvar)>,
-        group: Arc<WorkerGroup<VM>>,
+        stw_group: Arc<WorkerGroup<VM>>,
+        conc_group: Arc<WorkerGroup<VM>>,
     ) -> Self {
         Self {
             disable: AtomicBool::new(false),
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
             prioritized_queue: None,
-            monitor,
             can_open: None,
             sentinel: Mutex::new(None),
-            group,
+            stw_group,
+            conc_group,
+            in_concurrent: AtomicBool::new(true),
         }
+    }
+
+    pub fn set_in_concurrent(&self, in_concurrent: bool) {
+        self.in_concurrent.store(in_concurrent, Ordering::SeqCst);
     }
 
     pub fn set_as_enabled(&self) {
@@ -122,27 +128,37 @@ impl<VM: VMBinding> WorkBucket<VM> {
         new_queue
     }
 
+    fn get_active_worker_group(&self) -> &WorkerGroup<VM> {
+        if self.in_concurrent.load(Ordering::SeqCst) {
+            &self.conc_group
+        } else {
+            &self.stw_group
+        }
+    }
+
     fn notify_one_worker(&self) {
         // If the bucket is not activated, don't notify anyone.
         if !self.is_activated() {
             return;
         }
+        let group = self.get_active_worker_group();
         // Notify one if there're any parked workers.
-        if self.group.parked_workers() > 0 {
+        if group.parked_workers() > 0 {
             // let _guard = self.monitor.0.lock().unwrap();
-            self.monitor.1.notify_one()
+            group.monitor.1.notify_one()
         }
     }
 
-    pub fn notify_all_workers(&self) {
+    fn notify_all_workers(&self) {
         // If the bucket is not activated, don't notify anyone.
         if !self.is_activated() {
             return;
         }
+        let group = self.get_active_worker_group();
         // Notify all if there're any parked workers.
-        if self.group.parked_workers() > 0 {
+        if group.parked_workers() > 0 {
             // let _guard = self.monitor.0.lock().unwrap();
-            self.monitor.1.notify_all()
+            group.monitor.1.notify_all()
         }
     }
 
