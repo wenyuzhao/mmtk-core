@@ -282,14 +282,22 @@ pub struct WorkerGroup<VM: VMBinding> {
     /// Shared worker data
     pub workers_shared: Vec<Arc<GCWorkerShared<VM>>>,
     parked_workers: AtomicUsize,
+    total_parked_workers: Arc<AtomicUsize>,
     unspawned_local_work_queues: Mutex<Vec<deque::Worker<Box<dyn GCWork<VM>>>>>,
     ordinal_base: usize,
-    pub monitor: Arc<(Mutex<()>, Condvar)>,
+    pub monitor: Arc<(Arc<Mutex<()>>, Condvar)>,
+    total_workers: usize,
 }
 
 impl<VM: VMBinding> WorkerGroup<VM> {
     /// Create a WorkerGroup
-    pub fn new(ordinal_base: usize, num_workers: usize) -> Arc<Self> {
+    pub fn new(
+        total_parked_workers: Arc<AtomicUsize>,
+        ordinal_base: usize,
+        num_workers: usize,
+        total_workers: usize,
+        lock: Arc<Mutex<()>>,
+    ) -> Arc<Self> {
         let unspawned_local_work_queues = (0..num_workers)
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
@@ -306,9 +314,11 @@ impl<VM: VMBinding> WorkerGroup<VM> {
         Arc::new(Self {
             workers_shared,
             parked_workers: Default::default(),
+            total_parked_workers,
             unspawned_local_work_queues: Mutex::new(unspawned_local_work_queues),
             ordinal_base,
-            monitor: Default::default(),
+            monitor: Arc::new((lock, Default::default())),
+            total_workers,
         })
     }
 
@@ -346,26 +356,23 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     ///
     /// Return true if all the workers are parked.
     pub fn inc_parked_workers(&self) -> bool {
-        let old = self.parked_workers.fetch_add(1, Ordering::SeqCst);
-        debug_assert!(old < self.worker_count());
-        old + 1 == self.worker_count()
+        self.parked_workers.fetch_add(1, Ordering::SeqCst);
+        let old = self.total_parked_workers.fetch_add(1, Ordering::SeqCst);
+        debug_assert!(old < self.total_workers);
+        old + 1 == self.total_workers
     }
 
     /// Decrease the packed-workers counter.
     /// Called after a worker is resumed from the parked state.
     pub fn dec_parked_workers(&self) {
-        let old = self.parked_workers.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(old <= self.worker_count());
+        self.parked_workers.fetch_sub(1, Ordering::SeqCst);
+        let old = self.total_parked_workers.fetch_sub(1, Ordering::SeqCst);
+        debug_assert!(old <= self.total_workers);
     }
 
     /// Get the number of parked workers in the group
-    pub fn parked_workers(&self) -> usize {
+    pub fn parked_workers_in_group(&self) -> usize {
         self.parked_workers.load(Ordering::SeqCst)
-    }
-
-    /// Check if all the workers are packed
-    pub fn all_parked(&self) -> bool {
-        self.parked_workers() == self.worker_count()
     }
 
     /// Return true if there're any pending designated work

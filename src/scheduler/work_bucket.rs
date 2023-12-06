@@ -128,24 +128,22 @@ impl<VM: VMBinding> WorkBucket<VM> {
         new_queue
     }
 
-    fn get_active_worker_group(&self) -> &WorkerGroup<VM> {
-        if self.in_concurrent.load(Ordering::SeqCst) {
-            &self.conc_group
-        } else {
-            &self.stw_group
-        }
-    }
-
     fn notify_one_worker(&self) {
         // If the bucket is not activated, don't notify anyone.
         if !self.is_activated() {
             return;
         }
-        let group = self.get_active_worker_group();
         // Notify one if there're any parked workers.
-        if group.parked_workers() > 0 {
-            // let _guard = self.monitor.0.lock().unwrap();
-            group.monitor.1.notify_one()
+        if !self.in_concurrent.load(Ordering::SeqCst) {
+            if self.conc_group.parked_workers_in_group() > 0 {
+                self.conc_group.monitor.1.notify_one();
+            } else if self.stw_group.parked_workers_in_group() > 0 {
+                self.stw_group.monitor.1.notify_one();
+            }
+        } else {
+            if self.conc_group.parked_workers_in_group() > 0 {
+                self.conc_group.monitor.1.notify_one();
+            }
         }
     }
 
@@ -154,11 +152,14 @@ impl<VM: VMBinding> WorkBucket<VM> {
         if !self.is_activated() {
             return;
         }
-        let group = self.get_active_worker_group();
         // Notify all if there're any parked workers.
-        if group.parked_workers() > 0 {
-            // let _guard = self.monitor.0.lock().unwrap();
-            group.monitor.1.notify_all()
+        if self.conc_group.parked_workers_in_group() > 0 {
+            self.conc_group.monitor.1.notify_all();
+        }
+        if !self.in_concurrent.load(Ordering::SeqCst) {
+            if self.stw_group.parked_workers_in_group() > 0 {
+                self.stw_group.monitor.1.notify_all();
+            }
         }
     }
 
