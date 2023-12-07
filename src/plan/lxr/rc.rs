@@ -26,7 +26,8 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 static INC_EDGES: AtomicUsize = AtomicUsize::new(0);
 static INC_TIME: AtomicUsize = AtomicUsize::new(0);
@@ -580,6 +581,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             0
         };
+        crate::NO_EVAC.store(true, Ordering::Relaxed);
+        self.no_evac = true;
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
