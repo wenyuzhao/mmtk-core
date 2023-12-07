@@ -53,7 +53,12 @@ pub struct GCWorkScheduler<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
 
 impl<VM: VMBinding> GCWorkScheduler<VM> {
-    pub fn new(num_workers: usize, num_conc_workers: usize, affinity: AffinityKind) -> Arc<Self> {
+    pub fn new(
+        num_workers: usize,
+        mut num_conc_workers: usize,
+        affinity: AffinityKind,
+    ) -> Arc<Self> {
+        num_conc_workers = usize::min(num_conc_workers, num_workers);
         assert!(num_conc_workers > 0 && num_conc_workers <= num_workers);
         assert!(num_workers > 0);
         let parked_workers = Arc::new(AtomicUsize::new(0));

@@ -360,6 +360,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        super::rc::dump_counters();
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
         if pause == Pause::FinalMark || pause == Pause::Full {
@@ -784,10 +785,11 @@ impl<VM: VMBinding> LXR<VM> {
                 .load(Ordering::Relaxed)
         {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
-                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={}",
+                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={} cm_packets={}",
                     emergency,
                     self.base().is_user_triggered_collection(),
                     self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                    crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
                 );
                 Pause::FinalMark
             } else {
