@@ -60,16 +60,16 @@ pub struct WorkBucket<VM: VMBinding> {
     /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
     /// can be used repeatedly to discover and process more such objects.
     sentinel: Mutex<Option<Box<dyn GCWork<VM>>>>,
+    generic_group: Arc<WorkerGroup<VM>>,
     stw_group: Arc<WorkerGroup<VM>>,
-    conc_group: Arc<WorkerGroup<VM>>,
     in_concurrent: AtomicBool,
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
     pub fn new(
         active: bool,
+        generic_group: Arc<WorkerGroup<VM>>,
         stw_group: Arc<WorkerGroup<VM>>,
-        conc_group: Arc<WorkerGroup<VM>>,
     ) -> Self {
         Self {
             disable: AtomicBool::new(false),
@@ -78,8 +78,8 @@ impl<VM: VMBinding> WorkBucket<VM> {
             prioritized_queue: None,
             can_open: None,
             sentinel: Mutex::new(None),
+            generic_group,
             stw_group,
-            conc_group,
             in_concurrent: AtomicBool::new(true),
         }
     }
@@ -135,14 +135,14 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
         // Notify one if there're any parked workers.
         if !self.in_concurrent.load(Ordering::SeqCst) {
-            if self.conc_group.parked_workers_in_group() > 0 {
-                self.conc_group.monitor.1.notify_one();
+            if self.generic_group.parked_workers_in_group() > 0 {
+                self.generic_group.monitor.1.notify_one();
             } else if self.stw_group.parked_workers_in_group() > 0 {
                 self.stw_group.monitor.1.notify_one();
             }
         } else {
-            if self.conc_group.parked_workers_in_group() > 0 {
-                self.conc_group.monitor.1.notify_one();
+            if self.generic_group.parked_workers_in_group() > 0 {
+                self.generic_group.monitor.1.notify_one();
             }
         }
     }
@@ -153,8 +153,8 @@ impl<VM: VMBinding> WorkBucket<VM> {
             return;
         }
         // Notify all if there're any parked workers.
-        if self.conc_group.parked_workers_in_group() > 0 {
-            self.conc_group.monitor.1.notify_all();
+        if self.generic_group.parked_workers_in_group() > 0 {
+            self.generic_group.monitor.1.notify_all();
         }
         if !self.in_concurrent.load(Ordering::SeqCst) {
             if self.stw_group.parked_workers_in_group() > 0 {

@@ -293,6 +293,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     /// Create a WorkerGroup
     pub fn new(
         total_parked_workers: Arc<AtomicUsize>,
+        is_stw: bool,
         ordinal_base: usize,
         num_workers: usize,
         total_workers: usize,
@@ -306,7 +307,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             .map(|i| {
                 Arc::new(GCWorkerShared::<VM>::new(
                     Some(unspawned_local_work_queues[i].stealer()),
-                    ordinal_base != 0,
+                    is_stw,
                 ))
             })
             .collect::<Vec<_>>();

@@ -28,10 +28,10 @@ pub enum CoordinatorMessage<VM: VMBinding> {
 pub struct GCWorkScheduler<VM: VMBinding> {
     /// Work buckets
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
+    /// Workers that can run both concurrently and STW
+    generic_worker_group: Arc<WorkerGroup<VM>>,
     /// STW-only Workers
     stw_worker_group: Arc<WorkerGroup<VM>>,
-    /// Workers that can run both concurrently and STW
-    conc_worker_group: Arc<WorkerGroup<VM>>,
     /// The shared part of the GC worker object of the controller thread
     coordinator_worker_shared: Arc<GCWorkerShared<VM>>,
     pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
@@ -58,8 +58,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         assert!(num_workers > 0);
         let parked_workers = Arc::new(AtomicUsize::new(0));
         let lock = Arc::new(Mutex::new(()));
-        let conc_worker_group = WorkerGroup::new(
+        let generic_worker_group = WorkerGroup::new(
             parked_workers.clone(),
+            false,
             0,
             num_conc_workers,
             num_workers,
@@ -67,6 +68,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         );
         let stw_worker_group = WorkerGroup::new(
             parked_workers.clone(),
+            true,
             num_conc_workers,
             num_workers - num_conc_workers,
             num_workers,
@@ -78,7 +80,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut work_buckets = EnumMap::from_array(array_from_fn(|stage_num| {
             let stage = WorkBucketStage::from_usize(stage_num);
             let active = stage == WorkBucketStage::Unconstrained;
-            WorkBucket::new(active, stw_worker_group.clone(), conc_worker_group.clone())
+            WorkBucket::new(
+                active,
+                generic_worker_group.clone(),
+                stw_worker_group.clone(),
+            )
         }));
 
         work_buckets[WorkBucketStage::Unconstrained].enable_prioritized_queue();
@@ -109,7 +115,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         Arc::new(Self {
             work_buckets,
             stw_worker_group,
-            conc_worker_group,
+            generic_worker_group,
             coordinator_worker_shared,
             postponed_concurrent_work: spin::RwLock::new(Injector::new()),
             postponed_concurrent_work_prioritized: spin::RwLock::new(Injector::new()),
@@ -200,8 +206,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn num_workers(&self) -> usize {
-        self.stw_worker_group.as_ref().worker_count()
-            + self.conc_worker_group.as_ref().worker_count()
+        self.generic_worker_group.as_ref().worker_count()
+            + self.stw_worker_group.as_ref().worker_count()
     }
 
     /// Create GC threads, including the controller thread and all workers.
@@ -228,7 +234,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         );
         VM::VMCollection::spawn_gc_thread(tls, GCThreadContext::<VM>::Controller(gc_controller));
 
-        self.conc_worker_group.spawn(mmtk, sender.clone(), tls);
+        self.generic_worker_group.spawn(mmtk, sender.clone(), tls);
         self.stw_worker_group.spawn(mmtk, sender, tls);
     }
 
@@ -601,7 +607,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         // Try steal some packets from any worker
-        for (id, worker_shared) in self.conc_worker_group.workers_shared.iter().enumerate() {
+        for (id, worker_shared) in self.generic_worker_group.workers_shared.iter().enumerate() {
             if id == worker.ordinal {
                 continue;
             }
@@ -663,12 +669,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Note: The lock is released during `wait` in the loop.
         let stw_worker = worker.is_stw();
         let group = if !stw_worker {
-            &self.conc_worker_group
-        } else {
-            &self.stw_worker_group
-        };
-        let group2 = if stw_worker {
-            &self.conc_worker_group
+            &self.generic_worker_group
         } else {
             &self.stw_worker_group
         };
@@ -746,15 +747,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // We only notify_all if there're more than one packets available.
         if !self.all_activated_buckets_are_empty() {
             // Have more jobs in this buckets. Notify other workers.
-            group.monitor.1.notify_all();
-            group2.monitor.1.notify_all();
+            self.generic_worker_group.monitor.1.notify_all();
+            self.stw_worker_group.monitor.1.notify_all();
         }
         // Return this packet and execute it.
         work
     }
 
     pub fn enable_stat(&self) {
-        for worker in &self.conc_worker_group.workers_shared {
+        for worker in &self.generic_worker_group.workers_shared {
             let worker_stat = worker.borrow_stat();
             worker_stat.enable();
         }
@@ -768,7 +769,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn statistics(&self) -> HashMap<String, String> {
         let mut summary = SchedulerStat::default();
-        for worker in &self.conc_worker_group.workers_shared {
+        for worker in &self.generic_worker_group.workers_shared {
             let worker_stat = worker.borrow_stat();
             summary.merge(&worker_stat);
         }
@@ -822,8 +823,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 WorkBucketStage::from_usize(2)
             );
         }
-        let _guard = self.conc_worker_group.monitor.0.lock().unwrap();
-        self.conc_worker_group.monitor.1.notify_all();
+        let _guard = self.generic_worker_group.monitor.0.lock().unwrap();
+        self.generic_worker_group.monitor.1.notify_all();
         self.stw_worker_group.monitor.1.notify_all();
     }
 
@@ -841,7 +842,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn has_designated_work(&self) -> bool {
-        self.stw_worker_group.has_designated_work() || self.conc_worker_group.has_designated_work()
+        self.generic_worker_group.has_designated_work()
+            || self.stw_worker_group.has_designated_work()
     }
 
     pub(super) fn push_designated_work(&self, create: impl Fn() -> Box<dyn GCWork<VM>>) {
@@ -849,7 +851,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let result = w.designated_work.push(create());
             debug_assert!(result.is_ok());
         }
-        for w in &self.conc_worker_group.workers_shared {
+        for w in &self.generic_worker_group.workers_shared {
             let result = w.designated_work.push(create());
             debug_assert!(result.is_ok());
         }
@@ -862,7 +864,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn wakeup_all_conc_workers(&self) {
         let _guard: std::sync::MutexGuard<'_, ()> =
-            self.conc_worker_group.monitor.0.lock().unwrap();
-        self.conc_worker_group.monitor.1.notify_all();
+            self.generic_worker_group.monitor.0.lock().unwrap();
+        self.generic_worker_group.monitor.1.notify_all();
     }
 }
