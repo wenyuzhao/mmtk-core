@@ -230,7 +230,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    #[inline]
     fn process_edge_after_obj_scan(
         &mut self,
         object: ObjectReference,
@@ -256,7 +255,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         self.trace_object::<false>(t);
     }
 
-    #[inline]
     fn scan_object(&mut self, object: ObjectReference, klass: Address) {
         if cfg!(feature = "sanity") {
             assert!(
@@ -320,7 +318,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
-    #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "sanity") {
             assert!(
