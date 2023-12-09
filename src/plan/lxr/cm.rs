@@ -26,9 +26,11 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     white_objects_arc: Option<Arc<Vec<ObjectReference>>>,
     // objects to scan
     grey_objects: Option<Vec<(ObjectReference, Address)>>,
-    grey_large_ref_array: Option<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    grey_large_ref_arrays: Option<Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>>,
     // recursively discovered grey objects
     next_grey_objects: VectorQueue<(ObjectReference, Address)>,
+    next_grey_large_ref_arrays: VectorQueue<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    next_grey_large_ref_arrays_size: usize,
     klass: Address,
     rc: RefCountHelper<VM>,
 }
@@ -45,8 +47,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             white_objects: Some(objects),
             white_objects_arc: None,
             grey_objects: None,
-            grey_large_ref_array: None,
+            grey_large_ref_arrays: None,
             next_grey_objects: VectorQueue::default(),
+            next_grey_large_ref_arrays: VectorQueue::default(),
+            next_grey_large_ref_arrays_size: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
@@ -63,8 +67,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             white_objects: None,
             white_objects_arc: Some(objects),
             grey_objects: None,
-            grey_large_ref_array: None,
+            grey_large_ref_arrays: None,
             next_grey_objects: VectorQueue::default(),
+            next_grey_large_ref_arrays: VectorQueue::default(),
+            next_grey_large_ref_arrays_size: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
@@ -85,18 +91,21 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             white_objects: None,
             white_objects_arc: None,
             grey_objects: Some(objects),
-            grey_large_ref_array: None,
+            grey_large_ref_arrays: None,
             next_grey_objects: VectorQueue::default(),
+            next_grey_large_ref_arrays: VectorQueue::default(),
+            next_grey_large_ref_arrays_size: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
     }
 
-    pub fn new_grey_large_ref_array(
-        o: ObjectReference,
-        klass: Address,
-        size: usize,
-        slice: VM::VMMemorySlice,
+    pub fn new_grey_large_ref_arrays(
+        // o: ObjectReference,
+        // klass: Address,
+        // size: usize,
+        // slice: VM::VMMemorySlice,
+        slices: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
         let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
@@ -106,30 +115,24 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             white_objects: None,
             white_objects_arc: None,
             grey_objects: None,
-            grey_large_ref_array: Some((o, klass, size, slice)),
+            grey_large_ref_arrays: Some(slices),
             next_grey_objects: VectorQueue::default(),
+            next_grey_large_ref_arrays: VectorQueue::default(),
+            next_grey_large_ref_arrays_size: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
     }
 
-    fn create_scan_large_ref_array_packet(
+    fn create_scan_large_ref_arrays_packet(
         &mut self,
-        o: ObjectReference,
-        klass: Address,
-        size: usize,
-        slice: VM::VMMemorySlice,
+        slices: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
     ) {
+        FLUSHED_LARGE_REF_ARRAY_PACKETS.fetch_add(1, Ordering::SeqCst);
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
         debug_assert!(self.plan.concurrent_marking_enabled());
-        let w = LXRConcurrentTraceObjects::<VM>::new_grey_large_ref_array(
-            o,
-            klass,
-            size,
-            slice,
-            worker.mmtk,
-        );
+        let w = LXRConcurrentTraceObjects::<VM>::new_grey_large_ref_arrays(slices, worker.mmtk);
         if self.plan.current_pause() == Some(Pause::RefCount) {
             worker.scheduler().postpone(w);
         } else {
@@ -138,6 +141,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     fn create_scan_objects_packet(&mut self, objects: Vec<(ObjectReference, Address)>) {
+        FLUSHED_NORMAL_PACKETS.fetch_add(1, Ordering::SeqCst);
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
         debug_assert!(self.plan.concurrent_marking_enabled());
@@ -154,6 +158,26 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if !self.next_grey_objects.is_empty() {
             let new_nodes = self.next_grey_objects.take();
             self.create_scan_objects_packet(new_nodes);
+        }
+        if !self.next_grey_large_ref_arrays.is_empty() {
+            let slices = self.next_grey_large_ref_arrays.take();
+            self.create_scan_large_ref_arrays_packet(slices);
+        }
+    }
+
+    #[cold]
+    fn flush_obj(&mut self) {
+        if !self.next_grey_objects.is_empty() {
+            let new_nodes = self.next_grey_objects.take();
+            self.create_scan_objects_packet(new_nodes);
+        }
+    }
+
+    #[cold]
+    fn flush_arr(&mut self) {
+        if !self.next_grey_large_ref_arrays.is_empty() {
+            let slices = self.next_grey_large_ref_arrays.take();
+            self.create_scan_large_ref_arrays_packet(slices);
         }
     }
 
@@ -206,6 +230,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
+    #[inline]
     fn process_edge_after_obj_scan(
         &mut self,
         object: ObjectReference,
@@ -231,6 +256,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         self.trace_object::<false>(t);
     }
 
+    #[inline]
     fn scan_object(&mut self, object: ObjectReference, klass: Address) {
         if cfg!(feature = "sanity") {
             assert!(
@@ -294,6 +320,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
+    #[inline]
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "sanity") {
             assert!(
@@ -310,19 +337,32 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             && VM::VMScanning::obj_array_data(object).len() >= 1024
         {
             let data = VM::VMScanning::obj_array_data(object);
-            for chunk in data.chunks(4096) {
-                self.create_scan_large_ref_array_packet(
-                    object,
-                    self.klass,
-                    object.get_size::<VM>(),
-                    chunk,
-                );
+            self.next_grey_large_ref_arrays_size += data.len();
+            self.next_grey_large_ref_arrays.push((
+                object,
+                self.klass,
+                object.get_size::<VM>(),
+                data,
+            ));
+            if self.next_grey_large_ref_arrays_size >= 30000 {
+                self.flush_arr();
             }
+            // let mut count = 0;
+            // // for chunk in data.chunks(usize::MAX) {
+            // count += 1;
+            // self.create_scan_large_ref_array_packet(
+            //     object,
+            //     self.klass,
+            //     object.get_size::<VM>(),
+            //     data,
+            // );
+            // }
+            // println!("New CM Array Slice Packets {} array-len={}", count, VM::VMScanning::obj_array_data(object).len());
         } else {
             // Small objects: enqueue
             self.next_grey_objects.push((object, self.klass));
-            if self.next_grey_objects.len() >= 4096 {
-                self.flush();
+            if self.next_grey_objects.len() >= 40960 {
+                self.flush_obj();
             }
         }
     }
@@ -337,22 +377,34 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
-        if crate::verbose(3) && self.plan.current_pause().is_some() {
+        let t = std::time::SystemTime::now();
+        let record = if crate::verbose(3) && self.plan.current_pause().is_some() {
             STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
-        }
+            true
+        } else {
+            false
+        };
         // mark objects
         if let Some(objects) = self.white_objects.take() {
+            STW_MARK_OBJS.fetch_add(objects.len(), Ordering::SeqCst);
             self.trace_objects(&objects)
         } else if let Some(objects) = self.white_objects_arc.take() {
+            STW_MARK_OBJS.fetch_add(objects.len(), Ordering::SeqCst);
             self.trace_objects(&objects)
         }
         // scan and mark fields
         if let Some(objects) = self.grey_objects.take() {
+            STW_SCAN_OBJS.fetch_add(objects.len(), Ordering::SeqCst);
             for (o, k) in objects {
                 self.scan_object(o, k)
             }
-        } else if let Some((o, k, size, s)) = self.grey_large_ref_array.take() {
-            self.scan_large_ref_array(o, k, size, s)
+        } else if let Some(slices) = self.grey_large_ref_arrays.take() {
+            for (o, k, size, s) in slices {
+                let len = s.len();
+                STW_SCAN_OBJS.fetch_add(len, Ordering::SeqCst);
+                self.scan_large_ref_array(o, k, size, s);
+                // println!("CMArray len={} time={}ms", len, ms);
+            }
         }
         // CM: Decrease counter
         let pause_opt = self.plan.current_pause();
@@ -365,6 +417,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
                 }
                 grey_objects.clear();
                 self.next_grey_objects.swap(&mut grey_objects);
+                STW_SCAN_OBJS.fetch_add(grey_objects.len(), Ordering::SeqCst);
                 for (o, k) in &grey_objects {
                     self.scan_object(*o, *k);
                 }
@@ -373,6 +426,10 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         self.flush();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        if record {
+            let us = t.elapsed().unwrap().as_micros() as usize;
+            STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
+        }
     }
 }
 
@@ -400,6 +457,11 @@ impl ProcessModBufSATB {
 
 pub static STW_CM_PACKETS: AtomicUsize = AtomicUsize::new(0);
 pub static STW_MODBUF_PACKETS: AtomicUsize = AtomicUsize::new(0);
+pub static FLUSHED_LARGE_REF_ARRAY_PACKETS: AtomicUsize = AtomicUsize::new(0);
+pub static FLUSHED_NORMAL_PACKETS: AtomicUsize = AtomicUsize::new(0);
+pub static STW_CM_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
+pub static STW_MARK_OBJS: AtomicUsize = AtomicUsize::new(0);
+pub static STW_SCAN_OBJS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn dump_stw_cm_packet_counters() {
     gc_log!(
@@ -409,6 +471,25 @@ pub fn dump_stw_cm_packet_counters() {
     );
     STW_CM_PACKETS.store(0, Ordering::SeqCst);
     STW_MODBUF_PACKETS.store(0, Ordering::SeqCst);
+    gc_log!(
+        " - STW_CM_PACKETS_TIME={}ms",
+        STW_CM_PACKETS_TIME.load(Ordering::SeqCst) / 1000,
+    );
+    STW_CM_PACKETS_TIME.store(0, Ordering::SeqCst);
+    gc_log!(
+        " - STW_MARK_OBJS={} STW_SCAN_OBJS={}",
+        STW_MARK_OBJS.load(Ordering::SeqCst),
+        STW_SCAN_OBJS.load(Ordering::SeqCst),
+    );
+    STW_MARK_OBJS.store(0, Ordering::SeqCst);
+    STW_SCAN_OBJS.store(0, Ordering::SeqCst);
+    gc_log!(
+        " - FLUSHED_LARGE_REF_ARRAY_PACKETS={} FLUSHED_NORMAL_PACKETS={}",
+        FLUSHED_LARGE_REF_ARRAY_PACKETS.load(Ordering::SeqCst),
+        FLUSHED_NORMAL_PACKETS.load(Ordering::SeqCst),
+    );
+    FLUSHED_LARGE_REF_ARRAY_PACKETS.store(0, Ordering::SeqCst);
+    FLUSHED_NORMAL_PACKETS.store(0, Ordering::SeqCst);
 }
 
 impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {

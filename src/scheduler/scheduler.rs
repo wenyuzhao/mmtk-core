@@ -53,7 +53,8 @@ pub struct GCWorkScheduler<VM: VMBinding> {
 unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
 
 impl<VM: VMBinding> GCWorkScheduler<VM> {
-    pub fn new(num_workers: usize, num_conc_workers: usize, affinity: AffinityKind) -> Arc<Self> {
+    pub fn new(num_workers: usize, mut num_conc_workers: usize, affinity: AffinityKind) -> Arc<Self> {
+        num_conc_workers = usize::min(num_conc_workers, num_workers);
         assert!(num_conc_workers > 0 && num_conc_workers <= num_workers);
         assert!(num_workers > 0);
         let parked_workers = Arc::new(AtomicUsize::new(0));
@@ -713,16 +714,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 // coordinator work packets.
             }
             // Wait
-            if cfg!(feature = "report_worker_sleep_events")
-                && self.in_gc_pause.load(Ordering::Relaxed)
-                && self.work_buckets[WorkBucketStage::FinishConcurrentWork].is_activated()
-            {
-                gc_log!([3]
-                    "    - ({:.3}ms) worker#{} sleep",
-                    crate::gc_start_time_ms(),
-                    worker.ordinal,
-                );
-            }
+            // if cfg!(feature = "report_worker_sleep_events")
+            //     && self.in_gc_pause.load(Ordering::Relaxed)
+            //     && self.work_buckets[WorkBucketStage::FinishConcurrentWork].is_activated()
+            // {
+                // gc_log!(
+                //     "    - ({:.3}ms) worker#{} sleep stw={}",
+                //     crate::gc_start_time_ms(),
+                //     worker.ordinal,
+                //     worker.is_stw(),
+                // );
+            // }
             flush_logs!();
             loop {
                 guard = group.monitor.1.wait(guard).unwrap();

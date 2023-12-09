@@ -26,7 +26,20 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::Arc;use std::sync::atomic::AtomicUsize;
+
+static INC_EDGES: AtomicUsize = AtomicUsize::new(0);
+static INC_TIME: AtomicUsize = AtomicUsize::new(0);
+
+pub fn dump_counters() {
+    gc_log!(
+        " - INC_EDGES={} INC_TIME={}ms",
+        INC_EDGES.load(Ordering::SeqCst),
+        INC_TIME.load(Ordering::SeqCst) / 1000,
+    );
+    INC_EDGES.store(0, Ordering::SeqCst);
+    INC_TIME.store(0, Ordering::SeqCst);
+}
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
@@ -481,6 +494,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         depth: u32,
         is_incomplete_root: bool,
     ) -> Option<Vec<ObjectReference>> {
+        INC_EDGES.fetch_add(incs.len(), Ordering::SeqCst);
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
@@ -514,6 +528,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         slice: VM::VMMemorySlice,
         depth: u32,
     ) -> Option<Vec<ObjectReference>> {
+        INC_EDGES.fetch_add(slice.len(), Ordering::SeqCst);
         for e in slice.iter_edges() {
             self.process_edge::<K>(e, depth, false);
         }
@@ -552,7 +567,7 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        #[cfg(feature = "log_outstanding_packets")]
+        // #[cfg(feature = "log_outstanding_packets")]
         let t = std::time::SystemTime::now();
 
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
@@ -565,6 +580,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             0
         };
+        // crate::NO_EVAC.store(true, Ordering::Relaxed);
+        // self.no_evac = true;
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
@@ -685,20 +702,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             crate::RC_STAT.merge(&mut self.stat);
         }
 
-        #[cfg(feature = "log_outstanding_packets")]
-        {
-            let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
-            if ms > 10f32 || cfg!(feature = "log_all_inc_packets") {
-                gc_log!(
-                        "WARNING: Incs packet took {:.3}ms! KIND={} RootKind={:?} depth={} counters={:?}",
-                        ms,
-                        KIND,
-                        self.root_kind,
-                        depth,
-                        self.counters,
-                    );
-            }
-        }
+        // #[cfg(feature = "log_outstanding_packets")]
+        // {
+        //     let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
+        //     if ms > 10f32 || cfg!(feature = "log_all_inc_packets") {
+        //         gc_log!(
+        //                 "WARNING: Incs packet took {:.3}ms! KIND={} RootKind={:?} depth={} counters={:?}",
+        //                 ms,
+        //                 KIND,
+        //                 self.root_kind,
+        //                 depth,
+        //                 self.counters,
+        //             );
+        //     }
+        // }
+        let us = t.elapsed().unwrap().as_micros() as usize;
+        INC_TIME.fetch_add(us, Ordering::SeqCst);
         if !self.mark_objects.is_empty() {
             let objs = std::mem::take(&mut self.mark_objects);
             assert!(self.in_cm);
