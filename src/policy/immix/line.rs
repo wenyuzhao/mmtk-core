@@ -50,6 +50,7 @@ impl Line {
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
     /// Align the give address to the line boundary.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn align(address: Address) -> Address {
         debug_assert!(!super::BLOCK_ONLY);
         address.align_down(Self::BYTES)
@@ -63,6 +64,7 @@ impl Line {
 
     /// Get the line from a given address.
     /// The address must be line-aligned.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn from(address: Address) -> Self {
         debug_assert!(!super::BLOCK_ONLY);
         debug_assert!(address.is_aligned_to(Self::BYTES));

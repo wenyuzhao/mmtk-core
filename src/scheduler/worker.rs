@@ -39,6 +39,7 @@ pub fn reset_workers<VM: VMBinding>() {
 }
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
+#[cfg_attr(feature = "inline_pragmas", inline)]
 pub fn current_worker_ordinal() -> Option<ThreadId> {
     WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed))
 }

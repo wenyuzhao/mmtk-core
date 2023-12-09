@@ -10,12 +10,15 @@ use crate::vm::VMBinding;
 
 /// Callback trait of scanning functions that report edges.
 pub trait EdgeVisitor<ES: Edge> {
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_discover_references(&self) -> bool {
         true
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_follow_clds(&self) -> bool {
         true
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_claim_clds(&self) -> bool {
         true
     }

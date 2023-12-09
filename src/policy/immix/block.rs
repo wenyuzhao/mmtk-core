@@ -236,11 +236,13 @@ impl Block {
 
     /// Get the block containing the given address.
     /// The input address does not need to be aligned.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn containing<VM: VMBinding>(object: ObjectReference) -> Self {
         Self(VM::VMObjectModel::ref_to_address(object).align_down(Self::BYTES))
     }
 
     /// Get block start address
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub const fn start(&self) -> Address {
         self.0
     }
@@ -466,6 +468,7 @@ impl Block {
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
 
     /// Test if the block is marked for defragmentation.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_defrag_source(&self) -> bool {
         let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         // The byte should be 0 (not defrag source) or 255 (defrag source) if this is a major defrag GC, as we set the values in PrepareBlockState.
@@ -473,6 +476,7 @@ impl Block {
         byte == Self::DEFRAG_SOURCE_STATE
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
         Block::containing::<VM>(o).is_defrag_source()
     }

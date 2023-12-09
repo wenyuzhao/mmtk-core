@@ -82,6 +82,7 @@ impl SpaceDescriptor {
         self.0 == SpaceDescriptor::UNINITIALIZED.0
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_contiguous(self) -> bool {
         (self.0 & TYPE_CONTIGUOUS) == TYPE_CONTIGUOUS
     }

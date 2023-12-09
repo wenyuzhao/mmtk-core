@@ -175,6 +175,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn address_in_space(&self, start: Address) -> bool {
         if !start.is_mapped() {
             return false;
@@ -186,6 +187,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn in_space(&self, object: ObjectReference) -> bool {
         self.address_in_space(object.to_address::<VM>())
     }
@@ -273,6 +275,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         self.common().name
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn common(&self) -> &CommonSpace<VM>;
     fn get_gc_trigger(&self) -> &GCTrigger<VM> {
         self.common().gc_trigger.as_ref()
@@ -567,6 +570,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         }
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn vm_map(&self) -> &'static dyn VMMap {
         self.vm_map
     }

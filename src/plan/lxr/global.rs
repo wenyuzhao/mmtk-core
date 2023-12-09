@@ -1064,6 +1064,7 @@ impl<VM: VMBinding> LXR<VM> {
         self.previous_pause.load(Ordering::SeqCst)
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
         self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
     }
@@ -1089,6 +1090,7 @@ impl<VM: VMBinding> LXR<VM> {
             self.common.los.attempt_mark(o)
         }
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
 
     pub fn is_marked(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());

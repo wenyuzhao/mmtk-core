@@ -67,6 +67,7 @@ impl MetadataSpec {
     /// * `mask`: is an optional mask value for the metadata. This value is used in cases like the forwarding pointer metadata, where some of the bits are reused by other metadata such as the forwarding bits.
     /// * `atomic_ordering`: is the ordering for the load operation.
     ///
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn load_atomic<VM: VMBinding, T: MetadataValue>(
         &self,
         object: ObjectReference,
@@ -150,6 +151,7 @@ impl MetadataSpec {
     /// * `success_order`: is the atomic ordering used if the operation is successful.
     /// * `failure_order`: is the atomic ordering used if the operation fails.
     ///
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn compare_exchange_metadata<VM: VMBinding, T: MetadataValue>(
         &self,
         object: ObjectReference,

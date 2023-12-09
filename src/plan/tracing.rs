@@ -130,15 +130,19 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 }
 
 impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_claim_clds(&self) -> bool {
         self.should_claim_and_scan_clds
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_follow_clds(&self) -> bool {
         self.should_claim_and_scan_clds
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         #[cfg(debug_assertions)]
         {
@@ -174,15 +178,19 @@ struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge)> {
 }
 
 impl<VM: VMBinding, F: FnMut(VM::VMEdge)> EdgeVisitor<VM::VMEdge> for EdgeIteratorImpl<VM, F> {
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_claim_clds(&self) -> bool {
         self.should_claim_clds
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn should_follow_clds(&self) -> bool {
         self.should_follow_clds
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn visit_edge(&mut self, slot: VM::VMEdge) {
         (self.f)(slot);
     }
@@ -193,6 +201,7 @@ pub struct EdgeIterator<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> EdgeIterator<VM> {
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn iterate(
         o: ObjectReference,
         should_discover_references: bool,

@@ -1042,6 +1042,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline(always))]
     pub fn trace_object_without_moving_rc(
         &self,
         queue: &mut impl ObjectQueue,
@@ -1312,6 +1313,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Atomically mark an object.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         loop {
             let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
@@ -1367,6 +1369,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Check if an object is marked.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn is_marked_with(&self, object: ObjectReference, mark_state: u8) -> bool {
         let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
@@ -1376,6 +1379,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         old_value == mark_state
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
         self.is_marked_with(object, self.mark_state)
     }

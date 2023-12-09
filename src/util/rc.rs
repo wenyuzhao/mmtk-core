@@ -144,6 +144,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         unsafe { RC_TABLE.store(o.to_address::<VM>(), count) }
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn count(&self, o: ObjectReference) -> u8 {
         RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed)
     }
@@ -172,6 +173,7 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         v == 0 || v == MAX_REF_COUNT
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_straddle_line(&self, line: Line) -> bool {
         let v: u8 = unsafe { RC_STRADDLE_LINES.load::<u8>(line.start()) };
         v != 0

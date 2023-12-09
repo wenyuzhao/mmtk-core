@@ -38,6 +38,7 @@ pub fn bytes_to_chunks_up(bytes: usize) -> usize {
     (bytes + BYTES_IN_CHUNK - 1) >> LOG_BYTES_IN_CHUNK
 }
 
+#[cfg_attr(feature = "inline_pragmas", inline)]
 pub fn address_to_chunk_index(addr: Address) -> usize {
     (addr - vm_layout().heap_start) >> LOG_BYTES_IN_CHUNK
 }

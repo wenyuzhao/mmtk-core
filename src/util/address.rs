@@ -149,15 +149,18 @@ impl Address {
     pub const MAX: Self = Address(usize::max_value());
 
     /// creates Address from a pointer
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn from_ptr<T>(ptr: *const T) -> Address {
         Address(ptr as usize)
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn from_ref<T>(r: &T) -> Address {
         Address(r as *const T as usize)
     }
 
     /// creates Address from a mutable pointer
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn from_mut_ptr<T>(ptr: *mut T) -> Address {
         Address(ptr as usize)
     }
@@ -166,6 +169,7 @@ impl Address {
     /// # Safety
     /// It is unsafe and the user needs to be aware that they are creating an invalid address.
     /// The zero address should only be used as unininitialized or sentinel values in performance critical code (where you dont want to use `Option<Address>`).
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub const unsafe fn zero() -> Address {
         Address(0)
     }
@@ -184,6 +188,7 @@ impl Address {
     /// It is unsafe and the user needs to be aware that they may create an invalid address.
     /// This creates arbitrary addresses which may not be valid. This should only be used for hard-coded addresses. Any other uses of this function could be
     /// replaced with more proper alternatives.
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub const unsafe fn from_usize(raw: usize) -> Address {
         Address(raw)
     }
@@ -245,6 +250,7 @@ impl Address {
         std::ptr::write_unaligned(self.0 as *mut T, value);
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     /// atomic operation: load
     /// # Safety
     /// This could throw a segment fault if the address is invalid
@@ -264,6 +270,7 @@ impl Address {
     /// atomic operation: compare and exchange usize
     /// # Safety
     /// This could throw a segment fault if the address is invalid
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub unsafe fn compare_exchange<T: Atomic>(
         self,
         old: T::Type,
@@ -299,11 +306,13 @@ impl Address {
     }
 
     /// converts the Address to a pointer
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn to_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
     /// converts the Address to a mutable pointer
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn to_mut_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
@@ -317,17 +326,20 @@ impl Address {
     }
 
     /// converts the Address to a pointer-sized integer
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub const fn as_usize(self) -> usize {
         self.0
     }
 
     /// returns the chunk index for this address
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn chunk_index(self) -> usize {
         use crate::util::conversions;
         conversions::address_to_chunk_index(self)
     }
 
     /// return true if the referenced memory is mapped
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_mapped(self) -> bool {
         if self.0 == 0 {
             false
@@ -590,6 +602,7 @@ impl ObjectReference {
     /// MMTk should not make any assumption on the actual location of the address with the object reference.
     /// MMTk should not assume the address returned by this method is in our allocation. For the purposes of
     /// setting object metadata, MMTk should use [`crate::vm::ObjectModel::ref_to_address()`] or [`crate::vm::ObjectModel::ref_to_header()`].
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn to_raw_address(self) -> Address {
         Address(self.0)
     }
@@ -606,6 +619,7 @@ impl ObjectReference {
     /// Get the in-heap address from an object reference. This method is used by MMTk to get an in-heap address
     /// for an object reference. This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_address`]. See the
     /// comments on [`crate::vm::ObjectModel::ref_to_address`].
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn to_address<VM: VMBinding>(self) -> Address {
         let to_address = VM::VMObjectModel::ref_to_address(self);
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || to_address == self.to_raw_address(), "The binding claims unified object reference address, but for object reference {}, ref_to_address() returns {}", self, to_address);
@@ -635,6 +649,7 @@ impl ObjectReference {
     }
 
     /// is this object reference null reference?
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_null(self) -> bool {
         self.0 == 0
     }
@@ -682,6 +697,7 @@ impl ObjectReference {
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn is_in_any_space(self) -> bool {
         let addr = self.to_raw_address();
         if addr < vm_layout().heap_start || addr >= vm_layout().heap_end {
@@ -714,6 +730,7 @@ impl ObjectReference {
 
     pub fn log_start_address<VM: VMBinding>(self) {}
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn class_pointer<VM: VMBinding>(self) -> Address {
         VM::VMObjectModel::get_class_pointer(self)
     }
@@ -770,6 +787,7 @@ impl ObjectReference {
         }
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(
         self,
         cld_scan: CLDScanPolicy,
@@ -786,6 +804,7 @@ impl ObjectReference {
         )
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMEdge)>(
         self,
         cld_scan: CLDScanPolicy,
