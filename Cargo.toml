@@ -176,6 +176,7 @@ lxr_abort_on_trace = []
 lxr_log_reclaim = []
 lxr_simple_satb_trigger = []
 inline_pragmas = []
+defrag_checks = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

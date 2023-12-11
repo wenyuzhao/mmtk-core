@@ -33,6 +33,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     next_grey_large_ref_arrays_size: usize,
     klass: Address,
     rc: RefCountHelper<VM>,
+    scanned_objs: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -53,6 +54,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_large_ref_arrays_size: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            scanned_objs: 0,
         }
     }
 
@@ -71,6 +73,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
+            scanned_objs: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
@@ -95,6 +98,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
+            scanned_objs: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
@@ -119,6 +123,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
+            scanned_objs: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
         }
@@ -248,6 +253,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 t
             );
         }
+        #[cfg(feature = "defrag_checks")]
         if crate::args::RC_MATURE_EVACUATION
             && (should_check_remset || !e.to_address().is_mapped())
             && self.plan.in_defrag(t)
@@ -269,6 +275,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if self.rc.count(object) == 0 || object.class_pointer::<VM>() != klass {
             return;
         }
+        self.scanned_objs += 1;
+        #[cfg(feature = "defrag_checks")]
         let should_check_remset = !self.plan.in_defrag(object);
         object.iterate_fields_with_klass::<VM, _>(
             CLDScanPolicy::Claim,
@@ -280,7 +288,14 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     return;
                 }
                 if self.rc.count(object) != 0 {
-                    self.process_edge_after_obj_scan(object, e, t, should_check_remset);
+                    #[cfg(feature = "defrag_checks")]
+                    {
+                        self.process_edge_after_obj_scan(object, e, t, should_check_remset);
+                    }
+                    #[cfg(not(feature = "defrag_checks"))]
+                    {
+                        self.process_edge_after_obj_scan(object, e, t, false);
+                    }
                 }
             },
         );
@@ -307,6 +322,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if current_klass != klass || object.get_size::<VM>() != size {
             return;
         }
+        #[cfg(feature = "defrag_checks")]
         let should_check_remset = !self.plan.in_defrag(object);
         for e in slice.iter_edges() {
             let t: ObjectReference = e.load();
@@ -314,7 +330,14 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 continue;
             }
             if self.rc.count(object) != 0 {
-                self.process_edge_after_obj_scan(object, e, t, should_check_remset);
+                #[cfg(feature = "defrag_checks")]
+                {
+                    self.process_edge_after_obj_scan(object, e, t, should_check_remset);
+                }
+                #[cfg(not(feature = "defrag_checks"))]
+                {
+                    self.process_edge_after_obj_scan(object, e, t, false);
+                }
             }
         }
     }
@@ -395,14 +418,18 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         }
         // scan and mark fields
         if let Some(objects) = self.grey_objects.take() {
-            STW_SCAN_OBJS.fetch_add(objects.len(), Ordering::SeqCst);
+            if record {
+                STW_SCAN_OBJS.fetch_add(objects.len(), Ordering::SeqCst);
+            }
             for (o, k) in objects {
                 self.scan_object(o, k)
             }
         } else if let Some(slices) = self.grey_large_ref_arrays.take() {
             for (o, k, size, s) in slices {
                 let len = s.len();
-                STW_SCAN_OBJS.fetch_add(len, Ordering::SeqCst);
+                if record {
+                    STW_SCAN_OBJS.fetch_add(len, Ordering::SeqCst);
+                }
                 self.scan_large_ref_array(o, k, size, s);
                 // println!("CMArray len={} time={}ms", len, ms);
             }
@@ -418,7 +445,9 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
                 }
                 grey_objects.clear();
                 self.next_grey_objects.swap(&mut grey_objects);
-                STW_SCAN_OBJS.fetch_add(grey_objects.len(), Ordering::SeqCst);
+                if record {
+                    STW_SCAN_OBJS.fetch_add(grey_objects.len(), Ordering::SeqCst);
+                }
                 for (o, k) in &grey_objects {
                     self.scan_object(*o, *k);
                 }
@@ -430,6 +459,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         if record {
             let us = t.elapsed().unwrap().as_micros() as usize;
             STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
+            STW_SCAN_OBJS2.fetch_add(self.scanned_objs, Ordering::SeqCst);
         }
     }
 }
@@ -463,6 +493,7 @@ pub static FLUSHED_NORMAL_PACKETS: AtomicUsize = AtomicUsize::new(0);
 pub static STW_CM_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
 pub static STW_MARK_OBJS: AtomicUsize = AtomicUsize::new(0);
 pub static STW_SCAN_OBJS: AtomicUsize = AtomicUsize::new(0);
+pub static STW_SCAN_OBJS2: AtomicUsize = AtomicUsize::new(0);
 
 pub fn dump_stw_cm_packet_counters() {
     gc_log!(
@@ -478,12 +509,14 @@ pub fn dump_stw_cm_packet_counters() {
     );
     STW_CM_PACKETS_TIME.store(0, Ordering::SeqCst);
     gc_log!(
-        " - STW_MARK_OBJS={} STW_SCAN_OBJS={}",
+        " - STW_MARK_OBJS={} STW_SCAN_OBJS={} STW_SCAN_OBJS2={}",
         STW_MARK_OBJS.load(Ordering::SeqCst),
         STW_SCAN_OBJS.load(Ordering::SeqCst),
+        STW_SCAN_OBJS2.load(Ordering::SeqCst),
     );
     STW_MARK_OBJS.store(0, Ordering::SeqCst);
     STW_SCAN_OBJS.store(0, Ordering::SeqCst);
+    STW_SCAN_OBJS2.store(0, Ordering::SeqCst);
     gc_log!(
         " - FLUSHED_LARGE_REF_ARRAY_PACKETS={} FLUSHED_NORMAL_PACKETS={}",
         FLUSHED_LARGE_REF_ARRAY_PACKETS.load(Ordering::SeqCst),
