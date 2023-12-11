@@ -34,6 +34,8 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     klass: Address,
     rc: RefCountHelper<VM>,
     scanned_objs: usize,
+    scanned_slots: usize,
+    scanned_non_null_slots: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -55,6 +57,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             scanned_objs: 0,
+            scanned_slots: 0,
+            scanned_non_null_slots: 0,
         }
     }
 
@@ -76,6 +80,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_objs: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            scanned_slots: 0,
+            scanned_non_null_slots: 0,
         }
     }
 
@@ -101,6 +107,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_objs: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            scanned_slots: 0,
+            scanned_non_null_slots: 0,
         }
     }
 
@@ -126,6 +134,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_objs: 0,
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            scanned_slots: 0,
+            scanned_non_null_slots: 0,
         }
     }
 
@@ -283,10 +293,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             RefScanPolicy::Discover,
             klass,
             |e| {
+                self.scanned_slots += 1;
                 let t: ObjectReference = e.load();
                 if t.is_null() {
                     return;
                 }
+                self.scanned_non_null_slots += 1;
                 if self.rc.count(object) != 0 {
                     #[cfg(feature = "defrag_checks")]
                     {
@@ -324,11 +336,13 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
         #[cfg(feature = "defrag_checks")]
         let should_check_remset = !self.plan.in_defrag(object);
+        self.scanned_slots += slice.len();
         for e in slice.iter_edges() {
             let t: ObjectReference = e.load();
             if t.is_null() {
                 continue;
             }
+            self.scanned_non_null_slots += 1;
             if self.rc.count(object) != 0 {
                 #[cfg(feature = "defrag_checks")]
                 {
@@ -460,6 +474,8 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
             let us = t.elapsed().unwrap().as_micros() as usize;
             STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
             STW_SCAN_OBJS2.fetch_add(self.scanned_objs, Ordering::SeqCst);
+            STW_SCAN_SLOTS.fetch_add(self.scanned_slots, Ordering::SeqCst);
+            STW_SCAN_NON_NULL_SLOTS.fetch_add(self.scanned_non_null_slots, Ordering::SeqCst);
         }
     }
 }
@@ -494,6 +510,8 @@ pub static STW_CM_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
 pub static STW_MARK_OBJS: AtomicUsize = AtomicUsize::new(0);
 pub static STW_SCAN_OBJS: AtomicUsize = AtomicUsize::new(0);
 pub static STW_SCAN_OBJS2: AtomicUsize = AtomicUsize::new(0);
+pub static STW_SCAN_SLOTS: AtomicUsize = AtomicUsize::new(0);
+pub static STW_SCAN_NON_NULL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn dump_stw_cm_packet_counters() {
     gc_log!(
@@ -509,14 +527,18 @@ pub fn dump_stw_cm_packet_counters() {
     );
     STW_CM_PACKETS_TIME.store(0, Ordering::SeqCst);
     gc_log!(
-        " - STW_MARK_OBJS={} STW_SCAN_OBJS={} STW_SCAN_OBJS2={}",
+        " - STW_MARK_OBJS={} STW_SCAN_OBJS={} STW_SCAN_OBJS2={} STW_SCAN_SLOTS={} STW_SCAN_NON_NULL_SLOTS={}",
         STW_MARK_OBJS.load(Ordering::SeqCst),
         STW_SCAN_OBJS.load(Ordering::SeqCst),
         STW_SCAN_OBJS2.load(Ordering::SeqCst),
+        STW_SCAN_SLOTS.load(Ordering::SeqCst),
+        STW_SCAN_NON_NULL_SLOTS.load(Ordering::SeqCst),
     );
     STW_MARK_OBJS.store(0, Ordering::SeqCst);
     STW_SCAN_OBJS.store(0, Ordering::SeqCst);
     STW_SCAN_OBJS2.store(0, Ordering::SeqCst);
+    STW_SCAN_SLOTS.store(0, Ordering::SeqCst);
+    STW_SCAN_NON_NULL_SLOTS.store(0, Ordering::SeqCst);
     gc_log!(
         " - FLUSHED_LARGE_REF_ARRAY_PACKETS={} FLUSHED_NORMAL_PACKETS={}",
         FLUSHED_LARGE_REF_ARRAY_PACKETS.load(Ordering::SeqCst),
