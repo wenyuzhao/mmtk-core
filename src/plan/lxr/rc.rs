@@ -26,19 +26,23 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
+static SCAN_OBJS: AtomicUsize = AtomicUsize::new(0);
 static INC_EDGES: AtomicUsize = AtomicUsize::new(0);
 static INC_TIME: AtomicUsize = AtomicUsize::new(0);
 
 pub fn dump_counters() {
     gc_log!(
-        " - INC_EDGES={} INC_TIME={}ms",
+        " - INC_EDGES={} INC_TIME={}ms INC_SCAN_OBJS={}",
         INC_EDGES.load(Ordering::SeqCst),
         INC_TIME.load(Ordering::SeqCst) / 1000,
+        SCAN_OBJS.load(Ordering::SeqCst) / 1000,
     );
     INC_EDGES.store(0, Ordering::SeqCst);
     INC_TIME.store(0, Ordering::SeqCst);
+    SCAN_OBJS.store(0, Ordering::SeqCst);
 }
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
@@ -61,6 +65,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     copy_context: *mut GCWorkerCopyContext<VM>,
     #[cfg(feature = "lxr_precise_incs_counter")]
     stat: crate::LocalRCStat,
+    scan_objs: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -98,6 +103,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             copy_context: std::ptr::null_mut(),
             #[cfg(feature = "lxr_precise_incs_counter")]
             stat: crate::LocalRCStat::default(),
+            scan_objs: 0,
         }
     }
 

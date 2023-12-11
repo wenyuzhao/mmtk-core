@@ -368,7 +368,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 object.get_size::<VM>(),
                 data,
             ));
-            if self.next_grey_large_ref_arrays_size >= 30000 {
+            if self.next_grey_large_ref_arrays_size >= 4096 {
                 self.flush_arr();
             }
             // let mut count = 0;
@@ -385,7 +385,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
         } else {
             // Small objects: enqueue
             self.next_grey_objects.push((object, self.klass));
-            if self.next_grey_objects.len() >= 40960 {
+            if self.next_grey_objects.len() >= 4096 {
                 self.flush_obj();
             }
         }
