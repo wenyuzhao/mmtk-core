@@ -192,6 +192,24 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         self.address_in_space(object.to_address::<VM>())
     }
 
+    #[cfg_attr(feature = "inline_pragmas", inline)]
+    fn address_in_space_fast(&self, start: Address) -> bool {
+        #[cfg(not(feature = "opt_space_check"))]
+        if !start.is_mapped() {
+            return false;
+        }
+        if !self.common().descriptor.is_contiguous() {
+            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+        } else {
+            start >= self.common().start && start < self.common().start + self.common().extent
+        }
+    }
+
+    #[cfg_attr(feature = "inline_pragmas", inline)]
+    fn in_space_fast(&self, object: ObjectReference) -> bool {
+        self.address_in_space_fast(object.to_address::<VM>())
+    }
+
     /**
      * This is called after we get result from page resources.  The space may
      * tap into the hook to monitor heap growth.  The call is made from within the

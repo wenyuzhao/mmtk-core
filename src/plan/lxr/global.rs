@@ -1093,7 +1093,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     pub fn is_marked(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
-        if self.immix_space.in_space(o) {
+        if self.immix_space.in_space_fast(o) {
             self.immix_space.is_marked(o)
         } else {
             self.common.los.is_marked(o)

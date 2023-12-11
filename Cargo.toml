@@ -178,6 +178,7 @@ lxr_simple_satb_trigger = []
 inline_pragmas = []
 defrag_checks = []
 opt_attempt_mark = []
+opt_space_check = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
