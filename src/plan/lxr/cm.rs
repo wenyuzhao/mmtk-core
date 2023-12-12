@@ -372,6 +372,10 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
         if self.rc.object_or_line_is_dead(object) || VM::VMScanning::is_val_array(object) {
             return;
         }
+        #[cfg(feature = "measure_trace_rate")]
+        {
+            self.enqueued_objs += 1;
+        }
         if VM::VMScanning::is_obj_array(object)
             && VM::VMScanning::obj_array_data(object).len() >= 1024
         {
@@ -467,6 +471,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
             let us = t.elapsed().unwrap().as_micros() as usize;
             STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
             STW_SCAN_NON_NULL_SLOTS.fetch_add(self.scanned_non_null_slots, Ordering::SeqCst);
+            STW_ENQUEUE_OBJS.fetch_add(self.enqueued_objs, Ordering::SeqCst);
         }
     }
 }
