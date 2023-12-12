@@ -12,7 +12,6 @@ use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
-use crate::util::Address;
 use crate::vm::edge_shape::Edge;
 use crate::vm::edge_shape::MemorySlice;
 use crate::LazySweepingJobsCounter;
@@ -41,7 +40,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     no_evac: bool,
     pub root_kind: Option<RootKind>,
     depth: u32,
-    mark_objects: Vec<(ObjectReference, Address)>,
     lxr: &'static LXR<VM>,
     rc: RefCountHelper<VM>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
@@ -81,7 +79,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             rc: RefCountHelper::NEW,
             root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
-            mark_objects: vec![],
             copy_context: std::ptr::null_mut(),
             #[cfg(feature = "lxr_precise_incs_counter")]
             stat: crate::LocalRCStat::default(),
@@ -127,7 +124,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
-            if self.lxr.los().in_space(o) {
+            if self.lxr.los().in_space_fast(o) {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
             }
@@ -349,7 +346,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_objects += 1;
             s.inc_volume += o.get_size::<VM>();
         });
-        let los = self.lxr.los().in_space(o);
+        let los = self.lxr.los().in_space_fast(o);
         if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
                 std::hint::spin_loop();
@@ -699,14 +696,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     );
             }
         }
-        if !self.mark_objects.is_empty() {
-            let objs = std::mem::take(&mut self.mark_objects);
-            assert!(self.in_cm);
-            assert_ne!(self.pause, Pause::FinalMark);
-            worker
-                .scheduler()
-                .postpone(LXRConcurrentTraceObjects::new_grey_objects(objs));
-        }
     }
 }
 
@@ -817,7 +806,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             s.dead_mature_rc_objects += 1;
             s.dead_mature_rc_volume += o.get_size::<VM>();
 
-            if !lxr.immix_space.in_space(o) {
+            if !lxr.immix_space.in_space_fast(o) {
                 s.dead_mature_los_objects += 1;
                 s.dead_mature_los_volume += o.get_size::<VM>();
 
@@ -845,7 +834,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 let x = edge.load();
                 if !x.is_null() {
                     // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                    if edge.to_address().is_mapped() {
+                    if edge.to_address().is_in_mmtk_heap() {
                         let rc = self.rc.count(x);
                         if rc != MAX_REF_COUNT && rc != 0 {
                             self.recursive_dec(x);
@@ -871,7 +860,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 }
             });
         }
-        let in_ix_space = lxr.immix_space.in_space(o);
+        let in_ix_space = lxr.immix_space.in_space_fast(o);
         if !crate::args::HOLE_COUNTING && in_ix_space {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }

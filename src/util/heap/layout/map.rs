@@ -1,9 +1,11 @@
+use downcast_rs::Downcast;
+
 use crate::util::freelist::FreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::Address;
 
-pub trait VMMap: Sync {
+pub trait VMMap: Sync + Downcast {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor);
 
     /// Create a free-list for a discontiguous space. Must only be called at boot time.
@@ -75,3 +77,5 @@ pub trait VMMap: Sync {
         unimplemented!("map32 only")
     }
 }
+
+impl_downcast!(VMMap);

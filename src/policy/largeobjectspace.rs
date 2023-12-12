@@ -422,6 +422,34 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// the method will attemp to mark the object and clear its nursery bit. If the attempt
     /// succeeds, the method will return true, meaning the object is marked by this invocation.
     /// Otherwise, it returns false.
+    #[cfg(feature = "opt_attempt_mark")]
+    fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {
+        let mask = if self.rc_enabled {
+            MARK_BIT
+        } else if self.in_nursery_gc {
+            LOS_BIT_MASK
+        } else {
+            MARK_BIT
+        };
+        let result = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
+            .as_spec()
+            .extract_side_spec()
+            .fetch_update_atomic::<u8, _>(
+                object.to_raw_address(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |old_value| {
+                    let mark_bit = old_value & mask;
+                    if mark_bit == value {
+                        return None;
+                    }
+                    Some(old_value & !LOS_BIT_MASK | value)
+                },
+            );
+        result.is_ok()
+    }
+
+    #[cfg(not(feature = "opt_attempt_mark"))]
     fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {
         loop {
             let mask = if self.rc_enabled {
@@ -462,7 +490,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
             object,
             None,
-            Ordering::SeqCst,
+            if cfg!(feature = "opt_attempt_mark") {
+                Ordering::Relaxed
+            } else {
+                Ordering::SeqCst
+            },
         ) & MARK_BIT
             == value
     }

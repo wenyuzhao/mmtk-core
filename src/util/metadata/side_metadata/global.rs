@@ -546,6 +546,11 @@ impl SideMetadataSpec {
         )
     }
 
+    pub fn load_byte(&self, data_addr: Address) -> u8 {
+        let meta_addr = address_to_meta_address(self, data_addr);
+        unsafe { meta_addr.load::<u8>() }
+    }
+
     pub fn load_atomic<T: MetadataValue>(&self, data_addr: Address, order: Ordering) -> T {
         self.side_metadata_access::<T, _, _, _>(
             data_addr,

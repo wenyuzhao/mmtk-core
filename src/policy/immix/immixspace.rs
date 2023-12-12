@@ -1312,6 +1312,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Atomically mark an object.
+    #[cfg(feature = "opt_attempt_mark")]
+    pub fn attempt_mark(&self, object: ObjectReference) -> bool {
+        let result = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.fetch_update_metadata::<VM, u8, _>(
+            object,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |v| {
+                if v == self.mark_state {
+                    return None;
+                }
+                Some(self.mark_state)
+            },
+        );
+        result.is_ok()
+    }
+
+    #[cfg(not(feature = "opt_attempt_mark"))]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         loop {
             let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
@@ -1371,7 +1388,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
             None,
-            Ordering::SeqCst,
+            if cfg!(feature = "opt_attempt_mark") {
+                Ordering::Relaxed
+            } else {
+                Ordering::SeqCst
+            },
         );
         old_value == mark_state
     }

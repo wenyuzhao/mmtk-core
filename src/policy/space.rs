@@ -190,6 +190,30 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         self.address_in_space(object.to_address::<VM>())
     }
 
+    fn address_in_space_fast(&self, start: Address) -> bool {
+        #[cfg(not(feature = "opt_space_check"))]
+        if !start.is_mapped() {
+            return false;
+        }
+        #[cfg(not(feature = "no_dyn_dispatch"))]
+        if !self.common().descriptor.is_contiguous() {
+            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+        } else {
+            start >= self.common().start && start < self.common().start + self.common().extent
+        }
+        #[cfg(feature = "no_dyn_dispatch")]
+        {
+            use crate::vm::object_model::ObjectModel;
+            debug_assert!(VM::VMObjectModel::COMPRESSED_PTR_ENABLED);
+            let common = self.common();
+            common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
+        }
+    }
+
+    fn in_space_fast(&self, object: ObjectReference) -> bool {
+        self.address_in_space_fast(object.to_address::<VM>())
+    }
+
     /**
      * This is called after we get result from page resources.  The space may
      * tap into the hook to monitor heap growth.  The call is made from within the
@@ -383,6 +407,7 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
 
     pub vm_map: &'static dyn VMMap,
+    pub vm_map_32: Option<&'static crate::util::heap::layout::map32::Map32>,
     pub mmapper: &'static dyn Mmapper,
 
     /// This field equals to needs_log_bit in the plan constraints.
@@ -461,6 +486,12 @@ impl<VM: VMBinding> CommonSpace<VM> {
             start: unsafe { Address::zero() },
             extent: 0,
             vm_map: args.plan_args.vm_map,
+            vm_map_32: args
+                .plan_args
+                .vm_map
+                .as_any()
+                .downcast_ref::<crate::util::heap::layout::map32::Map32>()
+                .map(|x| unsafe { &*(x as *const crate::util::heap::layout::map32::Map32) }),
             mmapper: args.plan_args.mmapper,
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             needs_field_log_bit: args.plan_args.constraints.needs_field_log_bit,
@@ -569,6 +600,11 @@ impl<VM: VMBinding> CommonSpace<VM> {
 
     pub fn vm_map(&self) -> &'static dyn VMMap {
         self.vm_map
+    }
+
+    #[allow(unused)]
+    pub(crate) fn get_vm_map32(&self) -> &'static crate::util::heap::layout::map32::Map32 {
+        unsafe { self.vm_map_32.unwrap_unchecked() }
     }
 }
 

@@ -769,11 +769,19 @@ impl<VM: VMBinding> LXR<VM> {
         );
 
         // If CM is finished, do a final mark pause
+        if crate::verbose(3) {
+            if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
+                if concurrent_marking_packets_drained {
+                    gc_log!([3] "Finish SATB: Concurrent marking is done");
+                } else {
+                    gc_log!([3] "Finish SATB: Concurrent marking is NOT done");
+                }
+            }
+        }
         if self.concurrent_marking_enabled()
             && concurrent_marking_in_progress
             && concurrent_marking_packets_drained
         {
-            gc_log!([3] "Finish SATB: Concurrent marking is done");
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
@@ -784,10 +792,11 @@ impl<VM: VMBinding> LXR<VM> {
                 .load(Ordering::Relaxed)
         {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
-                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={}",
+                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={} cm_packets={}",
                     emergency,
                     self.base().is_user_triggered_collection(),
                     self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                    crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
                 );
                 Pause::FinalMark
             } else {
@@ -1063,16 +1072,16 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
-        self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
+        self.immix_space.in_space_fast(o) && Block::in_defrag_block::<VM>(o)
     }
 
     pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
+        self.immix_space.address_in_space_fast(a) && Block::address_in_defrag_block(a)
     }
 
     pub fn mark(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
-        if self.immix_space.in_space(o) {
+        if self.immix_space.in_space_fast(o) {
             self.immix_space.attempt_mark(o)
         } else {
             self.common.los.attempt_mark(o)
@@ -1090,7 +1099,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     pub fn is_marked(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
-        if self.immix_space.in_space(o) {
+        if self.immix_space.in_space_fast(o) {
             self.immix_space.is_marked(o)
         } else {
             self.common.los.is_marked(o)

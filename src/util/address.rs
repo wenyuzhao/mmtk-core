@@ -336,6 +336,11 @@ impl Address {
         }
     }
 
+    pub fn is_in_mmtk_heap(self) -> bool {
+        let layout = vm_layout();
+        self >= layout.heap_start && self < layout.heap_end
+    }
+
     pub fn unlock<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());
         RC_LOCK_BITS.store_atomic(self, UNLOCKED_VALUE, Ordering::Relaxed)
