@@ -249,7 +249,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
         #[cfg(feature = "defrag_checks")]
         if crate::args::RC_MATURE_EVACUATION
-            && (should_check_remset || !e.to_address().is_mapped())
+            && (should_check_remset || !e.to_address().is_in_mmtk_heap())
             && self.plan.in_defrag(t)
         {
             self.plan.immix_space.mature_evac_remset.record(e, t);
