@@ -189,7 +189,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             );
         }
 
-        let no_trace = NULL_AND_RC_CHECK && self.rc.count(object) == 0;
+        let no_trace = NULL_AND_RC_CHECK && self.rc.conservative_is_dead(object);
         if no_trace {
             return object;
         }
@@ -242,7 +242,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 return;
             }
             self.scanned_non_null_slots += 1;
-            if self.rc.count(t) != 0 {
+            if !self.rc.conservative_is_dead(t) {
                 #[cfg(feature = "defrag_checks")]
                 {
                     self.process_edge_after_obj_scan(object, e, t, should_check_remset);
@@ -264,7 +264,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 continue;
             }
             self.scanned_non_null_slots += 1;
-            if self.rc.count(t) != 0 {
+            if !self.rc.conservative_is_dead(t) {
                 #[cfg(feature = "defrag_checks")]
                 {
                     self.process_edge_after_obj_scan(object, e, t, should_check_remset);

@@ -148,6 +148,16 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed)
     }
 
+    #[cfg(feature = "fast_rc_check")]
+    pub fn conservative_is_dead(&self, o: ObjectReference) -> bool {
+        RC_TABLE.load_byte(o.to_address::<VM>()) == 0
+    }
+
+    #[cfg(not(feature = "fast_rc_check"))]
+    pub fn conservative_is_dead(&self, o: ObjectReference) -> bool {
+        self.count(o) == 0
+    }
+
     pub fn rc_table_range<UInt: Sized>(&self, b: Block) -> &'static [UInt] {
         debug_assert!({
             let log_bits_in_uint: usize =
