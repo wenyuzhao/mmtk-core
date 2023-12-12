@@ -770,10 +770,16 @@ impl<VM: VMBinding> LXR<VM> {
         );
 
         // If CM is finished, do a final mark pause
+        if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
+            if concurrent_marking_packets_drained {
+                gc_log!([3] "Finish SATB: Concurrent marking is done");
+            } else {
+                gc_log!([3] "Finish SATB: Concurrent marking is NOT done");
+            }
+        }
         if self.concurrent_marking_enabled() && concurrent_marking_in_progress
         // && concurrent_marking_packets_drained
         {
-            gc_log!([3] "Finish SATB: Concurrent marking is done");
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
