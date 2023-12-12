@@ -273,8 +273,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     fn scan_large_ref_array(&mut self, slice: VM::VMMemorySlice) {
-        #[cfg(feature = "defrag_checks")]
-        let should_check_remset = !self.plan.in_defrag(object);
+        // #[cfg(feature = "defrag_checks")]
+        // let should_check_remset = !self.plan.address_in_defrag(e.to_address());
         for e in slice.iter_edges() {
             let t: ObjectReference = e.load();
             if t.is_null() {
@@ -285,14 +285,14 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 self.scanned_non_null_slots += 1;
             }
             if !self.rc.object_or_line_is_dead(t) {
-                #[cfg(feature = "defrag_checks")]
-                {
-                    self.process_edge_after_obj_scan(t, should_check_remset);
-                }
-                #[cfg(not(feature = "defrag_checks"))]
-                {
-                    self.process_edge_after_obj_scan(t, false);
-                }
+                // #[cfg(feature = "defrag_checks")]
+                // {
+                //     self.process_edge_after_obj_scan(t, should_check_remset);
+                // }
+                // #[cfg(not(feature = "defrag_checks"))]
+                // {
+                self.process_edge_after_obj_scan(t, false);
+                // }
             }
         }
     }
