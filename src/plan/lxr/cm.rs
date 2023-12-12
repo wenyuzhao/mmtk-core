@@ -197,7 +197,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             );
         }
 
-        let no_trace = NULL_AND_RC_CHECK && self.rc.count(object) == 0;
+        let no_trace = NULL_AND_RC_CHECK && self.rc.object_or_line_is_dead(object);
         if no_trace || self.plan.is_marked(object) {
             return object;
         }
@@ -265,7 +265,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 object
             );
         }
-        if self.rc.count(object) == 0 || object.class_pointer::<VM>() != klass {
+        if self.rc.object_or_line_is_dead(object) || object.class_pointer::<VM>() != klass {
             return;
         }
         #[cfg(feature = "defrag_checks")]
@@ -280,7 +280,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     return;
                 }
                 self.scanned_non_null_slots += 1;
-                if self.rc.count(t) != 0 {
+                if !self.rc.object_or_line_is_dead(t) {
                     #[cfg(feature = "defrag_checks")]
                     {
                         self.process_edge_after_obj_scan(object, e, t, should_check_remset);
@@ -309,7 +309,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             );
         }
         let current_klass = object.class_pointer::<VM>();
-        if self.rc.count(object) == 0 {
+        if self.rc.object_or_line_is_dead(object) {
             return;
         }
         if current_klass != klass || object.get_size::<VM>() != size {
@@ -323,7 +323,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 continue;
             }
             self.scanned_non_null_slots += 1;
-            if self.rc.count(t) != 0 {
+            if !self.rc.object_or_line_is_dead(t) {
                 #[cfg(feature = "defrag_checks")]
                 {
                     self.process_edge_after_obj_scan(object, e, t, should_check_remset);
@@ -347,7 +347,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             );
         }
         // Don't enqueue the object if RC is zero
-        if self.rc.count(object) == 0 || VM::VMScanning::is_val_array(object) {
+        if self.rc.object_or_line_is_dead(object) || VM::VMScanning::is_val_array(object) {
             return;
         }
         if VM::VMScanning::is_obj_array(object)

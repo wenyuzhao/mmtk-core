@@ -1312,7 +1312,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Atomically mark an object.
-
     #[cfg(feature = "opt_attempt_mark")]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         let result = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.fetch_update_metadata::<VM, u8, _>(

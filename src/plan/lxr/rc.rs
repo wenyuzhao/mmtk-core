@@ -12,7 +12,6 @@ use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
-use crate::util::Address;
 use crate::vm::edge_shape::Edge;
 use crate::vm::edge_shape::MemorySlice;
 use crate::LazySweepingJobsCounter;
@@ -832,7 +831,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             s.dead_mature_rc_objects += 1;
             s.dead_mature_rc_volume += o.get_size::<VM>();
 
-            if !lxr.immix_space.in_space(o) {
+            if !lxr.immix_space.in_space_fast(o) {
                 s.dead_mature_los_objects += 1;
                 s.dead_mature_los_volume += o.get_size::<VM>();
 

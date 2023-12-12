@@ -203,6 +203,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
         #[cfg(feature = "no_dyn_dispatch")]
         {
+            use crate::vm::object_model::ObjectModel;
+            debug_assert!(VM::VMObjectModel::COMPRESSED_PTR_ENABLED);
             let common = self.common();
             common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
         }
@@ -484,14 +486,12 @@ impl<VM: VMBinding> CommonSpace<VM> {
             start: unsafe { Address::zero() },
             extent: 0,
             vm_map: args.plan_args.vm_map,
-            vm_map_32: Some(
-                args.plan_args
-                    .vm_map
-                    .as_any()
-                    .downcast_ref::<crate::util::heap::layout::map32::Map32>()
-                    .map(|x| unsafe { &*(x as *const crate::util::heap::layout::map32::Map32) })
-                    .unwrap(),
-            ),
+            vm_map_32: args
+                .plan_args
+                .vm_map
+                .as_any()
+                .downcast_ref::<crate::util::heap::layout::map32::Map32>()
+                .map(|x| unsafe { &*(x as *const crate::util::heap::layout::map32::Map32) }),
             mmapper: args.plan_args.mmapper,
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             needs_field_log_bit: args.plan_args.constraints.needs_field_log_bit,
@@ -602,7 +602,8 @@ impl<VM: VMBinding> CommonSpace<VM> {
         self.vm_map
     }
 
-    pub fn get_vm_map32(&self) -> &'static crate::util::heap::layout::map32::Map32 {
+    #[allow(unused)]
+    pub(crate) fn get_vm_map32(&self) -> &'static crate::util::heap::layout::map32::Map32 {
         unsafe { self.vm_map_32.unwrap_unchecked() }
     }
 }

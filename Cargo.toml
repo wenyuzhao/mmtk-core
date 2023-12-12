@@ -182,6 +182,12 @@ opt_space_check = []
 no_decs = []
 no_dyn_dispatch = []
 fast_rc_check = []
+opt = [
+    "opt_attempt_mark",
+    "opt_space_check",
+    "no_dyn_dispatch",
+    "fast_rc_check",
+]
 
 fixed_alloc_trigger_based_on_system_time = []
 

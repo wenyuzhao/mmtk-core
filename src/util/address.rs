@@ -337,7 +337,8 @@ impl Address {
     }
 
     pub fn is_in_mmtk_heap(self) -> bool {
-        self >= vm_layout().heap_start && self < vm_layout().heap_end
+        let layout = vm_layout();
+        self >= layout.heap_start && self < layout.heap_end
     }
 
     pub fn unlock<VM: VMBinding>(self) {
