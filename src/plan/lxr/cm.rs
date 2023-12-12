@@ -252,7 +252,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 if t.is_null() {
                     return;
                 }
-                if self.rc.count(object) != 0 {
+                if self.rc.count(t) != 0 {
                     self.process_edge_after_obj_scan(object, e, t, should_check_remset);
                 }
             },
@@ -286,7 +286,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if t.is_null() {
                 continue;
             }
-            if self.rc.count(object) != 0 {
+            if self.rc.count(t) != 0 {
                 self.process_edge_after_obj_scan(object, e, t, should_check_remset);
             }
         }
