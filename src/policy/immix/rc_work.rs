@@ -413,6 +413,7 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
+        #[cfg(not(feature = "lxr_no_mature_defrag"))]
         while let Some((block, _)) = blocks.pop() {
             if Self::skip_block(block) {
                 continue;
@@ -437,6 +438,7 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
+        #[cfg(not(feature = "lxr_no_mature_defrag"))]
         while let Some((block, _dead_bytes)) = blocks.pop() {
             if Self::skip_block(block) {
                 continue;
