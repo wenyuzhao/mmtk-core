@@ -195,10 +195,16 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         if !start.is_mapped() {
             return false;
         }
+        #[cfg(not(feature = "no_dyn_dispatch"))]
         if !self.common().descriptor.is_contiguous() {
             self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
         } else {
             start >= self.common().start && start < self.common().start + self.common().extent
+        }
+        #[cfg(feature = "no_dyn_dispatch")]
+        {
+            let common = self.common();
+            common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
         }
     }
 
@@ -399,6 +405,7 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
 
     pub vm_map: &'static dyn VMMap,
+    pub vm_map_32: Option<&'static crate::util::heap::layout::map32::Map32>,
     pub mmapper: &'static dyn Mmapper,
 
     /// This field equals to needs_log_bit in the plan constraints.
@@ -477,6 +484,14 @@ impl<VM: VMBinding> CommonSpace<VM> {
             start: unsafe { Address::zero() },
             extent: 0,
             vm_map: args.plan_args.vm_map,
+            vm_map_32: Some(
+                args.plan_args
+                    .vm_map
+                    .as_any()
+                    .downcast_ref::<crate::util::heap::layout::map32::Map32>()
+                    .map(|x| unsafe { &*(x as *const crate::util::heap::layout::map32::Map32) })
+                    .unwrap(),
+            ),
             mmapper: args.plan_args.mmapper,
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             needs_field_log_bit: args.plan_args.constraints.needs_field_log_bit,
@@ -585,6 +600,10 @@ impl<VM: VMBinding> CommonSpace<VM> {
 
     pub fn vm_map(&self) -> &'static dyn VMMap {
         self.vm_map
+    }
+
+    pub fn get_vm_map32(&self) -> &'static crate::util::heap::layout::map32::Map32 {
+        unsafe { self.vm_map_32.unwrap_unchecked() }
     }
 }
 
