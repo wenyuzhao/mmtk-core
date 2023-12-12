@@ -145,7 +145,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         &mut self,
         slices: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
     ) {
-        FLUSHED_LARGE_REF_ARRAY_PACKETS.fetch_add(1, Ordering::SeqCst);
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
         debug_assert!(self.plan.concurrent_marking_enabled());
@@ -158,7 +157,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     fn create_scan_objects_packet(&mut self, objects: Vec<(ObjectReference, Address)>) {
-        FLUSHED_NORMAL_PACKETS.fetch_add(1, Ordering::SeqCst);
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
         debug_assert!(self.plan.concurrent_marking_enabled());
@@ -442,9 +440,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
             }
         } else if let Some(slices) = self.grey_large_ref_arrays.take() {
             for (o, k, size, s) in slices {
-                let len = s.len();
                 self.scan_large_ref_array(o, k, size, s);
-                // println!("CMArray len={} time={}ms", len, ms);
             }
         }
         // CM: Decrease counter

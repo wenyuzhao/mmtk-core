@@ -472,9 +472,6 @@ impl MatureEvacuationSet {
             lxr.immix_space.defrag_headroom_pages()
         };
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
-
-        let max_copy_bytes = 0;
-        gc_log!("max_copy_bytes: {}", max_copy_bytes);
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
         if lxr.immix_space.pr.has_chunk_fragmentation_info() {
