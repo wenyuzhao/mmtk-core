@@ -174,7 +174,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn trace_object<const NULL_AND_RC_CHECK: bool>(
         &mut self,
         object: ObjectReference,
@@ -223,12 +222,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn process_edge_after_obj_scan(&mut self, t: ObjectReference) {
         self.trace_object::<false>(t);
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn scan_object(&mut self, object: ObjectReference) {
         if cfg!(feature = "sanity") {
             assert!(
@@ -282,7 +279,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "sanity") {
             assert!(

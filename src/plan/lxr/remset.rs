@@ -84,7 +84,6 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
         }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn record(&self, e: VM::VMEdge, o: ObjectReference) {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.add(1);

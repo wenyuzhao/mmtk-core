@@ -217,7 +217,6 @@ impl Mmapper for FragmentedMapper {
      * @param addr The address in question.
      * @return {@code true} if the given address has been mmapped
      */
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn is_mapped_address(&self, addr: Address) -> bool {
         let mapped = self.slab_table(addr);
         match mapped {
@@ -276,7 +275,6 @@ impl FragmentedMapper {
         mapped
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn hash(addr: Address) -> usize {
         let mut initial = (addr & !MMAP_SLAB_MASK) >> LOG_MMAP_SLAB_BYTES;
         let mut hash = 0;
@@ -287,7 +285,6 @@ impl FragmentedMapper {
         hash
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn slab_table(&self, addr: Address) -> Option<&Slab> {
         self.get_slab_table(addr)
     }
@@ -297,7 +294,6 @@ impl FragmentedMapper {
             .unwrap()
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn inner(&self) -> &InnerFragmentedMapper {
         unsafe { &*self.inner.get() }
     }
@@ -306,7 +302,6 @@ impl FragmentedMapper {
         unsafe { &mut *self.inner.get() }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn get_slab_table(&self, addr: Address) -> Option<&Slab> {
         if addr == SENTINEL {
             return None;
@@ -369,7 +364,6 @@ impl FragmentedMapper {
         }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn slab_table_for(&self, _addr: Address, index: usize) -> Option<&Slab> {
         debug_assert!(self.inner().slab_table[index].is_some());
         self.inner().slab_table[index].as_ref().map(|x| x as &Slab)

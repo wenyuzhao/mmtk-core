@@ -80,7 +80,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 // block.calc_dead_bytes::<VM>()
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
-            if lxr.current_pause().unwrap() == Pause::Full || score >= (Block::BYTES >> 1) || true {
+            if lxr.current_pause().unwrap() == Pause::Full || score >= (Block::BYTES >> 1) {
                 fragmented_blocks.push((block, score));
             }
         }
@@ -464,12 +464,11 @@ impl MatureEvacuationSet {
             los.release_rc_nursery_objects();
         }
         // Select mature defrag blocks
-        let available_clean_pages_for_defrag =
-            if lxr.current_pause().unwrap() == Pause::Full || true {
-                lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
-            } else {
-                lxr.immix_space.defrag_headroom_pages()
-            };
+        let available_clean_pages_for_defrag = if lxr.current_pause().unwrap() == Pause::Full {
+            lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
+        } else {
+            lxr.immix_space.defrag_headroom_pages()
+        };
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
 
         let max_copy_bytes = 0;

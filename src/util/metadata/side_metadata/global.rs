@@ -39,7 +39,6 @@ impl SideMetadataSpec {
         !self.is_absolute_offset()
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub const fn get_absolute_offset(&self) -> Address {
         debug_assert!(self.is_absolute_offset());
         unsafe { self.offset.addr }
@@ -450,7 +449,6 @@ impl SideMetadataSpec {
     /// * check if the side metadata memory is mapped.
     /// * check if the side metadata content is correct based on a sanity map (only for extreme assertions).
     #[allow(unused_variables)] // data_addr/input is not used in release build
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn side_metadata_access<T: MetadataValue, R: Copy, F: FnOnce() -> R, V: FnOnce(R)>(
         &self,
         data_addr: Address,
@@ -548,7 +546,6 @@ impl SideMetadataSpec {
         )
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn load_atomic<T: MetadataValue>(&self, data_addr: Address, order: Ordering) -> T {
         self.side_metadata_access::<T, _, _, _>(
             data_addr,
@@ -572,7 +569,6 @@ impl SideMetadataSpec {
         )
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn store_atomic<T: MetadataValue>(&self, data_addr: Address, metadata: T, order: Ordering) {
         self.side_metadata_access::<T, _, _, _>(
             data_addr,
@@ -665,7 +661,6 @@ impl SideMetadataSpec {
         }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn compare_exchange_atomic<T: MetadataValue>(
         &self,
         data_addr: Address,

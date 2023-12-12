@@ -512,7 +512,6 @@ fn output_pause_time() {
 static NO_EVAC: AtomicBool = AtomicBool::new(false);
 static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 
-#[cfg_attr(feature = "inline_pragmas", inline)]
 pub fn gc_worker_id() -> Option<usize> {
     crate::scheduler::current_worker_ordinal()
 }

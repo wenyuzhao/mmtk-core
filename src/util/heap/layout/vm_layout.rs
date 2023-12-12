@@ -81,7 +81,6 @@ impl VMLayout {
     }
     /// Number of bits to shift a space index into/out of a virtual address.
     /// In a 32-bit model, use a dummy value so that the compiler doesn't barf.
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     pub(crate) fn space_shift_64(&self) -> usize {
         self.log_space_extent
     }
@@ -193,7 +192,6 @@ static mut VM_LAYOUT: VMLayout = VMLayout::new_64bit();
 
 static VM_LAYOUT_FETCHED: AtomicBool = AtomicBool::new(false);
 
-#[cfg_attr(feature = "inline_pragmas", inline)]
 pub fn vm_layout() -> &'static VMLayout {
     if cfg!(debug_assertions) {
         VM_LAYOUT_FETCHED.store(true, Ordering::SeqCst);

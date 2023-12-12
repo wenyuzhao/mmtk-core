@@ -217,7 +217,6 @@ impl VMMap for Map64 {
         self.inner().finalized
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor {
         let index = Self::space_index(address).unwrap();
         self.inner().descriptor_map[index]
@@ -245,7 +244,6 @@ impl Map64 {
         unsafe { &*self.inner.get() }
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn space_index(addr: Address) -> Option<usize> {
         if addr > vm_layout().heap_end {
             return None;

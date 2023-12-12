@@ -114,7 +114,6 @@ impl Mmapper for ByteMapMmapper {
      * @param addr The address in question.
      * @return {@code true} if the given address has been mmapped
      */
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn is_mapped_address(&self, addr: Address) -> bool {
         let chunk = Self::address_to_mmap_chunks_down(addr);
         self.mapped[chunk].load(Ordering::Relaxed) == MapState::Mapped
@@ -152,7 +151,6 @@ impl ByteMapMmapper {
         Self::bytes_to_mmap_chunks_up(pages_to_bytes(pages))
     }
 
-    #[cfg_attr(feature = "inline_pragmas", inline)]
     fn address_to_mmap_chunks_down(addr: Address) -> usize {
         addr >> LOG_MMAP_CHUNK_BYTES
     }
