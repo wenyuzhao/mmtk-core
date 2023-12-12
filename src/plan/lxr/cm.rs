@@ -16,6 +16,7 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
+#[cfg(feature = "measure_trace_rate")]
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -31,6 +32,10 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     next_grey_objects: VectorQueue<(ObjectReference, Address)>,
     klass: Address,
     rc: RefCountHelper<VM>,
+    #[cfg(feature = "measure_trace_rate")]
+    scanned_non_null_slots: usize,
+    #[cfg(feature = "measure_trace_rate")]
+    enqueued_objs: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -49,6 +54,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            #[cfg(feature = "measure_trace_rate")]
+            scanned_non_null_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
+            enqueued_objs: 0,
         }
     }
 
@@ -67,6 +76,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            #[cfg(feature = "measure_trace_rate")]
+            scanned_non_null_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
+            enqueued_objs: 0,
         }
     }
 
@@ -89,6 +102,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            #[cfg(feature = "measure_trace_rate")]
+            scanned_non_null_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
+            enqueued_objs: 0,
         }
     }
 
@@ -110,6 +127,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
+            #[cfg(feature = "measure_trace_rate")]
+            scanned_non_null_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
+            enqueued_objs: 0,
         }
     }
 
@@ -190,11 +211,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         self.klass = object.class_pointer::<VM>();
         debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
-        if self.plan.immix_space.in_space(object) {
+        if self.plan.immix_space.in_space_fast(object) {
             self.plan
                 .immix_space
                 .trace_object_without_moving_rc(self, object);
-        } else if self.plan.los().in_space(object) {
+        } else if self.plan.los().in_space_fast(object) {
             self.plan.los().trace_object(self, object);
         }
         object
@@ -252,6 +273,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 if t.is_null() {
                     return;
                 }
+                #[cfg(feature = "measure_trace_rate")]
+                {
+                    self.scanned_non_null_slots += 1;
+                }
                 if !self.rc.object_or_line_is_dead(t) {
                     self.process_edge_after_obj_scan(object, e, t, should_check_remset);
                 }
@@ -285,6 +310,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let t: ObjectReference = e.load();
             if t.is_null() {
                 continue;
+            }
+            #[cfg(feature = "measure_trace_rate")]
+            {
+                self.scanned_non_null_slots += 1;
             }
             if !self.rc.object_or_line_is_dead(t) {
                 self.process_edge_after_obj_scan(object, e, t, should_check_remset);
@@ -337,9 +366,15 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
-        if crate::verbose(3) && self.plan.current_pause().is_some() {
+        #[cfg(feature = "measure_trace_rate")]
+        let t = std::time::SystemTime::now();
+        #[cfg(feature = "measure_trace_rate")]
+        let record = if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
             STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
-        }
+            true
+        } else {
+            false
+        };
         // mark objects
         if let Some(objects) = self.white_objects.take() {
             self.trace_objects(&objects)
@@ -373,6 +408,12 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         self.flush();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        #[cfg(feature = "measure_trace_rate")]
+        if record {
+            let us = t.elapsed().unwrap().as_micros() as usize;
+            STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
+            STW_SCAN_NON_NULL_SLOTS.fetch_add(self.scanned_non_null_slots, Ordering::SeqCst);
+        }
     }
 }
 
@@ -398,10 +439,19 @@ impl ProcessModBufSATB {
     }
 }
 
+#[cfg(feature = "measure_trace_rate")]
 pub static STW_CM_PACKETS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_trace_rate")]
 pub static STW_MODBUF_PACKETS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_trace_rate")]
+pub static STW_CM_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_trace_rate")]
+pub static STW_ENQUEUE_OBJS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_trace_rate")]
+pub static STW_SCAN_NON_NULL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 
-pub fn dump_stw_cm_packet_counters() {
+#[cfg(feature = "measure_trace_rate")]
+pub fn dump_trace_rate() {
     gc_log!(
         " - STW_CM_PACKETS={} STW_MODBUF_PACKETS={}",
         STW_CM_PACKETS.load(Ordering::SeqCst),
@@ -409,13 +459,22 @@ pub fn dump_stw_cm_packet_counters() {
     );
     STW_CM_PACKETS.store(0, Ordering::SeqCst);
     STW_MODBUF_PACKETS.store(0, Ordering::SeqCst);
+    gc_log!(
+        " - STW_CM_PACKETS_TIME={}ms STW_ENQUEUE_OBJS={} STW_SCAN_NON_NULL_SLOTS={}",
+        STW_CM_PACKETS_TIME.load(Ordering::SeqCst) / 1000,
+        STW_ENQUEUE_OBJS.load(Ordering::SeqCst),
+        STW_SCAN_NON_NULL_SLOTS.load(Ordering::SeqCst),
+    );
+    STW_CM_PACKETS_TIME.store(0, Ordering::SeqCst);
+    STW_ENQUEUE_OBJS.store(0, Ordering::SeqCst);
+    STW_SCAN_NON_NULL_SLOTS.store(0, Ordering::SeqCst);
 }
 
 impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        if crate::verbose(3) && lxr.current_pause().is_some() {
+        #[cfg(feature = "measure_trace_rate")]
+        if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
             STW_MODBUF_PACKETS.fetch_add(1, Ordering::SeqCst);
         }
         let mut w = if let Some(nodes) = self.nodes.take() {
@@ -554,7 +613,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         );
         debug_assert!(object.class_is_valid::<VM>());
         let object = object.get_forwarded_object().unwrap_or(object);
-        let new_object = if self.lxr.immix_space.in_space(object) {
+        let new_object = if self.lxr.immix_space.in_space_fast(object) {
             if self
                 .lxr
                 .rc
@@ -640,7 +699,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());
-        let x = if self.lxr.immix_space.in_space(object) {
+        let x = if self.lxr.immix_space.in_space_fast(object) {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
@@ -839,7 +898,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        if self.lxr.immix_space.in_space(object) {
+        if self.lxr.immix_space.in_space_fast(object) {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
