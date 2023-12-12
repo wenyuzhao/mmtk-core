@@ -223,7 +223,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             );
         }
         if crate::args::RC_MATURE_EVACUATION
-            && (should_check_remset || !e.to_address().is_mapped())
+            && (should_check_remset || !e.to_address().is_in_mmtk_heap())
             && self.plan.in_defrag(t)
         {
             self.plan.immix_space.mature_evac_remset.record(e, t);
@@ -676,7 +676,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         }
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            if slot.to_address().is_mapped() {
+            if slot.to_address().is_in_mmtk_heap() {
                 debug_assert!(self.remset_recorded_edges);
                 // Don't do the store if the original is already overwritten
                 let _ =
