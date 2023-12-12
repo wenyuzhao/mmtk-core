@@ -188,6 +188,8 @@ opt = [
     "no_dyn_dispatch",
     "fast_rc_check",
 ]
+measure_trace_rate = []
+lxr_no_mature_defrag = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

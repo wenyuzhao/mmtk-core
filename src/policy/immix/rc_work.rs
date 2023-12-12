@@ -413,17 +413,18 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
-        // while let Some((block, _)) = blocks.pop() {
-        //     if Self::skip_block(block) {
-        //         continue;
-        //     }
-        //     block.set_as_defrag_source(true);
-        //     selected_blocks.push(block);
-        //     *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
-        //     if *copy_bytes >= max_copy_bytes {
-        //         break;
-        //     }
-        // }
+        #[cfg(not(feature = "lxr_no_mature_defrag"))]
+        while let Some((block, _)) = blocks.pop() {
+            if Self::skip_block(block) {
+                continue;
+            }
+            block.set_as_defrag_source(true);
+            selected_blocks.push(block);
+            *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
+            if *copy_bytes >= max_copy_bytes {
+                break;
+            }
+        }
     }
 
     fn select_fragmented_blocks(
@@ -437,17 +438,18 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
-        // while let Some((block, _dead_bytes)) = blocks.pop() {
-        //     if Self::skip_block(block) {
-        //         continue;
-        //     }
-        //     block.set_as_defrag_source(true);
-        //     selected_blocks.push(block);
-        //     *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
-        //     if *copy_bytes >= max_copy_bytes {
-        //         break;
-        //     }
-        // }
+        #[cfg(not(feature = "lxr_no_mature_defrag"))]
+        while let Some((block, _dead_bytes)) = blocks.pop() {
+            if Self::skip_block(block) {
+                continue;
+            }
+            block.set_as_defrag_source(true);
+            selected_blocks.push(block);
+            *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
+            if *copy_bytes >= max_copy_bytes {
+                break;
+            }
+        }
     }
 
     fn select_mature_evacuation_candidates<VM: VMBinding>(

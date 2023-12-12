@@ -330,8 +330,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
+        #[cfg(feature = "measure_trace_rate")]
         if crate::verbose(3) {
-            super::cm::dump_stw_cm_packet_counters();
+            super::cm::dump_trace_rate();
         }
         let pause = self.current_pause().unwrap();
         crate::stat(|s| {
@@ -779,8 +780,23 @@ impl<VM: VMBinding> LXR<VM> {
                 }
             }
         }
-        if self.concurrent_marking_enabled() && concurrent_marking_in_progress
-        // && concurrent_marking_packets_drained
+        #[cfg(feature = "measure_trace_rate")]
+        if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
+            if !concurrent_marking_packets_drained {
+                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={} cm_packets={}",
+                    emergency,
+                    self.base().is_user_triggered_collection(),
+                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+                    crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
+                );
+            }
+            return Pause::FinalMark;
+        }
+
+        #[cfg(not(feature = "measure_trace_rate"))]
+        if self.concurrent_marking_enabled()
+            && concurrent_marking_in_progress
+            && concurrent_marking_packets_drained
         {
             return Pause::FinalMark;
         }
