@@ -331,7 +331,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         let t = std::time::SystemTime::now();
-        let record = if crate::verbose(3) && self.plan.current_pause().is_some() {
+        let record = if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
             STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
             true
         } else {
