@@ -347,6 +347,10 @@ impl Address {
             MMAPPER.is_mapped_address(self)
         }
     }
+    #[cfg_attr(feature = "inline_pragmas", inline)]
+    pub fn is_in_mmtk_heap(self) -> bool {
+        self >= vm_layout().heap_start && self < vm_layout().heap_end
+    }
 
     pub fn unlock<VM: VMBinding>(self) {
         debug_assert!(!self.is_zero());

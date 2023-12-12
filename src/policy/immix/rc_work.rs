@@ -413,17 +413,17 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
-        while let Some((block, _)) = blocks.pop() {
-            if Self::skip_block(block) {
-                continue;
-            }
-            block.set_as_defrag_source(true);
-            selected_blocks.push(block);
-            *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
-            if *copy_bytes >= max_copy_bytes {
-                break;
-            }
-        }
+        // while let Some((block, _)) = blocks.pop() {
+        //     if Self::skip_block(block) {
+        //         continue;
+        //     }
+        //     block.set_as_defrag_source(true);
+        //     selected_blocks.push(block);
+        //     *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
+        //     if *copy_bytes >= max_copy_bytes {
+        //         break;
+        //     }
+        // }
     }
 
     fn select_fragmented_blocks(
@@ -437,17 +437,17 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
-        while let Some((block, _dead_bytes)) = blocks.pop() {
-            if Self::skip_block(block) {
-                continue;
-            }
-            block.set_as_defrag_source(true);
-            selected_blocks.push(block);
-            *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
-            if *copy_bytes >= max_copy_bytes {
-                break;
-            }
-        }
+        // while let Some((block, _dead_bytes)) = blocks.pop() {
+        //     if Self::skip_block(block) {
+        //         continue;
+        //     }
+        //     block.set_as_defrag_source(true);
+        //     selected_blocks.push(block);
+        //     *copy_bytes += (Block::BYTES - (block.calc_dead_lines() << Line::LOG_BYTES)) >> 1;
+        //     if *copy_bytes >= max_copy_bytes {
+        //         break;
+        //     }
+        // }
     }
 
     fn select_mature_evacuation_candidates<VM: VMBinding>(
@@ -464,11 +464,12 @@ impl MatureEvacuationSet {
             los.release_rc_nursery_objects();
         }
         // Select mature defrag blocks
-        let available_clean_pages_for_defrag = if lxr.current_pause().unwrap() == Pause::Full || true {
-            lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
-        } else {
-            lxr.immix_space.defrag_headroom_pages()
-        };
+        let available_clean_pages_for_defrag =
+            if lxr.current_pause().unwrap() == Pause::Full || true {
+                lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
+            } else {
+                lxr.immix_space.defrag_headroom_pages()
+            };
         let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
 
         let max_copy_bytes = 0;

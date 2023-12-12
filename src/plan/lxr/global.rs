@@ -1065,16 +1065,16 @@ impl<VM: VMBinding> LXR<VM> {
 
     #[cfg_attr(feature = "inline_pragmas", inline)]
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
-        self.immix_space.in_space(o) && Block::in_defrag_block::<VM>(o)
+        self.immix_space.in_space_fast(o) && Block::in_defrag_block::<VM>(o)
     }
 
     pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
+        self.immix_space.address_in_space_fast(a) && Block::address_in_defrag_block(a)
     }
 
     pub fn mark(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
-        if self.immix_space.in_space(o) {
+        if self.immix_space.in_space_fast(o) {
             self.immix_space.attempt_mark(o)
         } else {
             self.common.los.attempt_mark(o)

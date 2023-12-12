@@ -1,4 +1,8 @@
 mod barrier;
+#[cfg(not(feature = "no_decs"))]
+pub(super) mod cm;
+#[cfg(feature = "no_decs")]
+#[path = "./cm_nodecs.rs"]
 pub(super) mod cm;
 mod gc_work;
 pub(super) mod global;

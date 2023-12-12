@@ -25,13 +25,12 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     white_objects: Option<Vec<ObjectReference>>,
     white_objects_arc: Option<Arc<Vec<ObjectReference>>>,
     // objects to scan
-    grey_objects: Option<Vec<(ObjectReference, Address)>>,
-    grey_large_ref_arrays: Option<Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>>,
+    grey_objects: Option<Vec<ObjectReference>>,
+    grey_large_ref_arrays: Option<Vec<VM::VMMemorySlice>>,
     // recursively discovered grey objects
-    next_grey_objects: VectorQueue<(ObjectReference, Address)>,
-    next_grey_large_ref_arrays: VectorQueue<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    next_grey_objects: VectorQueue<ObjectReference>,
+    next_grey_large_ref_arrays: VectorQueue<VM::VMMemorySlice>,
     next_grey_large_ref_arrays_size: usize,
-    klass: Address,
     rc: RefCountHelper<VM>,
     scanned_non_null_slots: usize,
 }
@@ -52,7 +51,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
-            klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             scanned_non_null_slots: 0,
         }
@@ -73,13 +71,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
-            klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             scanned_non_null_slots: 0,
         }
     }
 
-    pub fn new_grey_objects(objects: Vec<(ObjectReference, Address)>) -> Self {
+    pub fn new_grey_objects(objects: Vec<ObjectReference>) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
         }
@@ -98,14 +95,13 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
-            klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             scanned_non_null_slots: 0,
         }
     }
 
     pub fn new_grey_large_ref_arrays(
-        slices: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+        slices: Vec<VM::VMMemorySlice>,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
         let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
@@ -119,16 +115,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_grey_objects: VectorQueue::default(),
             next_grey_large_ref_arrays: VectorQueue::default(),
             next_grey_large_ref_arrays_size: 0,
-            klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             scanned_non_null_slots: 0,
         }
     }
 
-    fn create_scan_large_ref_arrays_packet(
-        &mut self,
-        slices: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
-    ) {
+    fn create_scan_large_ref_arrays_packet(&mut self, slices: Vec<VM::VMMemorySlice>) {
         FLUSHED_LARGE_REF_ARRAY_PACKETS.fetch_add(1, Ordering::SeqCst);
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
@@ -141,7 +133,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    fn create_scan_objects_packet(&mut self, objects: Vec<(ObjectReference, Address)>) {
+    fn create_scan_objects_packet(&mut self, objects: Vec<ObjectReference>) {
         FLUSHED_NORMAL_PACKETS.fetch_add(1, Ordering::SeqCst);
         // This packet is executed in concurrent.
         let worker = GCWorker::<VM>::current();
@@ -199,7 +191,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
 
         let no_trace = NULL_AND_RC_CHECK && self.rc.count(object) == 0;
-        if no_trace || self.plan.is_marked(object) {
+        if no_trace {
             return object;
         }
         // During concurrent marking, decs-processing can kill the object and mutators can reusing the memory afterwards.
@@ -213,14 +205,13 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         //    Note that if the memory is being reused simultaneously, our cached child nodes are invalid.
         // 4. Check the RC of the object after scanning.
         //    Push the previously cached child nodes to the mark queue only if the object RC is not zero -- the object is not overwritten yet and the cached children must be valid.
-        self.klass = object.class_pointer::<VM>();
         debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space_fast(object) {
             self.plan
                 .immix_space
                 .trace_object_without_moving_rc(self, object);
-        } else if self.plan.los().in_space_fast(object) {
+        } else {
             self.plan.los().trace_object(self, object);
         }
         object
@@ -233,91 +224,41 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     #[cfg_attr(feature = "inline_pragmas", inline)]
-    fn process_edge_after_obj_scan(
-        &mut self,
-        object: ObjectReference,
-        e: VM::VMEdge,
-        t: ObjectReference,
-        should_check_remset: bool,
-    ) {
-        if cfg!(feature = "sanity") {
-            assert!(
-                t.to_address::<VM>().is_mapped(),
-                "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
-                object,
-                e,
-                t
-            );
-        }
-        #[cfg(feature = "defrag_checks")]
-        if crate::args::RC_MATURE_EVACUATION
-            && (should_check_remset || !e.to_address().is_mapped())
-            && self.plan.in_defrag(t)
-        {
-            self.plan.immix_space.mature_evac_remset.record(e, t);
-        }
+    fn process_edge_after_obj_scan(&mut self, t: ObjectReference) {
         self.trace_object::<false>(t);
     }
 
     #[cfg_attr(feature = "inline_pragmas", inline)]
-    fn scan_object(&mut self, object: ObjectReference, klass: Address) {
+    fn scan_object(&mut self, object: ObjectReference) {
         if cfg!(feature = "sanity") {
             assert!(
                 object.to_address::<VM>().is_mapped(),
                 "Invalid obj {:?}: address is not mapped",
                 object
             );
-        }
-        if self.rc.count(object) == 0 || object.class_pointer::<VM>() != klass {
-            return;
         }
         #[cfg(feature = "defrag_checks")]
         let should_check_remset = !self.plan.in_defrag(object);
-        object.iterate_fields_with_klass::<VM, _>(
-            CLDScanPolicy::Claim,
-            RefScanPolicy::Discover,
-            klass,
-            |e| {
-                let t: ObjectReference = e.load();
-                if t.is_null() {
-                    return;
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
+            let t: ObjectReference = e.load();
+            if t.is_null() {
+                return;
+            }
+            self.scanned_non_null_slots += 1;
+            if self.rc.count(t) != 0 {
+                #[cfg(feature = "defrag_checks")]
+                {
+                    self.process_edge_after_obj_scan(object, e, t, should_check_remset);
                 }
-                self.scanned_non_null_slots += 1;
-                if self.rc.count(t) != 0 {
-                    #[cfg(feature = "defrag_checks")]
-                    {
-                        self.process_edge_after_obj_scan(object, e, t, should_check_remset);
-                    }
-                    #[cfg(not(feature = "defrag_checks"))]
-                    {
-                        self.process_edge_after_obj_scan(object, e, t, false);
-                    }
+                #[cfg(not(feature = "defrag_checks"))]
+                {
+                    self.process_edge_after_obj_scan(t);
                 }
-            },
-        );
+            }
+        });
     }
 
-    fn scan_large_ref_array(
-        &mut self,
-        object: ObjectReference,
-        klass: Address,
-        size: usize,
-        slice: VM::VMMemorySlice,
-    ) {
-        if cfg!(feature = "sanity") {
-            assert!(
-                object.to_address::<VM>().is_mapped(),
-                "Invalid obj {:?}: address is not mapped",
-                object
-            );
-        }
-        let current_klass = object.class_pointer::<VM>();
-        if self.rc.count(object) == 0 {
-            return;
-        }
-        if current_klass != klass || object.get_size::<VM>() != size {
-            return;
-        }
+    fn scan_large_ref_array(&mut self, slice: VM::VMMemorySlice) {
         #[cfg(feature = "defrag_checks")]
         let should_check_remset = !self.plan.in_defrag(object);
         for e in slice.iter_edges() {
@@ -333,7 +274,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 }
                 #[cfg(not(feature = "defrag_checks"))]
                 {
-                    self.process_edge_after_obj_scan(object, e, t, false);
+                    self.process_edge_after_obj_scan(t);
                 }
             }
         }
@@ -351,7 +292,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             );
         }
         // Don't enqueue the object if RC is zero
-        if self.rc.count(object) == 0 || VM::VMScanning::is_val_array(object) {
+        if VM::VMScanning::is_val_array(object) {
             return;
         }
         if VM::VMScanning::is_obj_array(object)
@@ -359,12 +300,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
         {
             let data = VM::VMScanning::obj_array_data(object);
             self.next_grey_large_ref_arrays_size += data.len();
-            self.next_grey_large_ref_arrays.push((
-                object,
-                self.klass,
-                object.get_size::<VM>(),
-                data,
-            ));
+            self.next_grey_large_ref_arrays.push(data);
             if self.next_grey_large_ref_arrays_size >= 4096 {
                 self.flush_arr();
             }
@@ -381,7 +317,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             // println!("New CM Array Slice Packets {} array-len={}", count, VM::VMScanning::obj_array_data(object).len());
         } else {
             // Small objects: enqueue
-            self.next_grey_objects.push((object, self.klass));
+            self.next_grey_objects.push(object);
             if self.next_grey_objects.len() >= 4096 {
                 self.flush_obj();
             }
@@ -413,13 +349,12 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         }
         // scan and mark fields
         if let Some(objects) = self.grey_objects.take() {
-            for (o, k) in objects {
-                self.scan_object(o, k)
+            for o in objects {
+                self.scan_object(o)
             }
         } else if let Some(slices) = self.grey_large_ref_arrays.take() {
-            for (o, k, size, s) in slices {
-                let len = s.len();
-                self.scan_large_ref_array(o, k, size, s);
+            for s in slices {
+                self.scan_large_ref_array(s);
                 // println!("CMArray len={} time={}ms", len, ms);
             }
         }
@@ -434,8 +369,8 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
                 }
                 grey_objects.clear();
                 self.next_grey_objects.swap(&mut grey_objects);
-                for (o, k) in &grey_objects {
-                    self.scan_object(*o, *k);
+                for o in &grey_objects {
+                    self.scan_object(*o);
                 }
             }
         }
