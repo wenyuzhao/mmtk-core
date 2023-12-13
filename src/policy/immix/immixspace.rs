@@ -326,7 +326,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     fn side_metadata_specs(rc_enabled: bool) -> Vec<SideMetadataSpec> {
         if rc_enabled {
             let meta = vec![
-                MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
+                // MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
@@ -340,7 +340,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
-                MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
+                // MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,

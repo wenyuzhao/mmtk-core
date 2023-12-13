@@ -65,6 +65,8 @@ define_side_metadata_specs!(
     RC_TABLE = (global: true, log_num_of_bits: crate::util::rc::LOG_REF_COUNT_BITS, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
     // Field barrier lock bits
     RC_LOCK_BITS = (global: true, log_num_of_bits: 0, log_bytes_in_region: crate::args::LOG_BYTES_PER_RC_LOCK_BIT),
+    // Record defrag state for immix blocks
+    IX_BLOCK_DEFRAG = (global: true, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Mark table for sanity GC
     SANITY_MARK_BITS = (global: true, log_num_of_bits: 3, log_bytes_in_region: crate::util::rc::LOG_MIN_OBJECT_SIZE),
 );
@@ -78,8 +80,6 @@ define_side_metadata_specs!(
     MS_OFFSET_MALLOC = (global: false, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Mark lines by immix
     IX_LINE_MARK    = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
-    // Record defrag state for immix blocks
-    IX_BLOCK_DEFRAG = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Mark blocks by immix
     IX_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Striddle line marks

@@ -160,6 +160,23 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
+    fn trace_slice<const SRC_IN_DEFRAG: bool>(&mut self, slice: &VM::VMMemorySlice) {
+        for e in slice.iter_edges() {
+            let t = e.load();
+            if t.is_null() {
+                continue;
+            }
+            #[cfg(feature = "measure_trace_rate")]
+            {
+                self.scanned_non_null_slots += 1;
+            }
+            if crate::args::RC_MATURE_EVACUATION && SRC_IN_DEFRAG && self.plan.in_defrag(t) {
+                self.plan.immix_space.mature_evac_remset.record(e, t);
+            }
+            self.trace_object(t);
+        }
+    }
+
     fn trace_arrays(&mut self, arrays: &[(ObjectReference, Address, usize, VM::VMMemorySlice)]) {
         for (o, cls, size, slice) in arrays {
             if !(o.class_pointer::<VM>() == *cls
@@ -169,22 +186,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 continue;
             }
             let should_check_remset = !self.plan.in_defrag(*o);
-            for e in slice.iter_edges() {
-                let t = e.load();
-                if t.is_null() {
-                    continue;
-                }
-                #[cfg(feature = "measure_trace_rate")]
-                {
-                    self.scanned_non_null_slots += 1;
-                }
-                if crate::args::RC_MATURE_EVACUATION
-                    && (should_check_remset || !e.to_address().is_in_mmtk_heap())
-                    && self.plan.in_defrag(t)
-                {
-                    self.plan.immix_space.mature_evac_remset.record(e, t);
-                }
-                self.trace_object(t);
+            if should_check_remset {
+                self.trace_slice::<true>(slice)
+            } else {
+                self.trace_slice::<false>(slice)
             }
         }
     }

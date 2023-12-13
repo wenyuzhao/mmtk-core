@@ -594,6 +594,7 @@ impl<VM: VMBinding> LXR<VM> {
                     .as_spec()
                     .extract_side_spec(),
             ),
+            MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
         ]);
         let global_side_metadata_specs = SideMetadataContext::new_global_specs(&immix_specs);
         let options = args.options.clone();
@@ -1087,7 +1088,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     pub fn in_defrag(&self, o: ObjectReference) -> bool {
-        self.immix_space.in_space_fast(o) && Block::in_defrag_block::<VM>(o)
+        Block::in_defrag_block::<VM>(o)
     }
 
     pub fn address_in_defrag(&self, a: Address) -> bool {
