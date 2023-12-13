@@ -89,7 +89,7 @@ impl Default for RuntimeArgs {
                 .or_else(|| env_arg("TRACE_THRESHOLD"))
                 .or_else(|| env_arg("CM_THRESHOLD"))
                 .unwrap_or(if cfg!(feature = "lxr_simple_satb_trigger") {
-                    60
+                    50
                 } else {
                     20
                 }),
