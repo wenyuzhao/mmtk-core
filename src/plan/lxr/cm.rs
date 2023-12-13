@@ -1,6 +1,7 @@
 use super::LXR;
 use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
+use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
@@ -160,17 +161,35 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    fn trace_slice<const SRC_IN_DEFRAG: bool>(&mut self, slice: &VM::VMMemorySlice) {
+    fn trace_slice<const SRC_IN_DEFRAG: bool, const SRC_IN_IMMIX: bool>(
+        &mut self,
+        slice: &VM::VMMemorySlice,
+    ) {
+        let e = slice.iter_edges().next().unwrap();
+        if SRC_IN_IMMIX
+            && self
+                .plan
+                .immix_space
+                .is_marked(e.to_address().to_object_reference::<VM>())
+        {
+            return;
+        }
         for e in slice.iter_edges() {
             let t = e.load();
             if t.is_null() {
                 continue;
             }
+            if SRC_IN_IMMIX
+                && Line::is_aligned(e.to_address())
+                && self.plan.immix_space.line_is_marked(e.to_address())
+            {
+                return;
+            }
             #[cfg(feature = "measure_trace_rate")]
             {
                 self.scanned_non_null_slots += 1;
             }
-            if crate::args::RC_MATURE_EVACUATION && SRC_IN_DEFRAG && self.plan.in_defrag(t) {
+            if crate::args::RC_MATURE_EVACUATION && !SRC_IN_DEFRAG && self.plan.in_defrag(t) {
                 self.plan.immix_space.mature_evac_remset.record(e, t);
             }
             self.trace_object(t);
@@ -185,11 +204,16 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             {
                 continue;
             }
-            let should_check_remset = !self.plan.in_defrag(*o);
-            if should_check_remset {
-                self.trace_slice::<true>(slice)
+            let ix = self.plan.immix_space.in_space_fast(*o);
+            if ix {
+                let src_in_defrag = self.plan.in_defrag(*o);
+                if src_in_defrag {
+                    self.trace_slice::<true, true>(slice)
+                } else {
+                    self.trace_slice::<false, true>(slice)
+                }
             } else {
-                self.trace_slice::<false>(slice)
+                self.trace_slice::<false, false>(slice)
             }
         }
     }

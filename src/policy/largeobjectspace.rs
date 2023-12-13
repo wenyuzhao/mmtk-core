@@ -100,6 +100,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
             self.test_and_mark(object, self.mark_state);
+            for off in (0..bytes).step_by(BYTES_IN_PAGE) {
+                let a = object.to_raw_address() + off;
+                self.test_and_mark(a.to_object_reference::<VM>(), self.mark_state);
+            }
             #[cfg(feature = "lxr_srv_ratio_counter")]
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
                 .los_alloc_vol

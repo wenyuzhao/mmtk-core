@@ -1401,6 +1401,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.is_marked_with(object, self.mark_state)
     }
 
+    pub fn line_is_marked(&self, a: Address) -> bool {
+        let b = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .load_byte(a);
+        b == u8::MAX
+    }
+
     /// Check if an object is pinned.
     fn is_pinned(&self, _object: ObjectReference) -> bool {
         #[cfg(feature = "object_pinning")]
