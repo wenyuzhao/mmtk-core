@@ -23,14 +23,13 @@ use std::sync::Arc;
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
     // objects to mark and scan
-    white_objects: Option<Vec<ObjectReference>>,
-    white_objects_arc: Option<Arc<Vec<ObjectReference>>>,
-    // objects to scan
-    grey_objects: Option<Vec<(ObjectReference, Address)>>,
-    grey_large_ref_array: Option<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
-    // recursively discovered grey objects
-    next_grey_objects: VectorQueue<(ObjectReference, Address)>,
-    klass: Address,
+    objects: Option<Vec<ObjectReference>>,
+    objects_arc: Option<Arc<Vec<ObjectReference>>>,
+    ref_arrays: Option<Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>>,
+    // recursively generated objects
+    next_objects: VectorQueue<ObjectReference>,
+    next_ref_arrays: VectorQueue<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    next_ref_arrays_size: usize,
     rc: RefCountHelper<VM>,
     #[cfg(feature = "measure_trace_rate")]
     scanned_non_null_slots: usize,
@@ -47,12 +46,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
-            white_objects: Some(objects),
-            white_objects_arc: None,
-            grey_objects: None,
-            grey_large_ref_array: None,
-            next_grey_objects: VectorQueue::default(),
-            klass: Address::ZERO,
+            objects: Some(objects),
+            objects_arc: None,
+            ref_arrays: None,
+            next_objects: VectorQueue::default(),
+            next_ref_arrays: VectorQueue::default(),
+            next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
@@ -69,12 +68,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
-            white_objects: None,
-            white_objects_arc: Some(objects),
-            grey_objects: None,
-            grey_large_ref_array: None,
-            next_grey_objects: VectorQueue::default(),
-            klass: Address::ZERO,
+            objects: None,
+            objects_arc: Some(objects),
+            ref_arrays: None,
+            next_objects: VectorQueue::default(),
+            next_ref_arrays: VectorQueue::default(),
+            next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
@@ -83,49 +82,20 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    pub fn new_grey_objects(objects: Vec<(ObjectReference, Address)>) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
-        }
-        let plan = GCWorker::<VM>::current()
-            .mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap();
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
-        Self {
-            plan,
-            white_objects: None,
-            white_objects_arc: None,
-            grey_objects: Some(objects),
-            grey_large_ref_array: None,
-            next_grey_objects: VectorQueue::default(),
-            klass: Address::ZERO,
-            rc: RefCountHelper::NEW,
-            #[cfg(feature = "measure_trace_rate")]
-            scanned_non_null_slots: 0,
-            #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
-        }
-    }
-
-    pub fn new_grey_large_ref_array(
-        o: ObjectReference,
-        klass: Address,
-        size: usize,
-        slice: VM::VMMemorySlice,
+    fn new_ref_arrays(
+        arrays: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
         let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             plan,
-            white_objects: None,
-            white_objects_arc: None,
-            grey_objects: None,
-            grey_large_ref_array: Some((o, klass, size, slice)),
-            next_grey_objects: VectorQueue::default(),
-            klass: Address::ZERO,
+            objects: None,
+            objects_arc: None,
+            ref_arrays: Some(arrays),
+            next_objects: VectorQueue::default(),
+            next_ref_arrays: VectorQueue::default(),
+            next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
@@ -134,88 +104,51 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
-    fn create_scan_large_ref_array_packet(
-        &mut self,
-        o: ObjectReference,
-        klass: Address,
-        size: usize,
-        slice: VM::VMMemorySlice,
-    ) {
-        // This packet is executed in concurrent.
-        let worker = GCWorker::<VM>::current();
-        debug_assert!(self.plan.concurrent_marking_enabled());
-        let w = LXRConcurrentTraceObjects::<VM>::new_grey_large_ref_array(
-            o,
-            klass,
-            size,
-            slice,
-            worker.mmtk,
-        );
-        if self.plan.current_pause() == Some(Pause::RefCount) {
-            worker.scheduler().postpone(w);
-        } else {
-            worker.add_work(WorkBucketStage::Unconstrained, w);
-        }
+    #[cold]
+    fn flush(&mut self) {
+        self.flush_arrs();
+        self.flush_objs();
     }
 
-    fn create_scan_objects_packet(&mut self, objects: Vec<(ObjectReference, Address)>) {
-        // This packet is executed in concurrent.
-        let worker = GCWorker::<VM>::current();
-        debug_assert!(self.plan.concurrent_marking_enabled());
-        let w = LXRConcurrentTraceObjects::<VM>::new_grey_objects(objects);
-        if self.plan.current_pause() == Some(Pause::RefCount) {
-            worker.scheduler().postpone(w);
-        } else {
-            worker.add_work(WorkBucketStage::Unconstrained, w);
+    #[cold]
+    fn flush_arrs(&mut self) {
+        if !self.next_ref_arrays.is_empty() {
+            let next_ref_arrays = self.next_ref_arrays.take();
+            let worker = GCWorker::<VM>::current();
+            debug_assert!(self.plan.concurrent_marking_enabled());
+            let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
+            if self.plan.current_pause() == Some(Pause::RefCount) {
+                worker.scheduler().postpone(w);
+            } else {
+                worker.add_work(WorkBucketStage::Unconstrained, w);
+            }
         }
     }
 
     #[cold]
-    fn flush(&mut self) {
-        if !self.next_grey_objects.is_empty() {
-            let new_nodes = self.next_grey_objects.take();
-            self.create_scan_objects_packet(new_nodes);
+    fn flush_objs(&mut self) {
+        if !self.next_objects.is_empty() {
+            let objects = self.next_objects.take();
+            let worker = GCWorker::<VM>::current();
+            debug_assert!(self.plan.concurrent_marking_enabled());
+            let w = Self::new(objects, worker.mmtk);
+            if self.plan.current_pause() == Some(Pause::RefCount) {
+                worker.scheduler().postpone(w);
+            } else {
+                worker.add_work(WorkBucketStage::Unconstrained, w);
+            }
         }
     }
 
-    fn trace_object<const NULL_AND_RC_CHECK: bool>(
-        &mut self,
-        object: ObjectReference,
-    ) -> ObjectReference {
-        if NULL_AND_RC_CHECK && object.is_null() {
-            return object;
-        }
-        if cfg!(any(feature = "sanity", debug_assertions)) {
-            assert!(
-                object.to_address::<VM>().is_mapped(),
-                "Invalid object {:?}: address is not mapped",
-                object
-            );
-        }
-
-        let no_trace = NULL_AND_RC_CHECK && self.rc.object_or_line_is_dead(object);
-        if no_trace || self.plan.is_marked(object) {
-            return object;
-        }
-        // During concurrent marking, decs-processing can kill the object and mutators can reusing the memory afterwards.
-        // If the RC of the object is dec to zero after it is marked by the marker, and before it is scanned,
-        // the object scanning step can crash if another mutator is also simultaneously reusing the memory.
-        // To solve this problem:
-        // 1. We cache the klass pointer before marking the object.
-        // 2. If we're the thread to successfully mark the object (instead of the RC decrement thread),
-        //    the previously cached class pointer is guaranteed to be valid, as no reuse can happen before we mark the object.
-        // 3. Scan the object use the cached klass pointer, and cache the collected child nodes without pushing them to the mark queue.
-        //    Note that if the memory is being reused simultaneously, our cached child nodes are invalid.
-        // 4. Check the RC of the object after scanning.
-        //    Push the previously cached child nodes to the mark queue only if the object RC is not zero -- the object is not overwritten yet and the cached children must be valid.
-        self.klass = object.class_pointer::<VM>();
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        debug_assert!(!object.is_null());
         debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
         if self.plan.immix_space.in_space_fast(object) {
             self.plan
                 .immix_space
                 .trace_object_without_moving_rc(self, object);
-        } else if self.plan.los().in_space_fast(object) {
+        } else {
             self.plan.los().trace_object(self, object);
         }
         object
@@ -223,100 +156,35 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 
     fn trace_objects(&mut self, objects: &[ObjectReference]) {
         for o in objects {
-            self.trace_object::<true>(*o);
+            self.trace_object(*o);
         }
     }
 
-    fn process_edge_after_obj_scan(
-        &mut self,
-        object: ObjectReference,
-        e: VM::VMEdge,
-        t: ObjectReference,
-        should_check_remset: bool,
-    ) {
-        if cfg!(feature = "sanity") {
-            assert!(
-                t.to_address::<VM>().is_mapped(),
-                "Invalid edge {:?}.{:?} -> {:?}: target is not mapped",
-                object,
-                e,
-                t
-            );
-        }
-        if crate::args::RC_MATURE_EVACUATION
-            && (should_check_remset || !e.to_address().is_in_mmtk_heap())
-            && self.plan.in_defrag(t)
-        {
-            self.plan.immix_space.mature_evac_remset.record(e, t);
-        }
-        self.trace_object::<false>(t);
-    }
-
-    fn scan_object(&mut self, object: ObjectReference, klass: Address) {
-        if cfg!(feature = "sanity") {
-            assert!(
-                object.to_address::<VM>().is_mapped(),
-                "Invalid obj {:?}: address is not mapped",
-                object
-            );
-        }
-        if self.rc.object_or_line_is_dead(object) || object.class_pointer::<VM>() != klass {
-            return;
-        }
-        let should_check_remset = !self.plan.in_defrag(object);
-        object.iterate_fields_with_klass::<VM, _>(
-            CLDScanPolicy::Claim,
-            RefScanPolicy::Discover,
-            klass,
-            |e| {
-                let t: ObjectReference = e.load();
+    fn trace_arrays(&mut self, arrays: &[(ObjectReference, Address, usize, VM::VMMemorySlice)]) {
+        for (o, cls, size, slice) in arrays {
+            if !(o.class_pointer::<VM>() == *cls
+                && o.get_size::<VM>() == *size
+                && !self.rc.object_or_line_is_dead(*o))
+            {
+                continue;
+            }
+            let should_check_remset = !self.plan.in_defrag(*o);
+            for e in slice.iter_edges() {
+                let t = e.load();
                 if t.is_null() {
-                    return;
+                    continue;
                 }
                 #[cfg(feature = "measure_trace_rate")]
                 {
                     self.scanned_non_null_slots += 1;
                 }
-                if !self.rc.object_or_line_is_dead(t) {
-                    self.process_edge_after_obj_scan(object, e, t, should_check_remset);
+                if crate::args::RC_MATURE_EVACUATION
+                    && (should_check_remset || !e.to_address().is_in_mmtk_heap())
+                    && self.plan.in_defrag(t)
+                {
+                    self.plan.immix_space.mature_evac_remset.record(e, t);
                 }
-            },
-        );
-    }
-
-    fn scan_large_ref_array(
-        &mut self,
-        object: ObjectReference,
-        klass: Address,
-        size: usize,
-        slice: VM::VMMemorySlice,
-    ) {
-        if cfg!(feature = "sanity") {
-            assert!(
-                object.to_address::<VM>().is_mapped(),
-                "Invalid obj {:?}: address is not mapped",
-                object
-            );
-        }
-        let current_klass = object.class_pointer::<VM>();
-        if self.rc.object_or_line_is_dead(object) {
-            return;
-        }
-        if current_klass != klass || object.get_size::<VM>() != size {
-            return;
-        }
-        let should_check_remset = !self.plan.in_defrag(object);
-        for e in slice.iter_edges() {
-            let t: ObjectReference = e.load();
-            if t.is_null() {
-                continue;
-            }
-            #[cfg(feature = "measure_trace_rate")]
-            {
-                self.scanned_non_null_slots += 1;
-            }
-            if !self.rc.object_or_line_is_dead(t) {
-                self.process_edge_after_obj_scan(object, e, t, should_check_remset);
+                self.trace_object(t);
             }
         }
     }
@@ -331,8 +199,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 object
             );
         }
-        // Don't enqueue the object if RC is zero
-        if self.rc.object_or_line_is_dead(object) || VM::VMScanning::is_val_array(object) {
+        if VM::VMScanning::is_val_array(object) {
             return;
         }
         #[cfg(feature = "measure_trace_rate")]
@@ -343,20 +210,39 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
             && VM::VMScanning::obj_array_data(object).len() >= 1024
         {
             let data = VM::VMScanning::obj_array_data(object);
+            let cls = object.class_pointer::<VM>();
+            let len = object.get_size::<VM>();
+
             for chunk in data.chunks(4096) {
-                self.create_scan_large_ref_array_packet(
-                    object,
-                    self.klass,
-                    object.get_size::<VM>(),
-                    chunk,
-                );
+                self.next_ref_arrays_size += chunk.len();
+                self.next_ref_arrays.push((object, cls, len, chunk));
+                if self.next_ref_arrays_size > 8192 {
+                    self.flush_arrs();
+                }
             }
         } else {
             // Small objects: enqueue
-            self.next_grey_objects.push((object, self.klass));
-            if self.next_grey_objects.len() >= 4096 {
-                self.flush();
-            }
+            let should_check_remset = !self.plan.in_defrag(object);
+            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
+                let t = e.load();
+                if t.is_null() {
+                    return;
+                }
+                #[cfg(feature = "measure_trace_rate")]
+                {
+                    self.scanned_non_null_slots += 1;
+                }
+                if crate::args::RC_MATURE_EVACUATION
+                    && (should_check_remset || !e.to_address().is_in_mmtk_heap())
+                    && self.plan.in_defrag(t)
+                {
+                    self.plan.immix_space.mature_evac_remset.record(e, t);
+                }
+                self.next_objects.push(t);
+                if self.next_objects.len() > 8192 {
+                    self.flush_objs();
+                }
+            });
         }
     }
 }
@@ -380,36 +266,32 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
             false
         };
         // mark objects
-        if let Some(objects) = self.white_objects.take() {
+        if let Some(objects) = self.objects.take() {
             self.trace_objects(&objects)
-        } else if let Some(objects) = self.white_objects_arc.take() {
+        } else if let Some(objects) = self.objects_arc.take() {
             self.trace_objects(&objects)
+        } else if let Some(arrays) = self.ref_arrays.take() {
+            self.trace_arrays(&arrays)
         }
-        // scan and mark fields
-        if let Some(objects) = self.grey_objects.take() {
-            for (o, k) in objects {
-                self.scan_object(o, k)
-            }
-        } else if let Some((o, k, size, s)) = self.grey_large_ref_array.take() {
-            self.scan_large_ref_array(o, k, size, s)
-        }
-        // CM: Decrease counter
         let pause_opt = self.plan.current_pause();
         if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
-            let mut grey_objects = vec![];
-            while !self.next_grey_objects.is_empty() {
+            let mut next_objects = vec![];
+            let mut next_ref_arrays = vec![];
+            while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
                 let pause_opt = self.plan.current_pause();
                 if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
                     break;
                 }
-                grey_objects.clear();
-                self.next_grey_objects.swap(&mut grey_objects);
-                for (o, k) in &grey_objects {
-                    self.scan_object(*o, *k);
-                }
+                next_objects.clear();
+                next_ref_arrays.clear();
+                self.next_objects.swap(&mut next_objects);
+                self.trace_objects(&next_objects);
+                self.next_ref_arrays.swap(&mut next_ref_arrays);
+                self.trace_arrays(&next_ref_arrays);
             }
         }
         self.flush();
+        // CM: Decrease counter
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
