@@ -266,7 +266,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 }
                 #[cfg(not(feature = "defrag_checks"))]
                 {
-                    self.process_edge_after_obj_scan(t);
+                    self.process_edge_after_obj_scan(t, false);
                 }
             }
         });
