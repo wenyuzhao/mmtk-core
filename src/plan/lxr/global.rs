@@ -381,6 +381,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             crate::gc_start_time_ms(),
         );
         <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
+        if perform_class_unloading {
+            gc_log!([3] "    - class unloading finished");
+        }
         self.common.los.is_end_of_satb_or_full_gc = false;
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]
