@@ -321,6 +321,18 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.sweep_large_pages(false);
         }
     }
+
+    pub fn trace_object_rc<Q: ObjectQueue>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        if self.test_and_mark(object, self.mark_state) {
+            queue.enqueue(object);
+        }
+        return object;
+    }
+
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]

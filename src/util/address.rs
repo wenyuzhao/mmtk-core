@@ -779,7 +779,7 @@ impl ObjectReference {
         }
     }
 
-    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge)>(
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge, bool)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
@@ -795,7 +795,7 @@ impl ObjectReference {
         )
     }
 
-    pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMEdge)>(
+    pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMEdge, bool)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,

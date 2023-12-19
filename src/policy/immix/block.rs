@@ -474,41 +474,17 @@ impl Block {
     }
 
     pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
-        Block::containing::<VM>(o).is_defrag_source()
+        Self::DEFRAG_STATE_TABLE.load_byte(o.to_raw_address()) != 0
     }
 
     pub fn address_in_defrag_block(a: Address) -> bool {
-        Block::from(Block::align(a)).is_defrag_source()
+        Self::DEFRAG_STATE_TABLE.load_byte(a) != 0
     }
 
     /// Mark the block for defragmentation.
     pub fn set_as_defrag_source(&self, defrag: bool) {
         let byte = if defrag { Self::DEFRAG_SOURCE_STATE } else { 0 };
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), byte, Ordering::SeqCst);
-    }
-
-    pub fn attempt_to_set_as_defrag_source(&self) -> bool {
-        loop {
-            let old_value: u8 =
-                Self::DEFRAG_STATE_TABLE.load_atomic(self.start(), Ordering::SeqCst);
-            if old_value == Self::DEFRAG_SOURCE_STATE {
-                return false;
-            }
-
-            if Self::DEFRAG_STATE_TABLE
-                .compare_exchange_atomic(
-                    self.start(),
-                    old_value,
-                    Self::DEFRAG_SOURCE_STATE,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-        true
     }
 
     /// Record the number of holes in the block.

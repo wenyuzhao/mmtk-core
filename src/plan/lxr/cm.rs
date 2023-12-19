@@ -150,7 +150,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 .immix_space
                 .trace_object_without_moving_rc(self, object);
         } else {
-            self.plan.los().trace_object(self, object);
+            self.plan.los().trace_object_rc(self, object);
         }
         object
     }
@@ -217,6 +217,33 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             }
         }
     }
+
+    fn scan_and_enqueue<const CHECK_REMSET: bool>(&mut self, object: ObjectReference) {
+        object.iterate_fields::<VM, _>(
+            CLDScanPolicy::Claim,
+            RefScanPolicy::Discover,
+            |e, out_of_heap| {
+                let t = e.load();
+                if t.is_null() {
+                    return;
+                }
+                #[cfg(feature = "measure_trace_rate")]
+                {
+                    self.scanned_non_null_slots += 1;
+                }
+                if crate::args::RC_MATURE_EVACUATION
+                    && (CHECK_REMSET || out_of_heap)
+                    && self.plan.in_defrag(t)
+                {
+                    self.plan.immix_space.mature_evac_remset.record(e, t);
+                }
+                self.next_objects.push(t);
+                if self.next_objects.len() > 8192 {
+                    self.flush_objs();
+                }
+            },
+        );
+    }
 }
 
 impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
@@ -228,50 +255,37 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 object
             );
         }
-        if VM::VMScanning::is_val_array(object) {
-            return;
-        }
-        #[cfg(feature = "measure_trace_rate")]
-        {
-            self.enqueued_objs += 1;
-        }
-        if VM::VMScanning::is_obj_array(object)
-            && VM::VMScanning::obj_array_data(object).len() >= 1024
-        {
-            let data = VM::VMScanning::obj_array_data(object);
-            let cls = object.class_pointer::<VM>();
-            let len = object.get_size::<VM>();
+        match VM::VMScanning::get_obj_kind(object) {
+            ObjectKind::ObjArray(len) if len >= 1024 => {
+                let data = VM::VMScanning::obj_array_data(object);
+                let cls = object.class_pointer::<VM>();
+                let len = object.get_size::<VM>();
 
-            for chunk in data.chunks(4096) {
-                self.next_ref_arrays_size += chunk.len();
-                self.next_ref_arrays.push((object, cls, len, chunk));
-                if self.next_ref_arrays_size > 8192 {
-                    self.flush_arrs();
-                }
-            }
-        } else {
-            // Small objects: enqueue
-            let should_check_remset = !self.plan.in_defrag(object);
-            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
-                let t = e.load();
-                if t.is_null() {
-                    return;
+                for chunk in data.chunks(4096) {
+                    self.next_ref_arrays_size += chunk.len();
+                    self.next_ref_arrays.push((object, cls, len, chunk));
+                    if self.next_ref_arrays_size > 8192 {
+                        self.flush_arrs();
+                    }
                 }
                 #[cfg(feature = "measure_trace_rate")]
                 {
-                    self.scanned_non_null_slots += 1;
+                    self.enqueued_objs += 1;
                 }
-                if crate::args::RC_MATURE_EVACUATION
-                    && (should_check_remset || !e.to_address().is_in_mmtk_heap())
-                    && self.plan.in_defrag(t)
+            }
+            ObjectKind::ValArray => {}
+            _ => {
+                let should_check_remset = !self.plan.in_defrag(object);
+                if should_check_remset {
+                    self.scan_and_enqueue::<true>(object)
+                } else {
+                    self.scan_and_enqueue::<false>(object)
+                }
+                #[cfg(feature = "measure_trace_rate")]
                 {
-                    self.plan.immix_space.mature_evac_remset.record(e, t);
+                    self.enqueued_objs += 1;
                 }
-                self.next_objects.push(t);
-                if self.next_objects.len() > 8192 {
-                    self.flush_objs();
-                }
-            });
+            }
         }
     }
 }
@@ -735,7 +749,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                 }
             }
         } else {
-            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e| {
+            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e, _| {
                 let o = e.load();
                 if o.is_null() {
                     return;
@@ -862,7 +876,7 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e| {
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e, _| {
             self.next_edges.push(e);
             if self.next_edges.is_full() {
                 self.flush();

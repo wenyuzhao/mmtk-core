@@ -139,7 +139,7 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     fn should_follow_clds(&self) -> bool {
         self.should_claim_and_scan_clds
     }
-    fn visit_edge(&mut self, slot: EdgeOf<E>) {
+    fn visit_edge(&mut self, slot: EdgeOf<E>, _out_of_haep: bool) {
         #[cfg(debug_assertions)]
         {
             use crate::vm::edge_shape::Edge;
@@ -165,7 +165,7 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
-struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge)> {
+struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge, bool)> {
     f: F,
     should_discover_references: bool,
     should_claim_clds: bool,
@@ -173,7 +173,9 @@ struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge)> {
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding, F: FnMut(VM::VMEdge)> EdgeVisitor<VM::VMEdge> for EdgeIteratorImpl<VM, F> {
+impl<VM: VMBinding, F: FnMut(VM::VMEdge, bool)> EdgeVisitor<VM::VMEdge>
+    for EdgeIteratorImpl<VM, F>
+{
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
     }
@@ -183,8 +185,8 @@ impl<VM: VMBinding, F: FnMut(VM::VMEdge)> EdgeVisitor<VM::VMEdge> for EdgeIterat
     fn should_follow_clds(&self) -> bool {
         self.should_follow_clds
     }
-    fn visit_edge(&mut self, slot: VM::VMEdge) {
-        (self.f)(slot);
+    fn visit_edge(&mut self, slot: VM::VMEdge, out_of_heap: bool) {
+        (self.f)(slot, out_of_heap);
     }
 }
 
@@ -198,7 +200,7 @@ impl<VM: VMBinding> EdgeIterator<VM> {
         should_discover_references: bool,
         should_claim_clds: bool,
         should_follow_clds: bool,
-        f: impl FnMut(VM::VMEdge),
+        f: impl FnMut(VM::VMEdge, bool),
         klass: Option<Address>,
     ) {
         let mut x = EdgeIteratorImpl::<VM, _> {

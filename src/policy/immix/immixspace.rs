@@ -1048,9 +1048,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
-            let straddle = self
-                .rc
-                .is_straddle_line(Line::from(Line::align(object.to_address::<VM>())));
+            let addr = object.to_address::<VM>().as_usize();
+            let straddle = if (addr & 0b11110000) == 0 {
+                self.rc
+                    .is_straddle_line(Line::from(Line::align(object.to_address::<VM>())))
+            } else {
+                false
+            };
+
+            // let straddle = self
+            //     .rc
+            //     .is_straddle_line(Line::from(Line::align(object.to_address::<VM>())));
             if !straddle {
                 // Visit node
                 queue.enqueue(object);
@@ -1319,10 +1327,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Ordering::Relaxed,
             Ordering::Relaxed,
             |v| {
-                if v == self.mark_state {
+                if v != 0 {
                     return None;
                 }
-                Some(self.mark_state)
+                Some(1)
             },
         );
         result.is_ok()

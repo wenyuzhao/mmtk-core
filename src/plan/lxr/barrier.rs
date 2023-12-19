@@ -320,7 +320,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         // assert_eq!(self.lxr.rc.count(obj), 1);
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
-        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e| {
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e, _| {
             let _succ = self.enqueue_node(obj, e, None);
             #[cfg(feature = "lxr_precise_incs_counter")]
             {

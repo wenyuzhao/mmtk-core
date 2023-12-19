@@ -251,7 +251,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
-            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge| {
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge, _| {
                 #[cfg(feature = "lxr_precise_incs_counter")]
                 {
                     self.stat.rec_incs += 1;
@@ -830,7 +830,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()
         } else if !crate::args().no_recursive_dec {
-            o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge| {
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge, _| {
                 let x = edge.load();
                 if !x.is_null() {
                     // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);

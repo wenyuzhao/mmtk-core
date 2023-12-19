@@ -20,12 +20,19 @@ pub trait EdgeVisitor<ES: Edge> {
         true
     }
     /// Call this function for each edge.
-    fn visit_edge(&mut self, edge: ES);
+    fn visit_edge(&mut self, edge: ES, out_of_heap: bool);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ObjectKind {
+    ValArray,
+    ObjArray(u32),
+    Scalar,
 }
 
 /// This lets us use closures as EdgeVisitor.
 impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
-    fn visit_edge(&mut self, edge: ES) {
+    fn visit_edge(&mut self, edge: ES, _out_of_heap: bool) {
         #[cfg(debug_assertions)]
         trace!(
             "(FunctionClosure) Visit edge {:?} (pointing to {})",
@@ -224,6 +231,10 @@ pub trait Scanning<VM: VMBinding> {
     }
 
     fn is_val_array(_o: ObjectReference) -> bool {
+        unreachable!()
+    }
+
+    fn get_obj_kind(_o: ObjectReference) -> ObjectKind {
         unreachable!()
     }
 
