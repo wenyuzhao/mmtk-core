@@ -380,9 +380,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             "    - ({:.3}ms) vm_release start",
             crate::gc_start_time_ms(),
         );
+        let t = std::time::SystemTime::now();
         <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
+        let elapsed = t.elapsed().unwrap().as_micros() as f64;
         if perform_class_unloading {
-            gc_log!([3] "    - class unloading finished");
+            gc_log!([3] "    - class unloading finished in {:.3} ms", elapsed / 1000.0);
         }
         self.common.los.is_end_of_satb_or_full_gc = false;
         #[cfg(feature = "lxr_release_stage_timer")]
