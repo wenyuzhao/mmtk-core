@@ -6,6 +6,8 @@ Plotty Log: [lxr-xput-regression-bear-2023-12-13-Wed-235836](http://squirrel.anu
 
 LXR total time geomean: 0.917 (highest: tomcat=1.048, lowest: xalan,sunflow=0.611).
 
+_Note: The cargo feature `opt` wss enabled for this measurement._
+
 # [2023-Nov-28] core-597effa, binding-9869048
 
 _Updated to dacapo-23.11-chopoin_
