@@ -181,6 +181,7 @@ impl<VM: VMBinding> MMTK<VM> {
             VM::VMCollection::block_for_gc(tls);
         }
         self.inside_harness.store(true, Ordering::SeqCst);
+        crate::reset_counters();
         self.get_plan().base().stats.start_all();
         self.scheduler.enable_stat();
         crate::INSIDE_HARNESS.store(true, Ordering::SeqCst);

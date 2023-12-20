@@ -798,7 +798,6 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    crate::reset_counters();
     mmtk.harness_begin(tls);
     crate::output_survival_ratios();
 }
