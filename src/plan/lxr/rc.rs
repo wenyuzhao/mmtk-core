@@ -235,19 +235,17 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 cursor += step;
             }
         };
-        if VM::VMScanning::is_obj_array(o) {
+        if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
             let data = VM::VMScanning::obj_array_data(o);
-            if data.len() > 0 {
-                for chunk in data.chunks(Self::CAPACITY) {
-                    #[cfg(feature = "lxr_precise_incs_counter")]
-                    {
-                        self.stat.rec_incs += chunk.len();
-                        if los {
-                            self.stat.los_rec_incs += chunk.len();
-                        }
+            for chunk in data.chunks(Self::CAPACITY) {
+                #[cfg(feature = "lxr_precise_incs_counter")]
+                {
+                    self.stat.rec_incs += chunk.len();
+                    if los {
+                        self.stat.los_rec_incs += chunk.len();
                     }
-                    self.add_new_slice(chunk);
                 }
+                self.add_new_slice(chunk);
             }
         } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);

@@ -261,7 +261,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 let cls = object.class_pointer::<VM>();
                 let len = object.get_size::<VM>();
 
-                for chunk in data.chunks(4096) {
+                for chunk in data.chunks(1024) {
                     self.next_ref_arrays_size += chunk.len();
                     self.next_ref_arrays.push((object, cls, len, chunk));
                     if self.next_ref_arrays_size > 8192 {
@@ -641,7 +641,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 worker,
             )
         } else {
-            let x = self.lxr.los().trace_object(self, object);
+            let x = self.lxr.los().trace_object_rc(self, object);
             debug_assert_ne!(
                 self.lxr.rc.count(x),
                 0,
@@ -681,7 +681,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         let object = slot.load();
         let new_object = self.trace_and_mark_object(object);
         super::record_edge_for_validation(slot, new_object);
-        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
+        if Self::OVERWRITE_REFERENCE && !new_object.is_null() && new_object != object {
             slot.store(new_object);
         }
     }
@@ -730,12 +730,9 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
             crate::record_live_bytes(object.get_size::<VM>());
         }
         // Skip primitive array
-        if VM::VMScanning::is_val_array(object) {
-            return;
-        }
-        if VM::VMScanning::is_obj_array(object) {
-            let data = VM::VMScanning::obj_array_data(object);
-            if data.len() > 0 {
+        match VM::VMScanning::get_obj_kind(object) {
+            ObjectKind::ObjArray(len) if len >= 1024 => {
+                let data = VM::VMScanning::obj_array_data(object);
                 for chunk in data.chunks(Self::CAPACITY) {
                     let len: usize = chunk.len();
                     if self.next_edge_count as usize + len >= Self::CAPACITY {
@@ -748,21 +745,27 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                     }
                 }
             }
-        } else {
-            object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |e, _| {
-                let o = e.load();
-                if o.is_null() {
-                    return;
-                }
-                if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
-                    return;
-                }
-                self.next_edges.push(e);
-                self.next_edge_count += 1;
-                if self.next_edge_count as usize >= Self::CAPACITY {
-                    self.flush();
-                }
-            })
+            ObjectKind::ValArray => {}
+            _ => {
+                object.iterate_fields::<VM, _>(
+                    CLDScanPolicy::Claim,
+                    RefScanPolicy::Discover,
+                    |e, _| {
+                        let o = e.load();
+                        if o.is_null() {
+                            return;
+                        }
+                        if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
+                            return;
+                        }
+                        self.next_edges.push(e);
+                        self.next_edge_count += 1;
+                        if self.next_edge_count as usize >= Self::CAPACITY {
+                            self.flush();
+                        }
+                    },
+                );
+            }
         }
     }
 }
