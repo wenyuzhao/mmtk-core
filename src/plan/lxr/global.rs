@@ -770,7 +770,7 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         gc_log!([2]
-            " - next gc mey perform: cycle_collection = {}, emergency_collection = {}",
+            " - next gc may perform: cycle_collection = {}, emergency_collection = {}",
             self.next_gc_may_perform_cycle_collection.load(Ordering::Relaxed),
             self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
         );
