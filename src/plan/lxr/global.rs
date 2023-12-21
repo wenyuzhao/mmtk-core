@@ -779,9 +779,9 @@ impl<VM: VMBinding> LXR<VM> {
         if crate::verbose(3) {
             if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
                 if concurrent_marking_packets_drained {
-                    gc_log!([3] "Finish SATB: Concurrent marking is done");
+                    gc_log!([3] "SATB: Concurrent marking is done");
                 } else {
-                    gc_log!([3] "Finish SATB: Concurrent marking is NOT done");
+                    gc_log!([3] "SATB: Concurrent marking is NOT done");
                 }
             }
         }
@@ -803,6 +803,9 @@ impl<VM: VMBinding> LXR<VM> {
             && concurrent_marking_in_progress
             && concurrent_marking_packets_drained
         {
+            return Pause::FinalMark;
+        }
+        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING && concurrent_marking_in_progress {
             return Pause::FinalMark;
         }
         // Either final mark pause or full pause for emergency GC
@@ -828,13 +831,6 @@ impl<VM: VMBinding> LXR<VM> {
                 );
                 Pause::Full
             };
-        }
-        if self
-            .next_gc_may_perform_cycle_collection
-            .load(Ordering::Relaxed)
-            && concurrent_marking_in_progress
-        {
-            return Pause::FinalMark;
         }
         // Should trigger CM?
         if cfg!(feature = "lxr_fixed_satb_trigger") {
@@ -962,12 +958,8 @@ impl<VM: VMBinding> LXR<VM> {
             RC_PAUSES_BEFORE_SATB.fetch_add(1, Ordering::Relaxed);
         }
         self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
-        #[allow(clippy::collapsible_if)]
-        if self.concurrent_marking_enabled() && !crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
-        {
-            if self.concurrent_marking_in_progress() {
-                scheduler.pause_concurrent_marking_work_packets_during_gc();
-            }
+        if self.concurrent_marking_in_progress() {
+            scheduler.pause_concurrent_marking_work_packets_during_gc();
         }
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
