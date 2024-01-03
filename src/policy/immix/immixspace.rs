@@ -1337,42 +1337,27 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Atomically mark an object.
     pub fn unmark(&self, object: ObjectReference) -> bool {
-        let mark_bit = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
-        let obj_addr = VM::VMObjectModel::ref_to_address(object);
-        loop {
-            let old_value: u8 = mark_bit.load_atomic(obj_addr, Ordering::SeqCst);
-            if old_value == Self::UNMARKED_STATE {
-                return false;
-            }
-
-            if mark_bit
-                .compare_exchange_atomic(
-                    obj_addr,
-                    Self::MARKED_STATE,
-                    Self::UNMARKED_STATE,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-        true
+        let result = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.fetch_update_metadata::<VM, u8, _>(
+            object,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |v| {
+                if v != 1 {
+                    return None;
+                }
+                Some(0)
+            },
+        );
+        result.is_ok()
     }
 
-    /// Check if an object is marked.
-    fn is_marked_with(&self, object: ObjectReference, mark_state: u8) -> bool {
+    pub fn is_marked(&self, object: ObjectReference) -> bool {
         let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
             None,
             Ordering::Relaxed,
         );
-        old_value == mark_state
-    }
-
-    pub fn is_marked(&self, object: ObjectReference) -> bool {
-        self.is_marked_with(object, self.mark_state)
+        old_value == 1
     }
 
     pub fn line_is_marked(&self, a: Address) -> bool {
