@@ -354,14 +354,14 @@ pub struct ProcessModBufSATB {
 
 impl ProcessModBufSATB {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             nodes: Some(nodes),
             nodes_arc: None,
         }
     }
     pub fn new_arc(nodes: Arc<Vec<ObjectReference>>) -> Self {
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             nodes: None,
             nodes_arc: Some(nodes),
@@ -440,7 +440,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
         };
         GCWork::do_work(&mut w, worker, mmtk);
 
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
+        // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
