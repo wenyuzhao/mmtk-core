@@ -1089,12 +1089,12 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     pub fn address_in_defrag(&self, a: Address) -> bool {
-        self.immix_space.address_in_space_fast(a) && Block::address_in_defrag_block(a)
+        self.immix_space.address_in_space(a) && Block::address_in_defrag_block(a)
     }
 
     pub fn mark(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
-        if self.immix_space.in_space_fast(o) {
+        if self.immix_space.in_space(o) {
             self.immix_space.attempt_mark(o)
         } else {
             self.common.los.attempt_mark(o)
@@ -1112,7 +1112,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     pub fn is_marked(&self, o: ObjectReference) -> bool {
         debug_assert!(!o.is_null());
-        if self.immix_space.in_space_fast(o) {
+        if self.immix_space.in_space(o) {
             self.immix_space.is_marked(o)
         } else {
             self.common.los.is_marked(o)

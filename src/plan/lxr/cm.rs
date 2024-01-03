@@ -145,7 +145,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         debug_assert!(!object.is_null());
         debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         debug_assert!(object.class_is_valid::<VM>());
-        if self.plan.immix_space.in_space_fast(object) {
+        if self.plan.immix_space.in_space(object) {
             self.plan
                 .immix_space
                 .trace_object_without_moving_rc(self, object);
@@ -204,7 +204,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             {
                 continue;
             }
-            let ix = self.plan.immix_space.in_space_fast(*o);
+            let ix = self.plan.immix_space.in_space(*o);
             if ix {
                 let src_in_defrag = self.plan.in_defrag(*o);
                 if src_in_defrag {
@@ -543,7 +543,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         );
         debug_assert!(object.class_is_valid::<VM>());
         let object = object.get_forwarded_object().unwrap_or(object);
-        let new_object = if self.lxr.immix_space.in_space_fast(object) {
+        let new_object = if self.lxr.immix_space.in_space(object) {
             if self
                 .lxr
                 .rc
@@ -629,7 +629,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());
-        let x = if self.lxr.immix_space.in_space_fast(object) {
+        let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(
@@ -831,7 +831,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        if self.lxr.immix_space.in_space_fast(object) {
+        if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
             self.lxr.immix_space.rc_trace_object(

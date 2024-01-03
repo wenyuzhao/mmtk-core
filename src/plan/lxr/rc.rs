@@ -124,7 +124,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         crate::stat(|s| {
             s.promoted_objects += 1;
             s.promoted_volume += o.get_size::<VM>();
-            if self.lxr.los().in_space_fast(o) {
+            if self.lxr.los().in_space(o) {
                 s.promoted_los_objects += 1;
                 s.promoted_los_volume += o.get_size::<VM>();
             }
@@ -344,7 +344,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_objects += 1;
             s.inc_volume += o.get_size::<VM>();
         });
-        let los = self.lxr.los().in_space_fast(o);
+        let los = self.lxr.los().in_space(o);
         if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
                 std::hint::spin_loop();
@@ -804,7 +804,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             s.dead_mature_rc_objects += 1;
             s.dead_mature_rc_volume += o.get_size::<VM>();
 
-            if !lxr.immix_space.in_space_fast(o) {
+            if !lxr.immix_space.in_space(o) {
                 s.dead_mature_los_objects += 1;
                 s.dead_mature_los_volume += o.get_size::<VM>();
 
@@ -858,7 +858,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 }
             });
         }
-        let in_ix_space = lxr.immix_space.in_space_fast(o);
+        let in_ix_space = lxr.immix_space.in_space(o);
         if !crate::args::HOLE_COUNTING && in_ix_space {
             Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
         }

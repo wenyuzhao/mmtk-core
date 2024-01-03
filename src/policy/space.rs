@@ -175,22 +175,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    fn address_in_space(&self, start: Address) -> bool {
-        if !start.is_mapped() {
-            return false;
-        }
-        if !self.common().descriptor.is_contiguous() {
-            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
-        } else {
-            start >= self.common().start && start < self.common().start + self.common().extent
-        }
-    }
-
     fn in_space(&self, object: ObjectReference) -> bool {
         self.address_in_space(object.to_address::<VM>())
     }
 
-    fn address_in_space_fast(&self, start: Address) -> bool {
+    fn address_in_space(&self, start: Address) -> bool {
+        // FIXME: Performance!
+        // if !start.is_mapped() {
+        //     return false;
+        // }
         // if !self.common().descriptor.is_contiguous() {
         //     self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
         // } else {
@@ -200,10 +193,6 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         debug_assert!(VM::VMObjectModel::COMPRESSED_PTR_ENABLED);
         let common = self.common();
         common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
-    }
-
-    fn in_space_fast(&self, object: ObjectReference) -> bool {
-        self.address_in_space_fast(object.to_address::<VM>())
     }
 
     /**
