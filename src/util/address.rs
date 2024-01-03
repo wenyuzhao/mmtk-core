@@ -337,12 +337,8 @@ impl Address {
     }
 
     pub fn is_in_mmtk_heap(self) -> bool {
-        if cfg!(feature = "opt_space_check") {
-            let layout = vm_layout();
-            self >= layout.heap_start && self < layout.heap_end
-        } else {
-            self.is_mapped()
-        }
+        let layout = vm_layout();
+        self >= layout.heap_start && self < layout.heap_end
     }
 
     pub fn unlock<VM: VMBinding>(self) {

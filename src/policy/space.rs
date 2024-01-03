@@ -191,23 +191,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     }
 
     fn address_in_space_fast(&self, start: Address) -> bool {
-        #[cfg(not(feature = "opt_space_check"))]
-        if !start.is_mapped() {
-            return false;
-        }
-        #[cfg(not(feature = "no_dyn_dispatch"))]
-        if !self.common().descriptor.is_contiguous() {
-            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
-        } else {
-            start >= self.common().start && start < self.common().start + self.common().extent
-        }
-        #[cfg(feature = "no_dyn_dispatch")]
-        {
-            use crate::vm::object_model::ObjectModel;
-            debug_assert!(VM::VMObjectModel::COMPRESSED_PTR_ENABLED);
-            let common = self.common();
-            common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
-        }
+        // if !self.common().descriptor.is_contiguous() {
+        //     self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+        // } else {
+        //     start >= self.common().start && start < self.common().start + self.common().extent
+        // }
+        use crate::vm::object_model::ObjectModel;
+        debug_assert!(VM::VMObjectModel::COMPRESSED_PTR_ENABLED);
+        let common = self.common();
+        common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
     }
 
     fn in_space_fast(&self, object: ObjectReference) -> bool {

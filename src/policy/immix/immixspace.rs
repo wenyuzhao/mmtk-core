@@ -1320,7 +1320,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Atomically mark an object.
-    #[cfg(feature = "opt_attempt_mark")]
     pub fn attempt_mark(&self, object: ObjectReference) -> bool {
         let result = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.fetch_update_metadata::<VM, u8, _>(
             object,
@@ -1334,35 +1333,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             },
         );
         result.is_ok()
-    }
-
-    #[cfg(not(feature = "opt_attempt_mark"))]
-    pub fn attempt_mark(&self, object: ObjectReference) -> bool {
-        loop {
-            let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
-                object,
-                None,
-                Ordering::SeqCst,
-            );
-            if old_value == self.mark_state {
-                return false;
-            }
-
-            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
-                    old_value,
-                    self.mark_state,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-        true
     }
 
     /// Atomically mark an object.
@@ -1396,11 +1366,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
             None,
-            if cfg!(feature = "opt_attempt_mark") {
-                Ordering::Relaxed
-            } else {
-                Ordering::SeqCst
-            },
+            Ordering::Relaxed,
         );
         old_value == mark_state
     }

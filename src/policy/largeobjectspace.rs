@@ -438,7 +438,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// the method will attemp to mark the object and clear its nursery bit. If the attempt
     /// succeeds, the method will return true, meaning the object is marked by this invocation.
     /// Otherwise, it returns false.
-    #[cfg(feature = "opt_attempt_mark")]
     fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {
         let mask = if self.rc_enabled {
             MARK_BIT
@@ -465,52 +464,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         result.is_ok()
     }
 
-    #[cfg(not(feature = "opt_attempt_mark"))]
-    fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {
-        loop {
-            let mask = if self.rc_enabled {
-                MARK_BIT
-            } else if self.in_nursery_gc {
-                LOS_BIT_MASK
-            } else {
-                MARK_BIT
-            };
-            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
-                object,
-                None,
-                Ordering::SeqCst,
-            );
-            let mark_bit = old_value & mask;
-            if mark_bit == value {
-                return false;
-            }
-            // using LOS_BIT_MASK have side effects of clearing nursery bit
-            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
-                    old_value,
-                    old_value & !LOS_BIT_MASK | value,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-        true
-    }
-
     fn test_mark_bit(&self, object: ObjectReference, value: u8) -> bool {
         VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
             object,
             None,
-            if cfg!(feature = "opt_attempt_mark") {
-                Ordering::Relaxed
-            } else {
-                Ordering::SeqCst
-            },
+            Ordering::Relaxed,
         ) & MARK_BIT
             == value
     }
