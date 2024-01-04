@@ -781,7 +781,7 @@ impl<VM: VMBinding> LXR<VM> {
                 if concurrent_marking_packets_drained {
                     gc_log!([3] "SATB: Concurrent marking is done");
                 } else {
-                    gc_log!([3] "SATB: Concurrent marking is NOT done");
+                    gc_log!([3] "SATB: Concurrent marking is NOT done. {} packets remaining", crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst));
                 }
             }
         }
