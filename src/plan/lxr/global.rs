@@ -966,7 +966,7 @@ impl<VM: VMBinding> LXR<VM> {
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<LXRGCWorkContext<E<VM>>>::new());
+            .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E<VM>>>::new()));
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
         // Release global/collectors/mutators
@@ -993,8 +993,9 @@ impl<VM: VMBinding> LXR<VM> {
         }
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         self.process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
+            StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
+        ));
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
@@ -1013,8 +1014,9 @@ impl<VM: VMBinding> LXR<VM> {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
         self.process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
+            StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
+        ));
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
@@ -1039,7 +1041,7 @@ impl<VM: VMBinding> LXR<VM> {
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutators::<LXRGCWorkContext<E>>::new());
+            .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E>>::new()));
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
