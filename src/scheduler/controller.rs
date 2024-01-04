@@ -93,7 +93,6 @@ impl<VM: VMBinding> GCController<VM> {
 
     /// Coordinate workers to perform GC in response to a GC request.
     fn do_gc_until_completion(&mut self) {
-        self.scheduler.set_in_gc_pause(true);
         let gc_start = std::time::Instant::now();
         // Schedule collection.
         self.initiate_coordinator_work(&mut ScheduleCollection, true);

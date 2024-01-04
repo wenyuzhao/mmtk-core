@@ -243,6 +243,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             mmtk.get_plan()
                 .current_gc_should_prepare_for_class_unloading(),
         );
+        mmtk.scheduler.set_in_gc_pause(true);
         gc_log!([3] "Discovered {} mutators", n);
         if BULK_THREAD_SCAN {
             let n_workers: usize = mmtk.scheduler.num_workers();
