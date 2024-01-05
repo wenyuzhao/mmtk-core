@@ -177,6 +177,7 @@ lxr_log_reclaim = []
 lxr_simple_satb_trigger = []
 measure_trace_rate = []
 lxr_no_mature_defrag = []
+aggressive_mature_evac = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

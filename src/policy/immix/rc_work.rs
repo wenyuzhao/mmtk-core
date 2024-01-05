@@ -39,11 +39,17 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let is_emergency_gc = lxr.current_pause().unwrap() == Pause::Full;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
-            let chunk_defarg_percent = if is_emergency_gc {
-                crate::args().chunk_defarg_percent << 1
-            } else {
-                crate::args().chunk_defarg_percent
-            };
+            let chunk_defarg_percent =
+                if is_emergency_gc || cfg!(faeture = "aggressive_mature_evac") {
+                    crate::args().chunk_defarg_percent
+                        << if cfg!(faeture = "aggressive_mature_evac") {
+                            2
+                        } else {
+                            1
+                        };
+                } else {
+                    crate::args().chunk_defarg_percent
+                };
             let chunk_defarg_percent = chunk_defarg_percent.min(100);
             let threshold = BLOCKS_IN_CHUNK * chunk_defarg_percent / 100;
             threshold.max(1)
@@ -471,7 +477,10 @@ impl MatureEvacuationSet {
         } else {
             lxr.immix_space.defrag_headroom_pages()
         };
-        let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
+        let mut max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
+        if cfg!(faeture = "aggressive_mature_evac") {
+            max_copy_bytes = max_copy_bytes << 2;
+        }
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
         if lxr.immix_space.pr.has_chunk_fragmentation_info() {
