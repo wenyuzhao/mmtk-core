@@ -86,7 +86,15 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 // block.calc_dead_bytes::<VM>()
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
-            if lxr.current_pause().unwrap() == Pause::Full || score >= (Block::BYTES >> 1) {
+            if lxr.current_pause().unwrap() == Pause::Full
+                || score
+                    >= (Block::BYTES
+                        >> if cfg!(faeture = "aggressive_mature_evac") {
+                            2
+                        } else {
+                            1
+                        })
+            {
                 fragmented_blocks.push((block, score));
             }
         }
