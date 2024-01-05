@@ -95,6 +95,7 @@ pub struct LXR<VM: VMBinding> {
     in_concurrent_marking: AtomicBool,
     pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
+    pub(super) barrier_decs: AtomicUsize,
     pub rc: RefCountHelper<VM>,
     gc_cause: Atomic<GCCause>,
 }
@@ -484,6 +485,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .as_nanos();
             crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
+
+        if cfg!(feature = "decs_counter") {
+            gc_log!([3] "POSTPONED {} DELETED OBJS FOR DECREMENT", self.barrier_decs.load(Ordering::SeqCst));
+            self.barrier_decs.store(0, Ordering::SeqCst);
+        }
     }
 
     fn gc_pause_end(&self) {
@@ -639,6 +645,7 @@ impl<VM: VMBinding> LXR<VM> {
             curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
             gc_cause: Atomic::new(GCCause::Unknown),
+            barrier_decs: AtomicUsize::default(),
         });
 
         lxr.update_fixed_alloc_trigger();
@@ -1052,9 +1059,11 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {
+        let mut count = 0usize;
         let prev_roots = self.prev_roots.write().unwrap();
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
+            count += decs.len();
             work_packets.push(Box::new(ProcessDecs::new(
                 decs,
                 LazySweepingJobsCounter::new_decs(),
@@ -1071,6 +1080,9 @@ impl<VM: VMBinding> LXR<VM> {
             scheduler.postpone_all_prioritized(work_packets);
         } else {
             scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(work_packets);
+        }
+        if cfg!(feature = "decs_counter") {
+            gc_log!([3] "POSTPONED {} ROOTS FOR DECREMENT", count);
         }
     }
 
@@ -1137,6 +1149,10 @@ impl<VM: VMBinding> LXR<VM> {
         let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
         lazy_sweeping_jobs.swap();
         lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
+            gc_log!([2]
+                " - lazy decs finished since-gc-start={:.3}ms",
+                crate::gc_start_time_ms(),
+            );
             let lxr = GCWorker::<VM>::current()
                 .mmtk
                 .get_plan()

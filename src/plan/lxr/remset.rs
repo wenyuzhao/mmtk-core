@@ -11,6 +11,8 @@ use crate::{
 };
 
 use super::mature_evac::EvacuateMatureObjects;
+use atomic::Ordering;
+use std::sync::atomic::AtomicUsize;
 
 #[repr(C)]
 pub(super) struct RemSetEntry(Address, ObjectReference);
@@ -29,6 +31,7 @@ pub struct MatureEvecRemSet<VM: VMBinding> {
     pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
     local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
     _p: PhantomData<VM>,
+    size: AtomicUsize,
 }
 
 impl<VM: VMBinding> MatureEvecRemSet<VM> {
@@ -37,6 +40,7 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
             gc_buffers: vec![],
             local_packets: vec![],
             _p: PhantomData,
+            size: AtomicUsize::new(0),
         };
         rs.gc_buffers
             .resize_with(workers, || UnsafeCell::new(vec![]));
@@ -51,9 +55,12 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
 
     fn flush_all(&self, space: &ImmixSpace<VM>) {
         let mut mature_evac_remsets = space.mature_evac_remsets.lock().unwrap();
+        let mut size = self.size.load(Ordering::SeqCst);
+        self.size.store(0, Ordering::SeqCst);
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
                 let remset = std::mem::take(self.gc_buffer(id));
+                size += remset.len();
                 if cfg!(feature = "rust_mem_counter") {
                     crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
                 }
@@ -69,12 +76,16 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
                 }
             }
         }
+        if cfg!(feature = "remset_counter") {
+            gc_log!("REMSET ENTRIES: {}", size);
+        }
     }
 
     #[cold]
     fn flush(&self, id: usize) {
         if self.gc_buffer(id).len() > 0 {
             let remset = std::mem::take(self.gc_buffer(id));
+            self.size.fetch_add(remset.len(), Ordering::SeqCst);
             if cfg!(feature = "rust_mem_counter") {
                 crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
             }

@@ -234,6 +234,11 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     #[cold]
     fn flush_decs_and_satb(&mut self) {
         if !self.decs.is_empty() {
+            if cfg!(feature = "decs_counter") {
+                self.lxr
+                    .barrier_decs
+                    .fetch_add(self.decs.len(), Ordering::SeqCst);
+            }
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
