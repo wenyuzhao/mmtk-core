@@ -46,7 +46,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                             2
                         } else {
                             1
-                        };
+                        }
                 } else {
                     crate::args().chunk_defarg_percent
                 };
