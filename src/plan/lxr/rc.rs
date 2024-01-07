@@ -928,6 +928,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if cfg!(feature = "lxr_no_decs") {
+            return;
+        }
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress()
             || (!crate::args::LAZY_DECREMENTS && lxr.current_pause() == Some(Pause::InitialMark));

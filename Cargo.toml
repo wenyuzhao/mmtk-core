@@ -180,6 +180,7 @@ lxr_no_mature_defrag = []
 aggressive_mature_evac = []
 decs_counter = []
 remset_counter = []
+lxr_no_decs = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
