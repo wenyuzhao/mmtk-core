@@ -173,9 +173,11 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
         // Reference counting
         if !old.is_null() {
-            self.decs.push(old);
-            if self.decs.is_full() {
-                self.flush_decs_and_satb();
+            if !cfg!(feature = "lxr_no_decs") || !self.lxr.is_marked(old) {
+                self.decs.push(old);
+                if self.decs.is_full() {
+                    self.flush_decs_and_satb();
+                }
             }
         }
         self.incs.push(edge);
