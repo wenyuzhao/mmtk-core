@@ -334,7 +334,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::NURSERY_PROMOTION_STATE_TABLE),
                 MetadataSpec::OnSide(Block::PHASE_EPOCH),
-                MetadataSpec::OnSide(Block::DEAD_WORDS),
             ];
             return metadata::extract_side_metadata(&meta);
         }
@@ -1463,7 +1462,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.reused_lines_consumed
                 .fetch_add(num_lines, Ordering::Relaxed);
         }
-        block.dec_dead_bytes_sloppy((num_lines as u32) << Line::LOG_BYTES);
         #[cfg(feature = "lxr_srv_ratio_counter")]
         crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
             .reused_alloc_vol

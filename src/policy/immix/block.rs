@@ -152,35 +152,10 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
     pub const LOG_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOG;
-    pub const DEAD_WORDS: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_DEAD_WORDS;
     pub const NURSERY_PROMOTION_STATE_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::NURSERY_PROMOTION_STATE;
     pub const PHASE_EPOCH: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::PHASE_EPOCH;
-
-    fn inc_dead_bytes_sloppy(&self, bytes: u32) {
-        let max_words = (Self::BYTES as u32) >> LOG_BYTES_IN_WORD;
-        let words = bytes >> LOG_BYTES_IN_WORD;
-        let old: u32 = Self::DEAD_WORDS.load_atomic(self.start(), Ordering::Relaxed);
-        let mut new = old + words;
-        if new >= max_words {
-            new = max_words - 1;
-        }
-        Self::DEAD_WORDS.store_atomic(self.start(), new, Ordering::Relaxed);
-    }
-
-    pub fn dec_dead_bytes_sloppy(&self, bytes: u32) {
-        let words = bytes >> LOG_BYTES_IN_WORD;
-        let old: u32 = Self::DEAD_WORDS.load_atomic(self.start(), Ordering::Relaxed);
-        let new = if old <= words { 0 } else { old - words };
-        Self::DEAD_WORDS.store_atomic(self.start(), new, Ordering::Relaxed);
-    }
-
-    pub fn inc_dead_bytes_sloppy_for_object<VM: VMBinding>(o: ObjectReference) {
-        let block = Block::containing::<VM>(o);
-        block.inc_dead_bytes_sloppy(o.get_size::<VM>() as u32);
-    }
 
     pub fn calc_dead_lines(&self) -> usize {
         let mut dead_lines = 0;
@@ -201,15 +176,6 @@ impl Block {
             }
         }
         dead_lines
-    }
-
-    pub fn dead_bytes(&self) -> u32 {
-        let v: u32 = Self::DEAD_WORDS.load_atomic(self.start(), Ordering::Relaxed);
-        v << LOG_BYTES_IN_WORD
-    }
-
-    fn reset_dead_bytes(&self) {
-        Self::DEAD_WORDS.store_atomic(self.start(), 0u32, Ordering::Relaxed);
     }
 
     pub const ZERO: Self = Self(Address::ZERO);
@@ -546,9 +512,6 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        if !crate::args::HOLE_COUNTING && space.rc_enabled {
-            self.reset_dead_bytes();
-        }
         self.set_state(BlockState::Unallocated);
         self.clear_in_place_promoted();
         if space.rc_enabled {

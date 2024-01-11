@@ -218,9 +218,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                 s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
             }
         });
-        if !crate::args::HOLE_COUNTING {
-            Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
-        }
         if ObjectReference::STRICT_VERIFICATION {
             unsafe {
                 o.to_address::<VM>().store(0xdeadusize);
