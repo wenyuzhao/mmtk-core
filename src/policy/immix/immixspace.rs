@@ -600,7 +600,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
             let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
-            if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
+            if crate::args::LAZY_DECREMENTS
+                && !disable_lasy_dec_for_current_gc
+                && !cfg!(feature = "fragmentation_analysis")
+            {
                 debug_assert_ne!(pause, Pause::Full);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
@@ -781,7 +784,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// 3. `contig-avail-lines` -  Number of **contiguous** available lines in block (0-64)
     /// 4. `avail-blocks-in-chunk` -  Number of available blocks in chunk (0-128)
     /// 5. `rc-live-words-in-block` -  RC Live size in block (0-4096)
-    pub fn dump_memory(&self) {
+    pub fn dump_memory(&self, lxr: &crate::plan::lxr::LXR<VM>) {
         #[derive(Default)]
         struct Dist {
             avail_blocks_in_chunk: Vec<u8>,
@@ -789,13 +792,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             avail_lines_in_block: Vec<u8>,
             contig_avail_lines: Vec<u8>,
             rc_live_words_in_block: Vec<u16>,
+            cm_live_words_in_block: Vec<u16>,
             live_chunks: usize,
             live_blocks: usize,
             live_pages: usize,
             live_lines: usize,
             rc_live_bytes: usize,
+            cm_live_bytes: usize,
         }
         let mut dist = Dist::default();
+        let mut unmarked_live_lines = 0usize;
         for chunk in self.chunk_map.all_chunks() {
             if !self.address_in_space(chunk.start()) {
                 continue;
@@ -819,6 +825,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         if rc_array.is_dead(i) {
                             avail_lines_in_page += 1;
                         } else {
+                            if !self.rc.is_straddle_line(line)&& !line.is_marked_by_satb::<VM>() {
+                                unmarked_live_lines += 1;
+                            }
                             dist.live_lines += 1;
                         }
                     }
@@ -835,6 +844,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 block.iter_holes(|lines| dist.contig_avail_lines.push(lines as u8));
                 // Get rc_live_bytes_in_block
                 let mut rc_live_size: usize = 0;
+                let mut cm_live_size: usize = 0;
                 let mut cursor = block.start();
                 let limit = block.end();
                 while cursor < limit {
@@ -848,10 +858,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             continue;
                         }
                         rc_live_size += o.get_size::<VM>();
+                        if lxr.is_marked(o) {
+                            cm_live_size += o.get_size::<VM>();
+                        }
                     }
                 }
                 dist.rc_live_words_in_block.push((rc_live_size >> 3) as u16);
                 dist.rc_live_bytes += rc_live_size;
+                dist.cm_live_words_in_block.push((cm_live_size >> 3) as u16);
+                dist.cm_live_bytes += cm_live_size;
             }
             dist.avail_blocks_in_chunk.push(avail_blocks_in_chunk);
         }
@@ -896,7 +911,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         println!("  live-blocks: {}", dist.live_blocks);
         println!("  live-pages: {}", dist.live_pages);
         println!("  live-lines: {}", dist.live_lines);
+        println!("  unmarked-live-lines: {}", unmarked_live_lines);
         println!("  rc-live-bytes: {}", dist.rc_live_bytes);
+        println!("  cm-live-bytes: {}", dist.cm_live_bytes);
         println!(
             "  reachable-live-bytes: {}",
             crate::SANITY_LIVE_SIZE_IX.load(Ordering::SeqCst)
@@ -924,6 +941,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         dump_bins(
             "rc-live-words-in-block",
             &mut dist.rc_live_words_in_block,
+            Block::BYTES >> 3,
+        );
+        dump_bins(
+            "cm-live-words-in-block",
+            &mut dist.cm_live_words_in_block,
             Block::BYTES >> 3,
         );
     }

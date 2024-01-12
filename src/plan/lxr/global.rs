@@ -955,7 +955,10 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
         scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
-        if crate::args::LAZY_DECREMENTS && pause != Pause::Full {
+        if crate::args::LAZY_DECREMENTS
+            && pause != Pause::Full
+            && !cfg!(feature = "fragmentation_analysis")
+        {
             scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
         }
     }
@@ -982,15 +985,15 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn dump_memory(&self, pause: Pause) {
-        if pause != Pause::RefCount {
-            println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - Full\n\n");
+        if pause != Pause::FinalMark {
+            // println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - Full\n\n");
             return;
         }
-        println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - RC\n");
+        println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - FinalMark\n");
         println!("heap-size: {}", self.get_total_pages() << 12);
-        self.immix_space.dump_memory();
-        self.los().dump_memory();
-        println!("\n@@ FRAGMENTATION DISTRIBUTION - RC End\n\n");
+        self.immix_space.dump_memory(self);
+        self.los().dump_memory(self);
+        println!("\n@@ FRAGMENTATION DISTRIBUTION - FinalMark End\n\n");
         // }
     }
 

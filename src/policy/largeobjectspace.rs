@@ -232,7 +232,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    pub fn dump_memory(&self) {
+    pub fn dump_memory(&self, lxr: &crate::plan::lxr::LXR<VM>) {
         // use crate::util::heap::chunk_map::Chunk;
         // use crate::util::linear_scan::Region;
         assert!(!self.common.contiguous);
@@ -247,20 +247,25 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         // let mut chunks = HashSet::<Address>::new();
         let mut live_pages = 0usize;
         let mut rc_live_bytes = 0usize;
+        let mut cm_live_bytes = 0usize;
         let mature_objects = self.rc_mature_objects.lock();
-        for (_o, size) in &*mature_objects {
+        for (o, size) in &*mature_objects {
             // let c = Chunk::align(o.to_address::<VM>());
             // if !chunks.contains(&c) {
             //     chunks.insert(c);
             // }
             live_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
             rc_live_bytes += size;
+            if lxr.is_marked(*o) {
+                cm_live_bytes += size;
+            }
         }
         println!("los:");
         println!("  live-chunks: {}", owned_chunks);
         // println!("  live-chunks: {}", chunks.len());
         println!("  live-pages: {}", live_pages);
         println!("  rc-live-bytes: {}", rc_live_bytes);
+        println!("  cm-live-bytes: {}", cm_live_bytes);
         println!(
             "  reachable-live-bytes: {}",
             crate::SANITY_LIVE_SIZE_LOS.load(Ordering::SeqCst)
