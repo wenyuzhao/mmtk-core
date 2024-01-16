@@ -1311,7 +1311,7 @@ impl<VM: VMBinding> LXR<VM> {
         if !cfg!(feature = "periodic_fragmentation_analysis") {
             return;
         }
-        let hrs = self.hours_since_monday_0am() % 6;
+        let hrs = self.hours_since_monday_0am() % 3;
         if hrs < 1 {
             crate::FRAG_EXP_ENABLED.store(true, Ordering::SeqCst)
         } else {
