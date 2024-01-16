@@ -6,7 +6,7 @@ use crate::plan::immix::Pause;
 use crate::plan::lxr::MatureEvecRemSet;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
-use crate::policy::largeobjectspace::{RCReleaseMatureLOS, RCSweepMatureAfterSATBLOS};
+use crate::policy::largeobjectspace::RCSweepMatureAfterSATBLOS;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;
@@ -825,7 +825,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         if rc_array.is_dead(i) {
                             avail_lines_in_page += 1;
                         } else {
-                            if !self.rc.is_straddle_line(line)&& !line.is_marked_by_satb::<VM>() {
+                            if !self.rc.is_straddle_line(line) && !line.is_marked_by_satb::<VM>() {
                                 unmarked_live_lines += 1;
                             }
                             dist.live_lines += 1;
@@ -1600,8 +1600,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            .add_prioritized(Box::new(RCReleaseMatureLOS::new(counter.clone())));
     }
 
     pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {

@@ -7,7 +7,6 @@ use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
-use crate::scheduler::WorkBucketStage;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
@@ -20,9 +19,9 @@ use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
-use spin::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -41,7 +40,6 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     trace_in_progress: bool,
     rc_nursery_objects: SegQueue<ObjectReference>,
     rc_mature_objects: Mutex<HashMap<ObjectReference, usize>>,
-    rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
     pub young_alloc_size: AtomicUsize,
@@ -222,7 +220,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             trace_in_progress: false,
             rc_nursery_objects: Default::default(),
             rc_mature_objects: Default::default(),
-            rc_dead_objects: Default::default(),
             num_pages_released_lazy: Default::default(),
             rc_killed_bytes: Default::default(),
             young_alloc_size: Default::default(),
@@ -248,7 +245,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let mut live_pages = 0usize;
         let mut rc_live_bytes = 0usize;
         let mut cm_live_bytes = 0usize;
-        let mature_objects = self.rc_mature_objects.lock();
+        let mature_objects = self.rc_mature_objects.lock().unwrap();
         for (o, size) in &*mature_objects {
             // let c = Chunk::align(o.to_address::<VM>());
             // if !chunks.contains(&c) {
@@ -258,9 +255,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_live_bytes += size;
             if lxr.is_marked(*o) {
                 cm_live_bytes += size;
+            } else {
+                panic!("{:?} is dead. rc={}", o, self.rc.count(*o));
             }
         }
         println!("los:");
+        println!("  reserved-pages: {}", self.reserved_pages());
         println!("  live-chunks: {}", owned_chunks);
         // println!("  live-chunks: {}", chunks.len());
         println!("  live-pages: {}", live_pages);
@@ -288,7 +288,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn release_rc_nursery_objects(&self) {
         debug_assert!(self.rc_enabled);
         // promote nursery objects or release dead nursery
-        let mut mature_blocks = self.rc_mature_objects.lock();
+        let mut mature_blocks = self.rc_mature_objects.lock().unwrap();
         while let Some(o) = self.rc_nursery_objects.pop() {
             if self.rc.count(o) == 0 {
                 self.release_object(o.to_address::<VM>());
@@ -431,8 +431,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        self.rc_dead_objects.push(o);
-        self.release_object(o.to_address::<VM>());
+        gc_log!("rc_free {:?}", o);
+        let mut rc_mature_objects = self.rc_mature_objects.lock().unwrap();
+        if rc_mature_objects.remove(&o).is_some() {
+            let pages = self.release_object(o.to_address::<VM>());
+            self.num_pages_released_lazy
+                .fetch_add(pages, Ordering::Relaxed);
+        }
     }
 
     pub fn is_marked(&self, object: ObjectReference) -> bool {
@@ -510,13 +515,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn sweep_rc_mature_objects_after_satb(&self, is_live: &impl Fn(ObjectReference) -> bool) {
-        let mature_objects = self.rc_mature_objects.lock();
+        let mut mature_objects = self.rc_mature_objects.lock().unwrap();
+        let mut released_objects = vec![];
         for (o, _size) in mature_objects.iter() {
             if !is_live(*o) {
                 self.update_stat_for_dead_mature_object(*o);
                 self.rc.set(*o, 0);
-                self.rc_free(*o);
+                let pages = self.release_object(o.to_address::<VM>());
+                self.num_pages_released_lazy
+                    .fetch_add(pages, Ordering::Relaxed);
+                released_objects.push(*o);
             }
+        }
+        for o in released_objects {
+            mature_objects.remove(&o);
         }
     }
 }
@@ -543,48 +555,5 @@ impl<VM: VMBinding> GCWork<VM> for RCSweepMatureAfterSATBLOS {
     ) {
         let los = mmtk.get_plan().common().get_los();
         los.sweep_rc_mature_objects_after_satb(&|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
-    }
-}
-
-pub struct RCReleaseMatureLOS {
-    _counter: LazySweepingJobsCounter,
-}
-
-impl RCReleaseMatureLOS {
-    pub fn new(counter: LazySweepingJobsCounter) -> Self {
-        Self { _counter: counter }
-    }
-
-    fn do_work_impl<VM: VMBinding>(&self, mmtk: &'static crate::MMTK<VM>) {
-        let los = mmtk.get_plan().common().get_los();
-        let mut mature_objects = los.rc_mature_objects.lock();
-        let mut total_released_pages = 0;
-        while let Some(o) = los.rc_dead_objects.pop() {
-            let removed = mature_objects.remove(&o);
-            if let Some(size) = removed {
-                total_released_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
-            }
-        }
-        let lxr = mmtk
-            .get_plan()
-            .downcast_ref::<crate::plan::lxr::LXR<VM>>()
-            .unwrap();
-        if total_released_pages != 0
-            && (lxr.current_pause().is_none()
-                || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
-        {
-            los.num_pages_released_lazy
-                .fetch_add(total_released_pages, Ordering::Relaxed);
-        }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCReleaseMatureLOS {
-    fn do_work(
-        &mut self,
-        _worker: &mut crate::scheduler::GCWorker<VM>,
-        mmtk: &'static crate::MMTK<VM>,
-    ) {
-        self.do_work_impl::<VM>(mmtk)
     }
 }
