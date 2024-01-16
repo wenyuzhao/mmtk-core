@@ -989,11 +989,11 @@ impl<VM: VMBinding> LXR<VM> {
             // println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - Full\n\n");
             return;
         }
-        println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - FinalMark\n");
-        println!("heap-size: {}", self.get_total_pages() << 12);
+        eprintln!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - FinalMark\n");
+        eprintln!("heap-size: {}", self.get_total_pages() << 12);
         self.immix_space.dump_memory(self);
         self.los().dump_memory(self);
-        println!("\n@@ FRAGMENTATION DISTRIBUTION - FinalMark End\n\n");
+        eprintln!("\n@@ FRAGMENTATION DISTRIBUTION - FinalMark End\n\n");
         // }
     }
 

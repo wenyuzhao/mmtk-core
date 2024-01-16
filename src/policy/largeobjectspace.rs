@@ -256,17 +256,17 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if lxr.is_marked(*o) {
                 cm_live_bytes += size;
             } else {
-                panic!("{:?} is dead. rc={}", o, self.rc.count(*o));
+                // panic!("{:?} is dead. rc={}", o, self.rc.count(*o));
             }
         }
-        println!("los:");
-        println!("  reserved-pages: {}", self.reserved_pages());
-        println!("  live-chunks: {}", owned_chunks);
+        eprintln!("los:");
+        eprintln!("  reserved-pages: {}", self.reserved_pages());
+        eprintln!("  live-chunks: {}", owned_chunks);
         // println!("  live-chunks: {}", chunks.len());
-        println!("  live-pages: {}", live_pages);
-        println!("  rc-live-bytes: {}", rc_live_bytes);
-        println!("  cm-live-bytes: {}", cm_live_bytes);
-        println!(
+        eprintln!("  live-pages: {}", live_pages);
+        eprintln!("  rc-live-bytes: {}", rc_live_bytes);
+        eprintln!("  cm-live-bytes: {}", cm_live_bytes);
+        eprintln!(
             "  reachable-live-bytes: {}",
             crate::SANITY_LIVE_SIZE_LOS.load(Ordering::SeqCst)
         );

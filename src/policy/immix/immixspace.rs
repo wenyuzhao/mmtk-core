@@ -884,19 +884,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let x: usize = (*x).into();
                 bins[x] += 1;
             }
-            print!("  {}: ", name);
+            eprint!("  {}: ", name);
             // let mut sum = 0usize;
             for i in 0..=max {
                 if i == 0 {
-                    print!("[");
+                    eprint!("[");
                 } else {
-                    print!(",");
+                    eprint!(",");
                 }
-                print!("{}", bins[i as usize]);
+                eprint!("{}", bins[i as usize]);
                 // sum += cdf[i as usize] as usize;
                 // print!("{}", sum);
             }
-            println!("]");
+            eprintln!("]");
         }
         // owned chunks
         let mut owned_chunks = 0usize;
@@ -905,16 +905,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             owned_chunks += self.common.vm_map().get_contiguous_region_chunks(a);
             a = self.common.vm_map().get_next_contiguous_region(a);
         }
-        println!("immix:");
-        println!("  owned-chunks: {}", owned_chunks);
-        println!("  live-chunks: {}", dist.live_chunks);
-        println!("  live-blocks: {}", dist.live_blocks);
-        println!("  live-pages: {}", dist.live_pages);
-        println!("  live-lines: {}", dist.live_lines);
-        println!("  unmarked-live-lines: {}", unmarked_live_lines);
-        println!("  rc-live-bytes: {}", dist.rc_live_bytes);
-        println!("  cm-live-bytes: {}", dist.cm_live_bytes);
-        println!(
+        eprintln!("immix:");
+        eprintln!("  reserved-pages: {}", self.reserved_pages());
+        eprintln!("  owned-chunks: {}", owned_chunks);
+        eprintln!("  live-chunks: {}", dist.live_chunks);
+        eprintln!("  live-blocks: {}", dist.live_blocks);
+        eprintln!("  live-pages: {}", dist.live_pages);
+        eprintln!("  live-lines: {}", dist.live_lines);
+        eprintln!("  unmarked-live-lines: {}", unmarked_live_lines);
+        eprintln!("  rc-live-bytes: {}", dist.rc_live_bytes);
+        eprintln!("  cm-live-bytes: {}", dist.cm_live_bytes);
+        eprintln!(
             "  reachable-live-bytes: {}",
             crate::SANITY_LIVE_SIZE_IX.load(Ordering::SeqCst)
         );
