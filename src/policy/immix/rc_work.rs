@@ -40,9 +40,9 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
             let chunk_defarg_percent =
-                if is_emergency_gc || cfg!(faeture = "aggressive_mature_evac") {
+                if is_emergency_gc || cfg!(feature = "aggressive_mature_evac") {
                     crate::args().chunk_defarg_percent
-                        << if cfg!(faeture = "aggressive_mature_evac") {
+                        << if cfg!(feature = "aggressive_mature_evac") {
                             2
                         } else {
                             1
@@ -89,7 +89,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             if lxr.current_pause().unwrap() == Pause::Full
                 || score
                     >= (Block::BYTES
-                        >> if cfg!(faeture = "aggressive_mature_evac") {
+                        >> if cfg!(feature = "aggressive_mature_evac") {
                             2
                         } else {
                             1
@@ -478,14 +478,17 @@ impl MatureEvacuationSet {
         }
         // Select mature defrag blocks
         let available_clean_pages_for_defrag = if lxr.current_pause().unwrap() == Pause::Full {
-            lxr.get_total_pages().saturating_sub(lxr.get_used_pages())
+            lxr.get_total_pages()
+                .saturating_sub(lxr.get_used_pages())
+                .max(lxr.immix_space.defrag_headroom_pages())
         } else {
             lxr.immix_space.defrag_headroom_pages()
         };
         let mut max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
-        if cfg!(faeture = "aggressive_mature_evac") {
+        if cfg!(feature = "aggressive_mature_evac") {
             max_copy_bytes = max_copy_bytes << 2;
         }
+        gc_log!([3] "max_copy_bytes={} ({}M)", max_copy_bytes, max_copy_bytes >> 20);
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
         if lxr.immix_space.pr.has_chunk_fragmentation_info() {

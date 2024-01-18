@@ -985,15 +985,15 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn dump_memory(&self, pause: Pause) {
-        if pause != Pause::FinalMark {
+        if pause != Pause::Full {
             // println!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - Full\n\n");
             return;
         }
-        eprintln!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - FinalMark\n");
+        eprintln!("\n\n\n@@ FRAGMENTATION DISTRIBUTION - {:?}\n", pause);
         eprintln!("heap-size: {}", self.get_total_pages() << 12);
         self.immix_space.dump_memory(self);
         self.los().dump_memory(self);
-        eprintln!("\n@@ FRAGMENTATION DISTRIBUTION - FinalMark End\n\n");
+        eprintln!("\n@@ FRAGMENTATION DISTRIBUTION - {:?} End\n\n", pause);
         // }
     }
 
