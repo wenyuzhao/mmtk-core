@@ -431,7 +431,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        gc_log!("rc_free {:?}", o);
         let mut rc_mature_objects = self.rc_mature_objects.lock().unwrap();
         if rc_mature_objects.remove(&o).is_some() {
             let pages = self.release_object(o.to_address::<VM>());
