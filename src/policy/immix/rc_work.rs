@@ -372,6 +372,11 @@ pub(super) struct MatureEvacuationSet {
 impl MatureEvacuationSet {
     /// Release all the mature defrag source blocks
     pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mature_evac_candidates start",
+            crate::gc_start_time_ms(),
+        );
         let mut defrag_blocks: Vec<Block> =
             std::mem::take(&mut *self.defrag_blocks.lock().unwrap());
         if defrag_blocks.is_empty() {
@@ -389,10 +394,19 @@ impl MatureEvacuationSet {
             block.rc_sweep_mature::<VM>(space, true, true);
             assert!(!block.is_defrag_source());
         }
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mature_evac_candidates released {}",
+            crate::gc_start_time_ms(), count
+        );
         if count != 0 {
-            gc_log!("sweep_mature_evac_candidates");
             space.pr.bulk_release_blocks(count);
         }
+        #[cfg(feature = "lxr_release_stage_timer")]
+        gc_log!([3]
+            "    - ({:.3}ms) sweep_mature_evac_candidates finish",
+            crate::gc_start_time_ms(),
+        );
     }
 
     pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
