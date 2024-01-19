@@ -606,10 +606,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             self.process_incs_for_obj_array::<KIND>(s, self.depth);
         }
         if let Some(roots) = roots {
-            if self.lxr.concurrent_marking_enabled()
-                && self.pause == Pause::InitialMark
-                && !self.root_kind.unwrap().should_skip_mark_and_decs()
-            {
+            if self.lxr.concurrent_marking_enabled() && self.pause == Pause::InitialMark {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
                     for r in &roots {
                         assert!(
@@ -624,7 +621,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::Full {
-                if !root_edges.is_empty() && !self.root_kind.unwrap().should_skip_mark_and_decs() {
+                if !root_edges.is_empty() {
                     let mut w = LXRStopTheWorldProcessEdges::new(
                         root_edges,
                         true,

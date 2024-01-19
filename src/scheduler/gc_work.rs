@@ -647,11 +647,6 @@ impl RootKind {
             || matches!(self, RootKind::YoungWeakHandleRoots)
     }
 
-    pub fn should_skip_mark_and_decs(&self) -> bool {
-        matches!(self, RootKind::YoungCodeCacheRoots)
-            || matches!(self, RootKind::YoungWeakHandleRoots)
-    }
-
     pub fn should_skip_decs(&self) -> bool {
         matches!(self, RootKind::YoungCodeCacheRoots)
             || matches!(self, RootKind::StrongCLDRoots)
