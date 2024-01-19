@@ -172,16 +172,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    fn record_mature_evac_remset(
-        &mut self,
-        e: VM::VMEdge,
-        o: ObjectReference,
-        is_incomplete_root: bool,
-    ) {
+    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference) {
         if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
-            return;
-        }
-        if self.pause == Pause::FinalMark && is_incomplete_root {
             return;
         }
         self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
@@ -431,7 +423,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         e: VM::VMEdge,
         depth: u32,
-        is_incomplete_root: bool,
+        add_root_to_remset: bool,
     ) -> Option<ObjectReference> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
@@ -444,8 +436,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         o.verify::<VM>();
         let new = self.process_inc_and_evacuate(o, depth);
         // Put this into remset if this is a mature edge, or a weak root
-        if K != EDGE_KIND_ROOT || is_incomplete_root {
-            self.record_mature_evac_remset(e, new, is_incomplete_root);
+        if K != EDGE_KIND_ROOT || add_root_to_remset {
+            self.record_mature_evac_remset(e, new);
         }
         if new != o {
             // gc_log!(
@@ -474,13 +466,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         &mut self,
         mut incs: AddressBuffer<'_, VM::VMEdge>,
         depth: u32,
-        is_incomplete_root: bool,
+        add_root_to_remset: bool,
     ) -> Option<Vec<ObjectReference>> {
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
             for e in &mut *incs {
-                if let Some(new) = self.process_edge::<K>(*e, depth, is_incomplete_root) {
+                if let Some(new) = self.process_edge::<K>(*e, depth, add_root_to_remset) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
@@ -599,16 +591,16 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             vec![]
         };
-        let is_incomplete_root = self
+        let add_root_to_remset = self
             .root_kind
-            .map(|r| r.is_incomplete())
+            .map(|r| r.should_record_remset())
             .unwrap_or_default();
         let roots = {
             let incs = std::mem::take(&mut self.incs);
-            self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, is_incomplete_root)
+            self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, false)
         };
         if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
-            assert!(!is_incomplete_root);
+            assert!(!add_root_to_remset);
         }
         for s in std::mem::take(&mut self.inc_slices) {
             self.process_incs_for_obj_array::<KIND>(s, self.depth);

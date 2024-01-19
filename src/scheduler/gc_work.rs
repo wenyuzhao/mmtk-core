@@ -634,21 +634,30 @@ pub enum RootKind {
     /// * Mark them at the start of SATB
     /// * StrongCLD / CodeCache roots: for SATB correctness, collect the complete set of them at Initial/Final SATB pause, to make sure they are marked and forwarded properly.
     /// * Mature evac: Add these roots to remset, so that any roots that is modified during the concurrent phase will be scanned.
-    Incomplete,
+    StrongCLDRoots,
+    YoungStrongCLDRoots,
+    YoungWeakCLDRoots,
     YoungCodeCacheRoots,
+    YoungWeakHandleRoots,
 }
 
 impl RootKind {
-    pub fn is_incomplete(&self) -> bool {
-        matches!(self, RootKind::Incomplete { .. })
+    pub fn should_record_remset(&self) -> bool {
+        matches!(self, RootKind::YoungWeakCLDRoots)
+            || matches!(self, RootKind::YoungWeakHandleRoots)
     }
 
     pub fn should_skip_mark_and_decs(&self) -> bool {
-        matches!(self, RootKind::YoungCodeCacheRoots { .. })
+        matches!(self, RootKind::YoungCodeCacheRoots)
+            || matches!(self, RootKind::YoungWeakHandleRoots)
     }
 
     pub fn should_skip_decs(&self) -> bool {
-        matches!(self, RootKind::YoungCodeCacheRoots) || matches!(self, RootKind::Incomplete)
+        matches!(self, RootKind::YoungCodeCacheRoots)
+            || matches!(self, RootKind::StrongCLDRoots)
+            || matches!(self, RootKind::YoungStrongCLDRoots)
+            || matches!(self, RootKind::YoungWeakCLDRoots)
+            || matches!(self, RootKind::YoungWeakHandleRoots)
     }
 }
 
