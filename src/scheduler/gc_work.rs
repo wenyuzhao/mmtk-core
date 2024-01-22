@@ -128,6 +128,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
 
         if mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_none() {
             <C::VM as VMBinding>::VMCollection::update_weak_processor(false);
+            <C::VM as VMBinding>::VMCollection::update_code_cache();
         }
 
         mmtk.get_plan().base().gc_trigger.policy.on_gc_release(mmtk);

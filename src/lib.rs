@@ -50,7 +50,7 @@ extern crate downcast_rs;
 extern crate probe;
 
 #[macro_use]
-mod gc_log;
+pub mod gc_log;
 mod mmtk;
 mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
@@ -593,7 +593,7 @@ pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, u
 
 static VERBOSE: AtomicUsize = AtomicUsize::new(0);
 
-fn verbose(level: usize) -> bool {
+pub fn verbose(level: usize) -> bool {
     VERBOSE.load(Ordering::Relaxed) >= level
 }
 
