@@ -98,7 +98,6 @@ pub trait Collection<VM: VMBinding> {
     fn process_phantom_refs<E: ProcessEdgesWork<VM = VM>>(_worker: &mut GCWorker<VM>) {}
 
     fn update_weak_processor(_lxr: bool) {}
-    fn update_code_cache() {}
 
     fn clear_cld_claimed_marks() {}
 
