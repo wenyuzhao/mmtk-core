@@ -87,6 +87,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
             if lxr.current_pause().unwrap() == Pause::Full
+                || cfg!(feature = "aggressive_mature_evac")
                 || score
                     >= (Block::BYTES
                         >> if cfg!(feature = "aggressive_mature_evac") {
@@ -515,9 +516,10 @@ impl MatureEvacuationSet {
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         gc_log!([2]
-            " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
+            " - defrag {} mature bytes ({} blocks ({}M), {} blocks in fragmented chunks)",
             copy_bytes,
             selected_blocks.len(),
+            selected_blocks.len() << Block::LOG_BYTES >> 20,
             count1,
         );
         // lxr.dump_heap_usage(false);
