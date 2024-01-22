@@ -41,12 +41,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let threshold = {
             let chunk_defarg_percent =
                 if is_emergency_gc || cfg!(feature = "aggressive_mature_evac") {
-                    crate::args().chunk_defarg_percent
-                        << if cfg!(feature = "aggressive_mature_evac") {
-                            2
-                        } else {
-                            1
-                        }
+                    crate::args().chunk_defarg_percent << 1
                 } else {
                     crate::args().chunk_defarg_percent
                 };
@@ -88,13 +83,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
             };
             if lxr.current_pause().unwrap() == Pause::Full
                 || cfg!(feature = "aggressive_mature_evac")
-                || score
-                    >= (Block::BYTES
-                        >> if cfg!(feature = "aggressive_mature_evac") {
-                            2
-                        } else {
-                            1
-                        })
+                || score >= (Block::BYTES >> 1)
             {
                 fragmented_blocks.push((block, score));
             }
@@ -500,9 +489,9 @@ impl MatureEvacuationSet {
             lxr.immix_space.defrag_headroom_pages()
         };
         let mut max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
-        if cfg!(feature = "aggressive_mature_evac") {
-            max_copy_bytes = max_copy_bytes << 2;
-        }
+        // if cfg!(feature = "aggressive_mature_evac") {
+        //     max_copy_bytes = max_copy_bytes << 2;
+        // }
         gc_log!([3] "max_copy_bytes={} ({}M)", max_copy_bytes, max_copy_bytes >> 20);
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
