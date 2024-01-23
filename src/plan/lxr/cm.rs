@@ -1,9 +1,11 @@
 use super::LXR;
 use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
+use crate::scheduler::RootKind;
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::rc::RefCountHelper;
@@ -537,6 +539,15 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if self.lxr.rc.count(object) == 0 {
             return object;
         }
+        // if !self.lxr.is_marked(object) {
+        if self.roots
+            && self.root_kind == Some(RootKind::Weak)
+            && (!self.lxr.immix_space.in_space(object)
+                || !Block::containing::<VM>(object).is_defrag_source())
+        {
+            return object;
+        }
+        // }
         debug_assert!(object.is_in_any_space(), "Invalid {:?}", object);
         debug_assert!(
             object.to_address::<VM>().is_aligned_to(8),
@@ -632,6 +643,13 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         debug_assert!(object.is_in_any_space());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());
+        if self.roots
+            && self.root_kind == Some(RootKind::Weak)
+            && (!self.lxr.immix_space.in_space(object)
+                || !Block::containing::<VM>(object).is_defrag_source())
+        {
+            return object;
+        }
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();

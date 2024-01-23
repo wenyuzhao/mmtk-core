@@ -639,6 +639,7 @@ pub enum RootKind {
     YoungWeakCLDRoots,
     YoungCodeCacheRoots,
     YoungWeakHandleRoots,
+    Weak,
 }
 
 impl RootKind {
@@ -659,6 +660,7 @@ impl RootKind {
             || matches!(self, RootKind::YoungStrongCLDRoots)
             || matches!(self, RootKind::YoungWeakCLDRoots)
             || matches!(self, RootKind::YoungWeakHandleRoots)
+            || matches!(self, RootKind::Weak)
     }
 }
 
