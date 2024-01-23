@@ -488,7 +488,7 @@ impl MatureEvacuationSet {
         } else {
             lxr.immix_space.defrag_headroom_pages()
         };
-        let mut max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
+        let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
         // if cfg!(feature = "aggressive_mature_evac") {
         //     max_copy_bytes = max_copy_bytes << 2;
         // }
