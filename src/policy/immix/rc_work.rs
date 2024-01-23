@@ -41,12 +41,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
         let threshold = {
             let chunk_defarg_percent =
                 if is_emergency_gc || cfg!(feature = "aggressive_mature_evac") {
-                    crate::args().chunk_defarg_percent
-                        << if cfg!(feature = "aggressive_mature_evac") {
-                            2
-                        } else {
-                            1
-                        }
+                    crate::args().chunk_defarg_percent << 1
                 } else {
                     crate::args().chunk_defarg_percent
                 };
@@ -87,13 +82,8 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
                 block.calc_dead_lines() << Line::LOG_BYTES
             };
             if lxr.current_pause().unwrap() == Pause::Full
-                || score
-                    >= (Block::BYTES
-                        >> if cfg!(feature = "aggressive_mature_evac") {
-                            2
-                        } else {
-                            1
-                        })
+                || cfg!(feature = "aggressive_mature_evac")
+                || score >= (Block::BYTES >> 1)
             {
                 fragmented_blocks.push((block, score));
             }
@@ -498,10 +488,10 @@ impl MatureEvacuationSet {
         } else {
             lxr.immix_space.defrag_headroom_pages()
         };
-        let mut max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
-        if cfg!(feature = "aggressive_mature_evac") {
-            max_copy_bytes = max_copy_bytes << 2;
-        }
+        let max_copy_bytes = available_clean_pages_for_defrag << LOG_BYTES_IN_PAGE;
+        // if cfg!(feature = "aggressive_mature_evac") {
+        //     max_copy_bytes = max_copy_bytes << 2;
+        // }
         gc_log!([3] "max_copy_bytes={} ({}M)", max_copy_bytes, max_copy_bytes >> 20);
         let mut copy_bytes = 0usize;
         let mut selected_blocks = vec![];
@@ -515,9 +505,10 @@ impl MatureEvacuationSet {
         let count1 = selected_blocks.len();
         self.select_fragmented_blocks(&mut selected_blocks, &mut copy_bytes, max_copy_bytes);
         gc_log!([2]
-            " - defrag {} mature bytes ({} blocks, {} blocks in fragmented chunks)",
+            " - defrag {} mature bytes ({} blocks ({}M), {} blocks in fragmented chunks)",
             copy_bytes,
             selected_blocks.len(),
+            selected_blocks.len() << Block::LOG_BYTES >> 20,
             count1,
         );
         // lxr.dump_heap_usage(false);

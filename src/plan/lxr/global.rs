@@ -377,14 +377,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             VM::VMCollection::update_weak_processor(false);
         }
         let perform_class_unloading = self.current_gc_should_perform_class_unloading();
-        if (pause == Pause::FinalMark || pause == Pause::Full) && perform_class_unloading {
-            #[cfg(feature = "lxr_release_stage_timer")]
-            gc_log!([3]
-                "    - ({:.3}ms) update_code_cache start",
-                crate::gc_start_time_ms(),
-            );
-            VM::VMCollection::update_code_cache();
-        }
         if perform_class_unloading {
             gc_log!([3] "    - class unloading");
         }

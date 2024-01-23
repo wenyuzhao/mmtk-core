@@ -29,9 +29,9 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// Work buckets
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
     /// Workers that can run both concurrently and STW
-    generic_worker_group: Arc<WorkerGroup<VM>>,
+    pub(crate) generic_worker_group: Arc<WorkerGroup<VM>>,
     /// STW-only Workers
-    stw_worker_group: Arc<WorkerGroup<VM>>,
+    pub(crate) stw_worker_group: Arc<WorkerGroup<VM>>,
     /// The shared part of the GC worker object of the controller thread
     coordinator_worker_shared: Arc<GCWorkerShared<VM>>,
     pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
