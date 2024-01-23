@@ -362,6 +362,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        #[cfg(feature = "measure_rc_rate")]
+        if crate::verbose(3) {
+            super::rc::dump_rc_rate();
+        }
         let _new_ratio = super::SURVIVAL_RATIO_PREDICTOR.update_ratio();
         let pause = self.current_pause().unwrap();
         if pause == Pause::FinalMark || pause == Pause::Full {
