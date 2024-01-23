@@ -770,7 +770,7 @@ pub trait ProcessEdgesWork:
             .sanity_checker
             .lock()
             .unwrap()
-            .add_root_edges(self.edges.clone());
+            .add_root_edges(self.edges.clone(), self.root_kind.unwrap());
     }
 
     /// Start the a scan work packet. If SCAN_OBJECTS_IMMEDIATELY, the work packet will be executed immediately, in this method.

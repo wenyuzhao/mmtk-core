@@ -17,7 +17,7 @@ pub struct SanityChecker<ES: Edge> {
     /// Visited objects
     refs: HashSet<ObjectReference>,
     /// Cached root edges for sanity root scanning
-    root_edges: Vec<Vec<ES>>,
+    root_edges: Vec<(Vec<ES>, RootKind)>,
     /// Cached root nodes for sanity root scanning
     root_nodes: Vec<Vec<ObjectReference>>,
 }
@@ -38,8 +38,8 @@ impl<ES: Edge> SanityChecker<ES> {
     }
 
     /// Cache a list of root edges to the sanity checker.
-    pub fn add_root_edges(&mut self, roots: Vec<ES>) {
-        self.root_edges.push(roots)
+    pub fn add_root_edges(&mut self, roots: Vec<ES>, kind: RootKind) {
+        self.root_edges.push((roots, kind))
     }
 
     pub fn add_root_nodes(&mut self, roots: Vec<ObjectReference>) {
@@ -90,15 +90,15 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
         // }
         {
             let sanity_checker = mmtk.sanity_checker.lock().unwrap();
-            for roots in &sanity_checker.root_edges {
-                scheduler.work_buckets[WorkBucketStage::Closure].add(
-                    SanityGCProcessEdges::<P::VM>::new(
-                        roots.clone(),
-                        true,
-                        mmtk,
-                        WorkBucketStage::Closure,
-                    ),
+            for (roots, kind) in &sanity_checker.root_edges {
+                let mut w = SanityGCProcessEdges::<P::VM>::new(
+                    roots.clone(),
+                    true,
+                    mmtk,
+                    WorkBucketStage::Closure,
                 );
+                w.root_kind = Some(*kind);
+                scheduler.work_buckets[WorkBucketStage::Closure].add(w);
             }
             for roots in &sanity_checker.root_nodes {
                 scheduler.work_buckets[WorkBucketStage::Closure].add(ScanObjects::<
@@ -296,6 +296,13 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     }
     #[cfg(not(feature = "fragmentation_analysis"))]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        // gc_log!(
+        //     "S {:?} -> {:?} r={} kind={:?}",
+        //     self.edge,
+        //     object,
+        //     self.roots,
+        //     self.root_kind
+        // );
         if let Some(_lxr) = self
             .mmtk()
             .get_plan()
@@ -362,12 +369,16 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
                 if lxr.current_pause().unwrap() == crate::plan::immix::Pause::FinalMark
                     || lxr.current_pause().unwrap() == crate::plan::immix::Pause::Full
                 {
+                    if !lxr.is_marked(object) {
+                        flush_logs!()
+                    }
                     assert!(
                         lxr.is_marked(object),
-                        "{:?} -> {:?} is not marked, roots={}",
+                        "{:?} -> {:?} is not marked, roots={} kind={:?}",
                         self.edge,
                         object,
-                        self.roots
+                        self.roots,
+                        self.root_kind,
                     )
                 }
             }

@@ -597,6 +597,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         let edges = std::mem::take(&mut self.edges);
         let slices = std::mem::take(&mut self.array_slices);
         self.process_edges_impl(&edges, &slices, self.remset_recorded_edges);
+        self.roots = false;
         self.remset_recorded_edges = false;
         let should_record_forwarded_roots = self.should_record_forwarded_roots;
         self.should_record_forwarded_roots = false;
