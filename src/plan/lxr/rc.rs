@@ -25,6 +25,8 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
+#[cfg(feature = "measure_rc_rate")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
@@ -46,6 +48,10 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     copy_context: *mut GCWorkerCopyContext<VM>,
     #[cfg(feature = "lxr_precise_incs_counter")]
     stat: crate::LocalRCStat,
+    #[cfg(feature = "measure_rc_rate")]
+    inc_objs: usize,
+    #[cfg(feature = "measure_rc_rate")]
+    copy_objs: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -82,6 +88,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             copy_context: std::ptr::null_mut(),
             #[cfg(feature = "lxr_precise_incs_counter")]
             stat: crate::LocalRCStat::default(),
+            #[cfg(feature = "measure_rc_rate")]
+            inc_objs: 0,
+            #[cfg(feature = "measure_rc_rate")]
+            copy_objs: 0,
         }
     }
 
@@ -282,6 +292,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 } else {
                     if rc != crate::util::rc::MAX_REF_COUNT {
                         let _ = self.rc.inc(target);
+                        #[cfg(feature = "measure_rc_rate")]
+                        {
+                            self.inc_objs += 1;
+                        }
                     }
                     self.record_mature_evac_remset2(obj_in_defrag, edge, target);
                 }
@@ -336,6 +350,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_objects += 1;
             s.inc_volume += o.get_size::<VM>();
         });
+        #[cfg(feature = "measure_rc_rate")]
+        {
+            self.inc_objs += 1;
+        }
         let los = self.lxr.los().in_space(o);
         if !los && object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
             while object_forwarding::is_being_forwarded::<VM>(o) {
@@ -374,6 +392,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     CopySemantics::DefaultCopy,
                     self.copy_context(),
                 );
+                #[cfg(feature = "measure_rc_rate")]
+                {
+                    self.copy_objs += 1;
+                }
                 if let Some(new) = new {
                     self.inc(new);
                     self.promote(new, true, false, depth);
@@ -539,7 +561,7 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        #[cfg(feature = "log_outstanding_packets")]
+        #[cfg(any(feature = "log_outstanding_packets", feature = "measure_rc_rate"))]
         let t = std::time::SystemTime::now();
 
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
@@ -689,7 +711,44 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     );
             }
         }
+        #[cfg(feature = "measure_rc_rate")]
+        {
+            let us = t.elapsed().unwrap().as_micros() as usize;
+            INC_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
+            INC_PACKETS.fetch_add(1, Ordering::SeqCst);
+            INC_OBJS.fetch_add(self.inc_objs, Ordering::SeqCst);
+            COPY_OBJS.fetch_add(self.copy_objs, Ordering::SeqCst);
+        }
     }
+}
+
+#[cfg(feature = "measure_rc_rate")]
+pub static INC_PACKETS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_rc_rate")]
+pub static INC_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_rc_rate")]
+pub static INC_OBJS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "measure_rc_rate")]
+pub static COPY_OBJS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "measure_rc_rate")]
+pub fn dump_rc_rate() {
+    gc_log!(
+        " - RC-INCS: packets={} total-time={}ms inc-objs={} cp-objs={}",
+        INC_PACKETS.load(Ordering::SeqCst),
+        INC_PACKETS_TIME.load(Ordering::SeqCst) / 1000,
+        INC_OBJS.load(Ordering::SeqCst),
+        COPY_OBJS.load(Ordering::SeqCst),
+    );
+    let t = INC_PACKETS_TIME.load(Ordering::SeqCst) as f32 / 1000f32;
+    gc_log!(
+        " - RC-INCS-RATE: {:.1}",
+        INC_OBJS.load(Ordering::SeqCst) as f32 / t,
+    );
+    INC_PACKETS.store(0, Ordering::SeqCst);
+    INC_PACKETS_TIME.store(0, Ordering::SeqCst);
+    INC_OBJS.store(0, Ordering::SeqCst);
+    COPY_OBJS.store(0, Ordering::SeqCst);
 }
 
 pub struct ProcessDecs<VM: VMBinding> {
