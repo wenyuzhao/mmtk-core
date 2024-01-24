@@ -539,15 +539,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if self.lxr.rc.count(object) == 0 {
             return object;
         }
-        // if !self.lxr.is_marked(object) {
         if self.roots
             && self.root_kind == Some(RootKind::Weak)
-            && (!self.lxr.immix_space.in_space(object)
-                || !Block::containing::<VM>(object).is_defrag_source())
+            && !Block::containing::<VM>(object).is_defrag_source()
         {
             return object;
         }
-        // }
         debug_assert!(object.is_in_any_space(), "Invalid {:?}", object);
         debug_assert!(
             object.to_address::<VM>().is_aligned_to(8),
@@ -646,8 +643,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         // debug_assert!(object.class_is_valid::<VM>());
         if self.roots
             && self.root_kind == Some(RootKind::Weak)
-            && (!self.lxr.immix_space.in_space(object)
-                || !Block::containing::<VM>(object).is_defrag_source())
+            && !Block::containing::<VM>(object).is_defrag_source()
         {
             return object;
         }
