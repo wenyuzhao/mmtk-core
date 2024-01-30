@@ -97,6 +97,7 @@ block_alloc_order_1 = []
 block_state_reset_bug = []
 fragmentation_analysis = []
 periodic_fragmentation_analysis = ["fragmentation_analysis"]
+g3_compatibilities = []
 
 ss_los_16m = []
 ss_tlab_4k = []
