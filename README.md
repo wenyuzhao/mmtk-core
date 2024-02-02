@@ -1,5 +1,7 @@
 # Source code for the paper "Low-Latency, High-Throughput Garbage Collection", PLDI 2022.
 
+This is the LXR branch of MMTk.
+
 **Please check [github.com/wenyuzhao/mmtk-core/tree/lxr](https://github.com/wenyuzhao/mmtk-core/tree/lxr) for the latest implementation.**
 
 **Please refer to [github.com/wenyuzhao/lxr-pldi-2022-artifact](https://github.com/wenyuzhao/lxr-pldi-2022-artifact) for detailed instructions to reproduce the results in the paper.**
