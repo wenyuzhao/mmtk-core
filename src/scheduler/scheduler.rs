@@ -10,6 +10,7 @@ use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam::deque::{self, Steal};
 use enum_map::{Enum, EnumMap};
+use portable_atomic::AtomicUsize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -24,6 +25,8 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(crate) worker_monitor: Arc<WorkerMonitor>,
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
+    pub total_gc_us: AtomicUsize,
+    pub total_yield_us: AtomicUsize,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -73,6 +76,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             coordinator_worker_shared,
             worker_monitor,
             affinity,
+            total_gc_us: AtomicUsize::new(0),
+            total_yield_us: AtomicUsize::new(0),
         })
     }
 
@@ -370,7 +375,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 return work;
             }
 
+            let t = std::time::SystemTime::now();
             self.worker_monitor.park_and_wait(worker);
+            let us = t.elapsed().unwrap().as_micros();
+            self.total_yield_us.fetch_add(us as usize, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
