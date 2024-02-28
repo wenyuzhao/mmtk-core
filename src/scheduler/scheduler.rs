@@ -9,9 +9,10 @@ use crate::util::rust_util::array_from_fn;
 use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam::deque::{self, Steal};
+use crossbeam::queue::SegQueue;
 use enum_map::{Enum, EnumMap};
-use portable_atomic::AtomicUsize;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -25,8 +26,10 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(crate) worker_monitor: Arc<WorkerMonitor>,
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
-    pub total_gc_us: AtomicUsize,
-    pub total_yield_us: AtomicUsize,
+    pub start_time: std::time::SystemTime,
+    pub yield_intervals: SegQueue<(usize, usize)>,
+    pub gc_intervals: SegQueue<(usize, usize)>,
+    pub in_harness: AtomicBool,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -76,8 +79,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             coordinator_worker_shared,
             worker_monitor,
             affinity,
-            total_gc_us: AtomicUsize::new(0),
-            total_yield_us: AtomicUsize::new(0),
+            start_time: std::time::SystemTime::now(),
+            yield_intervals: SegQueue::new(),
+            gc_intervals: SegQueue::new(),
+            in_harness: AtomicBool::new(false),
         })
     }
 
@@ -375,10 +380,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 return work;
             }
 
-            let t = std::time::SystemTime::now();
+            let start = self.start_time.elapsed().unwrap().as_micros() as usize;
             self.worker_monitor.park_and_wait(worker);
-            let us = t.elapsed().unwrap().as_micros();
-            self.total_yield_us.fetch_add(us as usize, std::sync::atomic::Ordering::Relaxed);
+            let end = self.start_time.elapsed().unwrap().as_micros() as usize;
+            self.yield_intervals.push((start, end));
         }
     }
 
@@ -389,9 +394,45 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         let coordinator_worker_stat = self.coordinator_worker_shared.borrow_stat();
         coordinator_worker_stat.enable();
+        self.in_harness
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn statistics(&self) -> HashMap<String, String> {
+        let mut total_gc_time = 0;
+        let mut gc_intervals: Vec<(usize, usize)> = vec![];
+        while let Some(interval) = self.gc_intervals.pop() {
+            let (start, end) = interval;
+            total_gc_time += end - start;
+            gc_intervals.push(interval);
+        }
+        dbg!(self.worker_group.worker_count());
+        dbg!(total_gc_time);
+        total_gc_time = total_gc_time * self.worker_group.worker_count();
+        let get_overlapped_duration = |ival: (usize, usize)| {
+            let (start, end) = ival;
+            let mut duration = 0;
+            for (gc_start, gc_end) in &gc_intervals {
+                if (start >= *gc_start && start <= *gc_end) || (end >= *gc_start && end <= *gc_end)
+                {
+                    let overlap_start = std::cmp::max(start, *gc_start);
+                    let overlap_end = std::cmp::min(end, *gc_end);
+                    duration += overlap_end - overlap_start;
+                }
+            }
+            return duration;
+        };
+        let mut total_overlapped_duration: usize = 0;
+        while let Some(interval) = self.yield_intervals.pop() {
+            let overlap_duration = get_overlapped_duration(interval);
+            total_overlapped_duration += overlap_duration;
+        }
+        println!(
+            "{:.3} / {:.3} ({:.3})",
+            total_overlapped_duration as f64 / 1000f64,
+            total_gc_time as f64 / 1000f64,
+            total_overlapped_duration as f64 / total_gc_time as f64
+        );
         let mut summary = SchedulerStat::default();
         for worker in &self.worker_group.workers_shared {
             let worker_stat = worker.borrow_stat();

@@ -81,7 +81,12 @@ impl<VM: VMBinding> GCController<VM> {
     /// A wrapper method for [`do_gc_until_completion`](GCController::do_gc_until_completion) to insert USDT tracepoints.
     fn do_gc_until_completion_traced(&mut self) {
         probe!(mmtk, gc_start);
+        let start = self.scheduler.start_time.elapsed().unwrap().as_micros() as usize;
         self.do_gc_until_completion();
+        let end = self.scheduler.start_time.elapsed().unwrap().as_micros() as usize;
+        if self.scheduler.in_harness.load(atomic::Ordering::SeqCst) {
+            self.scheduler.gc_intervals.push((start, end));
+        }
         probe!(mmtk, gc_end);
     }
 
