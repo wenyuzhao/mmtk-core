@@ -190,9 +190,30 @@ impl<VM: VMBinding> WorkBucket<VM> {
         sentinel.is_some()
     }
 
-    pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
+    pub fn update(&self, scheduler: &GCWorkScheduler<VM>, id: WorkBucketStage) -> bool {
         if let Some(can_open) = self.can_open.as_ref() {
             if !self.is_activated() && can_open(scheduler) {
+                if super::MEASURE_TRACING_BUCKET {
+                    if id == WorkBucketStage::Closure {
+                        scheduler.tracing_bucket_start_time.store(
+                            scheduler.start_time.elapsed().unwrap().as_micros() as usize,
+                            Ordering::SeqCst,
+                        );
+                    }
+                    if id == WorkBucketStage::SoftRefClosure {
+                        let start = scheduler.tracing_bucket_start_time.load(Ordering::SeqCst);
+                        let end = scheduler.start_time.elapsed().unwrap().as_micros() as usize;
+                        if scheduler.in_harness.load(Ordering::SeqCst) {
+                            println!(
+                                "Tracing bucket: {} - {} - {:.3}ms",
+                                start,
+                                end,
+                                (end - start) as f64 / 1000.0
+                            );
+                            scheduler.gc_intervals.push((start, end));
+                        }
+                    }
+                }
                 self.activate();
                 return true;
             }

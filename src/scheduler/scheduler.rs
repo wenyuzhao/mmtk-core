@@ -12,7 +12,7 @@ use crossbeam::deque::{self, Steal};
 use crossbeam::queue::SegQueue;
 use enum_map::{Enum, EnumMap};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -27,6 +27,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
     pub start_time: std::time::SystemTime,
+    pub tracing_bucket_start_time: AtomicUsize,
     pub yield_intervals: SegQueue<(usize, usize)>,
     pub gc_intervals: SegQueue<(usize, usize)>,
     pub in_harness: AtomicBool,
@@ -80,6 +81,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             worker_monitor,
             affinity,
             start_time: std::time::SystemTime::now(),
+            tracing_bucket_start_time: AtomicUsize::new(0),
             yield_intervals: SegQueue::new(),
             gc_intervals: SegQueue::new(),
             in_harness: AtomicBool::new(false),
@@ -248,7 +250,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             let bucket = &self.work_buckets[id];
-            let bucket_opened = bucket.update(self);
+            let bucket_opened = bucket.update(self, id);
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);

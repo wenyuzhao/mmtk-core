@@ -84,7 +84,8 @@ impl<VM: VMBinding> GCController<VM> {
         let start = self.scheduler.start_time.elapsed().unwrap().as_micros() as usize;
         self.do_gc_until_completion();
         let end = self.scheduler.start_time.elapsed().unwrap().as_micros() as usize;
-        if self.scheduler.in_harness.load(atomic::Ordering::SeqCst) {
+        if super::MEASURE_TRACING_BUCKET && self.scheduler.in_harness.load(atomic::Ordering::SeqCst)
+        {
             self.scheduler.gc_intervals.push((start, end));
         }
         probe!(mmtk, gc_end);

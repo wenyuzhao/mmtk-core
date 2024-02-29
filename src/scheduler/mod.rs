@@ -25,3 +25,5 @@ pub use controller::GCController;
 
 pub(crate) mod gc_work;
 pub use gc_work::ProcessEdgesWork;
+
+const MEASURE_TRACING_BUCKET: bool = true;
