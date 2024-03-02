@@ -11,6 +11,7 @@ use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam::deque::{self, Steal};
 use crossbeam::queue::SegQueue;
 use enum_map::{Enum, EnumMap};
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
@@ -28,7 +29,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     affinity: AffinityKind,
     pub start_time: std::time::SystemTime,
     pub tracing_bucket_start_time: AtomicUsize,
-    pub yield_intervals: SegQueue<(usize, usize)>,
+    pub yield_intervals: SegQueue<(usize, usize, usize)>,
     pub gc_intervals: SegQueue<(usize, usize)>,
     pub in_harness: AtomicBool,
 }
@@ -385,7 +386,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let start = self.start_time.elapsed().unwrap().as_micros() as usize;
             self.worker_monitor.park_and_wait(worker);
             let end = self.start_time.elapsed().unwrap().as_micros() as usize;
-            self.yield_intervals.push((start, end));
+            self.yield_intervals.push((worker.ordinal, start, end));
         }
     }
 
@@ -401,15 +402,25 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn statistics(&self) -> HashMap<String, String> {
+        const DUMP_INTERVALS: bool = true;
         let mut total_gc_time = 0;
         let mut gc_intervals: Vec<(usize, usize)> = vec![];
+        if DUMP_INTERVALS {
+            println!("===== GC Intervals Start =====");
+            if super::MEASURE_TRACING_BUCKET {
+                println!("stw-tracing:");
+            } else {
+                println!("stw:");
+            }
+        }
         while let Some(interval) = self.gc_intervals.pop() {
             let (start, end) = interval;
             total_gc_time += end - start;
             gc_intervals.push(interval);
+            if DUMP_INTERVALS {
+                println!("  - [{}, {}]", start, end);
+            }
         }
-        dbg!(self.worker_group.worker_count());
-        dbg!(total_gc_time);
         total_gc_time = total_gc_time * self.worker_group.worker_count();
         let get_overlapped_duration = |ival: (usize, usize)| {
             let (start, end) = ival;
@@ -425,9 +436,28 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return duration;
         };
         let mut total_overlapped_duration: usize = 0;
-        while let Some(interval) = self.yield_intervals.pop() {
-            let overlap_duration = get_overlapped_duration(interval);
+        println!("yield:");
+        let mut yield_ivals: Vec<Vec<(usize, usize)>> = vec![];
+        for _ in 0..self.worker_group.worker_count() {
+            yield_ivals.push(vec![]);
+        }
+        while let Some((id, start, end)) = self.yield_intervals.pop() {
+            let overlap_duration = get_overlapped_duration((start, end));
             total_overlapped_duration += overlap_duration;
+            if DUMP_INTERVALS && overlap_duration > 0 {
+                yield_ivals[id].push((start, end));
+            }
+        }
+        if DUMP_INTERVALS {
+            for i in 0..self.worker_group.worker_count() {
+                let ivals = &yield_ivals[i];
+                let s = ivals
+                    .iter()
+                    .map(|ival| format!("[{},{}]", ival.0, ival.1))
+                    .join(", ");
+                println!("  - [{}]", s);
+            }
+            println!("===== GC Intervals End =====");
         }
         println!(
             "{:.3} / {:.3} ({:.3})",
