@@ -29,7 +29,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     affinity: AffinityKind,
     pub start_time: std::time::SystemTime,
     pub tracing_bucket_start_time: AtomicUsize,
-    pub yield_intervals: SegQueue<(usize, usize, usize)>,
+    pub busy_intervals: SegQueue<(usize, usize, usize)>,
     pub gc_intervals: SegQueue<(usize, usize)>,
     pub in_harness: AtomicBool,
 }
@@ -83,7 +83,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             affinity,
             start_time: std::time::SystemTime::now(),
             tracing_bucket_start_time: AtomicUsize::new(0),
-            yield_intervals: SegQueue::new(),
+            busy_intervals: SegQueue::new(),
             gc_intervals: SegQueue::new(),
             in_harness: AtomicBool::new(false),
         })
@@ -383,10 +383,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 return work;
             }
 
-            let start = self.start_time.elapsed().unwrap().as_micros() as usize;
+            let end: usize = self.start_time.elapsed().unwrap().as_micros() as usize;
+            let start = worker.wakeup_time.load(std::sync::atomic::Ordering::SeqCst);
+            if self.in_harness.load(atomic::Ordering::SeqCst) {
+                self.busy_intervals.push((worker.ordinal, start, end));
+            }
             self.worker_monitor.park_and_wait(worker);
-            let end = self.start_time.elapsed().unwrap().as_micros() as usize;
-            self.yield_intervals.push((worker.ordinal, start, end));
+            let start = self.start_time.elapsed().unwrap().as_micros() as usize;
+            worker
+                .wakeup_time
+                .store(start, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -436,21 +442,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return duration;
         };
         let mut total_overlapped_duration: usize = 0;
-        println!("yield:");
-        let mut yield_ivals: Vec<Vec<(usize, usize)>> = vec![];
+        println!("busy:");
+        let mut busy_ivals: Vec<Vec<(usize, usize)>> = vec![];
         for _ in 0..self.worker_group.worker_count() {
-            yield_ivals.push(vec![]);
+            busy_ivals.push(vec![]);
         }
-        while let Some((id, start, end)) = self.yield_intervals.pop() {
+        while let Some((id, start, end)) = self.busy_intervals.pop() {
             let overlap_duration = get_overlapped_duration((start, end));
             total_overlapped_duration += overlap_duration;
-            if DUMP_INTERVALS && overlap_duration > 0 {
-                yield_ivals[id].push((start, end));
+            if DUMP_INTERVALS {
+                busy_ivals[id].push((start, end));
             }
         }
         if DUMP_INTERVALS {
             for i in 0..self.worker_group.worker_count() {
-                let ivals = &yield_ivals[i];
+                let ivals = &busy_ivals[i];
                 let s = ivals
                     .iter()
                     .map(|ival| format!("[{},{}]", ival.0, ival.1))
