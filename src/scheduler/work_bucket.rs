@@ -204,12 +204,12 @@ impl<VM: VMBinding> WorkBucket<VM> {
                         let start = scheduler.tracing_bucket_start_time.load(Ordering::SeqCst);
                         let end = scheduler.start_time.elapsed().unwrap().as_micros() as usize;
                         if scheduler.in_harness.load(Ordering::SeqCst) {
-                            println!(
-                                "Tracing bucket: {} - {} - {:.3}ms",
-                                start,
-                                end,
-                                (end - start) as f64 / 1000.0
-                            );
+                            // println!(
+                            //     "Tracing bucket: {} - {} - {:.3}ms",
+                            //     start,
+                            //     end,
+                            //     (end - start) as f64 / 1000.0
+                            // );
                             scheduler.gc_intervals.push((start, end));
                         }
                     }

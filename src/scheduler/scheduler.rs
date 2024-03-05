@@ -413,7 +413,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn statistics(&self) -> HashMap<String, String> {
-        const DUMP_INTERVALS: bool = true;
+        const DUMP_INTERVALS: bool = false;
         let mut total_gc_time = 0;
         let mut gc_intervals: Vec<(usize, usize)> = vec![];
         if DUMP_INTERVALS {
@@ -470,12 +470,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             println!("===== GC Intervals End =====");
         }
-        println!(
-            "{:.3} / {:.3} ({:.3})",
-            total_overlapped_duration as f64 / 1000f64,
-            total_gc_time as f64 / 1000f64,
-            total_overlapped_duration as f64 / total_gc_time as f64
-        );
+        let utilization = total_overlapped_duration as f64 / total_gc_time as f64;
+        if DUMP_INTERVALS {
+            println!(
+                "{:.3} / {:.3} ({:.3})",
+                total_overlapped_duration as f64 / 1000f64,
+                total_gc_time as f64 / 1000f64,
+                total_overlapped_duration as f64 / total_gc_time as f64
+            );
+        }
         let mut summary = SchedulerStat::default();
         for worker in &self.worker_group.workers_shared {
             let worker_stat = worker.borrow_stat();
@@ -483,7 +486,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         let coordinator_worker_stat = self.coordinator_worker_shared.borrow_stat();
         summary.merge(&coordinator_worker_stat);
-        summary.harness_stat()
+        let mut stat = summary.harness_stat();
+        stat.insert("utilization".to_string(), format!("{:.5}", utilization));
+        stat
     }
 
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
