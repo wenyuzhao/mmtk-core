@@ -1,3 +1,5 @@
+use atomic::Ordering;
+
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::global_state::GcStatus;
@@ -953,6 +955,30 @@ pub struct PlanProcessEdges<
     next_edges: Vec<VM::VMEdge>,
 }
 
+impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
+    PlanProcessEdges<VM, P, KIND>
+{
+    const CAP: usize = VectorObjectQueue::CAPACITY;
+
+    fn flush_check(&mut self) {
+        let mut should_flush = self.next_edges.len() >= Self::CAP;
+        // If there are yielded workers, we do flush right now
+        if !should_flush && cfg!(feature = "flush_opt") {
+            let parked_workers = self
+                .worker()
+                .scheduler()
+                .parked_workers
+                .load(Ordering::SeqCst);
+            if parked_workers > 0 {
+                should_flush = true;
+            }
+        }
+        if should_flush {
+            self.flush();
+        }
+    }
+}
+
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ObjectQueue
     for PlanProcessEdges<VM, P, KIND>
 {
@@ -963,10 +989,10 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
             self.next_edges.push(e);
             if self.next_edges.len() >= VectorObjectQueue::CAPACITY {
-                self.flush();
+                self.flush_check();
             }
         });
-
+        self.flush_check();
         self.plan.post_scan_object(o);
     }
 }

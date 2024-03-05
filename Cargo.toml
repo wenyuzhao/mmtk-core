@@ -69,7 +69,9 @@ name = "main"
 harness = false
 
 [features]
-default = []
+default = [ ]
+
+flush_opt = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

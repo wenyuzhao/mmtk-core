@@ -8,6 +8,7 @@ use crate::util::options::AffinityKind;
 use crate::util::rust_util::array_from_fn;
 use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};
+use atomic::Ordering;
 use crossbeam::deque::{self, Steal};
 use crossbeam::queue::SegQueue;
 use enum_map::{Enum, EnumMap};
@@ -32,6 +33,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub busy_intervals: SegQueue<(usize, usize, usize)>,
     pub gc_intervals: SegQueue<(usize, usize)>,
     pub in_harness: AtomicBool,
+    pub parked_workers: AtomicUsize,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -86,6 +88,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             busy_intervals: SegQueue::new(),
             gc_intervals: SegQueue::new(),
             in_harness: AtomicBool::new(false),
+            parked_workers: AtomicUsize::new(0),
         })
     }
 
@@ -388,7 +391,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if self.in_harness.load(atomic::Ordering::SeqCst) {
                 self.busy_intervals.push((worker.ordinal, start, end));
             }
+            self.parked_workers.fetch_add(1, Ordering::SeqCst);
             self.worker_monitor.park_and_wait(worker);
+            self.parked_workers.fetch_sub(1, Ordering::SeqCst);
             let start = self.start_time.elapsed().unwrap().as_micros() as usize;
             worker
                 .wakeup_time
