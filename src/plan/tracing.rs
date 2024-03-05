@@ -25,7 +25,7 @@ pub struct VectorQueue<T> {
 
 impl<T> VectorQueue<T> {
     /// Reserve a capacity of this on first enqueue to avoid frequent resizing.
-    const CAPACITY: usize = 4096;
+    pub const CAPACITY: usize = 4096;
 
     /// Create an empty `VectorObjectQueue`.
     pub fn new() -> Self {

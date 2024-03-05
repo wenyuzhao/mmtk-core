@@ -635,6 +635,7 @@ pub trait ProcessEdgesWork:
             debug_assert!(self.bucket != WorkBucketStage::Unconstrained);
             self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
         }
+        unreachable!();
     }
 
     /// Create an object-scanning work packet to be used for this ProcessEdgesWork.
@@ -650,6 +651,7 @@ pub trait ProcessEdgesWork:
         if !nodes.is_empty() {
             self.start_or_dispatch_scan_work(self.create_scan_work(nodes));
         }
+        unreachable!();
     }
 
     /// Process an edge, including loading the object reference from the memory slot,
@@ -679,9 +681,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         self.set_worker(worker);
         self.process_edges();
-        if !self.nodes.is_empty() {
-            self.flush();
-        }
+        self.flush();
         #[cfg(feature = "sanity")]
         if self.roots && !_mmtk.is_in_sanity() {
             self.cache_roots_for_sanity_gc();
@@ -771,6 +771,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
             WorkBucketStage::PinningRootsTrace,
             ProcessRootNode::<VM, I, E>::new(nodes, WorkBucketStage::Closure),
         );
+        unreachable!();
     }
 
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
@@ -779,6 +780,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
             WorkBucketStage::TPinningClosure,
             ProcessRootNode::<VM, I, I>::new(nodes, WorkBucketStage::TPinningClosure),
         );
+        unreachable!();
     }
 }
 
@@ -948,6 +950,25 @@ pub struct PlanProcessEdges<
 > {
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
+    next_edges: Vec<VM::VMEdge>,
+}
+
+impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ObjectQueue
+    for PlanProcessEdges<VM, P, KIND>
+{
+    fn enqueue(&mut self, o: ObjectReference) {
+        <VM as VMBinding>::VMScanning::scan_object(self.base.worker().tls, o, &mut |e| {
+            if self.next_edges.is_empty() {
+                self.next_edges.reserve(VectorObjectQueue::CAPACITY)
+            }
+            self.next_edges.push(e);
+            if self.next_edges.len() >= VectorObjectQueue::CAPACITY {
+                self.flush();
+            }
+        });
+
+        self.plan.post_scan_object(o);
+    }
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -964,19 +985,32 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref::<P>().unwrap();
-        Self { plan, base }
+        Self {
+            plan,
+            base,
+            next_edges: vec![],
+        }
     }
 
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
-        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, self.bucket)
+    fn flush(&mut self) {
+        assert!(self.nodes.is_empty());
+        if self.next_edges.is_empty() {
+            return;
+        }
+        let edges = std::mem::take(&mut self.next_edges);
+        let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
+        self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
+    }
+
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
+        unreachable!()
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         debug_assert!(!object.is_null());
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
-        self.plan
-            .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
+        self.plan.trace_object::<_, KIND>(self, object, worker)
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
