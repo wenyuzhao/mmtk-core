@@ -447,7 +447,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return duration;
         };
         let mut total_overlapped_duration: usize = 0;
-        println!("busy:");
+        if DUMP_INTERVALS {
+            println!("busy:");
+        }
         let mut busy_ivals: Vec<Vec<(usize, usize)>> = vec![];
         for _ in 0..self.worker_group.worker_count() {
             busy_ivals.push(vec![]);
