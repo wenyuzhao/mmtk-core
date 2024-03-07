@@ -69,9 +69,16 @@ name = "main"
 harness = false
 
 [features]
-default = [ ]
+default = []
 
-flush_opt = []
+edge_enqueuing = []
+buf_4096 = ["edge_enqueuing"]
+buf_2048 = ["edge_enqueuing"]
+buf_1024 = ["edge_enqueuing"]
+buf_512 = ["edge_enqueuing"]
+buf_256 = ["edge_enqueuing"]
+buf_128 = ["edge_enqueuing"]
+flush_opt = ["edge_enqueuing"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

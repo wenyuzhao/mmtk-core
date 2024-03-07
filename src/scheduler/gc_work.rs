@@ -637,7 +637,6 @@ pub trait ProcessEdgesWork:
             debug_assert!(self.bucket != WorkBucketStage::Unconstrained);
             self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
         }
-        unreachable!();
     }
 
     /// Create an object-scanning work packet to be used for this ProcessEdgesWork.
@@ -653,7 +652,6 @@ pub trait ProcessEdgesWork:
         if !nodes.is_empty() {
             self.start_or_dispatch_scan_work(self.create_scan_work(nodes));
         }
-        unreachable!();
     }
 
     /// Process an edge, including loading the object reference from the memory slot,
@@ -773,7 +771,6 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
             WorkBucketStage::PinningRootsTrace,
             ProcessRootNode::<VM, I, E>::new(nodes, WorkBucketStage::Closure),
         );
-        unreachable!();
     }
 
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
@@ -782,7 +779,6 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
             WorkBucketStage::TPinningClosure,
             ProcessRootNode::<VM, I, I>::new(nodes, WorkBucketStage::TPinningClosure),
         );
-        unreachable!();
     }
 }
 
@@ -1019,24 +1015,36 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn flush(&mut self) {
-        assert!(self.nodes.is_empty());
-        if self.next_edges.is_empty() {
-            return;
+        if !cfg!(feature = "edge_enqueuing") {
+            let nodes = self.pop_nodes();
+            if !nodes.is_empty() {
+                self.start_or_dispatch_scan_work(self.create_scan_work(nodes));
+            }
+        } else {
+            assert!(self.nodes.is_empty());
+            if self.next_edges.is_empty() {
+                return;
+            }
+            let edges = std::mem::take(&mut self.next_edges);
+            let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
+            self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
         }
-        let edges = std::mem::take(&mut self.next_edges);
-        let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
-        self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
     }
 
-    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
-        unreachable!()
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
+        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, self.bucket)
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         debug_assert!(!object.is_null());
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
-        self.plan.trace_object::<_, KIND>(self, object, worker)
+        if cfg!(feature = "edge_enqueuing") {
+            self.plan.trace_object::<_, KIND>(self, object, worker)
+        } else {
+            self.plan
+                .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
+        }
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {

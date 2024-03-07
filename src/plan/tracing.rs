@@ -25,7 +25,21 @@ pub struct VectorQueue<T> {
 
 impl<T> VectorQueue<T> {
     /// Reserve a capacity of this on first enqueue to avoid frequent resizing.
-    pub const CAPACITY: usize = 4096;
+    pub const CAPACITY: usize = {
+        if cfg!(feature = "buf_128") {
+            128
+        } else if cfg!(feature = "buf_256") {
+            256
+        } else if cfg!(feature = "buf_512") {
+            512
+        } else if cfg!(feature = "buf_1024") {
+            1024
+        } else if cfg!(feature = "buf_2048") {
+            2048
+        } else {
+            4096
+        }
+    };
 
     /// Create an empty `VectorObjectQueue`.
     pub fn new() -> Self {

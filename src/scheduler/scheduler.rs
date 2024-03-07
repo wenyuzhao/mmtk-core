@@ -3,6 +3,7 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, GCWorkerShared, ThreadId, WorkerGroup, WorkerMonitor};
 use super::*;
 use crate::mmtk::MMTK;
+use crate::plan::VectorObjectQueue;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::rust_util::array_from_fn;
@@ -76,6 +77,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         let coordinator_worker_shared = Arc::new(GCWorkerShared::<VM>::new(None));
+
+        println!("edge_enqueuing: {}", cfg!(feature = "edge_enqueuing"));
+        println!("flush_opt: {}", cfg!(feature = "flush_opt"));
+        println!("buffer_capicity: {}", VectorObjectQueue::CAPACITY);
 
         Arc::new(Self {
             work_buckets,
