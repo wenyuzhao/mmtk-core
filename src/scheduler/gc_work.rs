@@ -978,16 +978,21 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ObjectQueue
     for PlanProcessEdges<VM, P, KIND>
 {
+    #[cold]
     fn enqueue(&mut self, o: ObjectReference) {
-        <VM as VMBinding>::VMScanning::scan_object(self.base.worker().tls, o, &mut |e| {
-            if self.next_edges.is_empty() {
-                self.next_edges.reserve(VectorObjectQueue::CAPACITY)
-            }
-            self.next_edges.push(e);
-            if self.next_edges.len() >= VectorObjectQueue::CAPACITY {
-                self.flush_check();
-            }
-        });
+        <VM as VMBinding>::VMScanning::scan_object(
+            self.base.worker().tls,
+            o,
+            &mut |e: VM::VMEdge| {
+                if self.next_edges.is_empty() {
+                    self.next_edges.reserve(Self::CAP);
+                }
+                self.next_edges.push(e);
+                if self.next_edges.len() >= Self::CAP {
+                    self.flush_check();
+                }
+            },
+        );
         self.flush_check();
         self.plan.post_scan_object(o);
     }
@@ -1027,7 +1032,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
             let edges = std::mem::take(&mut self.next_edges);
             let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
-            self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
+            self.worker().add_work(self.bucket, work_packet);
         }
     }
 
@@ -1043,7 +1048,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             self.plan.trace_object::<_, KIND>(self, object, worker)
         } else {
             self.plan
-                .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
+                .trace_object::<_, KIND>(&mut self.base.nodes, object, worker)
         }
     }
 
