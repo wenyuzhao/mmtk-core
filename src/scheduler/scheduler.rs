@@ -80,6 +80,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         println!("edge_enqueuing: {}", cfg!(feature = "edge_enqueuing"));
         println!("flush_opt: {}", cfg!(feature = "flush_opt"));
+        println!("null_filter: {}", cfg!(feature = "null_filter"));
         println!("buffer_capicity: {}", VectorObjectQueue::CAPACITY);
 
         Arc::new(Self {

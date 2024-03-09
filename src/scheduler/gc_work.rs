@@ -987,6 +987,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 if self.next_edges.is_empty() {
                     self.next_edges.reserve(Self::CAP);
                 }
+                if cfg!(feature = "null_filter") {
+                    if e.load().is_null() {
+                        return;
+                    }
+                }
                 self.next_edges.push(e);
                 if self.next_edges.len() >= Self::CAP {
                     self.flush_check();
