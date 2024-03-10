@@ -72,12 +72,12 @@ harness = false
 default = []
 
 edge_enqueuing = []
-buf_4096 = ["edge_enqueuing"]
-buf_2048 = ["edge_enqueuing"]
-buf_1024 = ["edge_enqueuing"]
-buf_512 = ["edge_enqueuing"]
-buf_256 = ["edge_enqueuing"]
-buf_128 = ["edge_enqueuing"]
+buf_4096 = []
+buf_2048 = []
+buf_1024 = []
+buf_512 = []
+buf_256 = []
+buf_128 = []
 flush_opt = ["edge_enqueuing"]
 null_filter = ["edge_enqueuing"]
 
