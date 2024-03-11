@@ -445,6 +445,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 println!("  - [{}, {}]", start, end);
             }
         }
+        let tracing_time = total_gc_time;
         total_gc_time = total_gc_time * self.worker_group.worker_count();
         let get_overlapped_duration = |ival: (usize, usize)| {
             let (start, end) = ival;
@@ -503,6 +504,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         summary.merge(&coordinator_worker_stat);
         let mut stat = summary.harness_stat();
         stat.insert("utilization".to_string(), format!("{:.5}", utilization));
+        stat.insert("time.trace".to_string(), format!("{:.5}", tracing_time));
         stat
     }
 
