@@ -949,6 +949,7 @@ pub struct PlanProcessEdges<
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
     next_edges: Vec<VM::VMEdge>,
+    flush_opt_threashold: usize,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
@@ -958,6 +959,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     fn flush_check(&mut self) {
         let mut should_flush = self.next_edges.len() >= Self::CAP;
+        let mut should_flush_to_global = false;
         // If there are yielded workers, we do flush right now
         if !should_flush && cfg!(feature = "flush_opt") {
             let parked_workers = self
@@ -965,12 +967,23 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 .scheduler()
                 .parked_workers
                 .load(Ordering::SeqCst);
-            if parked_workers > 0 {
+            if parked_workers > 0 && self.next_edges.len() >= self.flush_opt_threashold {
                 should_flush = true;
+                should_flush_to_global = true;
             }
         }
         if should_flush {
-            self.flush();
+            if should_flush_to_global {
+                assert!(self.nodes.is_empty());
+                if self.next_edges.is_empty() {
+                    return;
+                }
+                let edges = std::mem::take(&mut self.next_edges);
+                let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
+                self.worker().scheduler().work_buckets[self.bucket].add(work_packet);
+            } else {
+                self.flush();
+            }
         }
     }
 }
@@ -996,6 +1009,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 if self.next_edges.len() >= Self::CAP {
                     self.flush_check();
                 }
+                // self.flush_check();
             },
         );
         self.flush_check();
@@ -1021,6 +1035,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             plan,
             base,
             next_edges: vec![],
+            flush_opt_threashold: mmtk.scheduler.flush_opt_threashold,
         }
     }
 

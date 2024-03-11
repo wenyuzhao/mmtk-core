@@ -35,6 +35,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub gc_intervals: SegQueue<(usize, usize)>,
     pub in_harness: AtomicBool,
     pub parked_workers: AtomicUsize,
+    pub flush_opt_threashold: usize,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -95,6 +96,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             gc_intervals: SegQueue::new(),
             in_harness: AtomicBool::new(false),
             parked_workers: AtomicUsize::new(0),
+            flush_opt_threashold: std::env::var("FLUSH_OPT_THRESHOLD")
+                .unwrap_or("1".to_string())
+                .parse()
+                .unwrap(),
         })
     }
 
