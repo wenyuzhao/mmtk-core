@@ -83,6 +83,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         println!("flush_opt: {}", cfg!(feature = "flush_opt"));
         println!("null_filter: {}", cfg!(feature = "null_filter"));
         println!("buffer_capicity: {}", VectorObjectQueue::CAPACITY);
+        let flush_opt_threashold = std::env::var("FLUSH_OPT_THRESHOLD")
+            .unwrap_or("1".to_string())
+            .parse()
+            .unwrap();
+        println!("flush_opt_threashold: {}", flush_opt_threashold);
 
         Arc::new(Self {
             work_buckets,
@@ -96,10 +101,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             gc_intervals: SegQueue::new(),
             in_harness: AtomicBool::new(false),
             parked_workers: AtomicUsize::new(0),
-            flush_opt_threashold: std::env::var("FLUSH_OPT_THRESHOLD")
-                .unwrap_or("1".to_string())
-                .parse()
-                .unwrap(),
+            flush_opt_threashold,
         })
     }
 
