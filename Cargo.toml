@@ -99,6 +99,9 @@ fragmentation_analysis = []
 periodic_fragmentation_analysis = ["fragmentation_analysis"]
 g3_compatibilities = []
 
+
+flush_opt = []
+
 ss_los_16m = []
 ss_tlab_4k = []
 ss_tlab_8k = []

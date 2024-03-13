@@ -52,6 +52,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     inc_objs: usize,
     #[cfg(feature = "measure_rc_rate")]
     copy_objs: usize,
+    flush_opt_threashold: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -92,27 +93,60 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             inc_objs: 0,
             #[cfg(feature = "measure_rc_rate")]
             copy_objs: 0,
+            flush_opt_threashold: lxr.immix_space.scheduler().flush_opt_threashold,
+        }
+    }
+
+    fn flush_check(&mut self) {
+        // if self.new_incs_count as usize >= Self::CAPACITY {
+        //     self.flush();
+        // }
+
+        let mut should_flush = self.new_incs_count as usize >= Self::CAPACITY;
+        let mut should_flush_to_global = false;
+        // If there are yielded workers, we do flush right now
+        if !should_flush && cfg!(feature = "flush_opt") {
+            let parked_workers = self
+                .worker()
+                .scheduler()
+                .parked_workers
+                .load(Ordering::SeqCst);
+            if parked_workers > 0 && self.new_incs_count as usize >= self.flush_opt_threashold {
+                should_flush = true;
+                should_flush_to_global = true;
+            }
+        }
+        if should_flush {
+            if should_flush_to_global {
+                if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
+                    let new_incs = self.new_incs.take();
+                    let new_inc_slices = self.new_inc_slices.take();
+                    let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
+                    w.depth += 1;
+                    w.inc_slices = new_inc_slices;
+                    self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained].add(w);
+                }
+                self.new_incs_count = 0;
+            } else {
+                self.flush();
+            }
         }
     }
 
     fn add_new_edge(&mut self, e: VM::VMEdge) {
         self.new_incs.push(e);
         self.new_incs_count += 1;
-        if self.new_incs_count as usize >= Self::CAPACITY {
-            self.flush();
-        }
+        self.flush_check();
     }
 
     fn add_new_slice(&mut self, e: VM::VMMemorySlice) {
         let len = e.len();
-        if self.new_incs_count as usize + len >= Self::CAPACITY {
-            self.flush();
-        }
+        // if self.new_incs_count as usize + len >= Self::CAPACITY {
+        //     self.flush();
+        // }
         self.new_incs_count += len as u32;
         self.new_inc_slices.push(e);
-        if self.new_incs_count as usize >= Self::CAPACITY {
-            self.flush();
-        }
+        self.flush_check();
     }
 
     pub fn new_objects(_objects: Vec<ObjectReference>) -> Self {

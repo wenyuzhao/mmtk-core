@@ -44,7 +44,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
     bucket_update_progress: AtomicUsize,
-    parked_workers: Arc<AtomicUsize>,
+    pub parked_workers: Arc<AtomicUsize>,
     pub start_time: std::time::SystemTime,
     pub tracing_bucket_start_time: AtomicUsize,
     pub busy_intervals: SegQueue<(usize, usize, usize)>,
