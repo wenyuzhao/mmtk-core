@@ -110,6 +110,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
+    pub wakeup_time: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -150,6 +151,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             is_coordinator,
             shared,
             local_work_buffer,
+            wakeup_time: AtomicUsize::new(0),
         }
     }
 

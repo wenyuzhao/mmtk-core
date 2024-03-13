@@ -86,7 +86,14 @@ impl<VM: VMBinding> GCController<VM> {
     fn do_gc_until_completion_traced(&mut self) {
         #[cfg(feature = "tracing")]
         probe!(mmtk, gc_start);
+        let start = self.scheduler.start_time.elapsed().unwrap().as_micros() as usize;
         self.do_gc_until_completion();
+        let end = self.scheduler.start_time.elapsed().unwrap().as_micros() as usize;
+        if !super::MEASURE_TRACING_BUCKET
+            && self.scheduler.in_harness.load(atomic::Ordering::SeqCst)
+        {
+            self.scheduler.gc_intervals.push((start, end));
+        }
         #[cfg(feature = "tracing")]
         probe!(mmtk, gc_end);
     }

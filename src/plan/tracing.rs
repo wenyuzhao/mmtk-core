@@ -34,7 +34,7 @@ impl<T: Clone> VectorQueue<T> {
 
 impl<T> VectorQueue<T> {
     /// Reserve a capacity of this on first enqueue to avoid frequent resizing.
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
     /// Create an empty `VectorObjectQueue`.
     pub fn new() -> Self {

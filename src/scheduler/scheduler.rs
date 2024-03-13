@@ -3,6 +3,7 @@ use super::work_bucket::*;
 use super::worker::{GCWorker, GCWorkerShared, ParkingGuard, ThreadId, WorkerGroup};
 use super::*;
 use crate::mmtk::MMTK;
+use crate::plan::VectorObjectQueue;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::reference_processor::PhantomRefProcessing;
@@ -10,6 +11,7 @@ use crate::util::rust_util::array_from_fn;
 use crate::vm::Collection;
 use crate::vm::{GCThreadContext, VMBinding};
 use crossbeam::deque::{self, Injector, Steal};
+use crossbeam::queue::SegQueue;
 use enum_map::{Enum, EnumMap};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -43,6 +45,12 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     affinity: AffinityKind,
     bucket_update_progress: AtomicUsize,
     parked_workers: Arc<AtomicUsize>,
+    pub start_time: std::time::SystemTime,
+    pub tracing_bucket_start_time: AtomicUsize,
+    pub busy_intervals: SegQueue<(usize, usize, usize)>,
+    pub gc_intervals: SegQueue<(usize, usize)>,
+    pub in_harness: AtomicBool,
+    pub flush_opt_threashold: usize,
 }
 
 // The 'channel' inside Scheduler disallows Sync for Scheduler. We have to make sure we use channel properly:
@@ -112,6 +120,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         let coordinator_worker_shared = Arc::new(GCWorkerShared::<VM>::new(None, false));
 
+        println!("edge_enqueuing: {}", cfg!(feature = "edge_enqueuing"));
+        println!("flush_opt: {}", cfg!(feature = "flush_opt"));
+        println!("null_filter: {}", cfg!(feature = "null_filter"));
+        println!("buffer_capicity: {}", VectorObjectQueue::CAPACITY);
+        let flush_opt_threashold = std::env::var("FLUSH_OPT_THRESHOLD")
+            .unwrap_or("1".to_string())
+            .parse()
+            .unwrap();
+        println!("flush_opt_threashold: {}", flush_opt_threashold);
+
         Arc::new(Self {
             work_buckets,
             stw_worker_group,
@@ -124,6 +142,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             affinity,
             bucket_update_progress: AtomicUsize::new(0),
             parked_workers,
+            start_time: std::time::SystemTime::now(),
+            tracing_bucket_start_time: AtomicUsize::new(0),
+            busy_intervals: SegQueue::new(),
+            gc_intervals: SegQueue::new(),
+            in_harness: AtomicBool::new(false),
+            flush_opt_threashold,
         })
     }
 
@@ -475,7 +499,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if bucket.disabled() || bucket.is_activated() {
                 continue;
             }
-            let bucket_opened = bucket.update(self);
+            let bucket_opened = bucket.update(self, id);
             #[cfg(feature = "tracing")]
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);
@@ -724,12 +748,23 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
             flush_logs!();
+            let end: usize = self.start_time.elapsed().unwrap().as_micros() as usize;
+            let start = worker.wakeup_time.load(std::sync::atomic::Ordering::SeqCst);
+            if self.in_harness.load(atomic::Ordering::SeqCst) {
+                self.busy_intervals.push((worker.ordinal, start, end));
+            }
+            // self.parked_workers.fetch_add(1, Ordering::SeqCst);
             loop {
                 guard = group.monitor.1.wait(guard).unwrap();
                 if !(self.in_concurrent() && stw_worker) {
                     break;
                 }
             }
+            // self.parked_workers.fetch_sub(1, Ordering::SeqCst);
+            let start = self.start_time.elapsed().unwrap().as_micros() as usize;
+            worker
+                .wakeup_time
+                .store(start, std::sync::atomic::Ordering::SeqCst);
             // gc_log!(
             //     "    - ({:.3}ms) worker#{} wakeup stw={}",
             //     crate::gc_start_time_ms(),
@@ -765,9 +800,86 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         let coordinator_worker_stat = self.coordinator_worker_shared.borrow_stat();
         coordinator_worker_stat.enable();
+        self.in_harness
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn statistics(&self) -> HashMap<String, String> {
+        const DUMP_INTERVALS: bool = false;
+        let mut total_gc_time = 0;
+        let mut gc_intervals: Vec<(usize, usize)> = vec![];
+        if DUMP_INTERVALS {
+            println!("===== GC Intervals Start =====");
+            if super::MEASURE_TRACING_BUCKET {
+                println!("stw-tracing:");
+            } else {
+                println!("stw:");
+            }
+        }
+        while let Some(interval) = self.gc_intervals.pop() {
+            let (start, end) = interval;
+            total_gc_time += end - start;
+            gc_intervals.push(interval);
+            if DUMP_INTERVALS {
+                println!("  - [{}, {}]", start, end);
+            }
+        }
+        let tracing_time = total_gc_time;
+        total_gc_time = total_gc_time
+            * (self.generic_worker_group.worker_count() + self.stw_worker_group.worker_count());
+        let get_overlapped_duration = |ival: (usize, usize)| {
+            let (start, end) = ival;
+            let mut duration = 0;
+            for (gc_start, gc_end) in &gc_intervals {
+                if (start >= *gc_start && start <= *gc_end) || (end >= *gc_start && end <= *gc_end)
+                {
+                    let overlap_start = std::cmp::max(start, *gc_start);
+                    let overlap_end = std::cmp::min(end, *gc_end);
+                    duration += overlap_end - overlap_start;
+                }
+            }
+            return duration;
+        };
+        let mut total_overlapped_duration: usize = 0;
+        if DUMP_INTERVALS {
+            println!("busy:");
+        }
+        let mut busy_ivals: Vec<Vec<(usize, usize)>> = vec![];
+        for _ in
+            0..(self.generic_worker_group.worker_count() + self.stw_worker_group.worker_count())
+        {
+            busy_ivals.push(vec![]);
+        }
+        while let Some((id, start, end)) = self.busy_intervals.pop() {
+            let overlap_duration = get_overlapped_duration((start, end));
+            total_overlapped_duration += overlap_duration;
+            if DUMP_INTERVALS {
+                busy_ivals[id].push((start, end));
+            }
+        }
+        if DUMP_INTERVALS {
+            for i in
+                0..(self.generic_worker_group.worker_count() + self.stw_worker_group.worker_count())
+            {
+                let ivals = &busy_ivals[i];
+                let s = ivals
+                    .iter()
+                    .map(|ival| format!("[{},{}]", ival.0, ival.1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("  - [{}]", s);
+            }
+            println!("===== GC Intervals End =====");
+        }
+        let utilization = total_overlapped_duration as f64 / total_gc_time as f64;
+        if DUMP_INTERVALS {
+            println!(
+                "{:.3} / {:.3} ({:.3})",
+                total_overlapped_duration as f64 / 1000f64,
+                total_gc_time as f64 / 1000f64,
+                total_overlapped_duration as f64 / total_gc_time as f64
+            );
+        }
         let mut summary = SchedulerStat::default();
         for worker in &self.generic_worker_group.workers_shared {
             let worker_stat = worker.borrow_stat();
@@ -798,6 +910,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
+        stat.insert("utilization".to_string(), format!("{:.5}", utilization));
+        stat.insert("time.trace".to_string(), format!("{:.5}", tracing_time));
         stat
     }
 
