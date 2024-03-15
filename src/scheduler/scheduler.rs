@@ -831,8 +831,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let (start, end) = ival;
             let mut duration = 0;
             for (gc_start, gc_end) in &gc_intervals {
-                if (start >= *gc_start && start <= *gc_end) || (end >= *gc_start && end <= *gc_end)
-                {
+                let (x1, x2) = (start, end);
+                let (y1, y2) = (*gc_start, *gc_end);
+                if x1 <= y2 && y1 <= x2 {
                     let overlap_start = std::cmp::max(start, *gc_start);
                     let overlap_end = std::cmp::min(end, *gc_end);
                     duration += overlap_end - overlap_start;
@@ -874,7 +875,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let utilization = total_overlapped_duration as f64 / total_gc_time as f64;
         if DUMP_INTERVALS {
             println!(
-                "{:.3} / {:.3} ({:.3})",
+                "Utilization: {:.3} / {:.3} ({:.3})",
                 total_overlapped_duration as f64 / 1000f64,
                 total_gc_time as f64 / 1000f64,
                 total_overlapped_duration as f64 / total_gc_time as f64
