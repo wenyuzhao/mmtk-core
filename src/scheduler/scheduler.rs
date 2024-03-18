@@ -805,7 +805,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn statistics(&self) -> HashMap<String, String> {
-        const DUMP_INTERVALS: bool = false;
+        const DUMP_INTERVALS: bool = cfg!(feature = "dump_ivals");
         let mut total_gc_time = 0;
         let mut gc_intervals: Vec<(usize, usize)> = vec![];
         if DUMP_INTERVALS {

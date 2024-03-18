@@ -37,7 +37,7 @@ pub const LOCKED_VALUE: u8 = 0b1;
 
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    incs: VectorQueue<VM::VMEdge>,
+    incs: VectorQueue<VM::VMEdge, { crate::args::BARRIER_BUFFER_SIZE }>,
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
     lxr: &'static LXR<VM>,

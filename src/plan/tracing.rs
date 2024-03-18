@@ -21,20 +21,20 @@ pub type VectorObjectQueue = VectorQueue<ObjectReference>;
 /// An implementation of `ObjectQueue` using a `Vec`.
 ///
 /// This can also be used as a buffer. For example, the mark stack or the write barrier mod-buffer.
-pub struct VectorQueue<T> {
+pub struct VectorQueue<T, const CAP: usize = { crate::args::BUFFER_SIZE }> {
     /// Enqueued nodes.
     buffer: Vec<T>,
 }
 
-impl<T: Clone> VectorQueue<T> {
+impl<T: Clone, const CAP: usize> VectorQueue<T, { CAP }> {
     pub fn clone_buffer(&self) -> Vec<T> {
         self.buffer.clone()
     }
 }
 
-impl<T> VectorQueue<T> {
+impl<T, const CAP: usize> VectorQueue<T, { CAP }> {
     /// Reserve a capacity of this on first enqueue to avoid frequent resizing.
-    pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    pub const CAPACITY: usize = CAP;
 
     /// Create an empty `VectorObjectQueue`.
     pub fn new() -> Self {
@@ -81,7 +81,7 @@ impl<T> VectorQueue<T> {
     }
 }
 
-impl<T> Default for VectorQueue<T> {
+impl<T, const CAP: usize> Default for VectorQueue<T, { CAP }> {
     fn default() -> Self {
         Self::new()
     }

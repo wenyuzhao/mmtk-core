@@ -140,6 +140,31 @@ pub const BUFFER_SIZE: usize = {
         1024
     }
 };
+pub const BARRIER_BUFFER_SIZE: usize = {
+    if cfg!(feature = "lxr_barrier_buf_4096") {
+        4096
+    } else if cfg!(feature = "lxr_barrier_buf_2048") {
+        2048
+    } else if cfg!(feature = "lxr_barrier_buf_1024") {
+        1024
+    } else if cfg!(feature = "lxr_barrier_buf_512") {
+        512
+    } else if cfg!(feature = "lxr_barrier_buf_256") {
+        256
+    } else if cfg!(feature = "lxr_barrier_buf_128") {
+        128
+    } else if cfg!(feature = "lxr_barrier_buf_64") {
+        64
+    } else if cfg!(feature = "lxr_barrier_buf_32") {
+        32
+    } else if cfg!(feature = "lxr_barrier_buf_16") {
+        16
+    } else if cfg!(feature = "lxr_barrier_buf_8") {
+        8
+    } else {
+        BUFFER_SIZE
+    }
+};
 
 pub const HOLE_COUNTING: bool = cfg!(feature = "lxr_hole_counting");
 pub const NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY: bool = false;
