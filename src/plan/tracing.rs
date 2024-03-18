@@ -23,7 +23,7 @@ pub type VectorObjectQueue = VectorQueue<ObjectReference>;
 /// This can also be used as a buffer. For example, the mark stack or the write barrier mod-buffer.
 pub struct VectorQueue<T, const CAP: usize = { crate::args::BUFFER_SIZE }> {
     /// Enqueued nodes.
-    buffer: Vec<T>,
+    pub buffer: Vec<T>,
 }
 
 impl<T: Clone, const CAP: usize> VectorQueue<T, { CAP }> {

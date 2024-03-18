@@ -164,6 +164,8 @@ lxr_rc_bits_2 = []
 lxr_rc_bits_4 = []
 lxr_rc_bits_8 = []
 dump_ivals = []
+local_packet_flush_fix = []
+log_tail_packet = []
 
 # LXR Features
 lxr_hole_counting = []

@@ -341,6 +341,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
+            if cfg!(feature = "log_tail_packet") {
+                println!(" -- ({}) flush", GCWorker::<VM>::current().ordinal);
+            }
             let new_incs = self.new_incs.take();
             let new_inc_slices = self.new_inc_slices.take();
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
@@ -700,6 +703,31 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         let mut inc_slices = vec![];
         const ACTIVE_PACKET_SPLIT: bool = false;
         while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
+            if cfg!(feature = "log_tail_packet") {
+                println!(
+                    " -- ({}) incs: depth={} len={}",
+                    worker.ordinal, depth, self.new_incs_count
+                );
+                // if depth > 0 && (depth % 5) == 0 {
+                //     let e = self
+                //         .new_incs
+                //         .buffer
+                //         .get(0)
+                //         .cloned()
+                //         .or_else(|| {
+                //             self.new_inc_slices
+                //                 .buffer
+                //                 .get(0)
+                //                 .unwrap()
+                //                 .iter_edges()
+                //                 .next()
+                //         })
+                //         .unwrap();
+                //     let o = e.load();
+                //     let s = VM::VMObjectModel::dump_object_s(o);
+                //     print!(" -- obj: {s}");
+                // }
+            }
             self.new_incs_count = 0;
             depth += 1;
             incs.clear();

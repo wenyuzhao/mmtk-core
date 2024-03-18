@@ -194,8 +194,10 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// If the bucket is activated, the packet will be pushed to the local queue, otherwise it will be
     /// pushed to the global bucket.
     pub fn add_work(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
+        let parked_workers = self.scheduler().parked_workers.load(Ordering::SeqCst);
         if !self.scheduler().work_buckets[bucket].is_activated()
             || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
+            || (cfg!(feature = "local_packet_flush_fix") && parked_workers > 0)
         {
             self.scheduler.work_buckets[bucket].add(work);
             return;
