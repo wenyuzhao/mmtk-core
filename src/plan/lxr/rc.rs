@@ -598,6 +598,9 @@ impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if cfg!(feature = "log_tail_packet") {
+            gc_log!(" -- ({}) incs start", worker.ordinal);
+        }
         #[cfg(any(feature = "log_outstanding_packets", feature = "measure_rc_rate"))]
         let t = std::time::SystemTime::now();
 
@@ -704,9 +707,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         const ACTIVE_PACKET_SPLIT: bool = false;
         while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
             if cfg!(feature = "log_tail_packet") {
-                println!(
-                    " -- ({}) incs: depth={} len={}",
-                    worker.ordinal, depth, self.new_incs_count
+                gc_log!(
+                    " -- ({}) rec incs: depth={} len={} entries={},{}",
+                    worker.ordinal,
+                    depth,
+                    self.new_incs_count,
+                    self.new_incs.len(),
+                    self.new_inc_slices.len()
                 );
                 // if depth > 0 && (depth % 5) == 0 {
                 //     let e = self

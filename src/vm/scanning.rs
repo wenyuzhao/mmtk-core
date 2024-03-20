@@ -116,7 +116,7 @@ pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
 ///     references to variables with limited lifetime (such as local variables), because
 ///     it needs to be moved between threads.
 pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
-    const BUFFER_SIZE: usize = crate::args::BUFFER_SIZE;
+    const BUFFER_SIZE: usize = crate::args::ROOT_BUFFER_SIZE;
     /// Create work packets to handle root edges.
     ///
     /// The work packet may update the edges.
