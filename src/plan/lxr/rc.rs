@@ -53,12 +53,12 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     #[cfg(feature = "measure_rc_rate")]
     copy_objs: usize,
     flush_opt_threashold: usize,
+    cap: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -94,6 +94,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             #[cfg(feature = "measure_rc_rate")]
             copy_objs: 0,
             flush_opt_threashold: lxr.immix_space.scheduler().flush_opt_threashold,
+            cap: crate::args::BUFFER_SIZE,
         }
     }
 
@@ -102,7 +103,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         //     self.flush();
         // }
 
-        let mut should_flush = self.new_incs_count as usize >= Self::CAPACITY;
+        let mut should_flush = self.new_incs_count as usize >= self.cap;
         let mut should_flush_to_global = false;
         // If there are yielded workers, we do flush right now
         if !should_flush && cfg!(feature = "flush_opt") {
@@ -273,7 +274,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         };
         if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
             let data = VM::VMScanning::obj_array_data(o);
-            for chunk in data.chunks(Self::CAPACITY) {
+            for chunk in data.chunks(self.cap) {
                 #[cfg(feature = "lxr_precise_incs_counter")]
                 {
                     self.stat.rec_incs += chunk.len();
@@ -338,6 +339,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
+    fn get_next_cap(&self) -> usize {
+        const MIN_CAP: usize = 8;
+        let cap = if cfg!(feature = "lxr_buf_decay_1_2") {
+            self.cap / 2
+        } else if cfg!(feature = "lxr_buf_decay_2_3") {
+            self.cap * 2 / 3
+        } else if cfg!(feature = "lxr_buf_decay_3_4") {
+            self.cap * 3 / 4
+        } else if cfg!(feature = "lxr_buf_decay_4_5") {
+            self.cap * 4 / 5
+        } else {
+            self.cap
+        };
+        usize::max(MIN_CAP, cap)
+    }
+
     #[cold]
     fn flush(&mut self) {
         if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
@@ -349,6 +366,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             w.inc_slices = new_inc_slices;
+            w.cap = self.get_next_cap();
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
         self.new_incs_count = 0;
@@ -715,6 +733,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     self.new_incs.len(),
                     self.new_inc_slices.len()
                 );
+                self.cap = self.get_next_cap();
                 // if depth > 0 && (depth % 5) == 0 {
                 //     let e = self
                 //         .new_incs
