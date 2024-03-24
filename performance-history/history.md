@@ -1,3 +1,13 @@
+# [2024-Mar-20] core-1665a55, binding-2cf7c70, jdk-bc9669a
+
+![](./20240320-core_1665a55-binding_2cf7c70.png)
+
+Plotty Log: [lxr-xput-regression-boar-2024-03-21-Thu-015845](http://squirrel.anu.edu.au/plotty-public/wenyuz/v8/p/K64Qjc)
+
+LXR total time geomean: 0.886 (highest: tomcat=1.022, lowest: xalan=0.413).
+
+_Note: This measurement uses openjdk commit [`bc9669a`](https://github.com/mmtk/openjdk/tree/bc9669aaedc07924d08b939adedcad33f3e76065)._
+
 # [2023-Dec-13] core-4ab99bb, binding-cdbc8de
 
 ![](./20231213-core_4ab99bb-binding_cdbc8de.png)
