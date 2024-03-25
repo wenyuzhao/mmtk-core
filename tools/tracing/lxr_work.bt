@@ -1,8 +1,6 @@
 // Usage:
 // Comment out rustflags in mmtk-openjdk, and run:
-// ./mmtk-core/tools/tracing/run.py -b /opt/bpftrace/bpftrace-0.19.1-static -m /home/wenyuz/MM
-Tk-Dev/openjdk/build/linux-x86_64-normal-server-release/jdk/lib/server/libmmtk_openjdk.so -H lxr_work > ebpf-cassandra.lo
-g
+// ./mmtk-core/tools/tracing/run.py -b /opt/bpftrace/bpftrace-0.19.1-static -m /home/wenyuz/MMTk-Dev/openjdk/build/linux-x86_64-normal-server-release/jdk/lib/server/libmmtk_openjdk.so -H lxr_work > ebpf-cassandra.log
 
 
 // uprobe:$MMTK:start_worker {
