@@ -24,6 +24,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_rc_rate")]
 use std::sync::atomic::AtomicUsize;
@@ -32,10 +33,10 @@ use std::sync::Arc;
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
-    inc_slices: Vec<VM::VMMemorySlice>,
+    // inc_slices: Vec<VM::VMMemorySlice>,
     /// Recursively generated new increments
-    new_incs: VectorQueue<VM::VMEdge>,
-    new_inc_slices: VectorQueue<VM::VMMemorySlice>,
+    new_incs: VecDeque<VM::VMEdge>,
+    new_inc_slices: VecDeque<VM::VMMemorySlice>,
     new_incs_count: u32,
     pause: Pause,
     in_cm: bool,
@@ -74,9 +75,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     fn __default(lxr: &'static LXR<VM>) -> Self {
         Self {
             incs: vec![],
-            inc_slices: vec![],
-            new_incs: VectorQueue::default(),
-            new_inc_slices: VectorQueue::default(),
+            // inc_slices: vec![],
+            new_incs: Default::default(),
+            new_inc_slices: Default::default(),
             new_incs_count: 0,
             lxr,
             pause: Pause::RefCount,
@@ -99,43 +100,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     fn flush_check(&mut self) {
-        // if self.new_incs_count as usize >= Self::CAPACITY {
-        //     self.flush();
-        // }
-
-        let mut should_flush = self.new_incs_count as usize >= self.cap;
-        let mut should_flush_to_global = false;
-        // If there are yielded workers, we do flush right now
-        if !should_flush && cfg!(feature = "flush_opt") {
-            let parked_workers = self
-                .worker()
-                .scheduler()
-                .parked_workers
-                .load(Ordering::SeqCst);
-            if parked_workers > 0 && self.new_incs_count as usize >= self.flush_opt_threashold {
-                should_flush = true;
-                should_flush_to_global = true;
-            }
-        }
+        let len = self.new_incs_count;
+        let should_flush = len as usize >= self.cap;
         if should_flush {
-            if should_flush_to_global {
-                if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
-                    let new_incs = self.new_incs.take();
-                    let new_inc_slices = self.new_inc_slices.take();
-                    let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
-                    w.depth += 1;
-                    w.inc_slices = new_inc_slices;
-                    self.worker().scheduler().work_buckets[WorkBucketStage::Unconstrained].add(w);
-                }
-                self.new_incs_count = 0;
-            } else {
-                self.flush();
-            }
+            self.flush();
         }
     }
 
     fn add_new_edge(&mut self, e: VM::VMEdge) {
-        self.new_incs.push(e);
+        self.new_incs.push_back(e);
         self.new_incs_count += 1;
         self.flush_check();
     }
@@ -146,7 +119,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         //     self.flush();
         // }
         self.new_incs_count += len as u32;
-        self.new_inc_slices.push(e);
+        self.new_inc_slices.push_back(e);
         self.flush_check();
     }
 
@@ -361,15 +334,44 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             if cfg!(feature = "log_tail_packet") {
                 println!(" -- ({}) flush", GCWorker::<VM>::current().ordinal);
             }
-            let new_incs = self.new_incs.take();
-            let new_inc_slices = self.new_inc_slices.take();
-            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
+            // pop half
+            let mut new_incs = VecDeque::new();
+            let mut new_inc_slices = VecDeque::new();
+            let count = self.new_incs_count / 2;
+            let mut i = 0;
+            let mut new_incs_count = 0;
+            while i < count {
+                let mut has_new = false;
+                if let Some(e) = self.new_inc_slices.pop_front() {
+                    i += e.len() as u32;
+                    self.new_incs_count -= e.len() as u32;
+                    new_incs_count += e.len() as u32;
+                    new_inc_slices.push_back(e);
+                    has_new = true;
+                }
+                if let Some(e) = self.new_incs.pop_front() {
+                    new_incs.push_back(e);
+                    i += 1;
+                    new_incs_count += 1;
+                    self.new_incs_count -= 1;
+                    has_new = true;
+                }
+                if !has_new {
+                    break;
+                }
+            }
+            if new_incs.is_empty() && new_inc_slices.is_empty() {
+                return;
+            }
+            let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(vec![], self.lxr);
             w.depth += 1;
-            w.inc_slices = new_inc_slices;
+            w.new_incs = new_incs;
+            w.new_inc_slices = new_inc_slices;
+            w.new_incs_count = new_incs_count;
             w.cap = self.get_next_cap();
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
-        self.new_incs_count = 0;
+        // self.new_incs_count = 0;
     }
 
     fn inc(&self, o: ObjectReference) -> bool {
@@ -671,20 +673,10 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             vec![]
         };
-        let add_root_to_remset = self
-            .root_kind
-            .map(|r| r.should_record_remset())
-            .unwrap_or_default();
         let roots = {
             let incs = std::mem::take(&mut self.incs);
             self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, false)
         };
-        if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
-            assert!(!add_root_to_remset);
-        }
-        for s in std::mem::take(&mut self.inc_slices) {
-            self.process_incs_for_obj_array::<KIND>(s, self.depth);
-        }
         if let Some(roots) = roots {
             if self.lxr.concurrent_marking_enabled()
                 && self.pause == Pause::InitialMark
@@ -719,63 +711,22 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         // Process recursively generated buffer
-        let mut depth = self.depth;
-        let mut incs = vec![];
-        let mut inc_slices = vec![];
-        const ACTIVE_PACKET_SPLIT: bool = false;
+        // let mut depth = self.depth;
+        // let mut incs = vec![];
+        // let mut inc_slices = vec![];
+        // const ACTIVE_PACKET_SPLIT: bool = false;
+        // println!("LOOP START");
         while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
-            if cfg!(feature = "log_tail_packet") {
-                gc_log!(
-                    " -- ({}) rec incs: depth={} len={} entries={},{}",
-                    worker.ordinal,
-                    depth,
-                    self.new_incs_count,
-                    self.new_incs.len(),
-                    self.new_inc_slices.len()
-                );
-                self.cap = self.get_next_cap();
-                // if depth > 0 && (depth % 5) == 0 {
-                //     let e = self
-                //         .new_incs
-                //         .buffer
-                //         .get(0)
-                //         .cloned()
-                //         .or_else(|| {
-                //             self.new_inc_slices
-                //                 .buffer
-                //                 .get(0)
-                //                 .unwrap()
-                //                 .iter_edges()
-                //                 .next()
-                //         })
-                //         .unwrap();
-                //     let o = e.load();
-                //     let s = VM::VMObjectModel::dump_object_s(o);
-                //     print!(" -- obj: {s}");
-                // }
+            // println!("LOOP");
+            while let Some(s) = self.new_inc_slices.pop_front() {
+                self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s, self.depth);
             }
-            self.new_incs_count = 0;
-            depth += 1;
-            incs.clear();
-            inc_slices.clear();
-            self.new_incs.swap(&mut incs);
-            self.new_inc_slices.swap(&mut inc_slices);
-            if ACTIVE_PACKET_SPLIT && depth >= 16 && incs.len() > 1 {
-                let (a, b) = incs.split_at(incs.len() / 2);
-                let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(b.to_vec(), self.lxr);
-                w.depth = depth;
-                self.worker().add_work(WorkBucketStage::Unconstrained, w);
-                incs = a.to_vec();
-            }
-            if !incs.is_empty() {
-                self.process_incs::<EDGE_KIND_NURSERY>(AddressBuffer::Ref(&mut incs), depth, false);
-            }
-            if !inc_slices.is_empty() {
-                for s in &inc_slices {
-                    self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
-                }
+            while let Some(e) = self.new_incs.pop_front() {
+                self.process_edge::<EDGE_KIND_NURSERY>(e, self.depth, false);
             }
         }
+        assert!(self.new_incs.is_empty());
+        assert!(self.new_inc_slices.is_empty());
         self.survival_ratio_predictor_local.sync();
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
