@@ -37,7 +37,7 @@ impl<T> VectorQueue<T> {
         } else if cfg!(feature = "buf_2048") {
             2048
         } else {
-            4096
+            1024
         }
     };
 
