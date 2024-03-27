@@ -1,8 +1,13 @@
 use atomic::Ordering;
 
+use self::policy::gc_work::PolicyTraceObject;
+use self::policy::immix::TRACE_KIND_DEFRAG;
+use self::policy::space::Space;
+
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::global_state::GcStatus;
+use crate::plan::immix::Immix;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
 use crate::util::*;
@@ -330,7 +335,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         let mmtk = worker.mmtk;
 
         // Prepare the underlying ProcessEdgesWork
-        let mut process_edges_work = E::new(vec![], false, mmtk, self.stage);
+        let mut process_edges_work = E::new(vec![], vec![], false, mmtk, self.stage);
         // FIXME: This line allows us to omit the borrowing lifetime of worker.
         // We should refactor ProcessEdgesWork so that it uses `worker` locally, not as a member.
         process_edges_work.set_worker(worker);
@@ -496,6 +501,8 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanVMSpecificRoots<C> {
 
 pub struct ProcessEdgesBase<VM: VMBinding> {
     pub edges: Vec<VM::VMEdge>,
+    pub los_edges: Vec<VM::VMEdge>,
+    pub mixed: bool,
     pub nodes: VectorObjectQueue,
     mmtk: &'static MMTK<VM>,
     // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
@@ -512,6 +519,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
     // at creation. This avoids overhead for dynamic dispatch or downcasting plan for each object traced.
     pub fn new(
         edges: Vec<VM::VMEdge>,
+        los_edges: Vec<VM::VMEdge>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
@@ -525,6 +533,8 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
         }
         Self {
             edges,
+            los_edges,
+            mixed: false,
             nodes: VectorObjectQueue::new(),
             mmtk,
             worker: std::ptr::null_mut(),
@@ -600,6 +610,7 @@ pub trait ProcessEdgesWork:
     /// * `bucket`: which work bucket this packet belongs to. Further work generated from this packet will also be put to the same bucket.
     fn new(
         edges: Vec<EdgeOf<Self>>,
+        los_edges: Vec<EdgeOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<Self::VM>,
         bucket: WorkBucketStage,
@@ -707,11 +718,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
 
     fn new(
         edges: Vec<EdgeOf<Self>>,
+        los_edges: Vec<EdgeOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let base = ProcessEdgesBase::new(edges, los_edges, roots, mmtk, bucket);
         Self { base }
     }
 
@@ -756,29 +768,29 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
     RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsWorkFactory<VM, E, I>
 {
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::Closure,
-            E::new(edges, true, self.mmtk, WorkBucketStage::Closure),
-        );
+        let mut p = E::new(edges, vec![], true, self.mmtk, WorkBucketStage::Closure);
+        p.mixed = true;
+        crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, p);
     }
 
     fn create_process_pinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         // Will process roots within the PinningRootsTrace bucket
         // And put work in the Closure bucket
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::PinningRootsTrace,
-            ProcessRootNode::<VM, I, E>::new(nodes, WorkBucketStage::Closure),
-        );
+        // crate::memory_manager::add_work_packet(
+        //     self.mmtk,
+        //     WorkBucketStage::PinningRootsTrace,
+        //     ProcessRootNode::<VM, I, E>::new(nodes, WorkBucketStage::Closure),
+        // );
+        unimplemented!()
     }
 
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::TPinningClosure,
-            ProcessRootNode::<VM, I, I>::new(nodes, WorkBucketStage::TPinningClosure),
-        );
+        // crate::memory_manager::add_work_packet(
+        //     self.mmtk,
+        //     WorkBucketStage::TPinningClosure,
+        //     ProcessRootNode::<VM, I, I>::new(nodes, WorkBucketStage::TPinningClosure),
+        // );
+        unimplemented!()
     }
 }
 
@@ -949,6 +961,7 @@ pub struct PlanProcessEdges<
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
     next_edges: Vec<VM::VMEdge>,
+    next_los_edges: Vec<VM::VMEdge>,
     flush_opt_threashold: usize,
 }
 
@@ -958,7 +971,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     const CAP: usize = VectorObjectQueue::CAPACITY;
 
     fn flush_check(&mut self) {
-        let mut should_flush = self.next_edges.len() >= Self::CAP;
+        let mut should_flush = self.next_los_edges.len() + self.next_edges.len() >= Self::CAP;
         let mut should_flush_to_global = false;
         // If there are yielded workers, we do flush right now
         if !should_flush && cfg!(feature = "flush_opt") {
@@ -975,16 +988,40 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         if should_flush {
             if should_flush_to_global {
                 assert!(self.nodes.is_empty());
-                if self.next_edges.is_empty() {
+                if self.next_edges.is_empty() && self.next_los_edges.is_empty() {
                     return;
                 }
                 let edges = std::mem::take(&mut self.next_edges);
-                let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
+                let los_edges = std::mem::take(&mut self.next_los_edges);
+                let work_packet =
+                    Self::new(edges, los_edges, false, self.base.mmtk, self.base.bucket);
                 self.worker().scheduler().work_buckets[self.bucket].add(work_packet);
             } else {
                 self.flush();
             }
         }
+    }
+
+    fn process_edge_ix(&mut self, p: &crate::plan::immix::Immix<VM>, slot: EdgeOf<Self>) {
+        let object = slot.load();
+        if object.is_null() {
+            return;
+        }
+        let w = self.worker();
+        let new_object = p.immix_space.trace_object::<_, KIND>(
+            self,
+            object,
+            Some(copy::CopySemantics::DefaultCopy),
+            w,
+        );
+        if KIND == TRACE_KIND_DEFRAG && new_object != object {
+            slot.store(new_object);
+        }
+    }
+
+    fn process_edge_los(&mut self, p: &crate::plan::immix::Immix<VM>, slot: EdgeOf<Self>) {
+        let object = slot.load();
+        p.common.los.trace_object(self, object);
     }
 }
 
@@ -997,19 +1034,23 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             self.base.worker().tls,
             o,
             &mut |e: VM::VMEdge| {
-                if self.next_edges.is_empty() {
-                    self.next_edges.reserve(Self::CAP);
+                let o = e.load();
+                if o.is_null() {
+                    return;
                 }
-                if cfg!(feature = "null_filter") {
-                    if e.load().is_null() {
-                        return;
+                if cfg!(feature = "specialize")
+                    && self.plan.common().los.address_in_space(o.to_raw_address())
+                {
+                    self.next_los_edges.push(e);
+                } else {
+                    if self.next_edges.is_empty() {
+                        self.next_edges.reserve(Self::CAP);
                     }
+                    self.next_edges.push(e);
                 }
-                self.next_edges.push(e);
-                if self.next_edges.len() >= Self::CAP {
+                if self.next_los_edges.len() + self.next_edges.len() >= Self::CAP {
                     self.flush_check();
                 }
-                // self.flush_check();
             },
         );
         self.flush_check();
@@ -1025,16 +1066,18 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     fn new(
         edges: Vec<EdgeOf<Self>>,
+        los_edges: Vec<EdgeOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let base = ProcessEdgesBase::new(edges, los_edges, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self {
             plan,
             base,
             next_edges: vec![],
+            next_los_edges: vec![],
             flush_opt_threashold: mmtk.scheduler.flush_opt_threashold,
         }
     }
@@ -1047,11 +1090,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         } else {
             assert!(self.nodes.is_empty());
-            if self.next_edges.is_empty() {
+            if self.next_edges.is_empty() && self.next_los_edges.is_empty() {
                 return;
             }
             let edges = std::mem::take(&mut self.next_edges);
-            let work_packet = Self::new(edges, false, self.base.mmtk, self.base.bucket);
+            let los_edges = std::mem::take(&mut self.next_los_edges);
+            let work_packet = Self::new(edges, los_edges, false, self.base.mmtk, self.base.bucket);
             self.worker().add_work(self.bucket, work_packet);
         }
     }
@@ -1081,6 +1125,23 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         debug_assert!(!new_object.is_null());
         if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(new_object);
+        }
+    }
+
+    fn process_edges(&mut self) {
+        probe!(mmtk, process_edges, self.edges.len(), self.is_roots());
+        if cfg!(feature = "specialize") && !self.mixed {
+            let p = unsafe { &*(self.plan as *const P as *const Immix<VM>) };
+            for i in 0..self.edges.len() {
+                self.process_edge_ix(p, self.edges[i]);
+            }
+            for i in 0..self.los_edges.len() {
+                self.process_edge_los(p, self.los_edges[i])
+            }
+        } else {
+            for i in 0..self.edges.len() {
+                self.process_edge(self.edges[i])
+            }
         }
     }
 }
@@ -1212,8 +1273,13 @@ impl<VM: VMBinding, I: ProcessEdgesWork<VM = VM>, E: ProcessEdgesWork<VM = VM>> 
         // objects which are traced for the first time and we create work for scanning those roots.
         let scanned_root_objects = {
             // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work =
-                I::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
+            let mut process_edges_work = I::new(
+                vec![],
+                vec![],
+                true,
+                mmtk,
+                WorkBucketStage::PinningRootsTrace,
+            );
             process_edges_work.set_worker(worker);
 
             for object in self.roots.iter().copied() {
@@ -1230,7 +1296,7 @@ impl<VM: VMBinding, I: ProcessEdgesWork<VM = VM>, E: ProcessEdgesWork<VM = VM>> 
             process_edges_work.nodes.take()
         };
 
-        let process_edges_work = E::new(vec![], false, mmtk, self.bucket);
+        let process_edges_work = E::new(vec![], vec![], false, mmtk, self.bucket);
         let work = process_edges_work.create_scan_work(scanned_root_objects);
         crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
 
@@ -1265,6 +1331,7 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
 
     fn new(
         _edges: Vec<EdgeOf<Self>>,
+        _los_edges: Vec<EdgeOf<Self>>,
         _roots: bool,
         _mmtk: &'static MMTK<Self::VM>,
         _bucket: WorkBucketStage,

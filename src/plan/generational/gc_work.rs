@@ -27,11 +27,12 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
 
     fn new(
         edges: Vec<EdgeOf<Self>>,
+        los_edges: Vec<EdgeOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let base = ProcessEdgesBase::new(edges, los_edges, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref().unwrap();
         Self { plan, base }
     }
@@ -161,11 +162,12 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                 }
             }
             // Forward entries
-            GCWork::do_work(
-                &mut E::new(edges, false, mmtk, WorkBucketStage::Closure),
-                worker,
-                mmtk,
-            )
+            // GCWork::do_work(
+            //     &mut E::new(edges, false, mmtk, WorkBucketStage::Closure),
+            //     worker,
+            //     mmtk,
+            // )
+            unimplemented!()
         }
     }
 }

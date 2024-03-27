@@ -69,7 +69,7 @@ name = "main"
 harness = false
 
 [features]
-default = []
+default = ["edge_enqueuing"]
 
 edge_enqueuing = []
 buf_4096 = []
@@ -80,6 +80,7 @@ buf_256 = []
 buf_128 = []
 flush_opt = ["edge_enqueuing"]
 null_filter = ["edge_enqueuing"]
+specialize = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

@@ -115,13 +115,14 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 
     fn flush(&mut self) {
-        let buf = self.buffer.take();
-        if !buf.is_empty() {
-            self.worker.add_work(
-                self.bucket,
-                E::new(buf, false, self.worker.mmtk, self.bucket),
-            );
-        }
+        // let buf = self.buffer.take();
+        // if !buf.is_empty() {
+        //     self.worker.add_work(
+        //         self.bucket,
+        //         E::new(buf, false, self.worker.mmtk, self.bucket),
+        //     );
+        // }
+        unimplemented!()
     }
 }
 
