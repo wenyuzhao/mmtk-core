@@ -1004,9 +1004,6 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     fn process_edge_ix(&mut self, p: &crate::plan::immix::Immix<VM>, slot: EdgeOf<Self>) {
         let object = slot.load();
-        if object.is_null() {
-            return;
-        }
         let w = self.worker();
         let new_object = p.immix_space.trace_object::<_, KIND>(
             self,
