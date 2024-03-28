@@ -82,6 +82,7 @@ flush_opt = ["edge_enqueuing"]
 null_filter = ["edge_enqueuing"]
 specialize = []
 lifo = []
+local = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
