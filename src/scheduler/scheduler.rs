@@ -118,7 +118,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             self.clone(),
             true,
             self.coordinator_worker_shared.clone(),
-            deque::Worker::new_fifo(),
+            if cfg!(feature = "lifo") {
+                deque::Worker::new_lifo()
+            } else {
+                deque::Worker::new_fifo()
+            },
         );
         let gc_controller = GCController::new(
             mmtk,

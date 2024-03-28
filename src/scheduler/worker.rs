@@ -411,7 +411,13 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     /// Create a WorkerGroup
     pub fn new(num_workers: usize) -> Arc<Self> {
         let unspawned_local_work_queues = (0..num_workers)
-            .map(|_| deque::Worker::new_fifo())
+            .map(|_| {
+                if cfg!(feature = "lifo") {
+                    deque::Worker::new_lifo()
+                } else {
+                    deque::Worker::new_fifo()
+                }
+            })
             .collect::<Vec<_>>();
 
         let workers_shared = (0..num_workers)
