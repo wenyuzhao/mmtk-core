@@ -177,6 +177,7 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace<VM> {
+    #[cfg_attr(feature = "inline", inline(always))]
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
@@ -539,6 +540,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Trace and mark objects without evacuation.
+    #[cfg_attr(feature = "inline", inline(always))]
     pub fn trace_object_without_moving(
         &self,
         queue: &mut impl ObjectQueue,
@@ -687,32 +689,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Atomically mark an object.
+    #[cfg_attr(feature = "inline", inline(always))]
     fn attempt_mark(&self, object: ObjectReference, mark_state: u8) -> bool {
-        loop {
-            let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
-                object,
-                None,
-                Ordering::SeqCst,
-            );
-            if old_value == mark_state {
-                return false;
-            }
-
-            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
-                    old_value,
-                    mark_state,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-        true
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .fetch_update_metadata::<VM, u8, _>(object, Ordering::SeqCst, Ordering::SeqCst, |v| {
+                if v == mark_state {
+                    None
+                } else {
+                    Some(mark_state)
+                }
+            })
+            .is_ok()
     }
 
     /// Check if an object is marked.
