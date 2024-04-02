@@ -692,13 +692,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[cfg_attr(feature = "inline", inline(always))]
     fn attempt_mark(&self, object: ObjectReference, mark_state: u8) -> bool {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-            .fetch_update_metadata::<VM, u8, _>(object, Ordering::SeqCst, Ordering::SeqCst, |v| {
-                if v == mark_state {
-                    None
-                } else {
-                    Some(mark_state)
-                }
-            })
+            .extract_side_spec()
+            .fetch_update_atomic::<u8, _>(
+                object.to_raw_address(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |v| {
+                    if v == mark_state {
+                        None
+                    } else {
+                        Some(mark_state)
+                    }
+                },
+            )
             .is_ok()
     }
 
