@@ -91,6 +91,7 @@ pub(crate) fn generate_trace_object<'a>(
     };
 
     quote! {
+        #[cfg_attr(feature = "inline", inline(always))]
         fn trace_object<Q: crate::plan::ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(&self, __mmtk_queue: &mut Q, __mmtk_objref: crate::util::ObjectReference, __mmtk_worker: &mut crate::scheduler::GCWorker<VM>) -> crate::util::ObjectReference {
             use crate::policy::space::Space;
             use crate::policy::gc_work::PolicyTraceObject;

@@ -184,6 +184,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
+    #[cfg_attr(feature = "inline", inline(always))]
     pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,

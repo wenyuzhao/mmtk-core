@@ -1002,6 +1002,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         }
     }
 
+    #[cfg_attr(feature = "inline", inline(always))]
     fn process_edge_ix(&mut self, p: &crate::plan::immix::Immix<VM>, slot: EdgeOf<Self>) {
         let object = slot.load();
         let w = self.worker();
@@ -1016,6 +1017,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         }
     }
 
+    #[cfg_attr(feature = "inline", inline(always))]
     fn process_edge_los(&mut self, p: &crate::plan::immix::Immix<VM>, slot: EdgeOf<Self>) {
         let object = slot.load();
         p.common.los.trace_object(self, object);
@@ -1101,6 +1103,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         PlanScanObjects::<Self, P>::new(self.plan, nodes, false, self.bucket)
     }
 
+    #[cfg_attr(feature = "inline", inline(always))]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         debug_assert!(!object.is_null());
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
@@ -1113,6 +1116,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         }
     }
 
+    #[cfg_attr(feature = "inline", inline(always))]
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
         if object.is_null() {
