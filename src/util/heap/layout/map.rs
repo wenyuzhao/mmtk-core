@@ -3,6 +3,8 @@ use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::Address;
 
+use super::map32::Map32;
+
 pub trait VMMap: Sync {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor);
 
@@ -64,4 +66,8 @@ pub trait VMMap: Sync {
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor;
 
     fn add_to_cumulative_committed_pages(&self, pages: usize);
+
+    fn as_map32(&'static self) -> Option<&'static Map32> {
+        None
+    }
 }

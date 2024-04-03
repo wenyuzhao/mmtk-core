@@ -960,8 +960,7 @@ pub struct PlanProcessEdges<
 > {
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
-    next_edges: Vec<VM::VMEdge>,
-    next_los_edges: Vec<VM::VMEdge>,
+    next_edges: [Vec<VM::VMEdge>; 2],
     flush_opt_threashold: usize,
 }
 
@@ -971,7 +970,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     const CAP: usize = VectorObjectQueue::CAPACITY;
 
     fn flush_check(&mut self) {
-        let mut should_flush = self.next_los_edges.len() + self.next_edges.len() >= Self::CAP;
+        let mut should_flush = self.next_edges[0].len() + self.next_edges[1].len() >= Self::CAP;
         let mut should_flush_to_global = false;
         // If there are yielded workers, we do flush right now
         if !should_flush && cfg!(feature = "flush_opt") {
@@ -980,7 +979,9 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 .scheduler()
                 .parked_workers
                 .load(Ordering::SeqCst);
-            if parked_workers > 0 && self.next_edges.len() >= self.flush_opt_threashold {
+            if parked_workers > 0
+                && self.next_edges[0].len() + self.next_edges[1].len() >= self.flush_opt_threashold
+            {
                 should_flush = true;
                 should_flush_to_global = true;
             }
@@ -988,11 +989,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         if should_flush {
             if should_flush_to_global {
                 assert!(self.nodes.is_empty());
-                if self.next_edges.is_empty() && self.next_los_edges.is_empty() {
+                if self.next_edges[0].is_empty() && self.next_edges[1].is_empty() {
                     return;
                 }
-                let edges = std::mem::take(&mut self.next_edges);
-                let los_edges = std::mem::take(&mut self.next_los_edges);
+                let edges = std::mem::take(&mut self.next_edges[0]);
+                let los_edges = std::mem::take(&mut self.next_edges[1]);
                 let work_packet =
                     Self::new(edges, los_edges, false, self.base.mmtk, self.base.bucket);
                 self.worker().scheduler().work_buckets[self.bucket].add(work_packet);
@@ -1035,17 +1036,27 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 if o.is_null() {
                     return;
                 }
-                if cfg!(feature = "specialize")
-                    && self.plan.common().los.address_in_space(o.to_raw_address())
-                {
-                    self.next_los_edges.push(e);
-                } else {
-                    if self.next_edges.is_empty() {
-                        self.next_edges.reserve(Self::CAP);
+                if cfg!(feature = "fast_enqueuing") {
+                    let los = cfg!(feature = "specialize")
+                        && self.plan.common().los.address_in_space(o.to_raw_address());
+                    let queue = &mut self.next_edges[los as usize];
+                    if queue.is_empty() && !los {
+                        queue.reserve(Self::CAP);
                     }
-                    self.next_edges.push(e);
+                    queue.push(e);
+                } else {
+                    if cfg!(feature = "specialize")
+                        && self.plan.common().los.address_in_space(o.to_raw_address())
+                    {
+                        self.next_edges[1].push(e);
+                    } else {
+                        if self.next_edges[0].is_empty() {
+                            self.next_edges[0].reserve(Self::CAP);
+                        }
+                        self.next_edges[0].push(e);
+                    }
                 }
-                if self.next_los_edges.len() + self.next_edges.len() >= Self::CAP {
+                if self.next_edges[0].len() + self.next_edges[1].len() >= Self::CAP {
                     self.flush_check();
                 }
             },
@@ -1073,8 +1084,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         Self {
             plan,
             base,
-            next_edges: vec![],
-            next_los_edges: vec![],
+            next_edges: [vec![], vec![]],
             flush_opt_threashold: mmtk.scheduler.flush_opt_threashold,
         }
     }
@@ -1087,11 +1097,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         } else {
             assert!(self.nodes.is_empty());
-            if self.next_edges.is_empty() && self.next_los_edges.is_empty() {
+            if self.next_edges[0].is_empty() && self.next_edges[1].is_empty() {
                 return;
             }
-            let edges = std::mem::take(&mut self.next_edges);
-            let los_edges = std::mem::take(&mut self.next_los_edges);
+            let edges = std::mem::take(&mut self.next_edges[0]);
+            let los_edges = std::mem::take(&mut self.next_edges[1]);
             let work_packet = Self::new(edges, los_edges, false, self.base.mmtk, self.base.bucket);
             self.worker().add_work(self.bucket, work_packet);
         }

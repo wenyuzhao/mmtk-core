@@ -323,7 +323,7 @@ impl Address {
     }
 
     /// returns the chunk index for this address
-    pub fn chunk_index(self) -> usize {
+    pub const fn chunk_index(self) -> usize {
         use crate::util::conversions;
         conversions::address_to_chunk_index(self)
     }

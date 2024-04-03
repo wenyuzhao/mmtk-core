@@ -2,6 +2,7 @@ use crate::global_state::GlobalState;
 use crate::plan::PlanConstraints;
 use crate::scheduler::GCWorkScheduler;
 use crate::util::conversions::*;
+use crate::util::heap::layout::map32::Map32;
 use crate::util::metadata::side_metadata::{
     SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
 };
@@ -229,10 +230,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     }
 
     fn address_in_space(&self, start: Address) -> bool {
-        if !self.common().descriptor.is_contiguous() {
-            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+        if cfg!(feature = "fast_space_check") {
+            let common = self.common();
+            common.map32.get_descriptor_for_address(start) == common.descriptor
         } else {
-            start >= self.common().start && start < self.common().start + self.common().extent
+            if !self.common().descriptor.is_contiguous() {
+                self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+            } else {
+                start >= self.common().start && start < self.common().start + self.common().extent
+            }
         }
     }
 
@@ -426,6 +432,7 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
 
     pub vm_map: &'static dyn VMMap,
+    map32: &'static Map32,
     pub mmapper: &'static dyn Mmapper,
 
     pub(crate) metadata: SideMetadataContext,
@@ -498,6 +505,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             start: unsafe { Address::zero() },
             extent: 0,
             vm_map: args.plan_args.vm_map,
+            map32: args.plan_args.vm_map.as_map32().unwrap(),
             mmapper: args.plan_args.mmapper,
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             gc_trigger: args.plan_args.gc_trigger,

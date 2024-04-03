@@ -43,8 +43,8 @@ pub fn bytes_to_chunks_up(bytes: usize) -> usize {
 }
 
 /// Convert an address to the chunk index (aligned down).
-pub fn address_to_chunk_index(addr: Address) -> usize {
-    addr >> LOG_BYTES_IN_CHUNK
+pub const fn address_to_chunk_index(addr: Address) -> usize {
+    addr.as_usize() >> LOG_BYTES_IN_CHUNK
 }
 
 /// Convert a chunk index to the start address of the chunk.

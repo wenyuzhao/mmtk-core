@@ -687,6 +687,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Atomically mark an object.
+    #[cfg(feature = "fast_mark")]
+    fn attempt_mark(&self, object: ObjectReference, mark_state: u8) -> bool {
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .fetch_update_atomic::<u8, _>(
+                object.to_raw_address(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |v| {
+                    if v == mark_state {
+                        None
+                    } else {
+                        Some(mark_state)
+                    }
+                },
+            )
+            .is_ok()
+    }
+
+    #[cfg(not(feature = "fast_mark"))]
     fn attempt_mark(&self, object: ObjectReference, mark_state: u8) -> bool {
         loop {
             let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(

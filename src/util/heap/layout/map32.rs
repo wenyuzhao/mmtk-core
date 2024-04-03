@@ -269,6 +269,10 @@ impl VMMap for Map32 {
         self.cumulative_committed_pages
             .fetch_add(pages, Ordering::Relaxed);
     }
+
+    fn as_map32(&'static self) -> Option<&'static Map32> {
+        Some(self)
+    }
 }
 
 impl Map32 {
