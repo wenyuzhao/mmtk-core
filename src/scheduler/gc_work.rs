@@ -1045,15 +1045,15 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     }
                     queue.push(e);
                 } else {
-                    if cfg!(feature = "specialize")
-                        && self.plan.common().los.address_in_space(o.to_raw_address())
-                    {
-                        self.next_edges[1].push(e);
-                    } else {
+                    let los = cfg!(feature = "specialize")
+                        && self.plan.common().los.address_in_space(o.to_raw_address());
+                    if !los {
                         if self.next_edges[0].is_empty() {
                             self.next_edges[0].reserve(Self::CAP);
                         }
                         self.next_edges[0].push(e);
+                    } else {
+                        self.next_edges[1].push(e);
                     }
                 }
                 if self.next_edges[0].len() + self.next_edges[1].len() >= Self::CAP {
