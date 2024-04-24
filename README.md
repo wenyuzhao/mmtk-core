@@ -6,6 +6,16 @@ This is the LXR branch of MMTk.
 
 **Please refer to [github.com/wenyuzhao/lxr-pldi-2022-artifact](https://github.com/wenyuzhao/lxr-pldi-2022-artifact) for detailed instructions to reproduce the results in the paper.**
 
+## Run Latext LXR
+
+LXR's command line args have been changed a lot. Here are the minimal flags required to run the latest LXR:
+
+```bash
+./jdk-11.0.19/bin/java -XX:+UseThirdPartyHeap -XX:ThirdPartyHeapOptions=plan=LXR -Xms100M -Xmx100M  -version
+```
+
+Please always specify `-Xms` and `-Xmx` and make sure the values are the same. LXR does not support variable heap sizes right now.
+
 ## Getting started
 
 1. Clone [mmtk-core](https://github.com/wenyuzhao/mmtk-core) and [mmtk-openjdk](https://github.com/wenyuzhao/mmtk-openjdk). Checkout the _lxr_ branch for both repos.
