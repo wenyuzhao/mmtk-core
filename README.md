@@ -8,7 +8,7 @@ This is the LXR branch of MMTk.
 
 ## Run Latext LXR
 
-LXR's command line args have been changed a lot. Here are the minimal flags required to run the latest LXR:
+LXR's command line arguments have changed significantly since its initial release. Here are the minimal flags required to run the latest version of LXR:
 
 ```bash
 ./jdk-11.0.19/bin/java -XX:+UseThirdPartyHeap -XX:ThirdPartyHeapOptions=plan=LXR -Xms100M -Xmx100M  -version
