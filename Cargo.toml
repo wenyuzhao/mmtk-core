@@ -73,6 +73,7 @@ default = [
     "dep:regex",
     "dep:env_logger",
     "no_meta_counting",
+    "opt",
 ]
 # default = []
 nontemporal = []
@@ -182,6 +183,16 @@ lxr_no_srv_copy_reserve = []
 lxr_abort_on_trace = []
 lxr_log_reclaim = []
 lxr_simple_satb_trigger = []
+opt_attempt_mark = []
+opt_space_check = []
+no_dyn_dispatch = []
+fast_rc_check = []
+opt = [
+    "opt_attempt_mark",
+    "opt_space_check",
+    "no_dyn_dispatch",
+    "fast_rc_check",
+]
 measure_trace_rate = []
 measure_rc_rate = []
 lxr_no_mature_defrag = []

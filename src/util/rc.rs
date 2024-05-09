@@ -149,7 +149,11 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn object_or_line_is_dead(&self, o: ObjectReference) -> bool {
-        RC_TABLE.load_byte(o.to_address::<VM>()) == 0
+        if cfg!(feature = "fast_rc_check") {
+            RC_TABLE.load_byte(o.to_address::<VM>()) == 0
+        } else {
+            self.count(o) == 0
+        }
     }
 
     pub fn rc_table_range<UInt: Sized>(&self, b: Block) -> &'static [UInt] {

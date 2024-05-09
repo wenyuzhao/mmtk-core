@@ -247,6 +247,10 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("lxr_no_srv_copy_reserve");
     dump_feature!("lxr_abort_on_trace");
     dump_feature!("lxr_simple_satb_trigger");
+    dump_feature!("opt_attempt_mark");
+    dump_feature!("opt_space_check");
+    dump_feature!("no_dyn_dispatch");
+    dump_feature!("fast_rc_check");
     dump_feature!("measure_trace_rate");
     dump_feature!("lxr_no_mature_defrag");
 
