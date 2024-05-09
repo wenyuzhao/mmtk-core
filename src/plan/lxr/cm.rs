@@ -239,6 +239,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(e, t);
                 }
+                #[cfg(feature = "satb_skip_marked_objs")]
                 if self.plan.is_marked(t) {
                     return;
                 }
