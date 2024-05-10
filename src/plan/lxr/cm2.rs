@@ -2,7 +2,6 @@ use super::LXR;
 use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::Block;
-use crate::policy::immix::line::Line;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::scheduler::RootKind;
