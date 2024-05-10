@@ -798,6 +798,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
+        #[cfg(feature = "measure_trace_rate")]
+        crate::plan::lxr::STW_CM_COUNTERS_TOTAL.report(&mut stat);
         stat
     }
 

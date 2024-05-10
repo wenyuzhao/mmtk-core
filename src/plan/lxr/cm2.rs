@@ -18,8 +18,6 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
-#[cfg(feature = "measure_trace_rate")]
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
@@ -35,9 +33,11 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     klass: Address,
     rc: RefCountHelper<VM>,
     #[cfg(feature = "measure_trace_rate")]
+    scanned_slots: usize,
+    #[cfg(feature = "measure_trace_rate")]
     scanned_non_null_slots: usize,
     #[cfg(feature = "measure_trace_rate")]
-    enqueued_objs: usize,
+    scanned_objs: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -57,9 +57,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
+            scanned_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
+            scanned_objs: 0,
         }
     }
 
@@ -79,9 +81,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
+            scanned_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
+            scanned_objs: 0,
         }
     }
 
@@ -105,9 +109,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
+            scanned_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
+            scanned_objs: 0,
         }
     }
 
@@ -130,9 +136,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             klass: Address::ZERO,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
+            scanned_slots: 0,
+            #[cfg(feature = "measure_trace_rate")]
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
+            scanned_objs: 0,
         }
     }
 
@@ -251,6 +259,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         {
             self.plan.immix_space.mature_evac_remset.record(e, t);
         }
+        #[cfg(feature = "satb_skip_marked_objs")]
+        if self.plan.is_marked(t) {
+            return;
+        }
         self.trace_object::<false>(t);
     }
 
@@ -272,6 +284,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             klass,
             |e, _| {
                 let t: ObjectReference = e.load();
+                #[cfg(feature = "measure_trace_rate")]
+                {
+                    self.scanned_slots += 1;
+                }
                 if t.is_null() {
                     return;
                 }
@@ -308,6 +324,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             return;
         }
         let should_check_remset = !self.plan.in_defrag(object);
+        #[cfg(feature = "measure_trace_rate")]
+        {
+            self.scanned_slots += slice.len();
+        }
         for e in slice.iter_edges() {
             let t: ObjectReference = e.load();
             if t.is_null() {
@@ -333,13 +353,13 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 object
             );
         }
+        #[cfg(feature = "measure_trace_rate")]
+        {
+            self.scanned_objs += 1;
+        }
         // Don't enqueue the object if RC is zero
         if self.rc.object_or_line_is_dead(object) || VM::VMScanning::is_val_array(object) {
             return;
-        }
-        #[cfg(feature = "measure_trace_rate")]
-        {
-            self.enqueued_objs += 1;
         }
         if VM::VMScanning::is_obj_array(object)
             && VM::VMScanning::obj_array_data(object).len() >= 1024
@@ -373,14 +393,9 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
-        let t = std::time::SystemTime::now();
+        let t = std::time::Instant::now();
         #[cfg(feature = "measure_trace_rate")]
-        let record = if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
-            STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
-            true
-        } else {
-            false
-        };
+        let record = !mmtk.scheduler.in_concurrent() && crate::inside_harness();
         // mark objects
         if let Some(objects) = self.white_objects.take() {
             self.trace_objects(&objects)
@@ -416,10 +431,19 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
         if record {
-            let us = t.elapsed().unwrap().as_micros() as usize;
-            STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
-            STW_SCAN_NON_NULL_SLOTS.fetch_add(self.scanned_non_null_slots, Ordering::SeqCst);
-            STW_ENQUEUE_OBJS.fetch_add(self.enqueued_objs, Ordering::SeqCst);
+            let us = t.elapsed().as_micros() as usize;
+            macro_rules! flush {
+                ($field:ident, $val: expr) => {
+                    super::STW_CM_COUNTERS_CURRENT
+                        .$field
+                        .fetch_add($val, Ordering::SeqCst);
+                };
+            }
+            flush!(cm_packets, 1);
+            flush!(cm_packets_time_us, us);
+            flush!(scanned_slots, self.scanned_slots);
+            flush!(scanned_non_null_slots, self.scanned_non_null_slots);
+            flush!(scanned_objs, self.scanned_objs);
         }
     }
 }
@@ -446,44 +470,9 @@ impl ProcessModBufSATB {
     }
 }
 
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_CM_PACKETS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_MODBUF_PACKETS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_CM_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_ENQUEUE_OBJS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_SCAN_NON_NULL_SLOTS: AtomicUsize = AtomicUsize::new(0);
-
-#[cfg(feature = "measure_trace_rate")]
-pub fn dump_trace_rate() {
-    gc_log!(
-        " - STW_CM_PACKETS={} STW_MODBUF_PACKETS={}",
-        STW_CM_PACKETS.load(Ordering::SeqCst),
-        STW_MODBUF_PACKETS.load(Ordering::SeqCst),
-    );
-    STW_CM_PACKETS.store(0, Ordering::SeqCst);
-    STW_MODBUF_PACKETS.store(0, Ordering::SeqCst);
-    gc_log!(
-        " - STW_CM_PACKETS_TIME={}ms STW_ENQUEUE_OBJS={} STW_SCAN_NON_NULL_SLOTS={}",
-        STW_CM_PACKETS_TIME.load(Ordering::SeqCst) / 1000,
-        STW_ENQUEUE_OBJS.load(Ordering::SeqCst),
-        STW_SCAN_NON_NULL_SLOTS.load(Ordering::SeqCst),
-    );
-    STW_CM_PACKETS_TIME.store(0, Ordering::SeqCst);
-    STW_ENQUEUE_OBJS.store(0, Ordering::SeqCst);
-    STW_SCAN_NON_NULL_SLOTS.store(0, Ordering::SeqCst);
-}
-
 impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        #[cfg(feature = "measure_trace_rate")]
-        if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
-            STW_MODBUF_PACKETS.fetch_add(1, Ordering::SeqCst);
-        }
         let mut w = if let Some(nodes) = self.nodes.take() {
             if nodes.is_empty() {
                 return;

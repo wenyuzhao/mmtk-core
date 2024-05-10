@@ -121,6 +121,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
             return true;
         }
+        #[cfg(feature = "measure_trace_rate")]
+        if self.concurrent_marking_in_progress() {
+            return true;
+        }
         // SATB is finished
         if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
             self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
@@ -332,9 +336,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn prepare(&mut self, tls: VMWorkerThread) {
         #[cfg(feature = "measure_trace_rate")]
-        if crate::verbose(3) {
-            super::cm::dump_trace_rate();
-        }
+        super::flush_trace_rate();
         let pause = self.current_pause().unwrap();
         crate::stat(|s| {
             if pause == Pause::RefCount {

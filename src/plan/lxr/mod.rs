@@ -1,9 +1,9 @@
 mod barrier;
 #[cfg(feature = "edge_enqueuing")]
-pub(super) mod cm;
+pub mod cm;
 #[cfg(not(feature = "edge_enqueuing"))]
 #[path = "./cm2.rs"]
-pub(super) mod cm;
+pub mod cm;
 mod gc_work;
 pub(super) mod global;
 mod mature_evac;
@@ -246,4 +246,81 @@ pub fn record_edge_for_validation(slot: impl Edge, obj: ObjectReference) {
             .unwrap()
             .insert(slot.to_address(), obj);
     }
+}
+
+#[cfg(feature = "measure_trace_rate")]
+pub struct STWCMTraceRateCounters {
+    pub cm_packets: AtomicUsize,
+    pub cm_packets_time_us: AtomicUsize,
+    pub scanned_objs: AtomicUsize,
+    pub scanned_slots: AtomicUsize,
+    pub scanned_non_null_slots: AtomicUsize,
+}
+
+#[cfg(feature = "measure_trace_rate")]
+impl STWCMTraceRateCounters {
+    pub fn report(&self, stat: &mut HashMap<String, String>) {
+        macro_rules! report {
+            ($field:ident) => {{
+                let v = self.$field.load(Ordering::SeqCst);
+                stat.insert(stringify!($field).to_owned(), format!("{}", v));
+            }};
+        }
+        report!(cm_packets);
+        report!(cm_packets_time_us);
+        report!(scanned_objs);
+        report!(scanned_slots);
+        report!(scanned_non_null_slots);
+    }
+}
+
+#[cfg(feature = "measure_trace_rate")]
+static STW_CM_COUNTERS_CURRENT: STWCMTraceRateCounters = STWCMTraceRateCounters {
+    cm_packets: AtomicUsize::new(0),
+    cm_packets_time_us: AtomicUsize::new(0),
+    scanned_objs: AtomicUsize::new(0),
+    scanned_slots: AtomicUsize::new(0),
+    scanned_non_null_slots: AtomicUsize::new(0),
+};
+
+#[cfg(feature = "measure_trace_rate")]
+pub static STW_CM_COUNTERS_TOTAL: STWCMTraceRateCounters = STWCMTraceRateCounters {
+    cm_packets: AtomicUsize::new(0),
+    cm_packets_time_us: AtomicUsize::new(0),
+    scanned_objs: AtomicUsize::new(0),
+    scanned_slots: AtomicUsize::new(0),
+    scanned_non_null_slots: AtomicUsize::new(0),
+};
+
+#[cfg(feature = "measure_trace_rate")]
+pub fn flush_trace_rate() {
+    if !crate::inside_harness() {
+        return;
+    }
+    let curr = &STW_CM_COUNTERS_CURRENT;
+    let total = &STW_CM_COUNTERS_TOTAL;
+    gc_log!(
+        " - stw_cm_packets={} stw_cm_packets_time_us={}",
+        curr.cm_packets.load(Ordering::SeqCst),
+        curr.cm_packets_time_us.load(Ordering::SeqCst),
+    );
+    gc_log!(
+        " - stw_scanned_objs={} stw_scanned_slots={} stw_scanned_non_null_slots={}",
+        curr.scanned_objs.load(Ordering::SeqCst),
+        curr.scanned_slots.load(Ordering::SeqCst),
+        curr.scanned_non_null_slots.load(Ordering::SeqCst),
+    );
+    // flush to total
+    macro_rules! flush {
+        ($total:expr, $curr:expr, $field:ident) => {{
+            let v = $curr.$field.load(Ordering::SeqCst);
+            $total.$field.fetch_add(v, Ordering::SeqCst);
+            $curr.$field.store(0, Ordering::SeqCst);
+        }};
+    }
+    flush!(total, curr, cm_packets);
+    flush!(total, curr, cm_packets_time_us);
+    flush!(total, curr, scanned_objs);
+    flush!(total, curr, scanned_slots);
+    flush!(total, curr, scanned_non_null_slots);
 }

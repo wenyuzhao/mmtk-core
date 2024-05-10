@@ -73,6 +73,7 @@ default = [
     "dep:regex",
     "dep:env_logger",
     "no_meta_counting",
+    "measure_trace_rate",
     "opt",
 ]
 # default = []
