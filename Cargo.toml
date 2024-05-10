@@ -193,6 +193,7 @@ opt = [
     "no_dyn_dispatch",
     "fast_rc_check",
     "satb_skip_marked_objs",
+    "edge_enqueuing",
 ]
 satb_skip_marked_objs = []
 measure_trace_rate = []
@@ -202,6 +203,7 @@ aggressive_mature_evac = []
 decs_counter = []
 remset_counter = []
 lxr_no_decs = []
+edge_enqueuing = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

@@ -1,4 +1,8 @@
 mod barrier;
+#[cfg(feature = "edge_enqueuing")]
+pub(super) mod cm;
+#[cfg(not(feature = "edge_enqueuing"))]
+#[path = "./cm2.rs"]
 pub(super) mod cm;
 mod gc_work;
 pub(super) mod global;
