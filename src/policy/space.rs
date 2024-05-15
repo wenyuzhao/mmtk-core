@@ -180,19 +180,14 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     }
 
     fn address_in_space(&self, start: Address) -> bool {
-        // FIXME: Performance!
-        // if !start.is_mapped() {
-        //     return false;
-        // }
-        // if !self.common().descriptor.is_contiguous() {
-        //     self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
-        // } else {
-        //     start >= self.common().start && start < self.common().start + self.common().extent
-        // }
         use crate::vm::object_model::ObjectModel;
-        debug_assert!(VM::VMObjectModel::COMPRESSED_PTR_ENABLED);
-        let common = self.common();
-        common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
+        if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            let common = self.common();
+            common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
+        } else {
+            debug_assert!(self.common().descriptor.is_contiguous());
+            start >= self.common().start && start < self.common().start + self.common().extent
+        }
     }
 
     /**
