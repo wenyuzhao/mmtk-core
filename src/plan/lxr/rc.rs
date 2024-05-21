@@ -3,6 +3,7 @@ use super::cm::LXRStopTheWorldProcessEdges;
 use super::SurvivalRatioPredictorLocal;
 use super::LXR;
 use crate::plan::VectorQueue;
+use crate::policy::immix::block::BlockState;
 use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
@@ -149,9 +150,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let size = o.get_size::<VM>();
 
         if !los {
-            let block = Block::containing::<VM>(o);
-            if !copied && block.is_nursery() {
-                block.set_as_in_place_promoted(&self.lxr.immix_space);
+            let in_nursery_block = Block::containing::<VM>(o).get_state() == BlockState::Nursery;
+            if !copied && in_nursery_block {
+                Block::containing::<VM>(o).set_as_in_place_promoted();
             }
             self.rc.promote_with_size(o, size);
             if copied {
@@ -330,8 +331,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return true;
         }
         // Skip recycled lines
-        let block = Block::containing::<VM>(o);
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_nursery() {
+        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES
+            && Block::containing::<VM>(o).get_state() != BlockState::Nursery
+        {
             return true;
         }
         if cfg!(debug_assertions) {

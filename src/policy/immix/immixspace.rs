@@ -17,6 +17,7 @@ use crate::util::heap::chunk_map::*;
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::PageResource;
 use crate::util::linear_scan::Region;
+use crate::util::linear_scan::RegionIterator;
 use crate::util::metadata::side_metadata::*;
 use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
@@ -154,7 +155,8 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             return true;
         }
         if self.cm_enabled {
-            if Block::containing::<VM>(object).is_nursery() {
+            let block_state = Block::containing::<VM>(object).get_state();
+            if block_state == BlockState::Nursery {
                 return true;
             }
         }
@@ -326,20 +328,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     fn side_metadata_specs(rc_enabled: bool) -> Vec<SideMetadataSpec> {
         if rc_enabled {
             let meta = vec![
-                // MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 MetadataSpec::OnSide(crate::util::rc::RC_STRADDLE_LINES),
                 MetadataSpec::OnSide(Block::LOG_TABLE),
                 MetadataSpec::OnSide(Block::NURSERY_PROMOTION_STATE_TABLE),
-                MetadataSpec::OnSide(Block::PHASE_EPOCH),
+                MetadataSpec::OnSide(Block::DEAD_WORDS),
             ];
             return metadata::extract_side_metadata(&meta);
         }
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
-                // MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
@@ -488,7 +488,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
         self.block_allocation.notify_mutator_phase_end();
-        self.pr.prepare_gc();
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
             // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -534,8 +533,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Release nursery blocks
         if pause != Pause::RefCount {
-            self.pr.reset_before_mature_evac();
-            if pause == Pause::Full || pause == Pause::FinalMark {
+            if pause == Pause::Full {
                 // Reset worker TLABs.
                 // The block of the current worker TLAB may be selected as part of the mature evacuation set.
                 // So the copied mature objects might be copied into defrag blocks, and get copied out again.
@@ -546,6 +544,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     .sweep_nursery_blocks(&self.scheduler, pause);
             self.flush_page_resource();
         }
+        self.block_allocation
+            .reset_block_mark_for_mutator_reused_blocks(pause);
         if pause == Pause::FinalMark {
             crate::REMSET_RECORDING.store(false, Ordering::SeqCst);
             self.is_end_of_satb_or_full_gc = true;
@@ -568,6 +568,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "    - ({:.3}ms) sweep_mutator_reused_blocks start",
             crate::gc_start_time_ms(),
         );
+        self.block_allocation
+            .sweep_mutator_reused_blocks(&self.scheduler, pause);
         #[cfg(feature = "lxr_release_stage_timer")]
         gc_log!([3]
             "    - ({:.3}ms) sweep_mutator_reused_blocks finish",
@@ -590,20 +592,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc = false;
         // This cannot be done in parallel in a separate thread
-        self.schedule_post_satb_mature_sweeping(pause);
+        self.schedule_mature_sweeping(pause);
         self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
-    fn schedule_post_satb_mature_sweeping(&self, pause: Pause) {
+    pub fn schedule_mature_sweeping(&self, pause: Pause) {
         if pause == Pause::Full || pause == Pause::FinalMark {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
-            if crate::args::LAZY_DECREMENTS
-                && !disable_lasy_dec_for_current_gc
-                && !cfg!(feature = "fragmentation_analysis")
-            {
+            let sweep_los: RCSweepMatureAfterSATBLOS =
+                RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
+            if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 debug_assert_ne!(pause, Pause::Full);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
@@ -785,170 +785,41 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// 4. `avail-blocks-in-chunk` -  Number of available blocks in chunk (0-128)
     /// 5. `rc-live-words-in-block` -  RC Live size in block (0-4096)
     pub fn dump_memory(&self, lxr: &crate::plan::lxr::LXR<VM>) {
-        #[derive(Default)]
-        struct Dist {
-            avail_blocks_in_chunk: Vec<u8>,
-            avail_pages_in_block: Vec<u8>,
-            avail_lines_in_block: Vec<u8>,
-            contig_avail_lines: Vec<u8>,
-            rc_live_words_in_block: Vec<u16>,
-            cm_live_words_in_block: Vec<u16>,
-            live_chunks: usize,
-            live_blocks: usize,
-            live_pages: usize,
-            live_lines: usize,
-            rc_live_bytes: usize,
-            cm_live_bytes: usize,
-        }
-        let mut dist = Dist::default();
-        let mut unmarked_live_lines = 0usize;
-        for chunk in self.chunk_map.all_chunks() {
-            if !self.address_in_space(chunk.start()) {
-                continue;
-            }
-            dist.live_chunks += 1;
-            let mut avail_blocks_in_chunk = 0u8;
-            for block in chunk
-                .iter_region::<Block>()
-                .filter(|b| b.get_state() != BlockState::Unallocated)
-            {
-                dist.live_blocks += 1;
-                avail_blocks_in_chunk += 1;
-                // Get avail_pages_in_block and avail_lines_in_block
-                let rc_array = RCArray::of(block);
-                let mut avail_lines_in_block = 0u8;
-                let mut avail_pages_in_block = 0u8;
-                for page in block.iter_region::<Page>() {
-                    let mut avail_lines_in_page = 0;
-                    for line in page.iter_region::<Line>() {
-                        let i = line.get_index_within_block();
-                        if rc_array.is_dead(i) {
-                            avail_lines_in_page += 1;
-                        } else {
-                            if !self.rc.is_straddle_line(line) && !line.is_marked_by_satb::<VM>() {
-                                unmarked_live_lines += 1;
-                            }
-                            dist.live_lines += 1;
-                        }
-                    }
-                    avail_lines_in_block += avail_lines_in_page;
-                    if avail_lines_in_page == (Page::BYTES / Line::BYTES) as u8 {
-                        avail_pages_in_block += 1;
-                    } else {
-                        dist.live_pages += 1;
-                    }
-                }
-                dist.avail_pages_in_block.push(avail_pages_in_block);
-                dist.avail_lines_in_block.push(avail_lines_in_block);
-                // Get contig_avail_lines
-                block.iter_holes(|lines| dist.contig_avail_lines.push(lines as u8));
-                // Get rc_live_bytes_in_block
-                let mut rc_live_size: usize = 0;
-                let mut cm_live_size: usize = 0;
-                let mut cursor = block.start();
-                let limit = block.end();
-                while cursor < limit {
-                    let o: ObjectReference = cursor.to_object_reference::<VM>();
-                    cursor = cursor + crate::util::rc::MIN_OBJECT_SIZE;
-                    let c = self.rc.count(o);
-                    if c != 0 {
-                        if Line::is_aligned(o.to_address::<VM>())
-                            && self.rc.is_straddle_line(Line::from(o.to_address::<VM>()))
-                        {
-                            continue;
-                        }
-                        rc_live_size += o.get_size::<VM>();
-                        if lxr.is_marked(o) {
-                            cm_live_size += o.get_size::<VM>();
-                        }
-                    }
-                }
-                dist.rc_live_words_in_block.push((rc_live_size >> 3) as u16);
-                dist.rc_live_bytes += rc_live_size;
-                dist.cm_live_words_in_block.push((cm_live_size >> 3) as u16);
-                dist.cm_live_bytes += cm_live_size;
-            }
-            dist.avail_blocks_in_chunk.push(avail_blocks_in_chunk);
-        }
+        unreachable!()
+    }
 
-        fn dump_bins<T: Copy + Ord + std::ops::Add<Output = T> + Into<usize>>(
-            name: &str,
-            v: &mut Vec<T>,
-            max: usize,
-        ) {
-            assert!(max <= u16::MAX as usize);
-            let max = max as u16;
-            v.sort();
-            let mut bins = vec![0usize; max as usize + 1];
-            for x in v.iter() {
-                let x: usize = (*x).into();
-                bins[x] += 1;
+    /// Release a block.
+    pub fn release_block(
+        &self,
+        block: Block,
+        nursery: bool,
+        zero_unlog_table: bool,
+        single_thread: bool,
+    ) {
+        // println!(
+        //     "Release {:?} nursery={} defrag={}",
+        //     block,
+        //     nursery,
+        //     block.is_defrag_source()
+        // );
+        if crate::verbose(2) {
+            if nursery {
+                RELEASED_NURSERY_BLOCKS.fetch_add(1, Ordering::SeqCst);
             }
-            eprint!("  {}: ", name);
-            // let mut sum = 0usize;
-            for i in 0..=max {
-                if i == 0 {
-                    eprint!("[");
-                } else {
-                    eprint!(",");
-                }
-                eprint!("{}", bins[i as usize]);
-                // sum += cdf[i as usize] as usize;
-                // print!("{}", sum);
+            RELEASED_BLOCKS.fetch_add(1, Ordering::SeqCst);
+        }
+        if crate::args::BARRIER_MEASUREMENT || zero_unlog_table {
+            block.clear_field_unlog_table::<VM>();
+        }
+        block.deinit(self);
+        crate::stat(|s| {
+            if nursery {
+                s.reclaimed_blocks_nursery += 1;
+            } else {
+                s.reclaimed_blocks_mature += 1;
             }
-            eprintln!("]");
-        }
-        // owned chunks
-        let mut owned_chunks = 0usize;
-        let mut a = self.pr.common().get_head_discontiguous_region();
-        while !a.is_zero() {
-            owned_chunks += self.common.vm_map().get_contiguous_region_chunks(a);
-            a = self.common.vm_map().get_next_contiguous_region(a);
-        }
-        eprintln!("immix:");
-        eprintln!("  reserved-pages: {}", self.reserved_pages());
-        eprintln!("  owned-chunks: {}", owned_chunks);
-        eprintln!("  live-chunks: {}", dist.live_chunks);
-        eprintln!("  live-blocks: {}", dist.live_blocks);
-        eprintln!("  live-pages: {}", dist.live_pages);
-        eprintln!("  live-lines: {}", dist.live_lines);
-        eprintln!("  unmarked-live-lines: {}", unmarked_live_lines);
-        eprintln!("  rc-live-bytes: {}", dist.rc_live_bytes);
-        eprintln!("  cm-live-bytes: {}", dist.cm_live_bytes);
-        eprintln!(
-            "  reachable-live-bytes: {}",
-            crate::SANITY_LIVE_SIZE_IX.load(Ordering::SeqCst)
-        );
-        dump_bins(
-            "avail-blocks-in-chunk",
-            &mut dist.avail_blocks_in_chunk,
-            Chunk::BYTES / Block::BYTES,
-        );
-        dump_bins(
-            "avail-pages-in-block",
-            &mut dist.avail_pages_in_block,
-            Block::BYTES / Page::BYTES,
-        );
-        dump_bins(
-            "avail-lines-in-block",
-            &mut dist.avail_lines_in_block,
-            Block::BYTES / Line::BYTES,
-        );
-        dump_bins(
-            "contig-avail-lines",
-            &mut dist.contig_avail_lines,
-            Block::BYTES / Line::BYTES,
-        );
-        dump_bins(
-            "rc-live-words-in-block",
-            &mut dist.rc_live_words_in_block,
-            Block::BYTES >> 3,
-        );
-        dump_bins(
-            "cm-live-words-in-block",
-            &mut dist.cm_live_words_in_block,
-            Block::BYTES >> 3,
-        );
+        });
+        self.pr.release_block(block, single_thread);
     }
 
     /// Allocate a clean block.
@@ -961,6 +832,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.notify_new_clean_block(copy);
         }
         let block = Block::from_aligned_address(block_address);
+        if !copy && self.rc_enabled {
+            self.block_allocation.nursery_blocks.push(block);
+        }
         self.block_allocation
             .initialize_new_clean_block(block, copy, self.cm_enabled);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
@@ -978,78 +852,50 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Some(block)
     }
 
-    /// Get a list of clean or reusable blocks.
-    /// For blocks in a new chunk, they should be mapped before returning.
-    /// No heap accounting should be updated. They are updated when the mutator starts to allocating into them.
-    pub fn acquire_blocks(
-        &self,
-        alloc_count: usize,
-        steal_count: usize,
-        clean: bool,
-        buf: &mut Vec<Block>,
-        copy: bool,
-        owner: VMThread,
-    ) -> bool {
-        debug_assert!(!owner.0.to_address().is_zero());
-        let mature_evac = copy
-            && self.rc_enabled
-            && self.scheduler().work_buckets[WorkBucketStage::Closure].is_activated();
-        self.pr.acquire_blocks(
-            alloc_count,
-            steal_count,
-            clean,
-            buf,
-            self,
-            copy,
-            mature_evac,
-            owner,
-        )
-    }
-
-    /// Logically acquire a clean block and poll for GC.
-    /// This does not actually allocate a block, but only updates the heap counter and do GC when necessary.
-    pub fn get_clean_block_logically(&self, tls: VMThread, _copy: bool) -> Result<(), ()> {
-        let success = self.acquire_logically(tls, Block::PAGES);
-        if !success {
-            return Err(());
+    /// Pop a reusable block from the reusable block list.
+    pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
+        if super::BLOCK_ONLY {
+            return None;
         }
-        Ok(())
-    }
-
-    pub fn initialize_new_block(&self, block: Block, clean: bool, copy: bool) {
-        // gc_log!("new-block: {:?} clean={} copy={}", block, clean, copy);
-        if clean {
-            if !self.rc_enabled {
-                self.defrag.notify_new_clean_block(copy);
-            }
-            self.block_allocation
-                .initialize_new_clean_block(block, copy, self.cm_enabled);
-            self.chunk_map.set(block.chunk(), ChunkState::Allocated);
-            if !self.rc_enabled {
-                self.lines_consumed
-                    .fetch_add(Block::LINES, Ordering::SeqCst);
-            }
-            #[cfg(feature = "lxr_srv_ratio_counter")]
-            if !copy {
-                crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
-                    .ix_clean_alloc_vol
-                    .fetch_add(Block::BYTES, Ordering::SeqCst);
-            }
-        } else {
-            if self.rc_enabled {
-                // pass
-            } else {
-                // Get available lines. Do this before block.init which will reset block state.
-                let lines_delta = match block.get_state() {
-                    BlockState::Reusable { unavailable_lines } => {
-                        Block::LINES - unavailable_lines as usize
+        loop {
+            if let Some(block) = self.reusable_blocks.pop() {
+                // Skip blocks that should be evacuated.
+                if copy && block.is_defrag_source() {
+                    continue;
+                }
+                if self.rc_enabled {
+                    if crate::args::RC_MATURE_EVACUATION && block.is_defrag_source() {
+                        continue;
                     }
-                    BlockState::Unmarked => Block::LINES,
-                    _ => unreachable!("{:?} {:?}", block, block.get_state()),
-                };
-                self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
+                    // Blocks in the `reusable_blocks` queue can be released after some RC collections.
+                    // These blocks can either have `Unallocated` state, or be reallocated again.
+                    // Skip these cases and only return the truly reusable blocks.
+                    if !block.get_state().is_reusable() {
+                        continue;
+                    }
+                    if !copy && !block.attempt_mutator_reuse() {
+                        continue;
+                    }
+                    if !copy {
+                        self.block_allocation.reused_blocks.push(block);
+                    }
+                } else {
+                    // Get available lines. Do this before block.init which will reset block state.
+                    let lines_delta = match block.get_state() {
+                        BlockState::Reusable { unavailable_lines } => {
+                            Block::LINES - unavailable_lines as usize
+                        }
+                        BlockState::Unmarked => Block::LINES,
+                        _ => unreachable!("{:?} {:?}", block, block.get_state()),
+                    };
+                    self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
+                }
+
+                block.init(copy, true, self);
+                return Some(block);
+            } else {
+                return None;
             }
-            block.init(copy, true, self);
         }
     }
 
@@ -1115,8 +961,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     let block = Block::containing::<VM>(object);
                     let state = block.get_state();
-                    if state != BlockState::Marked {
-                        debug_assert_ne!(state, BlockState::Unallocated);
+                    if state != BlockState::Nursery && state != BlockState::Marked {
                         block.set_state(BlockState::Marked);
                     }
                 }
@@ -1214,7 +1059,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             };
             debug_assert!({
                 let state = Block::containing::<VM>(new_object).get_state();
-                state == BlockState::Marked
+                state == BlockState::Marked || state == BlockState::Nursery
             });
             queue.enqueue(new_object);
             debug_assert!(new_object.is_live());
@@ -1479,12 +1324,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
             }
+            Line::update_validity::<VM>(RegionIterator::<Line>::new(start, end));
         }
         let num_lines = Line::steps_between(&start, &end).unwrap();
         if !copy {
             self.reused_lines_consumed
                 .fetch_add(num_lines, Ordering::Relaxed);
         }
+        block.dec_dead_bytes_sloppy((num_lines as u32) << Line::LOG_BYTES);
         #[cfg(feature = "lxr_srv_ratio_counter")]
         crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
             .reused_alloc_vol
@@ -1601,6 +1448,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
+        self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+            .add_prioritized(Box::new(RCSweepMatureAfterSATBLOS::new(counter.clone())));
     }
 
     pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {

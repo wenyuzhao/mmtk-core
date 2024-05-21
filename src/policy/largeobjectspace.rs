@@ -20,6 +20,7 @@ use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
@@ -39,7 +40,8 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     treadmill: TreadMill,
     trace_in_progress: bool,
     rc_nursery_objects: SegQueue<ObjectReference>,
-    rc_mature_objects: Mutex<HashMap<ObjectReference, usize>>,
+    rc_mature_objects: Mutex<HashSet<ObjectReference>>,
+    rc_dead_objects: SegQueue<ObjectReference>,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
     pub young_alloc_size: AtomicUsize,
@@ -98,10 +100,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
             self.test_and_mark(object, self.mark_state);
-            for off in (0..bytes).step_by(BYTES_IN_PAGE) {
-                let a = object.to_raw_address() + off;
-                self.test_and_mark(a.to_object_reference::<VM>(), self.mark_state);
-            }
             #[cfg(feature = "lxr_srv_ratio_counter")]
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
                 .los_alloc_vol
@@ -220,6 +218,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             trace_in_progress: false,
             rc_nursery_objects: Default::default(),
             rc_mature_objects: Default::default(),
+            rc_dead_objects: Default::default(),
             num_pages_released_lazy: Default::default(),
             rc_killed_bytes: Default::default(),
             young_alloc_size: Default::default(),
@@ -230,46 +229,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn dump_memory(&self, lxr: &crate::plan::lxr::LXR<VM>) {
-        // use crate::util::heap::chunk_map::Chunk;
-        // use crate::util::linear_scan::Region;
-        assert!(!self.common.contiguous);
-        // owned chunks
-        let mut owned_chunks = 0usize;
-        let mut a = self.pr.common().get_head_discontiguous_region();
-        while !a.is_zero() {
-            owned_chunks += self.common.vm_map().get_contiguous_region_chunks(a);
-            a = self.common.vm_map().get_next_contiguous_region(a);
-        }
-        // live pages and live size
-        // let mut chunks = HashSet::<Address>::new();
-        let mut live_pages = 0usize;
-        let mut rc_live_bytes = 0usize;
-        let mut cm_live_bytes = 0usize;
-        let mature_objects = self.rc_mature_objects.lock().unwrap();
-        for (o, size) in &*mature_objects {
-            // let c = Chunk::align(o.to_address::<VM>());
-            // if !chunks.contains(&c) {
-            //     chunks.insert(c);
-            // }
-            live_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
-            rc_live_bytes += size;
-            if lxr.is_marked(*o) {
-                cm_live_bytes += size;
-            } else {
-                // panic!("{:?} is dead. rc={}", o, self.rc.count(*o));
-            }
-        }
-        eprintln!("los:");
-        eprintln!("  reserved-pages: {}", self.reserved_pages());
-        eprintln!("  live-chunks: {}", owned_chunks);
-        // println!("  live-chunks: {}", chunks.len());
-        eprintln!("  live-pages: {}", live_pages);
-        eprintln!("  rc-live-bytes: {}", rc_live_bytes);
-        eprintln!("  cm-live-bytes: {}", cm_live_bytes);
-        eprintln!(
-            "  reachable-live-bytes: {}",
-            crate::SANITY_LIVE_SIZE_LOS.load(Ordering::SeqCst)
-        );
+        unreachable!()
     }
 
     fn release_object(&self, start: Address) -> usize {
@@ -293,7 +253,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if self.rc.count(o) == 0 {
                 self.release_object(o.to_address::<VM>());
             } else {
-                mature_blocks.insert(o, o.get_size::<VM>());
+                mature_blocks.insert(o);
             }
         }
     }
@@ -431,11 +391,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        let mut rc_mature_objects = self.rc_mature_objects.lock().unwrap();
-        if rc_mature_objects.remove(&o).is_some() {
-            let pages = self.release_object(o.to_address::<VM>());
-            self.num_pages_released_lazy
-                .fetch_add(pages, Ordering::Relaxed);
+        if o.to_address::<VM>().attempt_log_field::<VM>() {
+            self.rc_dead_objects.push(o);
         }
     }
 
@@ -514,20 +471,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn sweep_rc_mature_objects_after_satb(&self, is_live: &impl Fn(ObjectReference) -> bool) {
-        let mut mature_objects = self.rc_mature_objects.lock().unwrap();
-        let mut released_objects = vec![];
-        for (o, _size) in mature_objects.iter() {
+        let mature_objects = self.rc_mature_objects.lock().unwrap();
+        for o in mature_objects.iter() {
             if !is_live(*o) {
                 self.update_stat_for_dead_mature_object(*o);
                 self.rc.set(*o, 0);
-                let pages = self.release_object(o.to_address::<VM>());
-                self.num_pages_released_lazy
-                    .fetch_add(pages, Ordering::Relaxed);
-                released_objects.push(*o);
+                self.rc_free(*o);
             }
-        }
-        for o in released_objects {
-            mature_objects.remove(&o);
         }
     }
 }

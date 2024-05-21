@@ -145,7 +145,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         debug_assert!(!object.is_null());
-        debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
+        // debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         if self.plan.immix_space.in_space(object) {
             self.plan
                 .immix_space
@@ -659,14 +659,14 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
             )
         } else {
             let x = self.lxr.los().trace_object_rc(self, object);
-            debug_assert_ne!(
-                self.lxr.rc.count(x),
-                0,
-                "ERROR Invalid {:?} los={} rc={}",
-                x,
-                self.lxr.los().in_space(x),
-                self.lxr.rc.count(x)
-            );
+            // debug_assert_ne!(
+            //     self.lxr.rc.count(x),
+            //     0,
+            //     "ERROR Invalid {:?} los={} rc={}",
+            //     x,
+            //     self.lxr.los().in_space(x),
+            //     self.lxr.rc.count(x)
+            // );
             x
         };
         if self.should_record_forwarded_roots {

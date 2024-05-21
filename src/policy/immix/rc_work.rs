@@ -146,7 +146,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         let mut count = 0;
         for (block, defrag) in &self.blocks {
             block.unlog();
-            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag, false) {
+            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
                 count += 1;
             } else {
                 assert!(
@@ -157,9 +157,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
                     block.is_defrag_source()
                 );
             }
-        }
-        if count != 0 {
-            lxr.immix_space.pr.bulk_release_blocks(count);
         }
         if count != 0
             && (lxr.current_pause().is_none()
@@ -208,6 +205,9 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                 s.dead_mature_tracing_stuck_volume += o.get_size::<VM>();
             }
         });
+        if !crate::args::HOLE_COUNTING {
+            Block::inc_dead_bytes_sloppy_for_object::<VM>(o);
+        }
         if ObjectReference::STRICT_VERIFICATION {
             unsafe {
                 o.to_address::<VM>().store(0xdeadusize);
@@ -219,7 +219,8 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
         self.rc.set(o, 0);
     }
 
-    fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) -> bool {
+    fn process_block(&mut self, block: Block, immix_space: &ImmixSpace<VM>) {
+        let mut has_dead_object = false;
         let mut has_live = false;
         let mut cursor = block.start();
         let limit = block.end();
@@ -239,13 +240,16 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
                     }
                 }
                 self.process_dead_object(o);
+                has_dead_object = true;
             } else {
                 if c != 0 {
                     has_live = true;
                 }
             }
         }
-        !has_live
+        if has_dead_object || !has_live {
+            immix_space.add_to_possibly_dead_mature_blocks(block, false);
+        }
     }
 }
 
@@ -253,32 +257,16 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         let lxr: &LXR<VM> = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
-        let mut dead_blocks = 0;
         for block in self
             .chunk
             .iter_region::<Block>()
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
-            if block.is_defrag_source() {
+            if block.is_defrag_source() || block.get_state() == BlockState::Nursery {
                 continue;
             } else {
-                let dead = self.process_block(block, immix_space);
-                if dead && block.rc_sweep_mature(immix_space, false, true) {
-                    dead_blocks += 1;
-                }
+                self.process_block(block, immix_space)
             }
-        }
-        immix_space.pr.bulk_release_blocks(dead_blocks);
-        if dead_blocks != 0
-            && (lxr.current_pause().is_none()
-                || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
-        {
-            lxr.immix_space
-                .num_clean_blocks_released_mature
-                .fetch_add(dead_blocks, Ordering::Relaxed);
-            lxr.immix_space
-                .num_clean_blocks_released_lazy
-                .fetch_add(dead_blocks, Ordering::Relaxed);
         }
     }
 }
@@ -341,7 +329,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
             // Clear defrag state
             assert!(!block.is_defrag_source());
             // Clear block mark data.
-            block.set_state(BlockState::Unmarked);
+            if block.get_state() != BlockState::Nursery {
+                block.set_state(BlockState::Unmarked);
+            }
             debug_assert!(!block.get_state().is_reusable());
             // debug_assert_ne!(block.get_state(), BlockState::Marked);
             // debug_assert_ne!(block.get_state(), BlockState::Nursery);
@@ -372,31 +362,16 @@ impl MatureEvacuationSet {
         if defrag_blocks.is_empty() {
             return;
         }
-        let mut count = 0;
         while let Some(block) = defrag_blocks.pop() {
             if !block.is_defrag_source() || block.get_state() == BlockState::Unallocated {
                 // This block has been eagerly released (probably be reused again). Skip it.
                 continue;
             }
-            count += 1;
             block.clear_rc_table::<VM>();
             block.clear_striddle_table::<VM>();
-            block.rc_sweep_mature::<VM>(space, true, true);
+            block.rc_sweep_mature::<VM>(space, true);
             assert!(!block.is_defrag_source());
         }
-        #[cfg(feature = "lxr_release_stage_timer")]
-        gc_log!([3]
-            "    - ({:.3}ms) sweep_mature_evac_candidates released {}",
-            crate::gc_start_time_ms(), count
-        );
-        if count != 0 {
-            space.pr.bulk_release_blocks(count);
-        }
-        #[cfg(feature = "lxr_release_stage_timer")]
-        gc_log!([3]
-            "    - ({:.3}ms) sweep_mature_evac_candidates finish",
-            crate::gc_start_time_ms(),
-        );
     }
 
     pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
@@ -413,7 +388,7 @@ impl MatureEvacuationSet {
 
     fn skip_block(b: Block) -> bool {
         let s = b.get_state();
-        b.is_defrag_source() || s == BlockState::Unallocated
+        b.is_defrag_source() || s == BlockState::Unallocated || s == BlockState::Nursery
     }
 
     fn select_blocks_in_fragmented_chunks(

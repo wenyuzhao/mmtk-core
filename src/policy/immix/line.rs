@@ -3,6 +3,7 @@ use std::ops::Range;
 use atomic::Ordering;
 
 use super::block::Block;
+use crate::plan::lxr::MatureEvecRemSet;
 use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_WORD, LOG_MIN_OBJECT_SIZE};
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::*;
@@ -114,20 +115,6 @@ impl Line {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
     }
 
-    pub fn is_marked_by_satb<VM: VMBinding>(&self) -> bool {
-        for i in (0..Self::BYTES).step_by(8) {
-            let ptr = self.start() + i;
-            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .extract_side_spec()
-                .load_atomic::<u8>(ptr, Ordering::SeqCst)
-                == 1
-            {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Mark all lines the object is spanned to.
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
         debug_assert!(!super::BLOCK_ONLY);
@@ -147,6 +134,10 @@ impl Line {
             line.mark(state)
         }
         marked_lines
+    }
+
+    pub fn update_validity<VM: VMBinding>(lines: RegionIterator<Line>) {
+        return;
     }
 
     pub fn clear_field_unlog_table<VM: VMBinding>(lines: Range<Line>) {

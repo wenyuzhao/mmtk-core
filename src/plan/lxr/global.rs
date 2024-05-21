@@ -417,7 +417,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.current_pause().unwrap() == Pause::FullDefrag,
             Ordering::Relaxed,
         );
-        Block::update_global_phase_epoch(&self.immix_space);
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -449,7 +448,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
-        Block::update_global_phase_epoch(&self.immix_space);
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
@@ -464,11 +462,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(SystemTime::now(), Ordering::SeqCst);
         self.immix_space.rc_eager_prepare(pause);
 
+        for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+            mutator.flush();
+        }
+
         if pause == Pause::FinalMark {
-            // Flush barrier buffers before FinishConcurrentWork bucket
-            for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-                mutator.flush();
-            }
             self.set_concurrent_marking_state(false);
             if cfg!(feature = "satb_timer") {
                 let t = crate::SATB_START
