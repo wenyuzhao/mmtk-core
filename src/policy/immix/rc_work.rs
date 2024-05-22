@@ -255,7 +255,7 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let lxr: &LXR<VM> = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
         for block in self
             .chunk

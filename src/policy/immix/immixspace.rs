@@ -601,8 +601,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
-            let sweep_los: RCSweepMatureAfterSATBLOS =
-                RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
+            let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 debug_assert_ne!(pause, Pause::Full);
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
