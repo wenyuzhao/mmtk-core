@@ -58,6 +58,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::Write,
+    ptr::{addr_of, addr_of_mut},
     sync::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
@@ -307,13 +308,13 @@ const fn create_counters() -> Counters {
 
 fn reset_counters() {
     let mut new_counters = create_counters();
-    let global = unsafe { &mut COUNTERS };
+    let global = unsafe { &mut *addr_of_mut!(COUNTERS) };
     std::mem::swap(global, &mut new_counters);
 }
 
 fn stop_counters() {
-    let retired_counters = unsafe { &mut RETIRED_COUNTERS };
-    let global = unsafe { &mut COUNTERS };
+    let retired_counters = unsafe { &mut *addr_of_mut!(RETIRED_COUNTERS) };
+    let global = unsafe { &mut *addr_of_mut!(COUNTERS) };
     std::mem::swap(global, retired_counters);
 }
 
@@ -321,7 +322,7 @@ static mut RETIRED_COUNTERS: Counters = create_counters();
 static mut COUNTERS: Counters = create_counters();
 
 fn counters() -> &'static Counters {
-    unsafe { &COUNTERS }
+    unsafe { &*addr_of!(COUNTERS) }
 }
 
 #[derive(Default)]
