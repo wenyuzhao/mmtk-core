@@ -35,8 +35,6 @@ pub struct MatureEvecRemSet<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> MatureEvecRemSet<VM> {
-    pub const NO_VALIDITY_STATE: bool = true;
-
     pub fn new(workers: usize) -> Self {
         let mut rs = Self {
             gc_buffers: vec![],
