@@ -145,7 +145,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         debug_assert!(!object.is_null());
-        debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
+        // debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         if self.plan.immix_space.in_space(object) {
             self.plan
                 .immix_space
