@@ -40,8 +40,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     treadmill: TreadMill,
     trace_in_progress: bool,
     rc_nursery_objects: SegQueue<ObjectReference>,
-    rc_mature_objects: Mutex<HashSet<ObjectReference>>,
-    rc_dead_objects: SegQueue<ObjectReference>,
+    rc_mature_objects: Mutex<HashMap<ObjectReference, usize>>,
     pub num_pages_released_lazy: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
     pub young_alloc_size: AtomicUsize,
@@ -100,6 +99,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
             self.test_and_mark(object, self.mark_state);
+            for off in (0..bytes).step_by(BYTES_IN_PAGE) {
+                let a = object.to_raw_address() + off;
+                self.test_and_mark(a.to_object_reference::<VM>(), self.mark_state);
+            }
             #[cfg(feature = "lxr_srv_ratio_counter")]
             crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
                 .los_alloc_vol
@@ -218,7 +221,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             trace_in_progress: false,
             rc_nursery_objects: Default::default(),
             rc_mature_objects: Default::default(),
-            rc_dead_objects: Default::default(),
             num_pages_released_lazy: Default::default(),
             rc_killed_bytes: Default::default(),
             young_alloc_size: Default::default(),
@@ -253,7 +255,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if self.rc.count(o) == 0 {
                 self.release_object(o.to_address::<VM>());
             } else {
-                mature_blocks.insert(o);
+                mature_blocks.insert(o, o.get_size::<VM>());
             }
         }
     }
@@ -391,8 +393,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn rc_free(&self, o: ObjectReference) {
-        if o.to_address::<VM>().attempt_log_field::<VM>() {
-            self.rc_dead_objects.push(o);
+        let mut rc_mature_objects = self.rc_mature_objects.lock().unwrap();
+        if rc_mature_objects.remove(&o).is_some() {
+            let pages = self.release_object(o.to_address::<VM>());
+            self.num_pages_released_lazy
+                .fetch_add(pages, Ordering::Relaxed);
         }
     }
 
@@ -471,13 +476,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn sweep_rc_mature_objects_after_satb(&self, is_live: &impl Fn(ObjectReference) -> bool) {
-        let mature_objects = self.rc_mature_objects.lock().unwrap();
-        for o in mature_objects.iter() {
+        let mut mature_objects = self.rc_mature_objects.lock().unwrap();
+        let mut released_objects = vec![];
+        for (o, _size) in mature_objects.iter() {
             if !is_live(*o) {
                 self.update_stat_for_dead_mature_object(*o);
                 self.rc.set(*o, 0);
-                self.rc_free(*o);
+                let pages = self.release_object(o.to_address::<VM>());
+                self.num_pages_released_lazy
+                    .fetch_add(pages, Ordering::Relaxed);
+                released_objects.push(*o);
             }
+        }
+        for o in released_objects {
+            mature_objects.remove(&o);
         }
     }
 }
