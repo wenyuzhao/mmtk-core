@@ -110,7 +110,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         self.reused_blocks.visit_slice(|blocks| {
             for b in blocks {
                 let b = b.load(Ordering::Relaxed);
-                b.set_state(BlockState::Unmarked);
+                b.set_state(BlockState::Marked);
             }
         });
     }

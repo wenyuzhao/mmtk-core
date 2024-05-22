@@ -764,7 +764,11 @@ impl ObjectReference {
                 "unmapped object {:?}",
                 self
             );
-            assert!(self.is_in_any_space());
+            assert!(
+                self.is_in_any_space(),
+                "object {:?} is not in any space",
+                self
+            );
             assert_ne!(
                 unsafe { self.to_address::<VM>().load::<usize>() },
                 0xdead,

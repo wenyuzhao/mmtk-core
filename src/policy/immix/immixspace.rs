@@ -1448,8 +1448,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            .add_prioritized(Box::new(RCSweepMatureAfterSATBLOS::new(counter.clone())));
     }
 
     pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {
