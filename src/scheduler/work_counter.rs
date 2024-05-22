@@ -45,6 +45,7 @@ pub(super) trait WorkCounter: WorkCounterClone + std::fmt::Debug + Send {
     /// Return a reference to [`WorkCounterBase`]
     fn get_base(&self) -> &WorkCounterBase;
     /// Return a mutatable reference to [`WorkCounterBase`]
+    #[allow(unused)]
     fn get_base_mut(&mut self) -> &mut WorkCounterBase;
 }
 

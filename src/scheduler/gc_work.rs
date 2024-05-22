@@ -5,6 +5,7 @@ use crate::plan::lxr::LXR;
 use crate::plan::GcStatus;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
+use crate::plan::VectorQueue;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
@@ -993,6 +994,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
 
     /// Create another object-scanning work packet of the same kind, to scan adjacent objects of
     /// the objects in this packet.
+    #[allow(unused)]
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self;
 
     fn get_bucket(&self) -> WorkBucketStage;
@@ -1404,7 +1406,7 @@ impl<VM: VMBinding, I: ProcessEdgesWork<VM = VM>, E: ProcessEdgesWork<VM = VM>> 
 
             // This contains root objects that are visited the first time.
             // It is sufficient to only scan these objects.
-            process_edges_work.nodes.take()
+            VectorQueue::take(&mut process_edges_work.nodes)
         };
 
         let process_edges_work = E::new(vec![], false, mmtk, self.bucket);
