@@ -143,7 +143,7 @@ impl<VM: VMBinding> Immix<VM> {
             constraints: &IMMIX_CONSTRAINTS,
             global_side_metadata_specs: SideMetadataContext::new_global_specs(&immix_specs),
         };
-        if plan_args.constraints.barrier == BarrierSelector::FieldBarrier {
+        if crate::args::BARRIER_MEASUREMENT {
             plan_args
                 .global_side_metadata_specs
                 .push(ImmixFakeFieldBarrierSemantics::<VM>::UNLOG_BITS);
