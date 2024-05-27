@@ -50,11 +50,11 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         }
     }
 
-    fn get_edge_logging_state(&self, edge: Address) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(edge) }
+    fn get_edge_logging_state(&self, edge: VM::VMEdge) -> u8 {
+        unsafe { Self::UNLOG_BITS.load(edge.to_address()) }
     }
 
-    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: Address) -> bool {
+    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: VM::VMEdge) -> bool {
         loop {
             // Bailout if logged
             if self.get_edge_logging_state(edge) == LOGGED_VALUE {
@@ -63,7 +63,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
             // Attempt to lock the edges
             if Self::LOCK_BITS
                 .compare_exchange_atomic(
-                    edge,
+                    edge.to_address(),
                     UNLOCKED_VALUE,
                     LOCKED_VALUE,
                     Ordering::Relaxed,
@@ -82,22 +82,27 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         }
     }
 
-    fn unlock_edge(&self, edge: Address) {
-        RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
+    fn unlock_edge(&self, edge: VM::VMEdge) {
+        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_and_unlock_edge(&self, edge: Address) {
-        if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= 64 {
-            unsafe { Self::UNLOG_BITS.store(edge, LOGGED_VALUE) };
+    fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
+        let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
+            32usize
         } else {
-            Self::UNLOG_BITS.store_atomic(edge, LOGGED_VALUE, Ordering::Relaxed);
+            64
+        };
+        if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
+            unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
+        } else {
+            Self::UNLOG_BITS.store_atomic(edge.to_address(), LOGGED_VALUE, Ordering::Relaxed);
         }
-        RC_LOCK_BITS.store_atomic(edge, UNLOCKED_VALUE, Ordering::Relaxed);
+        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_edge_and_get_old_target(&self, edge: Address) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old: ObjectReference = unsafe { edge.load() };
+            let old = edge.load();
             self.log_and_unlock_edge(edge);
             Ok(old)
         } else {
@@ -106,10 +111,10 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     #[allow(unused)]
-    fn log_edge_and_get_old_target_sloppy(&self, edge: Address) -> Result<ObjectReference, ()> {
-        if !edge.is_field_logged::<VM>() {
-            let old: ObjectReference = unsafe { edge.load() };
-            edge.log_field::<VM>();
+    fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
+        if !edge.to_address().is_field_logged::<VM>() {
+            let old = edge.load();
+            edge.to_address().log_field::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -141,11 +146,11 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if let Ok(old) = self.log_edge_and_get_old_target(edge.to_address()) {
+        if let Ok(old) = self.log_edge_and_get_old_target(edge) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            self.slow(src, edge, old)
+            self.slow(src, edge, old);
         }
     }
 
