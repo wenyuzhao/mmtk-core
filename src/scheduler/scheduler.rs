@@ -798,6 +798,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
+        stat.insert(
+            "alloc-bytes".to_owned(),
+            crate::ALLOC.load(Ordering::SeqCst).to_string(),
+        );
         stat
     }
 

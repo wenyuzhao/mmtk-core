@@ -183,6 +183,7 @@ pub fn alloc<VM: VMBinding>(
     offset: usize,
     semantics: AllocationSemantics,
 ) -> Address {
+    crate::ALLOC.fetch_add(size, Ordering::SeqCst);
     crate::stat(|s| {
         s.alloc_objects += 1;
         s.alloc_volume += size;
@@ -800,6 +801,7 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
     crate::output_survival_ratios();
+    crate::ALLOC.store(0, Ordering::SeqCst);
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
