@@ -802,6 +802,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             "alloc-bytes".to_owned(),
             crate::ALLOC.load(Ordering::SeqCst).to_string(),
         );
+        stat.insert(
+            "roots".to_owned(),
+            crate::ROOTS.load(Ordering::SeqCst).to_string(),
+        );
         stat
     }
 

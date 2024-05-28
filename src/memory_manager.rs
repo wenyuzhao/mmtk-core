@@ -802,6 +802,7 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
     crate::output_survival_ratios();
     crate::ALLOC.store(0, Ordering::SeqCst);
+    crate::ROOTS.store(0, Ordering::SeqCst);
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting

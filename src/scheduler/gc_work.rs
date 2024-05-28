@@ -915,6 +915,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
     RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsWorkFactory<VM, E, I>
 {
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>, kind: RootKind) {
+        crate::ROOTS.fetch_add(edges.len(), Ordering::SeqCst);
         let mut w = E::new(
             edges,
             true,

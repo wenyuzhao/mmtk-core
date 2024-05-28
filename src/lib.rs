@@ -723,3 +723,4 @@ static RC_STAT: RCStat = RCStat {
 };
 
 static ALLOC: AtomicUsize = AtomicUsize::new(0);
+static ROOTS: AtomicUsize = AtomicUsize::new(0);
