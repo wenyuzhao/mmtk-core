@@ -740,7 +740,7 @@ impl ObjectReference {
             ((klass.as_usize() & 0xff000_00000000) == 0x7000_00000000) && klass.is_aligned_to(8)
         };
         if !valid {
-            println!("invalid klass {:?}", klass);
+            println!("invalid klass {:?} for object {:?}", klass, self);
         }
         valid
     }
@@ -768,7 +768,11 @@ impl ObjectReference {
                 "unmapped object {:?}",
                 self
             );
-            assert!(self.is_in_any_space());
+            assert!(
+                self.is_in_any_space(),
+                "object {:?} is not in any space",
+                self
+            );
             assert_ne!(
                 unsafe { self.to_address::<VM>().load::<usize>() },
                 0xdead,

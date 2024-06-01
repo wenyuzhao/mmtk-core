@@ -351,7 +351,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             vec![
                 MetadataSpec::OnSide(Line::MARK_TABLE),
-                MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,

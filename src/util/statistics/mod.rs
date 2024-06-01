@@ -1,3 +1,4 @@
+#[allow(unused)]
 pub use self::counter::Counter;
 pub use self::counter::Timer;
 

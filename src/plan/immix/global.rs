@@ -9,6 +9,7 @@ use crate::plan::global::GcStatus;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
@@ -16,7 +17,9 @@ use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::VMRequest;
+use crate::util::metadata;
 use crate::util::metadata::side_metadata::SideMetadataContext;
+use crate::util::metadata::MetadataSpec;
 use crate::vm::VMBinding;
 use crate::BarrierSelector;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
@@ -132,13 +135,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
 impl<VM: VMBinding> Immix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
+        let immix_specs =
+            metadata::extract_side_metadata(&[MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE)]);
         crate::args::validate_features(IMMIX_CONSTRAINTS.barrier, &args.options);
         let mut plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &IMMIX_CONSTRAINTS,
-            global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
+            global_side_metadata_specs: SideMetadataContext::new_global_specs(&immix_specs),
         };
-        if plan_args.constraints.barrier == BarrierSelector::FieldBarrier {
+        if crate::args::BARRIER_MEASUREMENT {
             plan_args
                 .global_side_metadata_specs
                 .push(ImmixFakeFieldBarrierSemantics::<VM>::UNLOG_BITS);

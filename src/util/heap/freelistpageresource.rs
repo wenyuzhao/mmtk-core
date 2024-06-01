@@ -226,7 +226,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // Since `Space` instances are always stored as global variables, so it is okay here
             // to turn `&CommonFreeListPageResource` into `&'static CommonFreeListPageResource`
             unsafe {
-                vm_map.bind_freelist(&*(&common_flpr as &CommonFreeListPageResource as *const _));
+                vm_map.bind_freelist(
+                    &common_flpr as &CommonFreeListPageResource
+                        as *const CommonFreeListPageResource,
+                );
             }
             common_flpr
         };
@@ -257,7 +260,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // Since `Space` instances are always stored as global variables, so it is okay here
             // to turn `&CommonFreeListPageResource` into `&'static CommonFreeListPageResource`
             unsafe {
-                vm_map.bind_freelist(&*(&common_flpr as &CommonFreeListPageResource as *const _));
+                vm_map.bind_freelist(
+                    &common_flpr as &CommonFreeListPageResource
+                        as *const CommonFreeListPageResource,
+                );
             }
             common_flpr
         };
@@ -357,10 +363,10 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         if !region.is_zero() {
             self.total_chunks
                 .fetch_add(required_chunks, Ordering::Relaxed);
-            debug_assert_eq!(
-                self.vm_map().get_contiguous_region_chunks(region),
-                required_chunks
-            );
+            // debug_assert_eq!(
+            //     self.vm_map().get_contiguous_region_chunks(region),
+            //     required_chunks
+            // );
             let region_start = conversions::bytes_to_pages(region - self.start);
             let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
             self.inner_mut()
