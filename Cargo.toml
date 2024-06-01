@@ -72,7 +72,7 @@ default = [
     "dep:sysinfo",
     "dep:regex",
     "dep:env_logger",
-    "no_meta_counting",
+    # "no_meta_counting",
 ]
 # default = []
 nontemporal = []
