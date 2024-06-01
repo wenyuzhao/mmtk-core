@@ -74,6 +74,7 @@ default = [
     "dep:env_logger",
     # "no_meta_counting",
 ]
+mutator_reused_block_state_bug = []
 # default = []
 nontemporal = []
 satb_timer = []
