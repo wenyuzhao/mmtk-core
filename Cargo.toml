@@ -68,7 +68,7 @@ built = { version = "=0.6.0", features = ["git2"] }
 [features]
 # default = ["sanity"]
 default = [
-    "perf_counter",
+    "perf_counter_plm0",
     "dep:sysinfo",
     "dep:regex",
     "dep:env_logger",
