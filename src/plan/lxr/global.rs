@@ -121,6 +121,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
             return true;
         }
+        if cfg!(feature = "object_size_distribution") {
+            return false;
+        }
         // SATB is finished
         if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
             self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
@@ -903,7 +906,9 @@ impl<VM: VMBinding> LXR<VM> {
         }
 
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        let pause = if crate::args::LXR_RC_ONLY {
+        let pause = if cfg!(feature = "object_size_distribution") {
+            Pause::Full
+        } else if crate::args::LXR_RC_ONLY {
             Pause::RefCount
         } else {
             let pause = self.select_lxr_collection_kind(emergency_collection);
