@@ -533,7 +533,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         self.dump_heap_usage(false);
         if cfg!(feature = "object_size_distribution") {
             if pause == Pause::FinalMark || pause == Pause::Full {
-                crate::dump_and_reset_obj_dist("Static", &mut crate::OBJ_COUNT.lock().unwrap());
+                crate::dump_and_reset_static_obj_dist()
             }
         }
         if cfg!(feature = "lxr_satb_live_bytes_counter") {

@@ -60,7 +60,7 @@ use std::{
     io::Write,
     ptr::{addr_of, addr_of_mut},
     sync::{
-        atomic::{AtomicBool, AtomicUsize},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize},
         Arc,
     },
     time::SystemTime,
@@ -522,20 +522,17 @@ pub(crate) fn args() -> &'static crate::args::RuntimeArgs {
 }
 
 lazy_static! {
-    static ref OBJ_COUNT: std::sync::Mutex<HashMap<usize, (usize, usize)>> =
-        std::sync::Mutex::new(HashMap::new());
+    static ref OBJ_COUNT: Vec<AtomicU32> = {
+        const MAX_OBJ_SIZE: usize = 512 << 20;
+        const ENTRIES: usize = MAX_OBJ_SIZE >> 3;
+        (0..ENTRIES).map(|_| AtomicU32::new(0)).collect()
+    };
 }
 
 fn record_obj(size: usize) {
     assert!(cfg!(feature = "object_size_distribution"));
-    let mut counts = OBJ_COUNT.lock().unwrap();
-    counts
-        .entry(size.next_power_of_two())
-        .and_modify(|x| {
-            x.0 += 1;
-            x.1 += size;
-        })
-        .or_insert((1, size));
+    let index = size >> 3;
+    OBJ_COUNT[index].fetch_add(1, Ordering::SeqCst);
 }
 
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -555,8 +552,33 @@ fn report_and_reset_live_bytes() {
     LIVE_BYTES.store(0, Ordering::SeqCst);
 }
 
+pub fn dump_and_reset_static_obj_dist() {
+    assert!(cfg!(feature = "object_size_distribution"));
+    if !crate::inside_harness() {
+        return;
+    }
+    eprintln!("[[Size Size Distribution START]]");
+    // last non-zero index
+    let last = OBJ_COUNT
+        .iter()
+        .rposition(|x| x.load(Ordering::SeqCst) != 0)
+        .unwrap_or_default();
+    for i in 0..=last {
+        let i = OBJ_COUNT[i].load(Ordering::SeqCst);
+        eprint!("{} ", i);
+    }
+    for i in 0..OBJ_COUNT.len() {
+        OBJ_COUNT[i].store(0, Ordering::SeqCst);
+    }
+    eprintln!();
+    eprintln!("[[Size Size Distribution END]]");
+}
+
 pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, usize)>) {
     assert!(cfg!(feature = "object_size_distribution"));
+    if !crate::inside_harness() {
+        return;
+    }
     // let mut total_size: usize = 0;
     let mut total_count: usize = 0;
     let mut table = vec![];
@@ -566,7 +588,7 @@ pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, u
         table.push((size, v));
     }
     table.sort_by_key(|x| x.0);
-    eprintln!("{} Size Distribution:", kind);
+    eprintln!("[[{} Size Distribution START]]", kind);
     let mut accumulative_count = 0;
     for (size, (count, total)) in table {
         // let curr = size * count;
@@ -589,6 +611,7 @@ pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, u
             (100 * accumulative_count) as f64 / total_count as f64
         );
     }
+    eprintln!("[[{} Size Distribution END]]", kind);
     counts.clear();
 }
 
