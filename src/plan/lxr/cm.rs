@@ -238,9 +238,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(e, t);
                 }
-                if self.plan.is_marked(t) {
-                    return;
-                }
                 self.next_objects.push(t);
                 if self.next_objects.len() > 8192 {
                     self.flush_objs();
