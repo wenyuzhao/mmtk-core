@@ -191,10 +191,8 @@ opt = [
     "opt_space_check",
     "no_dyn_dispatch",
     "fast_rc_check",
-    "satb_skip_marked_objs",
     "edge_enqueuing",
 ]
-satb_skip_marked_objs = []
 measure_trace_rate = []
 measure_rc_rate = []
 lxr_no_mature_defrag = []

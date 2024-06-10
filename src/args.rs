@@ -251,7 +251,6 @@ fn dump_features(active_barrier: BarrierSelector, options: &Options) {
     dump_feature!("opt_space_check");
     dump_feature!("no_dyn_dispatch");
     dump_feature!("fast_rc_check");
-    dump_feature!("satb_skip_marked_objs");
     dump_feature!("measure_trace_rate");
     dump_feature!("lxr_no_mature_defrag");
 
