@@ -49,24 +49,34 @@ impl Default for RuntimeArgs {
                 .ok()
         }
         Self {
-            incs_limit: env_arg("INCS_LIMIT"),
+            incs_limit: if cfg!(feature = "instrumentation") {
+                None
+            } else {
+                env_arg("INCS_LIMIT")
+            },
             no_mutator_line_recycling: env_bool_arg("NO_MUTATOR_LINE_RECYCLING").unwrap_or(false),
             no_line_recycling: env_bool_arg("NO_LINE_RECYCLING").unwrap_or(false),
-            nursery_blocks: env_arg("NURSERY_BLOCKS").or(
-                if cfg!(feature = "lxr_fixed_clean_rc_trigger") {
+            nursery_blocks: if cfg!(feature = "instrumentation") {
+                None
+            } else {
+                env_arg("NURSERY_BLOCKS").or(if cfg!(feature = "lxr_fixed_clean_rc_trigger") {
                     const BLOCKS_IN_MB: usize = (1 << 20) >> Block::LOG_BYTES;
                     Some(128 * BLOCKS_IN_MB) // 128 M
                 } else {
                     None
-                },
-            ),
-            young_limit_mb: env_arg("YOUNG_LIMIT")
-                .or_else(|| env_arg("YOUNG_LIMIT_MB"))
-                .or(if cfg!(feature = "lxr_fixed_rc_trigger") {
-                    Some(128 << LOG_BYTES_IN_MBYTE) // 128 M
-                } else {
-                    None
-                }),
+                })
+            },
+            young_limit_mb: if cfg!(feature = "instrumentation") {
+                Some(32 << LOG_BYTES_IN_MBYTE) // 32 M
+            } else {
+                env_arg("YOUNG_LIMIT")
+                    .or_else(|| env_arg("YOUNG_LIMIT_MB"))
+                    .or(if cfg!(feature = "lxr_fixed_rc_trigger") {
+                        Some(128 << LOG_BYTES_IN_MBYTE) // 128 M
+                    } else {
+                        None
+                    })
+            },
             nursery_ratio: env_arg("NURSERY_RATIO"),
             lower_concurrent_worker_priority: env_arg("LOWER_CONCURRENT_WORKER_PRIORITY")
                 .unwrap_or(false),
