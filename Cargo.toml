@@ -309,3 +309,6 @@ malloc_mark_sweep = []
 # Group:end
 
 tracing = ["probe"]
+
+revert_reset_block_mark = []
+revert_lock_check = []

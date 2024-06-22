@@ -184,7 +184,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             // Not filled by a mutator in the last mutator phase
             !block.is_nursery()
         // in_use state is not set
-            && (skip_lock_check || !block.is_locked())
+            && ((skip_lock_check && !cfg!(feature = "revert_lock_check")) || !block.is_locked())
         } else {
             let state = block.get_state();
             // Don't steal empty, used, or defrag blocks
@@ -195,7 +195,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             if block_owner.is_none() || block_owner == Some(owner) {
                 return false;
             }
-            skip_lock_check || !block.is_locked()
+            (skip_lock_check && !cfg!(feature = "revert_lock_check")) || !block.is_locked()
         }
     }
 
