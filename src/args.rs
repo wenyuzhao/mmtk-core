@@ -30,7 +30,6 @@ pub(crate) struct RuntimeArgs {
     pub(crate) survival_predictor_weighted: bool,
     pub(crate) trace_threshold: usize,
     pub(crate) min_reuse_lines: usize,
-    pub(crate) no_recursive_dec: bool,
     pub(crate) chunk_defarg_percent: usize,
     pub(crate) transparent_hugepage: bool,
 }
@@ -94,7 +93,6 @@ impl Default for RuntimeArgs {
                     20
                 }),
             min_reuse_lines: env_arg::<usize>("MIN_REUSE_LINES").unwrap_or(1),
-            no_recursive_dec: env_bool_arg("NO_RECURSIVE_DEC").unwrap_or(false),
             chunk_defarg_percent: env_arg::<usize>("CHUNK_DEFARG_THRESHOLD").unwrap_or(32),
             transparent_hugepage: env_bool_arg("TRANSPARENT_HUGEPAGE")
                 .or(env_bool_arg("HUGEPAGE"))

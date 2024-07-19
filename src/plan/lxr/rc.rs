@@ -881,36 +881,40 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         {
             // Buggy. Dead array can be recycled at any time.
             unimplemented!()
-        } else if !crate::args().no_recursive_dec {
-            o.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |edge, _| {
-                let x = edge.load();
-                if !x.is_null() {
-                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
-                    if edge.to_address().is_in_mmtk_heap() {
-                        let rc = self.rc.count(x);
-                        if rc != MAX_REF_COUNT && rc != 0 {
-                            self.recursive_dec(x);
+        } else if !cfg!(feature = "lxr_no_recursive_dec") {
+            o.iterate_fields::<VM, _>(
+                CLDScanPolicy::Claim,
+                RefScanPolicy::Follow,
+                |edge, out_of_heap| {
+                    let x = edge.load();
+                    if !x.is_null() {
+                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                        if !out_of_heap {
+                            let rc = self.rc.count(x);
+                            if rc != MAX_REF_COUNT && rc != 0 {
+                                self.recursive_dec(x);
+                            }
+                        } else {
+                            self.record_mature_evac_remset(lxr, edge, x);
                         }
-                    } else {
-                        self.record_mature_evac_remset(lxr, edge, x);
+                        if self.concurrent_marking_in_progress && !lxr.is_marked(x) {
+                            if cfg!(any(feature = "sanity", debug_assertions)) {
+                                assert!(
+                                    x.to_address::<VM>().is_mapped(),
+                                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                                    o,
+                                    edge,
+                                    x
+                                );
+                            }
+                            self.mark_objects.push(x);
+                            if self.mark_objects.is_full() {
+                                self.flush();
+                            }
+                        }
                     }
-                    if self.concurrent_marking_in_progress && !lxr.is_marked(x) {
-                        if cfg!(any(feature = "sanity", debug_assertions)) {
-                            assert!(
-                                x.to_address::<VM>().is_mapped(),
-                                "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                                o,
-                                edge,
-                                x
-                            );
-                        }
-                        self.mark_objects.push(x);
-                        if self.mark_objects.is_full() {
-                            self.flush();
-                        }
-                    }
-                }
-            });
+                },
+            );
         }
         let in_ix_space = lxr.immix_space.in_space(o);
         if !crate::args::BLOCK_ONLY && in_ix_space {
