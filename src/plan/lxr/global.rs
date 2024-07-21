@@ -573,11 +573,11 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                         end: (common.start + common.extent).as_usize() as u64,
                     })
             });
-            std::fs::create_dir_all("_heapdump").unwrap();
+            std::fs::create_dir_all("scratch/_heapdump").unwrap();
             super::HEAPDUMP
                 .lock()
                 .unwrap()
-                .dump_to_file(format!("_heapdump/heapdump.{}.binpb.zst", gc_count));
+                .dump_to_file(format!("scratch/_heapdump/heapdump.{}.binpb.zst", gc_count));
         }
         super::HEAPDUMP.lock().unwrap().reset();
     }
