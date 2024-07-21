@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package mmtk.util.sanity;
+
+message ShapesIteration {
+    repeated ShapesEpoch epochs = 1;
+}
+
+message ShapesEpoch {
+    repeated Shape shapes = 1;
+}
+
+message Shape {
+    enum Kind {
+        ValArray = 0;
+        ObjArray = 1;
+        Scalar = 2;
+    }
+    Kind kind = 1;
+    uint64 object = 2;
+    repeated sint64 offsets = 3;
+}

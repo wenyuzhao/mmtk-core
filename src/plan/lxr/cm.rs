@@ -692,11 +692,105 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     }
 
     fn process_mark_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
-        let new_object = self.trace_and_mark_object(object);
+        let old_object = slot.load();
+        let new_object = self.trace_and_mark_object(old_object);
         super::record_edge_for_validation(slot, new_object);
-        if Self::OVERWRITE_REFERENCE && !new_object.is_null() && new_object != object {
+        if Self::OVERWRITE_REFERENCE && !new_object.is_null() && new_object != old_object {
             slot.store(new_object);
+        }
+        if crate::inside_harness() && !new_object.is_null() {
+            let mut heapdump = super::HEAPDUMP.lock().unwrap();
+            let mut shapes_iter = super::SHAPES_ITER.lock().unwrap();
+
+            let mut edges: Vec<super::heapdump::NormalEdge> = vec![];
+            let mut objarray_length: Option<u64> = None;
+            let mut instance_mirror_start: Option<u64> = None;
+            let mut instance_mirror_count: Option<u64> = None;
+
+            if <VM as VMBinding>::VMScanning::is_val_array(new_object) {
+                shapes_iter
+                    .epochs
+                    .last_mut()
+                    .unwrap()
+                    .shapes
+                    .push(super::heapdump::Shape {
+                        kind: super::heapdump::shape::Kind::ValArray as i32,
+                        object: new_object.value() as u64,
+                        offsets: vec![],
+                    });
+            } else if <VM as VMBinding>::VMScanning::is_obj_array(new_object) {
+                shapes_iter
+                    .epochs
+                    .last_mut()
+                    .unwrap()
+                    .shapes
+                    .push(super::heapdump::Shape {
+                        kind: super::heapdump::shape::Kind::ObjArray as i32,
+                        object: new_object.value() as u64,
+                        offsets: vec![],
+                    });
+
+                <VM as VMBinding>::VMScanning::scan_object(
+                    self.worker().tls,
+                    new_object,
+                    &mut |e: <VM as VMBinding>::VMEdge| {
+                        edges.push(super::heapdump::NormalEdge {
+                            slot: e.to_address().as_usize() as u64,
+                            objref: e.load().value() as u64,
+                        });
+                    },
+                );
+
+                objarray_length = Some(edges.len() as u64);
+            } else {
+                if let Some((mirror_start, mirror_count)) =
+                    <VM as VMBinding>::VMScanning::instance_mirror_info(new_object)
+                {
+                    instance_mirror_start = Some(mirror_start);
+                    instance_mirror_count = Some(mirror_count);
+                }
+                let mut s = vec![];
+                <VM as VMBinding>::VMScanning::scan_object(
+                    self.worker().tls,
+                    new_object,
+                    &mut |e: <VM as VMBinding>::VMEdge| {
+                        s.push(e.to_address().as_usize() as i64 - new_object.value() as i64);
+                    },
+                );
+                // if s.len() > 512 {
+                //     <VM as VMBinding>::VMObjectModel::dump_object(object);
+                // }
+                shapes_iter
+                    .epochs
+                    .last_mut()
+                    .unwrap()
+                    .shapes
+                    .push(super::heapdump::Shape {
+                        kind: super::heapdump::shape::Kind::Scalar as i32,
+                        object: new_object.value() as u64,
+                        offsets: s,
+                    });
+                <VM as VMBinding>::VMScanning::scan_object(
+                    self.worker().tls,
+                    new_object,
+                    &mut |e: <VM as VMBinding>::VMEdge| {
+                        edges.push(super::heapdump::NormalEdge {
+                            slot: e.to_address().as_usize() as u64,
+                            objref: e.load().value() as u64,
+                        });
+                    },
+                );
+            }
+
+            heapdump.objects.push(super::heapdump::HeapObject {
+                start: new_object.value() as u64,
+                klass: new_object.class_pointer::<VM>().as_usize() as u64,
+                size: <VM as VMBinding>::VMObjectModel::get_current_size(new_object) as u64,
+                objarray_length,
+                instance_mirror_start,
+                instance_mirror_count,
+                edges: edges,
+            })
         }
     }
 
@@ -731,6 +825,16 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                     self.process_edge(e)
                 }
             }
+        }
+
+        if crate::inside_harness() && self.roots {
+            let mut heapdump = super::HEAPDUMP.lock().unwrap();
+            for root in &self.edges {
+                heapdump.roots.push(super::heapdump::RootEdge {
+                    objref: root.load().value() as u64,
+                });
+            }
+            assert!(self.array_slices.is_empty());
         }
     }
 }

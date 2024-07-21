@@ -8,10 +8,10 @@ use crate::plan::global::GcStatus;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
-use crate::plan::AllocationSemantics;
 use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+use crate::plan::{AllocationSemantics, HasSpaces};
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::largeobjectspace::LargeObjectSpace;
@@ -494,6 +494,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             gc_log!([3] "POSTPONED {} DELETED OBJS FOR DECREMENT", self.barrier_decs.load(Ordering::SeqCst));
             self.barrier_decs.store(0, Ordering::SeqCst);
         }
+
+        if crate::inside_harness() {
+            super::SHAPES_ITER
+                .lock()
+                .unwrap()
+                .epochs
+                .push(super::heapdump::ShapesEpoch { shapes: vec![] });
+        }
     }
 
     fn gc_pause_end(&self) {
@@ -546,6 +554,32 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
         }
+
+        if crate::inside_harness() {
+            let gc_count = super::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
+            self.for_each_space(&mut |s| {
+                let common = s.common();
+                assert!(
+                    common.contiguous,
+                    "Only support heapdump of contiguous spaces"
+                );
+                super::HEAPDUMP
+                    .lock()
+                    .unwrap()
+                    .spaces
+                    .push(super::heapdump::Space {
+                        name: common.name.to_owned(),
+                        start: common.start.as_usize() as u64,
+                        end: (common.start + common.extent).as_usize() as u64,
+                    })
+            });
+            std::fs::create_dir_all("_heapdump").unwrap();
+            super::HEAPDUMP
+                .lock()
+                .unwrap()
+                .dump_to_file(format!("_heapdump/heapdump.{}.binpb.zst", gc_count));
+        }
+        super::HEAPDUMP.lock().unwrap().reset();
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
@@ -855,7 +889,7 @@ impl<VM: VMBinding> LXR<VM> {
                     Pause::Full
                 };
             } else {
-                return Pause::RefCount;
+                return Pause::Full;
             }
         }
         if self
@@ -869,7 +903,7 @@ impl<VM: VMBinding> LXR<VM> {
                 Pause::Full
             };
         } else {
-            return Pause::RefCount;
+            return Pause::Full;
         }
     }
 

@@ -22,6 +22,10 @@ use atomic::Ordering;
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
+use prost::Message;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 
 const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
@@ -242,4 +246,40 @@ pub fn record_edge_for_validation(slot: impl Edge, obj: ObjectReference) {
             .unwrap()
             .insert(slot.to_address(), obj);
     }
+}
+
+lazy_static! {
+    static ref SHAPES_ITER: Mutex<heapdump::ShapesIteration> =
+        Mutex::new(heapdump::ShapesIteration { epochs: vec![] });
+    static ref HEAPDUMP: Mutex<heapdump::HeapDump> = Mutex::new(heapdump::HeapDump::new());
+}
+
+static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
+
+impl heapdump::HeapDump {
+    fn dump_to_file(&self, path: impl AsRef<Path>) {
+        let file = File::create(path).unwrap();
+        let mut writer = zstd::Encoder::new(file, 0).unwrap().auto_finish();
+        let mut buf = Vec::new();
+        self.encode(&mut buf).unwrap();
+        writer.write_all(&buf).unwrap();
+    }
+
+    fn reset(&mut self) {
+        self.objects.clear();
+        self.roots.clear();
+        self.spaces.clear();
+    }
+
+    fn new() -> Self {
+        heapdump::HeapDump {
+            objects: vec![],
+            roots: vec![],
+            spaces: vec![],
+        }
+    }
+}
+
+mod heapdump {
+    include!(concat!(env!("OUT_DIR"), "/mmtk.util.sanity.rs"));
 }
