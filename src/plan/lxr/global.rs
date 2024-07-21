@@ -58,6 +58,7 @@ static MAX_RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(128);
 
 use mmtk_macros::{HasSpaces, PlanTraceObject};
 
+#[allow(unused)]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 enum GCCause {
@@ -123,10 +124,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // SATB is finished
-        if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
-            self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
-            return true;
-        }
+        // if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
+        //     self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
+        //     return true;
+        // }
         // Survival limits
         let total_young_alloc_pages = self
             .immix_space
@@ -136,13 +137,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let predicted_survival_mb: usize =
             ((total_young_alloc_pages as f64 * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
                 << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
-        if !cfg!(feature = "lxr_no_survival_trigger") {
-            if predicted_survival_mb >= crate::args().max_survival_mb {
-                SURVIVAL_TRIGGERED.store(true, Ordering::Relaxed);
-                self.gc_cause.store(GCCause::Survival, Ordering::Relaxed);
-                return true;
-            }
-        }
+        // if !cfg!(feature = "lxr_no_survival_trigger") {
+        //     if predicted_survival_mb >= crate::args().max_survival_mb {
+        //         SURVIVAL_TRIGGERED.store(true, Ordering::Relaxed);
+        //         self.gc_cause.store(GCCause::Survival, Ordering::Relaxed);
+        //         return true;
+        //     }
+        // }
         if !self.immix_space.common().contiguous {
             let available_to_space = (self.immix_space.pr.available_pages()
                 + (VM_MAP.available_chunks() << (LOG_BYTES_IN_CHUNK - LOG_BYTES_IN_PAGE as usize)))
@@ -157,35 +158,35 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             unimplemented!()
         }
         // inc limits
-        if !crate::args::LXR_RC_ONLY
-            && crate::args()
-                .incs_limit
-                .map(|x| self.rc.inc_buffer_size() >= x)
-                .unwrap_or(false)
-        {
-            self.gc_cause.store(GCCause::Increments, Ordering::Relaxed);
-            return true;
-        }
+        // if !crate::args::LXR_RC_ONLY
+        //     && crate::args()
+        //         .incs_limit
+        //         .map(|x| self.rc.inc_buffer_size() >= x)
+        //         .unwrap_or(false)
+        // {
+        //     self.gc_cause.store(GCCause::Increments, Ordering::Relaxed);
+        //     return true;
+        // }
         // clean young blocks limits
-        if !crate::args::LXR_RC_ONLY
-            && self.immix_space.block_allocation.clean_nursery_blocks() >= self.nursery_blocks
-        {
-            self.gc_cause
-                .store(GCCause::FixedNursery, Ordering::Relaxed);
-            return true;
-        }
+        // if !crate::args::LXR_RC_ONLY
+        //     && self.immix_space.block_allocation.clean_nursery_blocks() >= self.nursery_blocks
+        // {
+        //     self.gc_cause
+        //         .store(GCCause::FixedNursery, Ordering::Relaxed);
+        //     return true;
+        // }
         // total young alloc limits (including clean and recycled allocation)
-        if !crate::args::LXR_RC_ONLY
-            && self
-                .immix_space
-                .block_allocation
-                .total_young_allocation_in_bytes()
-                >= self.young_alloc_trigger
-        {
-            self.gc_cause
-                .store(GCCause::FixedNursery, Ordering::Relaxed);
-            return true;
-        }
+        // if !crate::args::LXR_RC_ONLY
+        //     && self
+        //         .immix_space
+        //         .block_allocation
+        //         .total_young_allocation_in_bytes()
+        //         >= self.young_alloc_trigger
+        // {
+        //     self.gc_cause
+        //         .store(GCCause::FixedNursery, Ordering::Relaxed);
+        //     return true;
+        // }
         // Concurrent tracing finished
         // if !crate::args::LXR_RC_ONLY
         //     && self.concurrent_marking_in_progress()
