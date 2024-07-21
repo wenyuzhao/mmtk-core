@@ -555,7 +555,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
         }
-
         if crate::inside_harness() {
             let gc_count = super::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
             self.for_each_space(&mut |s| {
@@ -579,7 +578,16 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 let mut heapdump = super::HEAPDUMP.lock().unwrap();
                 for o in heapdump.objects.iter_mut() {
                     for e in o.edges.iter_mut() {
-                        e.objref = unsafe { *(e.slot as *mut u64) };
+                        let t = unsafe { *(e.slot as *mut u64) };
+                        if let Some(_fwd) = ObjectReference::from_raw_address(unsafe {
+                            Address::from_usize(t as usize)
+                        })
+                        .get_forwarded_object()
+                        {
+                            unreachable!()
+                        } else {
+                            e.objref = t;
+                        }
                     }
                 }
             }
@@ -607,11 +615,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                         continue;
                     }
                     reachable_objects.insert(o);
+                    if !objects.contains_key(&o) {
+                        panic!("Object not found: 0x{:x} ", o);
+                    }
                     let obj = objects.get(&o).unwrap();
                     live_objects.push(obj.clone());
                     for edge in &obj.edges {
-                        if edge.objref != 0 {
-                            mark_stack.push(edge.objref);
+                        let o = edge.objref;
+                        if o != 0 {
+                            mark_stack.push(o);
                         }
                     }
                 }
