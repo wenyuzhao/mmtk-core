@@ -148,6 +148,18 @@ impl Address {
     pub const ZERO: Self = Address(0);
     pub const MAX: Self = Address(usize::max_value());
 
+    pub fn prefetch_load(self) {
+        unsafe {
+            std::arch::x86_64::_mm_prefetch(self.to_ptr(), std::arch::x86_64::_MM_HINT_NTA);
+        }
+    }
+
+    pub fn prefetch_store(self) {
+        unsafe {
+            std::arch::x86_64::_mm_prefetch(self.to_ptr(), std::arch::x86_64::_MM_HINT_ET0);
+        }
+    }
+
     /// creates Address from a pointer
     pub fn from_ptr<T>(ptr: *const T) -> Address {
         Address(ptr as usize)
@@ -810,6 +822,16 @@ impl ObjectReference {
             f,
             Some(klass),
         )
+    }
+
+    /// Prefetch the object reference in preparation for a later load of the object
+    pub fn prefetch_load(self) {
+        self.to_raw_address().prefetch_load();
+    }
+
+    /// Prefetch the object reference in preparation for a later store to the object
+    pub fn prefetch_store(self) {
+        self.to_raw_address().prefetch_store();
     }
 }
 

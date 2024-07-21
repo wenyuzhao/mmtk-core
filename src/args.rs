@@ -185,6 +185,7 @@ pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 pub const INC_MAX_COPY_DEPTH: bool = false;
+pub const PREFETCH_STEP: usize = 8;
 
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {

@@ -493,12 +493,20 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
-            for e in &mut *incs {
+            for (i, e) in incs.iter().enumerate() {
                 if let Some(new) = self.process_edge::<K>(*e, depth, add_root_to_remset) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
                     num_roots += 1;
+                }
+                if cfg!(feature = "lxr_prefetch") {
+                    if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
+                        let o = e.load();
+                        if !o.is_null() {
+                            o.prefetch_load();
+                        }
+                    }
                 }
             }
             if num_roots != 0 {
@@ -511,8 +519,17 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 None
             }
         } else {
-            for e in &mut *incs {
+            for (i, e) in incs.iter().enumerate() {
                 self.process_edge::<K>(*e, depth, false);
+                // prefetch i+8
+                if cfg!(feature = "lxr_prefetch") {
+                    if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
+                        let o = e.load();
+                        if !o.is_null() {
+                            o.prefetch_load();
+                        }
+                    }
+                }
             }
             None
         }
@@ -523,8 +540,19 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         slice: VM::VMMemorySlice,
         depth: u32,
     ) -> Option<Vec<ObjectReference>> {
-        for e in slice.iter_edges() {
+        let n = slice.len();
+        for (i, e) in slice.iter_edges().enumerate() {
             self.process_edge::<K>(e, depth, false);
+            // prefetch i+8
+            if cfg!(feature = "lxr_prefetch") {
+                if i + crate::args::PREFETCH_STEP < n {
+                    let e = slice.get(i + crate::args::PREFETCH_STEP);
+                    let o = e.load();
+                    if !o.is_null() {
+                        o.prefetch_load();
+                    }
+                }
+            }
         }
         None
     }

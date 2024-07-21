@@ -176,6 +176,7 @@ pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
     fn len(&self) -> usize;
     /// Memory copy support
     fn copy(src: &Self, tgt: &Self);
+    fn get(&self, index: usize) -> Self::Edge;
 }
 
 /// Iterate edges within `Range<Address>`.
@@ -245,6 +246,10 @@ impl MemorySlice for Range<Address> {
             std::ptr::copy(src, tgt, words)
         }
     }
+
+    fn get(&self, index: usize) -> Self::Edge {
+        self.start + index * BYTES_IN_ADDRESS
+    }
 }
 
 /// Memory slice type with empty implementations.
@@ -303,6 +308,10 @@ impl<E: Edge> MemorySlice for UnimplementedMemorySlice<E> {
     }
 
     fn copy(_src: &Self, _tgt: &Self) {
+        unimplemented!()
+    }
+
+    fn get(&self, _index: usize) -> Self::Edge {
         unimplemented!()
     }
 }
