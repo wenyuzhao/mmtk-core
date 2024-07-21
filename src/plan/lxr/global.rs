@@ -40,6 +40,7 @@ use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
 use enum_map::EnumMap;
 use spin::Lazy;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Condvar, Mutex, RwLock};
 use std::time::SystemTime;
@@ -573,6 +574,64 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                         end: (common.start + common.extent).as_usize() as u64,
                     })
             });
+            // Fix edges
+            {
+                let mut heapdump = super::HEAPDUMP.lock().unwrap();
+                for o in heapdump.objects.iter_mut() {
+                    for e in o.edges.iter_mut() {
+                        e.objref = unsafe { *(e.slot as *mut u64) };
+                    }
+                }
+            }
+            // Drop dead refs
+            {
+                let mut heapdump = super::HEAPDUMP.lock().unwrap();
+                // println!(
+                //     "Heapdump before dropping dead refs: {:?}",
+                //     heapdump.objects.len()
+                // );
+
+                let mut objects: HashMap<_, _> = HashMap::new();
+                let mut live_objects = vec![];
+                for object in &heapdump.objects {
+                    objects.insert(object.start, object.clone());
+                }
+                let mut reachable_objects: HashSet<u64> = HashSet::new();
+                let mut mark_stack: Vec<u64> = vec![];
+                for root in &heapdump.roots {
+                    assert!(objects.contains_key(&root.objref));
+                    mark_stack.push(root.objref);
+                }
+                while let Some(o) = mark_stack.pop() {
+                    if reachable_objects.contains(&o) {
+                        continue;
+                    }
+                    reachable_objects.insert(o);
+                    let obj = objects.get(&o).unwrap();
+                    live_objects.push(obj.clone());
+                    for edge in &obj.edges {
+                        if edge.objref != 0 {
+                            mark_stack.push(edge.objref);
+                        }
+                    }
+                }
+
+                heapdump.objects = live_objects;
+
+                // println!("reachable_objects: {:?}", reachable_objects.len());
+                // println!("live_objects: {:?}", live_objects.len());
+
+                // println!(
+                //     "Heapdump after dropping dead refs: {:?}",
+                //     heapdump.objects.len()
+                // );
+
+                // heapdump.objects.dedup_by_key(|o| o.start);
+
+                // println!("Heapdump after dedup: {:?}", heapdump.objects.len());
+
+                assert_eq!(heapdump.objects.len(), reachable_objects.len());
+            }
             std::fs::create_dir_all("scratch/_heapdump").unwrap();
             super::HEAPDUMP
                 .lock()

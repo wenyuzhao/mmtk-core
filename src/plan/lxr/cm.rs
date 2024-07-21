@@ -700,6 +700,13 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         }
         if crate::inside_harness() && !new_object.is_null() {
             let mut heapdump = super::HEAPDUMP.lock().unwrap();
+
+            if self.roots {
+                heapdump.roots.push(super::heapdump::RootEdge {
+                    objref: new_object.value() as u64,
+                });
+            }
+
             let mut shapes_iter = super::SHAPES_ITER.lock().unwrap();
 
             let mut edges: Vec<super::heapdump::NormalEdge> = vec![];
@@ -730,10 +737,13 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                         offsets: vec![],
                     });
 
-                <VM as VMBinding>::VMScanning::scan_object(
-                    self.worker().tls,
-                    new_object,
-                    &mut |e: <VM as VMBinding>::VMEdge| {
+                new_object.iterate_fields::<VM, _>(
+                    CLDScanPolicy::Ignore,
+                    RefScanPolicy::Discover,
+                    |e, ooh| {
+                        if ooh {
+                            return;
+                        }
                         edges.push(super::heapdump::NormalEdge {
                             slot: e.to_address().as_usize() as u64,
                             objref: e.load().value() as u64,
@@ -750,10 +760,13 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                     instance_mirror_count = Some(mirror_count);
                 }
                 let mut s = vec![];
-                <VM as VMBinding>::VMScanning::scan_object(
-                    self.worker().tls,
-                    new_object,
-                    &mut |e: <VM as VMBinding>::VMEdge| {
+                new_object.iterate_fields::<VM, _>(
+                    CLDScanPolicy::Ignore,
+                    RefScanPolicy::Discover,
+                    |e, ooh| {
+                        if ooh {
+                            return;
+                        }
                         s.push(e.to_address().as_usize() as i64 - new_object.value() as i64);
                     },
                 );
@@ -770,10 +783,13 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                         object: new_object.value() as u64,
                         offsets: s,
                     });
-                <VM as VMBinding>::VMScanning::scan_object(
-                    self.worker().tls,
-                    new_object,
-                    &mut |e: <VM as VMBinding>::VMEdge| {
+                new_object.iterate_fields::<VM, _>(
+                    CLDScanPolicy::Ignore,
+                    RefScanPolicy::Discover,
+                    |e, ooh| {
+                        if ooh {
+                            return;
+                        }
                         edges.push(super::heapdump::NormalEdge {
                             slot: e.to_address().as_usize() as u64,
                             objref: e.load().value() as u64,
@@ -825,16 +841,6 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                     self.process_edge(e)
                 }
             }
-        }
-
-        if crate::inside_harness() && self.roots {
-            let mut heapdump = super::HEAPDUMP.lock().unwrap();
-            for root in &self.edges {
-                heapdump.roots.push(super::heapdump::RootEdge {
-                    objref: root.load().value() as u64,
-                });
-            }
-            assert!(self.array_slices.is_empty());
         }
     }
 }
