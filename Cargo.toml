@@ -195,6 +195,7 @@ lxr_prefetch_header = []
 lxr_prefetch_rc = []
 lxr_prefetch_policy_scan = ["lxr_prefetch_header"]
 lxr_prefetch_policy_trace = ["lxr_prefetch_header"]
+cas_opt = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

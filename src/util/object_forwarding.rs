@@ -4,7 +4,9 @@ use crate::util::metadata::MetadataSpec;
 use crate::util::{constants, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use super::rust_util::likely;
 
 const FORWARDING_NOT_TRIGGERED_YET: u8 = 0b00;
 const BEING_FORWARDED: u8 = 0b10;
@@ -22,21 +24,44 @@ const FORWARDING_POINTER_MASK: usize = 0xffff_fffc;
 /// Attempt to become the worker thread who will forward the object.
 /// The successful worker will set the object forwarding bits to BEING_FORWARDED, preventing other workers from forwarding the same object.
 pub fn attempt_to_forward<VM: VMBinding>(object: ObjectReference) -> u8 {
-    loop {
-        let old_value = get_forwarding_status::<VM>(object);
-        if old_value != FORWARDING_NOT_TRIGGERED_YET
-            || VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
+    if cfg!(feature = "cas_opt") {
+        let slot = object.to_raw_address() + 7usize;
+        let mut old_value: u8 = unsafe { slot.load() };
+        loop {
+            std::hint::spin_loop();
+            if likely(old_value != FORWARDING_NOT_TRIGGERED_YET) {
+                return old_value;
+            }
+            let result = unsafe {
+                slot.compare_exchange::<AtomicU8>(
                     old_value,
                     BEING_FORWARDED,
-                    None,
                     Ordering::SeqCst,
                     Ordering::Relaxed,
                 )
-                .is_ok()
-        {
-            return old_value;
+            };
+            if likely(result.is_ok()) {
+                return old_value;
+            }
+            old_value = result.unwrap_err();
+        }
+    } else {
+        loop {
+            let old_value = get_forwarding_status::<VM>(object);
+            if old_value != FORWARDING_NOT_TRIGGERED_YET
+                || VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC
+                    .compare_exchange_metadata::<VM, u8>(
+                        object,
+                        old_value,
+                        BEING_FORWARDED,
+                        None,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+            {
+                return old_value;
+            }
         }
     }
 }
@@ -133,7 +158,7 @@ pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> u8 {
     VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.load_atomic::<VM, u8>(
         object,
         None,
-        Ordering::SeqCst,
+        Ordering::Relaxed,
     )
 }
 
@@ -183,7 +208,7 @@ pub fn read_forwarding_pointer<VM: VMBinding>(object: ObjectReference) -> Object
             VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.load_atomic::<VM, usize>(
                 object,
                 Some(FORWARDING_POINTER_MASK),
-                Ordering::SeqCst,
+                Ordering::Relaxed,
             ),
         ))
     }
