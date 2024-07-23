@@ -278,6 +278,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     edge,
                     target
                 );
+                if cfg!(feature = "lxr_prefetch_policy_scan") {
+                    self.prefetch_object(target);
+                }
                 // debug_assert!(
                 //     target.class_is_valid::<VM>(),
                 //     "Invalid object {:?}.{:?} -> {:?}",
@@ -484,6 +487,18 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Some(new)
     }
 
+    fn prefetch_object(&self, o: ObjectReference) {
+        if o.is_null() {
+            return;
+        }
+        if cfg!(feature = "lxr_prefetch_header") {
+            o.prefetch_load();
+        }
+        if cfg!(feature = "lxr_prefetch_rc") {
+            self.rc.prefetch(o);
+        }
+    }
+
     fn process_incs<const K: EdgeKind>(
         &mut self,
         mut incs: AddressBuffer<'_, VM::VMEdge>,
@@ -500,12 +515,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     }
                     num_roots += 1;
                 }
-                if cfg!(feature = "lxr_prefetch") {
+                if cfg!(feature = "lxr_prefetch_policy_trace") {
                     if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
-                        let o = e.load();
-                        if !o.is_null() {
-                            o.prefetch_load();
-                        }
+                        self.prefetch_object(e.load());
                     }
                 }
             }
@@ -522,12 +534,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             for (i, e) in incs.iter().enumerate() {
                 self.process_edge::<K>(*e, depth, false);
                 // prefetch i+8
-                if cfg!(feature = "lxr_prefetch") {
+                if cfg!(feature = "lxr_prefetch_policy_trace") {
                     if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
-                        let o = e.load();
-                        if !o.is_null() {
-                            o.prefetch_load();
-                        }
+                        self.prefetch_object(e.load());
                     }
                 }
             }
@@ -544,13 +553,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         for (i, e) in slice.iter_edges().enumerate() {
             self.process_edge::<K>(e, depth, false);
             // prefetch i+8
-            if cfg!(feature = "lxr_prefetch") {
+            if cfg!(feature = "lxr_prefetch_policy_scan")
+                || cfg!(feature = "lxr_prefetch_policy_trace")
+            {
                 if i + crate::args::PREFETCH_STEP < n {
                     let e = slice.get(i + crate::args::PREFETCH_STEP);
-                    let o = e.load();
-                    if !o.is_null() {
-                        o.prefetch_load();
-                    }
+                    self.prefetch_object(e.load());
                 }
             }
         }

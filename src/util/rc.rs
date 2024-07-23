@@ -148,6 +148,10 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         RC_TABLE.load_atomic(o.to_address::<VM>(), Ordering::Relaxed)
     }
 
+    pub fn prefetch(&self, o: ObjectReference) {
+        RC_TABLE.prefetch(o.to_address::<VM>())
+    }
+
     pub fn object_or_line_is_dead(&self, o: ObjectReference) -> bool {
         RC_TABLE.load_byte(o.to_address::<VM>()) == 0
     }
