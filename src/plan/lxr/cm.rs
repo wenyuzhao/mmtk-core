@@ -29,7 +29,11 @@ fn prefetch_object<VM: VMBinding>(o: ObjectReference, ix: &ImmixSpace<VM>) {
         return;
     }
     if cfg!(feature = "lxr_prefetch_header") {
-        o.prefetch_load();
+        if cfg!(feature = "lxr_prefetch_header_write") {
+            o.prefetch_store();
+        } else {
+            o.prefetch_load();
+        }
     }
     if cfg!(feature = "lxr_prefetch_mark") {
         if ix.in_space(o) {

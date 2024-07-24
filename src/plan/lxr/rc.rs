@@ -492,7 +492,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if cfg!(feature = "lxr_prefetch_header") {
-            o.prefetch_load();
+            if cfg!(feature = "lxr_prefetch_header_write") {
+                o.prefetch_store();
+            } else {
+                o.prefetch_load();
+            }
         }
         if cfg!(feature = "lxr_prefetch_rc") {
             self.rc.prefetch(o);
@@ -984,7 +988,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             return;
         }
         if cfg!(feature = "lxr_prefetch_header") {
-            o.prefetch_load();
+            if cfg!(feature = "lxr_prefetch_header_write") {
+                o.prefetch_store();
+            } else {
+                o.prefetch_load();
+            }
         }
     }
 
