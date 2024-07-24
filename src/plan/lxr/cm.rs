@@ -3,6 +3,7 @@ use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::line::Line;
+use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
 use crate::scheduler::RootKind;
@@ -22,6 +23,23 @@ use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_trace_rate")]
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+
+fn prefetch_object<VM: VMBinding>(o: ObjectReference, ix: &ImmixSpace<VM>) {
+    if o.is_null() {
+        return;
+    }
+    if cfg!(feature = "lxr_prefetch_header") {
+        o.prefetch_load();
+    }
+    if cfg!(feature = "lxr_prefetch_mark") {
+        if ix.in_space(o) {
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+                .as_spec()
+                .extract_side_spec()
+                .prefetch(o.to_raw_address())
+        }
+    }
+}
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     plan: &'static LXR<VM>,
@@ -157,8 +175,13 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     fn trace_objects(&mut self, objects: &[ObjectReference]) {
-        for o in objects {
+        for (i, o) in objects.iter().enumerate() {
             self.trace_object(*o);
+            if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if let Some(o) = objects.get(i + crate::args::PREFETCH_STEP) {
+                    prefetch_object(*o, &self.plan.immix_space);
+                }
+            }
         }
     }
 
@@ -175,7 +198,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         {
             return;
         }
-        for e in slice.iter_edges() {
+        let n = slice.len();
+        for (i, e) in slice.iter_edges().enumerate() {
             let t = e.load();
             if t.is_null() {
                 continue;
@@ -194,6 +218,14 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 self.plan.immix_space.mature_evac_remset.record(e, t);
             }
             self.trace_object(t);
+            if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if i + crate::args::PREFETCH_STEP < n {
+                    prefetch_object(
+                        slice.get(i + crate::args::PREFETCH_STEP).load(),
+                        &self.plan.immix_space,
+                    );
+                }
+            }
         }
     }
 
@@ -707,28 +739,57 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         remset_edges: bool,
     ) {
         if self.pause == Pause::Full {
-            for e in edges {
-                self.process_mark_edge(*e)
+            for (i, e) in edges.iter().enumerate() {
+                self.process_mark_edge(*e);
+                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                    if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
+                        prefetch_object(e.load(), &self.lxr.immix_space);
+                    }
+                }
             }
         } else if remset_edges {
             for (i, e) in edges.iter().enumerate() {
-                self.process_remset_edge(*e, i)
+                self.process_remset_edge(*e, i);
+                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                    if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
+                        prefetch_object(e.load(), &self.lxr.immix_space);
+                    }
+                }
             }
         } else {
-            for e in edges {
-                self.process_edge(*e)
+            for (i, e) in edges.iter().enumerate() {
+                self.process_edge(*e);
+                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                    if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
+                        prefetch_object(e.load(), &self.lxr.immix_space);
+                    }
+                }
             }
         }
         if self.pause == Pause::Full {
             for slice in slices {
-                for e in slice.iter_edges() {
-                    self.process_mark_edge(e)
+                let n = slice.len();
+                for (i, e) in slice.iter_edges().enumerate() {
+                    self.process_mark_edge(e);
+                    if cfg!(feature = "lxr_prefetch_policy_trace") {
+                        if i + crate::args::PREFETCH_STEP < n {
+                            let e = slice.get(i + crate::args::PREFETCH_STEP);
+                            prefetch_object(e.load(), &self.lxr.immix_space);
+                        }
+                    }
                 }
             }
         } else {
             for slice in slices {
-                for e in slice.iter_edges() {
-                    self.process_edge(e)
+                let n = slice.len();
+                for (i, e) in slice.iter_edges().enumerate() {
+                    self.process_edge(e);
+                    if cfg!(feature = "lxr_prefetch_policy_trace") {
+                        if i + crate::args::PREFETCH_STEP < n {
+                            let e = slice.get(i + crate::args::PREFETCH_STEP);
+                            prefetch_object(e.load(), &self.lxr.immix_space);
+                        }
+                    }
                 }
             }
         }
@@ -872,7 +933,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     fn process_edges(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
         for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge(self, self.edges[i])
+            ProcessEdgesWork::process_edge(self, self.edges[i]);
+            if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if let Some(e) = self.edges.get(i + crate::args::PREFETCH_STEP) {
+                    prefetch_object(e.load(), &self.lxr.immix_space);
+                }
+            }
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());

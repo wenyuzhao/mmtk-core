@@ -979,8 +979,17 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
     }
 
+    fn prefetch_object(&self, o: ObjectReference) {
+        if o.is_null() {
+            return;
+        }
+        if cfg!(feature = "lxr_prefetch_header") {
+            o.prefetch_load();
+        }
+    }
+
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
-        for o in decs {
+        for (i, o) in decs.iter().enumerate() {
             // println!("dec {:?}", o);
             if o.is_null() {
                 continue;
@@ -1012,6 +1021,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             });
             if result == Ok(1) && is_los {
                 lxr.los().rc_free(o);
+            }
+            if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if let Some(o) = decs.get(i + crate::args::PREFETCH_STEP) {
+                    self.prefetch_object(*o);
+                }
             }
         }
     }

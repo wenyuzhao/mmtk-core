@@ -1140,7 +1140,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    pub fn los(&self) -> &LargeObjectSpace<VM> {
+    pub const fn los(&self) -> &LargeObjectSpace<VM> {
         &self.common.los
     }
 
