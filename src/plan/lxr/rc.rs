@@ -1068,6 +1068,9 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let roots = std::mem::take(&mut self.edges);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
             w.root_kind = self.root_kind;
+            #[cfg(feature = "lxr_no_merge_buckets")]
+            self.mmtk().scheduler.work_buckets[WorkBucketStage::RCIncs].add(w);
+            #[cfg(not(feature = "lxr_no_merge_buckets"))]
             GCWork::do_work(&mut w, self.worker(), self.mmtk());
         }
     }

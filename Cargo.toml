@@ -190,6 +190,7 @@ decs_counter = []
 remset_counter = []
 lxr_no_decs = []
 lxr_no_recursive_dec = []
+lxr_no_merge_buckets = []
 
 fixed_alloc_trigger_based_on_system_time = []
 

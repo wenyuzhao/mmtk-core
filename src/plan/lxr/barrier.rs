@@ -224,12 +224,11 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
             self.lxr.rc.increase_inc_buffer_size(incs.len());
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
-                _,
-                EDGE_KIND_MATURE,
-            >::new(
-                incs, self.lxr
-            ));
+            let w = ProcessIncs::<_, EDGE_KIND_MATURE>::new(incs, self.lxr);
+            #[cfg(feature = "lxr_no_merge_buckets")]
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCIncs].add(w);
+            #[cfg(not(feature = "lxr_no_merge_buckets"))]
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(w);
         }
     }
 

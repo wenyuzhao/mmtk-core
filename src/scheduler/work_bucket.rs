@@ -316,6 +316,8 @@ pub enum WorkBucketStage {
     Unconstrained,
     FinishConcurrentWork,
     Initial,
+    #[cfg(feature = "lxr_no_merge_buckets")]
+    RCIncs,
     /// Preparation work.  Plans, spaces, GC workers, mutators, etc. should be prepared for GC at
     /// this stage.
     Prepare,
