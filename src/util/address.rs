@@ -148,13 +148,13 @@ impl Address {
     pub const ZERO: Self = Address(0);
     pub const MAX: Self = Address(usize::max_value());
 
-    pub fn prefetch_load(self) {
+    pub fn prefetch_read(self) {
         unsafe {
             std::arch::x86_64::_mm_prefetch(self.to_ptr(), std::arch::x86_64::_MM_HINT_NTA);
         }
     }
 
-    pub fn prefetch_store(self) {
+    pub fn prefetch_write(self) {
         unsafe {
             std::arch::x86_64::_mm_prefetch(self.to_ptr(), std::arch::x86_64::_MM_HINT_ET0);
         }
@@ -825,13 +825,13 @@ impl ObjectReference {
     }
 
     /// Prefetch the object reference in preparation for a later load of the object
-    pub fn prefetch_load(self) {
-        self.to_raw_address().prefetch_load();
+    pub fn prefetch_read(self) {
+        self.to_raw_address().prefetch_read();
     }
 
     /// Prefetch the object reference in preparation for a later store to the object
-    pub fn prefetch_store(self) {
-        self.to_raw_address().prefetch_store();
+    pub fn prefetch_write(self) {
+        self.to_raw_address().prefetch_write();
     }
 }
 

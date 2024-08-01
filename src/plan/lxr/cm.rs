@@ -24,23 +24,20 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
+#[inline]
 fn prefetch_object<VM: VMBinding>(o: ObjectReference, ix: &ImmixSpace<VM>) {
     if o.is_null() {
         return;
     }
-    if cfg!(feature = "lxr_prefetch_header") {
-        if cfg!(feature = "lxr_prefetch_header_write") {
-            o.prefetch_store();
-        } else {
-            o.prefetch_load();
-        }
+    if crate::args::PREFETCH_HEADER {
+        o.prefetch_read();
     }
-    if cfg!(feature = "lxr_prefetch_mark") {
+    if crate::args::PREFETCH_MARK {
         if ix.in_space(o) {
             VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
                 .as_spec()
                 .extract_side_spec()
-                .prefetch(o.to_raw_address())
+                .prefetch_read(o.to_raw_address())
         }
     }
 }
@@ -181,7 +178,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     fn trace_objects(&mut self, objects: &[ObjectReference]) {
         for (i, o) in objects.iter().enumerate() {
             self.trace_object(*o);
-            if cfg!(feature = "lxr_prefetch_policy_trace") {
+            if crate::args::PREFETCH {
                 if let Some(o) = objects.get(i + crate::args::PREFETCH_STEP) {
                     prefetch_object(*o, &self.plan.immix_space);
                 }
@@ -222,7 +219,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 self.plan.immix_space.mature_evac_remset.record(e, t);
             }
             self.trace_object(t);
-            if cfg!(feature = "lxr_prefetch_policy_trace") {
+            if crate::args::PREFETCH {
                 if i + crate::args::PREFETCH_STEP < n {
                     prefetch_object(
                         slice.get(i + crate::args::PREFETCH_STEP).load(),
@@ -745,7 +742,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if self.pause == Pause::Full {
             for (i, e) in edges.iter().enumerate() {
                 self.process_mark_edge(*e);
-                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if crate::args::PREFETCH {
                     if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
                         prefetch_object(e.load(), &self.lxr.immix_space);
                     }
@@ -754,7 +751,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         } else if remset_edges {
             for (i, e) in edges.iter().enumerate() {
                 self.process_remset_edge(*e, i);
-                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if crate::args::PREFETCH {
                     if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
                         prefetch_object(e.load(), &self.lxr.immix_space);
                     }
@@ -763,7 +760,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         } else {
             for (i, e) in edges.iter().enumerate() {
                 self.process_edge(*e);
-                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if crate::args::PREFETCH {
                     if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
                         prefetch_object(e.load(), &self.lxr.immix_space);
                     }
@@ -775,7 +772,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 let n = slice.len();
                 for (i, e) in slice.iter_edges().enumerate() {
                     self.process_mark_edge(e);
-                    if cfg!(feature = "lxr_prefetch_policy_trace") {
+                    if crate::args::PREFETCH {
                         if i + crate::args::PREFETCH_STEP < n {
                             let e = slice.get(i + crate::args::PREFETCH_STEP);
                             prefetch_object(e.load(), &self.lxr.immix_space);
@@ -788,7 +785,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 let n = slice.len();
                 for (i, e) in slice.iter_edges().enumerate() {
                     self.process_edge(e);
-                    if cfg!(feature = "lxr_prefetch_policy_trace") {
+                    if crate::args::PREFETCH {
                         if i + crate::args::PREFETCH_STEP < n {
                             let e = slice.get(i + crate::args::PREFETCH_STEP);
                             prefetch_object(e.load(), &self.lxr.immix_space);
@@ -938,7 +935,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         self.pause = self.lxr.current_pause().unwrap();
         for i in 0..self.edges.len() {
             ProcessEdgesWork::process_edge(self, self.edges[i]);
-            if cfg!(feature = "lxr_prefetch_policy_trace") {
+            if crate::args::PREFETCH {
                 if let Some(e) = self.edges.get(i + crate::args::PREFETCH_STEP) {
                     prefetch_object(e.load(), &self.lxr.immix_space);
                 }

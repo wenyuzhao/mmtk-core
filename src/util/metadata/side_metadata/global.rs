@@ -551,9 +551,14 @@ impl SideMetadataSpec {
         unsafe { meta_addr.load::<u8>() }
     }
 
-    pub fn prefetch(&self, data_addr: Address) {
+    pub fn prefetch_read(&self, data_addr: Address) {
         let meta_addr = address_to_meta_address(self, data_addr);
-        meta_addr.prefetch_load();
+        meta_addr.prefetch_read();
+    }
+
+    pub fn prefetch_write(&self, data_addr: Address) {
+        let meta_addr = address_to_meta_address(self, data_addr);
+        meta_addr.prefetch_write();
     }
 
     pub fn load_atomic<T: MetadataValue>(&self, data_addr: Address, order: Ordering) -> T {

@@ -29,6 +29,19 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
+#[inline]
+fn prefetch_object<VM: VMBinding>(o: ObjectReference, rc: &RefCountHelper<VM>) {
+    if o.is_null() {
+        return;
+    }
+    if crate::args::PREFETCH_HEADER {
+        o.prefetch_read();
+    }
+    if crate::args::PREFETCH_RC {
+        rc.prefetch_read(o);
+    }
+}
+
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMEdge>,
@@ -278,9 +291,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     edge,
                     target
                 );
-                if cfg!(feature = "lxr_prefetch_policy_scan") {
-                    self.prefetch_object(target);
-                }
                 // debug_assert!(
                 //     target.class_is_valid::<VM>(),
                 //     "Invalid object {:?}.{:?} -> {:?}",
@@ -487,20 +497,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Some(new)
     }
 
+    #[inline]
     fn prefetch_object(&self, o: ObjectReference) {
-        if o.is_null() {
-            return;
-        }
-        if cfg!(feature = "lxr_prefetch_header") {
-            if cfg!(feature = "lxr_prefetch_header_write") {
-                o.prefetch_store();
-            } else {
-                o.prefetch_load();
-            }
-        }
-        if cfg!(feature = "lxr_prefetch_rc") {
-            self.rc.prefetch(o);
-        }
+        prefetch_object(o, &self.rc);
     }
 
     fn process_incs<const K: EdgeKind>(
@@ -519,7 +518,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     }
                     num_roots += 1;
                 }
-                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if crate::args::PREFETCH {
                     if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
                         self.prefetch_object(e.load());
                     }
@@ -537,8 +536,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             for (i, e) in incs.iter().enumerate() {
                 self.process_edge::<K>(*e, depth, false);
-                // prefetch i+8
-                if cfg!(feature = "lxr_prefetch_policy_trace") {
+                if crate::args::PREFETCH {
                     if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
                         self.prefetch_object(e.load());
                     }
@@ -556,10 +554,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let n = slice.len();
         for (i, e) in slice.iter_edges().enumerate() {
             self.process_edge::<K>(e, depth, false);
-            // prefetch i+8
-            if cfg!(feature = "lxr_prefetch_policy_scan")
-                || cfg!(feature = "lxr_prefetch_policy_trace")
-            {
+            if crate::args::PREFETCH {
                 if i + crate::args::PREFETCH_STEP < n {
                     let e = slice.get(i + crate::args::PREFETCH_STEP);
                     self.prefetch_object(e.load());
@@ -983,17 +978,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
     }
 
+    #[inline]
     fn prefetch_object(&self, o: ObjectReference) {
-        if o.is_null() {
-            return;
-        }
-        if cfg!(feature = "lxr_prefetch_header") {
-            if cfg!(feature = "lxr_prefetch_header_write") {
-                o.prefetch_store();
-            } else {
-                o.prefetch_load();
-            }
-        }
+        prefetch_object(o, &self.rc);
     }
 
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
@@ -1030,7 +1017,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             if result == Ok(1) && is_los {
                 lxr.los().rc_free(o);
             }
-            if cfg!(feature = "lxr_prefetch_policy_trace") {
+            if crate::args::PREFETCH {
                 if let Some(o) = decs.get(i + crate::args::PREFETCH_STEP) {
                     self.prefetch_object(*o);
                 }

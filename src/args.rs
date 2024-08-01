@@ -185,25 +185,11 @@ pub const NO_RC_PAUSES_DURING_CONCURRENT_MARKING: bool = cfg!(feature = "lxr_no_
 pub const SLOW_CONCURRENT_MARKING: bool = false;
 pub const LXR_RC_ONLY: bool = cfg!(feature = "lxr_rc_only");
 pub const INC_MAX_COPY_DEPTH: bool = false;
-pub const PREFETCH_STEP: usize = {
-    if cfg!(feature = "lxr_prefetch_step_1") {
-        1
-    } else if cfg!(feature = "lxr_prefetch_step_2") {
-        2
-    } else if cfg!(feature = "lxr_prefetch_step_4") {
-        4
-    } else if cfg!(feature = "lxr_prefetch_step_8") {
-        8
-    } else if cfg!(feature = "lxr_prefetch_step_16") {
-        16
-    } else if cfg!(feature = "lxr_prefetch_step_32") {
-        32
-    } else if cfg!(feature = "lxr_prefetch_step_64") {
-        64
-    } else {
-        8
-    }
-};
+pub const PREFETCH: bool = !cfg!(feature = "lxr_no_prefetch");
+pub const PREFETCH_HEADER: bool = PREFETCH;
+pub const PREFETCH_MARK: bool = PREFETCH;
+pub const PREFETCH_RC: bool = false;
+pub const PREFETCH_STEP: usize = 8;
 
 macro_rules! dump_feature {
     ($name: literal, $value: expr) => {
