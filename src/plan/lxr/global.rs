@@ -4,7 +4,6 @@ use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::remset::FlushMatureEvacRemsets;
 use crate::mmtk::VM_MAP;
 use crate::plan::global::CommonPlan;
-use crate::plan::global::GcStatus;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::FastRCPrepare;
@@ -250,16 +249,20 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
-        let pause =
-            self.select_collection_kind(self.base().gc_requester.is_concurrent_collection());
+        let pause = self.select_collection_kind(
+            self.base()
+                .gc_trigger
+                .gc_requester
+                .is_concurrent_collection(),
+        );
         if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
             crate::counters()
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
-        let gc_cause = if self.is_emergency_collection() {
+        let gc_cause = if self.base().global_state.is_emergency_collection() {
             GCCause::Emergency
-        } else if self.base().is_user_triggered_collection() {
+        } else if self.base().global_state.is_user_triggered_collection() {
             GCCause::UserTriggered
         } else {
             self.gc_cause.load(Ordering::SeqCst)
@@ -821,7 +824,8 @@ impl<VM: VMBinding> LXR<VM> {
         }
         // Either final mark pause or full pause for emergency GC
         if emergency
-            || (self.base().is_user_triggered_collection() && !cfg!(feature = "lxr_abort_on_trace"))
+            || (self.base().global_state.is_user_triggered_collection()
+                && !cfg!(feature = "lxr_abort_on_trace"))
             || self
                 .next_gc_may_perform_emergency_collection
                 .load(Ordering::Relaxed)
@@ -829,7 +833,7 @@ impl<VM: VMBinding> LXR<VM> {
             return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
                 gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={} cm_packets={}",
                     emergency,
-                    self.base().is_user_triggered_collection(),
+                    self.base().global_state.is_user_triggered_collection(),
                     self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
                     crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
                 );
@@ -837,7 +841,7 @@ impl<VM: VMBinding> LXR<VM> {
             } else {
                 gc_log!([3] "Full GC: emergency={} user={} next_gc_may_perform_emergency_collection={}",
                     emergency,
-                    self.base().is_user_triggered_collection(),
+                    self.base().global_state.is_user_triggered_collection(),
                     self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
                 );
                 Pause::Full
@@ -890,16 +894,14 @@ impl<VM: VMBinding> LXR<VM> {
                 crate::counters().overflow_triggerd.fetch_add(1, o);
             }
         }
-        self.base().set_collection_kind::<Self>(self);
-        self.base().set_gc_status(GcStatus::GcPrepare);
-        let emergency_collection = (self.base().cur_collection_attempts.load(Ordering::SeqCst) > 1)
-            || self.is_emergency_collection();
+        // self.base().global_state.set_collection_kind(
+        //     self.last_collection_was_exhaustive(),
+        //     self.base().gc_trigger.policy.can_heap_size_grow(),
+        // );
+        // self.base().global_state.set_gc_status(GcStatus::GcPrepare);
+        let emergency_collection = self.base().global_state.is_emergency_collection();
         if emergency_collection {
-            gc_log!([3] "cur_collection_attempts={} emergency_collection={} out_of_virtual_space={}",
-                self.base().cur_collection_attempts.load(Ordering::SeqCst),
-                self.base().emergency_collection.load(Ordering::Relaxed),
-                VM_MAP.out_of_virtual_space(),
-            );
+            gc_log!([3] "EMERGENCY COLLECTION: out_of_virtual_space={}", VM_MAP.out_of_virtual_space());
         }
 
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();

@@ -66,7 +66,7 @@ pub fn create_lxr_mutator<VM: VMBinding>(
     };
 
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, mmtk.get_plan(), &config.space_mapping),
+        allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
         barrier: Box::new(FieldBarrier::new(LXRFieldBarrierSemantics::new(mmtk))),
         mutator_tls,
         config,

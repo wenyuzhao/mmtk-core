@@ -143,12 +143,7 @@ impl<VM: VMBinding> GCController<VM> {
         );
 
         // Tell GC trigger that GC ended - this happens before EndOfGC where we resume mutators.
-        self.mmtk
-            .get_plan()
-            .base()
-            .gc_trigger
-            .policy
-            .on_gc_end(self.mmtk);
+        self.mmtk.gc_trigger.policy.on_gc_end(self.mmtk);
 
         // Finalization: Resume mutators, reset gc states
         // Note: Resume-mutators must happen after all work buckets are closed.

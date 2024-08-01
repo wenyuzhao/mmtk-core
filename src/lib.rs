@@ -74,6 +74,8 @@ use plan::immix::Pause;
 use spin::{Lazy, Mutex};
 type RwLock<T> = spin::rwlock::RwLock<T>;
 
+mod global_state;
+
 #[macro_use]
 mod policy;
 

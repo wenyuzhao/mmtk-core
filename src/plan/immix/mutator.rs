@@ -50,7 +50,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
     let config = MutatorConfig {
         allocator_mapping: &ALLOCATOR_MAPPING,
         space_mapping: Box::new({
-            let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, mmtk.get_plan());
+            let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, immix);
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
             vec
         }),
@@ -59,7 +59,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
     };
 
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, mmtk.get_plan(), &config.space_mapping),
+        allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
         barrier: if crate::args::BARRIER_MEASUREMENT {
             Box::new(FieldBarrier::new(ImmixFakeFieldBarrierSemantics::new(mmtk)))
         } else {
@@ -67,7 +67,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         },
         mutator_tls,
         config,
-        plan: mmtk.get_plan(),
+        plan: immix,
         _original_pointer: 0,
     }
 }

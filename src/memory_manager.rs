@@ -30,7 +30,7 @@ use std::time::SystemTime;
 
 pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
     let t = SystemTime::now();
-    mmtk.get_plan().base().stats.start_gc();
+    mmtk.stats.start_gc();
     if cfg!(feature = "yield_and_roots_timer") {
         let t = t
             .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::Relaxed))
@@ -206,6 +206,27 @@ pub fn alloc<VM: VMBinding>(
     debug_assert!(VM::USE_ALLOCATION_OFFSET || offset == 0);
 
     mutator.alloc(size, align, offset, semantics)
+}
+
+/// Invoke the allocation slow path. This is only intended for use when a binding implements the fastpath on
+/// the binding side. When the binding handles fast path allocation and the fast path fails, it can use this
+/// method for slow path allocation. Calling before exhausting fast path allocaiton buffer will lead to bad
+/// performance.
+///
+/// Arguments:
+/// * `mutator`: The mutator to perform this allocation request.
+/// * `size`: The number of bytes required for the object.
+/// * `align`: Required alignment for the object.
+/// * `offset`: Offset associated with the alignment.
+/// * `semantics`: The allocation semantic required for the allocation.
+pub fn alloc_slow<VM: VMBinding>(
+    mutator: &mut Mutator<VM>,
+    size: usize,
+    align: usize,
+    offset: usize,
+    semantics: AllocationSemantics,
+) -> Address {
+    mutator.alloc_slow(size, align, offset, semantics)
 }
 
 /// Perform post-allocation actions, usually initializing object metadata. For many allocators none are
@@ -446,6 +467,11 @@ pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: u
     crate::util::malloc::free_with_size(mmtk, addr, old_size)
 }
 
+#[cfg(feature = "malloc_counted_size")]
+pub fn get_malloc_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
+    mmtk.state.malloc_bytes.load(Ordering::SeqCst)
+}
+
 /// Poll for GC. MMTk will decide if a GC is needed. If so, this call will block
 /// the current thread, and trigger a GC. Otherwise, it will simply return.
 /// Usually a binding does not need to call this function. MMTk will poll for GC during its allocation.
@@ -458,10 +484,9 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
         "gc_poll() can only be called by a mutator thread."
     );
 
-    let plan = mmtk.get_plan();
-    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None) {
+    if mmtk.state.should_trigger_gc_when_heap_is_full() && mmtk.gc_trigger.poll(false, None) {
         debug!("Collection required");
-        assert!(plan.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
+        assert!(mmtk.state.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
         VM::VMCollection::block_for_gc(tls);
     }
 }
@@ -507,14 +532,11 @@ pub fn start_worker<VM: VMBinding>(
 ///   Collection::spawn_gc_thread() so that the VM knows the context.
 pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThread) {
     assert!(
-        !mmtk.get_plan().is_initialized(),
+        !mmtk.state.is_initialized(),
         "MMTk collection has been initialized (was initialize_collection() already called before?)"
     );
     mmtk.scheduler.spawn_gc_threads(mmtk, tls);
-    mmtk.get_plan()
-        .base()
-        .initialized
-        .store(true, Ordering::SeqCst);
+    mmtk.state.initialized.store(true, Ordering::SeqCst);
     #[cfg(feature = "tracing")]
     probe!(mmtk, collection_initialized);
 }
@@ -527,11 +549,10 @@ pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThre
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn enable_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     debug_assert!(
-        !mmtk.get_plan().should_trigger_gc_when_heap_is_full(),
+        !mmtk.state.should_trigger_gc_when_heap_is_full(),
         "enable_collection() is called when GC is already enabled."
     );
-    mmtk.get_plan()
-        .base()
+    mmtk.state
         .trigger_gc_when_heap_is_full
         .store(true, Ordering::SeqCst);
 }
@@ -548,11 +569,10 @@ pub fn enable_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn disable_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     debug_assert!(
-        mmtk.get_plan().should_trigger_gc_when_heap_is_full(),
+        mmtk.state.should_trigger_gc_when_heap_is_full(),
         "disable_collection() is called when GC is not enabled."
     );
-    mmtk.get_plan()
-        .base()
+    mmtk.state
         .trigger_gc_when_heap_is_full
         .store(false, Ordering::SeqCst);
 }
@@ -602,10 +622,7 @@ pub fn free_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
 /// to call this method is at the end of a GC (e.g. when the runtime is about to resume threads).
 #[cfg(feature = "count_live_bytes_in_gc")]
 pub fn live_bytes_in_last_gc<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
-    mmtk.get_plan()
-        .base()
-        .live_bytes_in_last_gc
-        .load(Ordering::SeqCst)
+    mmtk.state.live_bytes_in_last_gc.load(Ordering::SeqCst)
 }
 
 /// Return the starting address of the heap. *Note that currently MMTk uses
@@ -638,8 +655,7 @@ pub fn handle_user_collection_request<VM: VMBinding>(
     tls: VMMutatorThread,
     force: bool,
 ) {
-    mmtk.get_plan()
-        .handle_user_collection_request(tls, force, false);
+    mmtk.handle_user_collection_request(tls, force, false);
 }
 
 /// Is the object alive?
@@ -653,8 +669,8 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 /// Check if `addr` is the address of an object reference to an MMTk object.
 ///
 /// Concretely:
-/// 1.  Return true if `addr.to_object_reference()` is a valid object reference to an object in any
-///     space in MMTk.
+/// 1.  Return true if `ObjectReference::from_raw_address(addr)` is a valid object reference to an
+///     object in any space in MMTk.
 /// 2.  Also return true if there exists an `objref: ObjectReference` such that
 ///     -   `objref` is a valid object reference to an object in any space in MMTk, and
 ///     -   `lo <= objref.to_address() < hi`, where
@@ -748,17 +764,6 @@ pub fn is_in_mmtk_spaces<VM: VMBinding>(object: ObjectReference) -> bool {
 // TODO: Do we really need this function? Can a runtime always use is_mapped_object()?
 pub fn is_mapped_address(address: Address) -> bool {
     address.is_mapped()
-}
-
-/// Check that if a garbage collection is in progress and if the given
-/// object is not movable.  If it is movable error messages are
-/// logged and the system exits.
-///
-/// Arguments:
-/// * `mmtk`: A reference to an MMTk instance.
-/// * `object`: The object to check.
-pub fn modify_check<VM: VMBinding>(mmtk: &MMTK<VM>, object: ObjectReference) {
-    mmtk.get_plan().modify_check(object);
 }
 
 /// Add a reference to the list of weak references. A binding may

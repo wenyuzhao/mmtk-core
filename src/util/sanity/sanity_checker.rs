@@ -74,8 +74,7 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
         #[cfg(feature = "extreme_assertions")]
         mmtk.edge_logger.reset();
 
-        plan.base().inside_sanity.store(true, Ordering::SeqCst);
-        // Stop & scan mutators (mutator scanning can happen before STW)
+        mmtk.sanity_begin(); // Stop & scan mutators (mutator scanning can happen before STW)
 
         // We use the cached roots for sanity gc, based on the assumption that
         // the stack scanning triggered by the selected plan is correct and precise.
@@ -151,7 +150,6 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
         Self::update_mark_state();
         <P::VM as VMBinding>::VMCollection::clear_cld_claimed_marks();
         info!("Sanity GC prepare");
-        mmtk.get_plan().enter_sanity();
         {
             let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
             sanity_checker.refs.clear();
@@ -186,7 +184,6 @@ impl<P: Plan> SanityRelease<P> {
 impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
         info!("Sanity GC release");
-        mmtk.get_plan().leave_sanity();
         mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
         for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::Release]
@@ -200,6 +197,7 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
             debug_assert!(result.is_ok());
         }
+        mmtk.sanity_end();
     }
 }
 
