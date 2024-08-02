@@ -1,4 +1,5 @@
 use atomic_traits::Atomic;
+use bytemuck::NoUninit;
 
 use std::fmt;
 use std::mem;
@@ -27,7 +28,7 @@ pub type ByteOffset = isize;
 /// (memory wise and time wise). The idea is from the paper
 /// High-level Low-level Programming (VEE09) and JikesRVM.
 #[repr(transparent)]
-#[derive(Copy, Clone, Eq, Hash, PartialOrd, Ord, PartialEq)]
+#[derive(Copy, Clone, Eq, Hash, PartialOrd, Ord, PartialEq, NoUninit)]
 pub struct Address(usize);
 
 /// Address + ByteSize (positive)
@@ -145,7 +146,9 @@ impl Default for Address {
 }
 
 impl Address {
+    /// The lowest possible address.
     pub const ZERO: Self = Address(0);
+    /// The highest possible address.
     pub const MAX: Self = Address(usize::max_value());
 
     pub fn prefetch_read(self) {
@@ -165,6 +168,7 @@ impl Address {
         Address(ptr as usize)
     }
 
+    /// creates Address from a Rust reference
     pub fn from_ref<T>(r: &T) -> Address {
         Address(r as *const T as usize)
     }
@@ -208,10 +212,12 @@ impl Address {
     // These const functions are duplicated with the operator traits. But we need them,
     // as we need them to declare constants.
 
+    /// Get the number of bytes between two addresses. The current address needs to be higher than the other address.
     pub const fn get_extent(self, other: Address) -> ByteSize {
         self.0 - other.0
     }
 
+    /// Get the offset from `other` to `self`. The result is negative is `self` is lower than `other`.
     pub const fn get_offset(self, other: Address) -> ByteOffset {
         self.0 as isize - other.0 as isize
     }
@@ -220,6 +226,7 @@ impl Address {
     // The add() function is const fn, and we can use it to declare Address constants.
     // The Add trait function cannot be const.
     #[allow(clippy::should_implement_trait)]
+    /// Add an offset to the address.
     pub const fn add(self, size: usize) -> Address {
         Address(self.0 + size)
     }
@@ -228,15 +235,17 @@ impl Address {
     // The sub() function is const fn, and we can use it to declare Address constants.
     // The Sub trait function cannot be const.
     #[allow(clippy::should_implement_trait)]
+    /// Subtract an offset from the address.
     pub const fn sub(self, size: usize) -> Address {
         Address(self.0 - size)
     }
 
+    /// Bitwise 'and' with a mask.
     pub const fn and(self, mask: usize) -> usize {
         self.0 & mask
     }
 
-    // Perform a saturating subtract on the Address
+    /// Perform a saturating subtract on the Address
     pub const fn saturating_sub(self, size: usize) -> Address {
         Address(self.0.saturating_sub(size))
     }
@@ -602,10 +611,11 @@ mod tests {
 /// methods in [`crate::vm::ObjectModel`]. Major refactoring is needed in MMTk to allow
 /// the opaque `ObjectReference` type, and we haven't seen a use case for now.
 #[repr(transparent)]
-#[derive(Copy, Clone, Eq, Hash, PartialOrd, Ord, PartialEq)]
+#[derive(Copy, Clone, Eq, Hash, PartialOrd, Ord, PartialEq, NoUninit)]
 pub struct ObjectReference(usize);
 
 impl ObjectReference {
+    /// The null object reference, represented as zero.
     pub const NULL: Self = Self(0);
     pub const STRICT_VERIFICATION: bool =
         cfg!(debug_assertions) || cfg!(feature = "sanity") || false;
@@ -644,6 +654,9 @@ impl ObjectReference {
         VM::VMObjectModel::ref_to_header(self)
     }
 
+    /// Get the start of the allocation address for the object. This method is used by MMTk to get the start of the allocation
+    /// address originally returned from [`crate::memory_manager::alloc`] for the object.
+    /// This method is syntactic sugar for [`crate::vm::ObjectModel::ref_to_object_start`]. See comments on [`crate::vm::ObjectModel::ref_to_object_start`].
     pub fn to_object_start<VM: VMBinding>(self) -> Address {
         let object_start = VM::VMObjectModel::ref_to_object_start(self);
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || object_start == self.to_raw_address(), "The binding claims unified object reference address, but for object reference {}, ref_to_address() returns {}", self, object_start);
@@ -688,6 +701,7 @@ impl ObjectReference {
         }
     }
 
+    /// Can the object be moved?
     pub fn is_movable(self) -> bool {
         if self.is_null() {
             return false;
@@ -707,6 +721,7 @@ impl ObjectReference {
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.get_forwarded_object(self)
     }
 
+    /// Is the object in any MMTk spaces?
     pub fn is_in_any_space(self) -> bool {
         let addr = self.to_raw_address();
         if addr < vm_layout().heap_start || addr >= vm_layout().heap_end {
@@ -715,6 +730,7 @@ impl ObjectReference {
         unsafe { SFT_MAP.get_unchecked(Address(self.0)) }.is_in_space(self)
     }
 
+    /// Is the object sane?
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
         let addr = self.to_raw_address();

@@ -135,11 +135,11 @@ pub struct CommonPageResource {
     pub vm_map: &'static dyn VMMap,
     head_discontiguous_region: Mutex<Address>,
 
-    pub metadata: SideMetadataContext,
+    pub(crate) metadata: SideMetadataContext,
 }
 
 impl CommonPageResource {
-    pub fn new(
+    pub(crate) fn new(
         contiguous: bool,
         growable: bool,
         vm_map: &'static dyn VMMap,

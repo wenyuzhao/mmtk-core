@@ -81,7 +81,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         metadata.local.push(CHUNK_LIVE_BLOCKS);
     }
 
-    pub fn new_contiguous(
+    pub(crate) fn new_contiguous(
         log_pages: usize,
         start: Address,
         bytes: usize,
@@ -101,7 +101,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    pub fn new_discontiguous(
+    pub(crate) fn new_discontiguous(
         log_pages: usize,
         vm_map: &'static dyn VMMap,
         _num_workers: usize,
@@ -182,8 +182,13 @@ pub trait BlockAlloc<VM: VMBinding, B: Region> {
     fn free(&self, bpr: &BlockPageResource<VM, B>, b: B, single_thread: bool);
 }
 
+#[derive(Copy, Clone)]
+struct Cursor(u32, u32);
+
+unsafe impl bytemuck::NoUninit for Cursor {}
+
 struct LockFreeListBlockAlloc<B: Region> {
-    cursor: Atomic<(u32, u32)>,
+    cursor: Atomic<Cursor>,
     head: Atomic<Address>,
     _p: PhantomData<B>,
 }
@@ -196,9 +201,9 @@ impl<B: Region> LockFreeListBlockAlloc<B> {
     fn alloc_fast(&self) -> Option<B> {
         if Self::SYNC {
             // 1. bump the cursor
-            let (c, b) = self.cursor.load(Ordering::Relaxed);
+            let Cursor(c, b) = self.cursor.load(Ordering::Relaxed);
             if b < Self::BLOCKS_IN_CHUNK as u32 {
-                self.cursor.store((c, b + 1), Ordering::Relaxed);
+                self.cursor.store(Cursor(c, b + 1), Ordering::Relaxed);
                 let c = crate::util::conversions::chunk_index_to_address(c as usize);
                 return Some(B::from_aligned_address(c + ((b as usize) << B::LOG_BYTES)));
             }
@@ -233,14 +238,14 @@ impl<B: Region> LockFreeListBlockAlloc<B> {
         if self.cursor.load(Ordering::Relaxed).1 < Self::BLOCKS_IN_CHUNK as u32 {
             let result =
                 self.cursor
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |(c, b)| {
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |Cursor(c, b)| {
                         if b < Self::BLOCKS_IN_CHUNK as u32 {
-                            Some((c, b + 1))
+                            Some(Cursor(c, b + 1))
                         } else {
                             None
                         }
                     });
-            if let Ok((c, b)) = result {
+            if let Ok(Cursor(c, b)) = result {
                 let c = crate::util::conversions::chunk_index_to_address(c as usize);
                 return Some(B::from_aligned_address(c + ((b as usize) << B::LOG_BYTES)));
             }
@@ -269,7 +274,7 @@ impl<B: Region> LockFreeListBlockAlloc<B> {
     fn add_chunk(&self, c: Chunk) -> B {
         let new_cursor = c.start() + B::BYTES;
         let chunk_index = new_cursor.chunk_index() as u32;
-        self.cursor.store((chunk_index, 1), Ordering::Relaxed);
+        self.cursor.store(Cursor(chunk_index, 1), Ordering::Relaxed);
         B::from_aligned_address(c.start())
     }
 }
@@ -278,7 +283,7 @@ impl<VM: VMBinding, B: Region> BlockAlloc<VM, B> for LockFreeListBlockAlloc<B> {
     fn new() -> Self {
         Self {
             head: Atomic::new(Address::ZERO),
-            cursor: Atomic::new((0, Self::BLOCKS_IN_CHUNK as _)),
+            cursor: Atomic::new(Cursor(0, Self::BLOCKS_IN_CHUNK as _)),
             _p: PhantomData,
         }
     }

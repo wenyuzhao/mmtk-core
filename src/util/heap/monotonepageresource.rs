@@ -61,7 +61,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 
     fn get_available_physical_pages(&self) -> usize {
         let sync = self.sync.lock().unwrap();
-        let mut rtn = bytes_to_pages(sync.sentinel - sync.cursor);
+        let mut rtn = bytes_to_pages_up(sync.sentinel - sync.cursor);
         if !self.common.contiguous {
             rtn += self.common.vm_map.get_available_discontiguous_chunks() * PAGES_IN_CHUNK;
         }
@@ -188,7 +188,7 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
 }
 
 impl<VM: VMBinding> MonotonePageResource<VM> {
-    pub fn new_contiguous(
+    pub(crate) fn new_contiguous(
         start: Address,
         bytes: usize,
         vm_map: &'static dyn VMMap,
@@ -218,7 +218,10 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
         }
     }
 
-    pub fn new_discontiguous(vm_map: &'static dyn VMMap, metadata: SideMetadataContext) -> Self {
+    pub(crate) fn new_discontiguous(
+        vm_map: &'static dyn VMMap,
+        metadata: SideMetadataContext,
+    ) -> Self {
         MonotonePageResource {
             common: CommonPageResource::new(false, true, vm_map, metadata),
             sync: Mutex::new(MonotonePageResourceSync {
@@ -310,7 +313,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 MonotonePageResourceConditional::Contiguous { start, .. } => start,
                 _ => unreachable!(),
             };
-            let pages = bytes_to_pages(top - space_start);
+            let pages = bytes_to_pages_up(top - space_start);
             self.common.accounting.reset();
             self.common.accounting.reserve_and_commit(pages);
             guard.current_chunk = chunk;
@@ -343,7 +346,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
                 }
                 chunk_start = next_chunk_start;
             }
-            let pages = bytes_to_pages(live_size);
+            let pages = bytes_to_pages_up(live_size);
             self.common.accounting.reset();
             self.common.accounting.reserve_and_commit(pages);
         }
@@ -417,7 +420,7 @@ impl<VM: VMBinding> MonotonePageResource<VM> {
     }
 
     fn release_pages_extent(&self, _first: Address, bytes: usize) {
-        let pages = crate::util::conversions::bytes_to_pages(bytes);
+        let pages = crate::util::conversions::bytes_to_pages_up(bytes);
         debug_assert!(bytes == crate::util::conversions::pages_to_bytes(pages));
         // FIXME ZERO_PAGES_ON_RELEASE
         // FIXME Options.protectOnRelease

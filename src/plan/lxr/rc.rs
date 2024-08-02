@@ -614,14 +614,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         } else {
             let over_time = crate::args()
                 .max_pause_millis
-                .map(|threshold| {
-                    crate::GC_START_TIME
-                        .load(Ordering::Relaxed)
-                        .elapsed()
-                        .unwrap()
-                        .as_millis()
-                        >= threshold as u128
-                })
+                .map(|threshold| crate::GC_START_TIME.elapsed().as_millis() >= threshold as u128)
                 .unwrap_or(false);
             let over_space = mmtk.get_plan().get_used_pages()
                 - mmtk.get_plan().get_collection_reserved_pages()

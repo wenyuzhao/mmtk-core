@@ -15,13 +15,12 @@ use crate::*;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
-use std::time::SystemTime;
 
 pub struct ScheduleCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        crate::GC_TRIGGER_TIME.store(SystemTime::now(), Ordering::SeqCst);
+        crate::GC_TRIGGER_TIME.start();
         crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         // Tell GC trigger that GC started.
         mmtk.gc_trigger.policy.on_gc_start(mmtk);
@@ -298,10 +297,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
             }
             <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         }
-        let pause_time = crate::GC_START_TIME
-            .load(Ordering::SeqCst)
-            .elapsed()
-            .unwrap();
+        let pause_time = crate::GC_START_TIME.elapsed();
         let pause = mmtk
             .get_plan()
             .downcast_ref::<LXR<VM>>()
@@ -389,7 +385,7 @@ impl<VM: VMBinding> CoordinatorWork<VM> for EndOfGC {}
 
 /// This implements `ObjectTracer` by forwarding the `trace_object` calls to the wrapped
 /// `ProcessEdgesWork` instance.
-struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
+pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
     process_edges_work: E,
     stage: WorkBucketStage,
 }
@@ -397,11 +393,8 @@ struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
 impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
     /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
     /// and flush as soon as the underlying buffer of `process_edges_work` is full.
-    ///
-    /// This function is inlined because `trace_object` is probably the hottest function in MMTk.
-    /// If this function is called in small closures, please profile the program and make sure the
-    /// closure is inlined, too.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        debug_assert!(!object.is_null());
         let result = self.process_edges_work.trace_object(object);
         self.flush_if_full();
         result
@@ -434,7 +427,7 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
 /// the call to `with_tracer`, making use of its `trace_object` method.  It then creates work
 /// packets using the methods of the `ProcessEdgesWork` and add the work packet into the given
 /// `stage`.
-struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
+pub(crate) struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
     stage: WorkBucketStage,
     phantom_data: PhantomData<E>,
 }
@@ -747,15 +740,34 @@ pub type EdgeOf<E> = <<E as ProcessEdgesWork>::VM as VMBinding>::VMEdge;
 pub trait ProcessEdgesWork:
     Send + 'static + Sized + DerefMut + Deref<Target = ProcessEdgesBase<Self::VM>>
 {
+    /// The associate type for the VM.
     type VM: VMBinding;
 
     /// The work packet type for scanning objects when using this ProcessEdgesWork.
     type ScanObjectsWorkType: ScanObjectsWork<Self::VM>;
 
+    /// The maximum number of edges that should be put to one of this work packets.
+    /// The caller who creates a work packet of this trait should be responsible to
+    /// comply with this capacity.
+    /// Higher capacity means the packet will take longer to finish, and may lead to
+    /// bad load balancing. On the other hand, lower capacity would lead to higher cost
+    /// on scheduling many small work packets. It is important to find a proper capacity.
     const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    /// Do we update object reference? This has to be true for a moving GC.
     const OVERWRITE_REFERENCE: bool = true;
+    /// If true, we do object scanning in this work packet with the same worker without scheduling overhead.
+    /// If false, we will add object scanning work packets to the global queue and allow other workers to work on it.
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
+
     const RC_ROOTS: bool = false;
+
+    /// Create a [`ProcessEdgesWork`].
+    ///
+    /// Arguments:
+    /// * `edges`: a vector of the edges.
+    /// * `roots`: are the objects root reachable objects?
+    /// * `mmtk`: a reference to the MMTK instance.
+    /// * `bucket`: which work bucket this packet belongs to. Further work generated from this packet will also be put to the same bucket.
     fn new(
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
@@ -769,6 +781,8 @@ pub trait ProcessEdgesWork:
     /// `ActivePlan::vm_trace_object()` to let the binding handle the tracing.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 
+    /// If the work includes roots, we will store the roots somewhere so for sanity GC, we can do another
+    /// transitive closure from the roots.
     #[cfg(feature = "sanity")]
     fn cache_roots_for_sanity_gc(&mut self, _roots: Vec<EdgeOf<Self>>) {
         assert!(self.roots);
@@ -781,14 +795,14 @@ pub trait ProcessEdgesWork:
 
     /// Start the a scan work packet. If SCAN_OBJECTS_IMMEDIATELY, the work packet will be executed immediately, in this method.
     /// Otherwise, the work packet will be added the Closure work bucket and will be dispatched later by the scheduler.
-    fn start_or_dispatch_scan_work(&mut self, work_packet: impl GCWork<Self::VM>) {
+    fn start_or_dispatch_scan_work(&mut self, mut work_packet: impl GCWork<Self::VM>) {
         if Self::SCAN_OBJECTS_IMMEDIATELY {
             // We execute this `scan_objects_work` immediately.
             // This is expected to be a useful optimization because,
             // say for _pmd_ with 200M heap, we're likely to have 50000~60000 `ScanObjects` work packets
             // being dispatched (similar amount to `ProcessEdgesWork`).
             // Executing these work packets now can remarkably reduce the global synchronization time.
-            self.worker().do_work(work_packet);
+            work_packet.do_work(self.worker(), self.mmtk);
         } else {
             debug_assert!(self.bucket != WorkBucketStage::Unconstrained);
             self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
@@ -814,14 +828,21 @@ pub trait ProcessEdgesWork:
         }
     }
 
+    /// Process an edge, including loading the object reference from the memory slot,
+    /// trace the object and store back the new object reference if necessary.
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
+        if object.is_null() {
+            return;
+        }
         let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE {
+        debug_assert!(!new_object.is_null());
+        if Self::OVERWRITE_REFERENCE && new_object != object {
             slot.store(new_object);
         }
     }
 
+    /// Process all the edges in the work packet.
     fn process_edges(&mut self) {
         #[cfg(feature = "tracing")]
         probe!(mmtk, process_edges, self.edges.len(), self.is_roots());
@@ -880,9 +901,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         use crate::policy::sft::GCWorkerMutRef;
 
-        if object.is_null() {
-            return object;
-        }
+        debug_assert!(!object.is_null());
 
         // Erase <VM> type parameter
         let worker = GCWorkerMutRef::new(self.worker());
@@ -896,7 +915,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         unimplemented!()
     }
 }
-struct ProcessEdgesWorkRootsWorkFactory<
+pub(crate) struct ProcessEdgesWorkRootsWorkFactory<
     VM: VMBinding,
     E: ProcessEdgesWork<VM = VM>,
     I: ProcessEdgesWork<VM = VM>,
@@ -1228,9 +1247,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
+        debug_assert!(!object.is_null());
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
         self.plan
@@ -1239,8 +1256,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
+        if object.is_null() {
+            return;
+        }
         let new_object = self.trace_object(object);
-        if P::may_move_objects::<KIND>() {
+        debug_assert!(!new_object.is_null());
+        if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(new_object);
         }
     }

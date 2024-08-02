@@ -310,6 +310,8 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 }
 
+/// This enum defines all the work bucket types. The scheduler
+/// will instantiate a work bucket for each stage defined here.
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum WorkBucketStage {
     /// This bucket is always open.
@@ -376,6 +378,7 @@ pub enum WorkBucketStage {
 // Alias
 #[allow(non_upper_case_globals)]
 impl WorkBucketStage {
+    /// The first stop-the-world bucket.
     pub fn first_stw_stage() -> Self {
         WorkBucketStage::from_usize(1)
     }

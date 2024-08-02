@@ -10,7 +10,6 @@ mod remset;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 pub use self::global::LXR;
 pub use self::global::LXR_CONSTRAINTS;
@@ -39,7 +38,7 @@ pub static SURVIVAL_RATIO_PREDICTOR: SurvivalRatioPredictor = SurvivalRatioPredi
     los_alloc_vol: AtomicUsize::new(0),
     #[cfg(feature = "lxr_srv_ratio_counter")]
     ix_clean_alloc_vol: AtomicUsize::new(0),
-    pause_start: Atomic::new(SystemTime::UNIX_EPOCH),
+    pause_start: crate::Timer::new(),
 };
 
 pub struct SurvivalRatioPredictor {
@@ -56,7 +55,7 @@ pub struct SurvivalRatioPredictor {
     pub los_alloc_vol: AtomicUsize,
     #[cfg(feature = "lxr_srv_ratio_counter")]
     pub ix_clean_alloc_vol: AtomicUsize,
-    pub pause_start: Atomic<SystemTime>,
+    pub(crate) pause_start: crate::Timer,
 }
 
 impl SurvivalRatioPredictor {

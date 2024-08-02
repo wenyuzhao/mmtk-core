@@ -20,8 +20,8 @@ pub type ThreadId = usize;
 
 thread_local! {
     /// Current worker's ordinal
-    static WORKER_ORDINAL: Atomic<Option<ThreadId>> = Atomic::new(None);
-    static _WORKER: Atomic<Option<*mut ()>> = Atomic::new(None);
+    static WORKER_ORDINAL: Atomic<ThreadId> = Atomic::new(ThreadId::MAX);
+    static _WORKER: Atomic<usize> = Atomic::new(0);
 }
 
 lazy_static! {
@@ -40,7 +40,17 @@ pub fn reset_workers<VM: VMBinding>() {
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
 pub fn current_worker_ordinal() -> Option<ThreadId> {
-    WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed))
+    let ordinal = WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed));
+    debug_assert_ne!(
+        ordinal,
+        ThreadId::MAX,
+        "Thread-local variable WORKER_ORDINAL not set yet."
+    );
+    if ordinal == ThreadId::MAX {
+        None
+    } else {
+        Some(ordinal)
+    }
 }
 
 /// The part shared between a GCWorker and the scheduler.
@@ -159,7 +169,7 @@ impl<VM: VMBinding> GCWorker<VM> {
 
     /// Get current worker.
     pub fn current() -> &'static mut Self {
-        let ptr = _WORKER.with(|x| x.load(Ordering::Relaxed)).unwrap() as *mut Self;
+        let ptr = _WORKER.with(|x| x.load(Ordering::Relaxed)) as *mut Self;
         unsafe { &mut *ptr }
     }
 
@@ -201,20 +211,19 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.local_work_buffer.push(Box::new(work));
     }
 
+    /// Is this worker a coordinator or a normal GC worker?
     pub fn is_coordinator(&self) -> bool {
         self.is_coordinator
     }
 
+    /// Get the scheduler. There is only one scheduler per MMTk instance.
     pub fn scheduler(&self) -> &GCWorkScheduler<VM> {
         &self.scheduler
     }
 
+    /// Get a mutable reference of the copy context for this worker.
     pub fn get_copy_context_mut(&mut self) -> &mut GCWorkerCopyContext<VM> {
         &mut self.copy
-    }
-
-    pub fn do_work(&'static mut self, mut work: impl GCWork<VM>) {
-        work.do_work(self, self.mmtk);
     }
 
     /// Poll a ready-to-execute work packet in the following order:
@@ -231,18 +240,14 @@ impl<VM: VMBinding> GCWorker<VM> {
             .unwrap_or_else(|| self.scheduler().poll(self))
     }
 
-    pub fn do_boxed_work(&'static mut self, mut work: Box<dyn GCWork<VM>>) {
-        work.do_work(self, self.mmtk);
-    }
-
     /// Entry of the worker thread. Resolve thread affinity, if it has been specified by the user.
     /// Each worker will keep polling and executing work packets in a loop.
     pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
         #[cfg(feature = "tracing")]
         probe!(mmtk, gcworker_run);
-        WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
+        WORKER_ORDINAL.with(|x| x.store(self.ordinal, Ordering::SeqCst));
         let worker = self as *mut Self;
-        _WORKER.with(|x| x.store(Some(self as *mut Self as *mut ()), Ordering::SeqCst));
+        _WORKER.with(|x| x.store(self as *mut Self as usize, Ordering::SeqCst));
         _WORKERS
             .lock()
             .unwrap()

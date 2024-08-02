@@ -26,16 +26,13 @@ use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
-use std::time::SystemTime;
+use std::time::Instant;
 
 pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
-    let t = SystemTime::now();
+    let t = Instant::now();
     mmtk.stats.start_gc();
     if cfg!(feature = "yield_and_roots_timer") {
-        let t = t
-            .duration_since(crate::GC_TRIGGER_TIME.load(Ordering::Relaxed))
-            .unwrap()
-            .as_nanos();
+        let t = t.duration_since(*crate::GC_TRIGGER_TIME).as_nanos();
         crate::counters()
             .yield_nanos
             .fetch_add(t, Ordering::Relaxed);
@@ -46,7 +43,7 @@ pub fn report_gc_start<VM: VMBinding>(mmtk: &MMTK<VM>) {
         0f64,
         crate::gc_trigger_time_ms(),
     );
-    crate::GC_START_TIME.store(t, Ordering::SeqCst);
+    crate::GC_START_TIME.set(t);
 }
 
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
@@ -146,13 +143,15 @@ pub fn bind_mutator<VM: VMBinding>(
     mutator
 }
 
-/// Report to MMTk that a mutator is no longer needed. A binding should not attempt
-/// to use the mutator after this call. MMTk will not attempt to reclaim the memory for the
-/// mutator, so a binding should properly reclaim the memory for the mutator after this call.
+/// Report to MMTk that a mutator is no longer needed. All mutator state is flushed before it is
+/// destroyed. A binding should not attempt to use the mutator after this call. MMTk will not
+/// attempt to reclaim the memory for the mutator, so a binding should properly reclaim the memory
+/// for the mutator after this call.
 ///
 /// Arguments:
 /// * `mutator`: A reference to the mutator to be destroyed.
 pub fn destroy_mutator<VM: VMBinding>(mutator: &mut Mutator<VM>) {
+    mutator.flush();
     mutator.on_destroy();
 }
 
@@ -253,7 +252,7 @@ pub fn post_alloc<VM: VMBinding>(
 /// For a correct barrier implementation, a VM binding needs to choose one of the following options:
 /// * Use subsuming barrier `object_reference_write`
 /// * Use both `object_reference_write_pre` and `object_reference_write_post`, or both, if the binding has difficulty delegating the store to mmtk-core with the subsuming barrier.
-/// * Implement fast-path on the VM side, and call the generic api `object_reference_slow` as barrier slow-path call.
+/// * Implement fast-path on the VM side, and call the generic api `object_reference_write_slow` as barrier slow-path call.
 /// * Implement fast-path on the VM side, and do a specialized slow-path call.
 ///
 /// Arguments:
@@ -277,7 +276,7 @@ pub fn object_reference_write<VM: VMBinding>(
 /// For a correct barrier implementation, a VM binding needs to choose one of the following options:
 /// * Use subsuming barrier `object_reference_write`
 /// * Use both `object_reference_write_pre` and `object_reference_write_post`, or both, if the binding has difficulty delegating the store to mmtk-core with the subsuming barrier.
-/// * Implement fast-path on the VM side, and call the generic api `object_reference_slow` as barrier slow-path call.
+/// * Implement fast-path on the VM side, and call the generic api `object_reference_write_slow` as barrier slow-path call.
 /// * Implement fast-path on the VM side, and do a specialized slow-path call.
 ///
 /// Arguments:
@@ -303,7 +302,7 @@ pub fn object_reference_write_pre<VM: VMBinding>(
 /// For a correct barrier implementation, a VM binding needs to choose one of the following options:
 /// * Use subsuming barrier `object_reference_write`
 /// * Use both `object_reference_write_pre` and `object_reference_write_post`, or both, if the binding has difficulty delegating the store to mmtk-core with the subsuming barrier.
-/// * Implement fast-path on the VM side, and call the generic api `object_reference_slow` as barrier slow-path call.
+/// * Implement fast-path on the VM side, and call the generic api `object_reference_write_slow` as barrier slow-path call.
 /// * Implement fast-path on the VM side, and do a specialized slow-path call.
 ///
 /// Arguments:
@@ -467,6 +466,7 @@ pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: u
     crate::util::malloc::free_with_size(mmtk, addr, old_size)
 }
 
+/// Get the current active malloc'd bytes. Here MMTk only accounts for bytes that are done through those 'counted malloc' functions.
 #[cfg(feature = "malloc_counted_size")]
 pub fn get_malloc_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
     mmtk.state.malloc_bytes.load(Ordering::SeqCst)
@@ -773,7 +773,7 @@ pub fn is_mapped_address(address: Address) -> bool {
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The weak reference to add.
 pub fn add_weak_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
-    mmtk.reference_processors.add_weak_candidate::<VM>(reff);
+    mmtk.reference_processors.add_weak_candidate(reff);
 }
 
 /// Add a reference to the list of soft references. A binding may
@@ -783,7 +783,7 @@ pub fn add_weak_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference)
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The soft reference to add.
 pub fn add_soft_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
-    mmtk.reference_processors.add_soft_candidate::<VM>(reff);
+    mmtk.reference_processors.add_soft_candidate(reff);
 }
 
 /// Add a reference to the list of phantom references. A binding may
@@ -793,7 +793,7 @@ pub fn add_soft_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference)
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The phantom reference to add.
 pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
-    mmtk.reference_processors.add_phantom_candidate::<VM>(reff);
+    mmtk.reference_processors.add_phantom_candidate(reff);
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We do a full heap

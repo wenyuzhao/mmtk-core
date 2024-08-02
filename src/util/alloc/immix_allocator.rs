@@ -18,7 +18,9 @@ use std::sync::Arc;
 /// Immix allocator
 #[repr(C)]
 pub struct ImmixAllocator<VM: VMBinding> {
+    /// [`VMThread`] associated with this allocator instance
     pub tls: VMThread,
+    /// The fastpath bump pointer.
     pub bump_pointer: BumpPointer,
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
     space: &'static ImmixSpace<VM>,
@@ -272,7 +274,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.reset_bump_pointers();
     }
 
-    pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
+    pub(crate) fn immix_space(&self) -> &'static ImmixSpace<VM> {
         self.space
     }
 

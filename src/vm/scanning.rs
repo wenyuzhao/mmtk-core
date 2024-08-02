@@ -45,11 +45,14 @@ impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
 
 /// Callback trait of scanning functions that directly trace through edges.
 pub trait ObjectTracer {
-    /// Call this function for the content of each edge,
-    /// and assign the returned value back to the edge.
+    /// Call this function to trace through an object graph edge which points to `object`.
+    /// `object` must point to a valid object, and cannot be `ObjectReference::NULL`.
     ///
-    /// Note: This function is performance-critical.
-    /// Implementations should consider inlining if necessary.
+    /// The return value is the new object reference for `object` if it is moved, or `object` if
+    /// not moved.  If moved, the caller should update the slot that holds the reference to
+    /// `object` so that it points to the new location.
+    ///
+    /// Note: This function is performance-critical, therefore must be implemented efficiently.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 }
 
@@ -293,6 +296,14 @@ pub trait Scanning<VM: VMBinding> {
     /// Return whether the VM supports return barriers. This is unused at the moment.
     fn supports_return_barrier() -> bool;
 
+    /// Prepare for another round of root scanning in the same GC. Some GC algorithms
+    /// need multiple transitive closures, and each transitive closure starts from
+    /// root scanning. We expect the binding to provide the same root set for every
+    /// round of root scanning in the same GC. Bindings can use this call to get
+    /// ready for another round of root scanning to make sure that the same root
+    /// set will be returned in the upcoming calls of root scanning methods,
+    /// such as [`crate::vm::Scanning::scan_roots_in_mutator_thread`] and
+    /// [`crate::vm::Scanning::scan_vm_specific_roots`].
     fn prepare_for_roots_re_scanning();
 
     /// Process weak references.

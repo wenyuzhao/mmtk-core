@@ -77,7 +77,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     /// Block granularity in pages
     const LOG_PAGES: usize = B::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
 
-    pub fn new_contiguous(
+    pub(crate) fn new_contiguous(
         log_pages: usize,
         start: Address,
         bytes: usize,
@@ -93,7 +93,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    pub fn new_discontiguous(
+    pub(crate) fn new_discontiguous(
         log_pages: usize,
         vm_map: &'static dyn VMMap,
         num_workers: usize,

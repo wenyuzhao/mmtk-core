@@ -2,10 +2,10 @@ mod accounting;
 #[macro_use]
 pub mod layout;
 mod blockpageresource;
-pub mod blockpageresource_legacy;
-pub mod blockpageresource_nosweep;
+pub(crate) mod blockpageresource_legacy;
+pub(crate) mod blockpageresource_nosweep;
 pub mod chunk_map;
-pub mod freelistpageresource;
+pub(crate) mod freelistpageresource;
 pub mod gc_trigger;
 mod heap_meta;
 pub(crate) mod monotonepageresource;

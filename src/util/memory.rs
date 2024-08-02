@@ -2,13 +2,16 @@ use crate::util::alloc::AllocationError;
 use crate::util::opaque_pointer::*;
 use crate::util::Address;
 use crate::vm::{Collection, VMBinding};
+use bytemuck::NoUninit;
 use libc::{PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
 use std::fmt::Debug;
 use std::io::{Error, Result};
 #[cfg(feature = "enable_sysinfo")]
 use sysinfo::{RefreshKind, System, SystemExt};
 
-pub fn result_is_mapped(result: Result<()>) -> bool {
+/// Check the result from an mmap function in this module.
+/// Return true if the mmap has failed due to an existing conflicting mapping.
+pub(crate) fn result_is_mapped(result: Result<()>) -> bool {
     match result {
         Ok(_) => false,
         Err(err) => err.raw_os_error().unwrap() == libc::EEXIST,
@@ -27,10 +30,12 @@ pub fn prefetch(start: Address, mut len: usize) {
     }
 }
 
+/// Set a range of memory to 0.
 pub fn zero(start: Address, len: usize) {
     set(start, 0, len);
 }
 
+/// Set a range of memory to the given value. Similar to memset.
 pub fn set(start: Address, val: u8, len: usize) {
     unsafe {
         std::ptr::write_bytes::<u8>(start.to_mut_ptr(), val, len);
@@ -87,9 +92,12 @@ const MMAP_FLAGS: libc::c_int = libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_F
 /// This currently supports switching between different huge page allocation
 /// methods. However, this can later be refactored to reduce other code
 /// repetition.
-#[derive(Debug, Copy, Clone)]
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, NoUninit)]
 pub enum MmapStrategy {
+    /// The default mmap strategy.
     Normal,
+    /// Enable transparent huge pages for the pages that are mapped. This option is only for linux.
     TransparentHugePages,
 }
 
@@ -174,6 +182,7 @@ fn mmap_fixed(
     }
 }
 
+/// Unmap the given memory (in page granularity). This wraps the unsafe libc munmap call.
 pub fn munmap(start: Address, size: usize) -> Result<()> {
     let result = wrap_libc_call(&|| unsafe { libc::munmap(start.to_mut_ptr(), size) }, 0);
     if result.is_ok() {
@@ -216,10 +225,10 @@ pub fn handle_mmap_error<VM: VMBinding>(error: Error, tls: VMThread) -> ! {
 }
 
 /// Checks if the memory has already been mapped. If not, we panic.
-// Note that the checking has a side effect that it will map the memory if it was unmapped. So we panic if it was unmapped.
-// Be very careful about using this function.
+/// Note that the checking has a side effect that it will map the memory if it was unmapped. So we panic if it was unmapped.
+/// Be very careful about using this function.
 #[cfg(target_os = "linux")]
-pub fn panic_if_unmapped(start: Address, size: usize) {
+pub(crate) fn panic_if_unmapped(start: Address, size: usize) {
     if cfg!(feature = "no_map_fixed_noreplace") {
         return;
     }
@@ -237,13 +246,17 @@ pub fn panic_if_unmapped(start: Address, size: usize) {
     }
 }
 
+/// Checks if the memory has already been mapped. If not, we panic.
+/// This function is currently left empty for non-linux, and should be implemented in the future.
+/// As the function is only used for assertions, MMTk will still run even if we never panic.
 #[cfg(not(target_os = "linux"))]
-pub fn panic_if_unmapped(_start: Address, _size: usize) {
+pub(crate) fn panic_if_unmapped(_start: Address, _size: usize) {
     // This is only used for assertions, so MMTk will still run even if we never panic.
     // TODO: We need a proper implementation for this. As we do not have MAP_FIXED_NOREPLACE, we cannot use the same implementation as Linux.
     // Possibly we can use posix_mem_offset for both OS/s.
 }
 
+/// Unprotect the given memory (in page granularity) to allow access (PROT_READ/WRITE/EXEC).
 pub fn munprotect(start: Address, size: usize) -> Result<()> {
     wrap_libc_call(
         &|| unsafe { libc::mprotect(start.to_mut_ptr(), size, PROT_READ | PROT_WRITE | PROT_EXEC) },
@@ -251,6 +264,7 @@ pub fn munprotect(start: Address, size: usize) -> Result<()> {
     )
 }
 
+/// Protect the given memory (in page granularity) to forbid any access (PROT_NONE).
 pub fn mprotect(start: Address, size: usize) -> Result<()> {
     wrap_libc_call(
         &|| unsafe { libc::mprotect(start.to_mut_ptr(), size, PROT_NONE) },

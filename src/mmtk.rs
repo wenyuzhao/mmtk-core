@@ -50,7 +50,7 @@ use crate::util::rust_util::InitializeOnce;
 // A global space function table that allows efficient dispatch space specific code for addresses in our heap.
 pub static SFT_MAP: InitializeOnce<Box<dyn SFTMap>> = InitializeOnce::new();
 
-// MMTk builder. This is used to set options before actually creating an MMTk instance.
+/// MMTk builder. This is used to set options and other settings before actually creating an MMTk instance.
 pub struct MMTKBuilder {
     /// The options for this instance.
     pub options: Options,
@@ -132,7 +132,8 @@ unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
 unsafe impl<VM: VMBinding> Send for MMTK<VM> {}
 
 impl<VM: VMBinding> MMTK<VM> {
-    pub fn new(options: Arc<Options>) -> Self {
+    /// Create an MMTK instance. This is not public. Bindings should use [`MMTKBuilder::build`].
+    pub(crate) fn new(options: Arc<Options>) -> Self {
         crate::VERBOSE.store(*options.verbose, Ordering::SeqCst);
 
         // Initialize SFT first in case we need to use this in the constructor.
@@ -226,6 +227,9 @@ impl<VM: VMBinding> MMTK<VM> {
         }
     }
 
+    /// Generic hook to allow benchmarks to be harnessed. MMTk will trigger a GC
+    /// to clear any residual garbage and start collecting statistics for the benchmark.
+    /// This is usually called by the benchmark harness as its last step before the actual benchmark.
     pub fn harness_begin(&self, tls: VMMutatorThread) {
         #[cfg(feature = "tracing")]
         probe!(mmtk, harness_begin);
@@ -241,6 +245,9 @@ impl<VM: VMBinding> MMTK<VM> {
         crate::INSIDE_HARNESS.store(true, Ordering::SeqCst);
     }
 
+    /// Generic hook to allow benchmarks to be harnessed. MMTk will stop collecting
+    /// statistics, and print out the collected statistics in a defined format.
+    /// This is usually called by the benchmark harness right after the actual benchmark.
     pub fn harness_end(&'static self) {
         self.stats.stop_all(self);
         crate::INSIDE_HARNESS.store(false, Ordering::SeqCst);
@@ -284,10 +291,12 @@ impl<VM: VMBinding> MMTK<VM> {
         }
     }
 
+    /// Return true if a collection is in progress.
     pub fn gc_in_progress(&self) -> bool {
         *self.state.gc_status.lock().unwrap() != GcStatus::NotInGC
     }
 
+    /// Return true if a collection is in progress and past the preparatory stage.
     pub fn gc_in_progress_proper(&self) -> bool {
         *self.state.gc_status.lock().unwrap() == GcStatus::GcProper
     }
@@ -360,6 +369,7 @@ impl<VM: VMBinding> MMTK<VM> {
         self.gc_requester.request(true);
     }
 
+    /// Get a reference to the plan.
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {
         unsafe { &**(self.plan.get()) }
     }
@@ -374,6 +384,7 @@ impl<VM: VMBinding> MMTK<VM> {
         &mut **(self.plan.get())
     }
 
+    /// Get the run time options.
     pub fn get_options(&self) -> &Options {
         &self.options
     }

@@ -24,12 +24,15 @@ pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// VM bindings may also use this to enable the correct fast-path, if the fast-path is implemented in the binding.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BarrierSelector {
+    /// No barrier is used.
     NoBarrier,
+    /// Object remembering barrier is used.
     ObjectBarrier,
     FieldBarrier,
 }
 
 impl BarrierSelector {
+    /// A const function to check if two barrier selectors are the same.
     pub const fn equals(&self, other: BarrierSelector) -> bool {
         // cast enum to u8 then compare. Otherwise, we cannot do it in a const fn.
         *self as u8 == other as u8

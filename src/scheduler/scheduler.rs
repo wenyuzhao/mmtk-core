@@ -486,9 +486,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     gc_log!([3]
                         " - ({:.3}ms) Start GC Stage: {:?}",
                         crate::GC_START_TIME
-                            .load(Ordering::SeqCst)
                             .elapsed()
-                            .unwrap()
                             .as_nanos() as f64
                             / 1000000f64,
                         id
@@ -499,11 +497,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 && bucket_opened
                 && id == WorkBucketStage::Prepare
             {
-                let t = crate::GC_START_TIME
-                    .load(Ordering::SeqCst)
-                    .elapsed()
-                    .unwrap()
-                    .as_nanos();
+                let t = crate::GC_START_TIME.elapsed().as_nanos();
                 crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
             }
             buckets_updated = buckets_updated || bucket_opened;

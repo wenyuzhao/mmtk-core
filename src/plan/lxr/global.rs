@@ -54,9 +54,10 @@ static HEAP_AFTER_GC: AtomicUsize = AtomicUsize::new(0);
 static RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(0);
 static MAX_RC_PAUSES_BEFORE_SATB: AtomicUsize = AtomicUsize::new(128);
 
+use bytemuck::NoUninit;
 use mmtk_macros::{HasSpaces, PlanTraceObject};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, NoUninit)]
 #[repr(u8)]
 enum GCCause {
     Unknown,
@@ -101,9 +102,6 @@ pub struct LXR<VM: VMBinding> {
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
     moves_objects: true,
-    gc_header_bits: 2,
-    gc_header_words: 0,
-    num_specialized_scans: 1,
     // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     barrier: BarrierSelector::FieldBarrier,
@@ -462,9 +460,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .block_allocation
                 .total_young_allocation_in_bytes(),
         );
-        super::SURVIVAL_RATIO_PREDICTOR
-            .pause_start
-            .store(SystemTime::now(), Ordering::SeqCst);
+        super::SURVIVAL_RATIO_PREDICTOR.pause_start.start();
         self.immix_space.rc_eager_prepare(pause);
 
         if pause == Pause::FinalMark {
@@ -474,22 +470,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             }
             self.set_concurrent_marking_state(false);
             if cfg!(feature = "satb_timer") {
-                let t = crate::SATB_START
-                    .load(Ordering::SeqCst)
-                    .elapsed()
-                    .unwrap()
-                    .as_nanos();
+                let t = crate::SATB_START.elapsed().as_nanos();
                 crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
             && self.concurrent_marking_in_progress()
         {
-            let t = crate::SATB_START
-                .load(Ordering::SeqCst)
-                .elapsed()
-                .unwrap()
-                .as_nanos();
+            let t = crate::SATB_START.elapsed().as_nanos();
             crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
         }
 
@@ -507,13 +495,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.set_concurrent_marking_state(true);
             crate::REMSET_RECORDING.store(true, Ordering::SeqCst);
             if cfg!(feature = "satb_timer") {
-                crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
+                crate::SATB_START.start();
             }
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
             && self.concurrent_marking_in_progress()
         {
-            crate::SATB_START.store(SystemTime::now(), Ordering::SeqCst)
+            crate::SATB_START.start();
         }
         // if pause == Pause::RefCount || pause == Pause::InitialMark {
         //     self.resize_nursery();

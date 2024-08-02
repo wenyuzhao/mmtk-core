@@ -7,8 +7,13 @@ use atomic::{Atomic, Ordering};
 use crate::util::constants::{BYTES_IN_ADDRESS, LOG_BYTES_IN_ADDRESS};
 use crate::util::{Address, ObjectReference};
 
-/// An abstract edge.  An edge holds an object reference.  When we load from it, we get an
-/// ObjectReference; we can also store an ObjectReference into it.
+/// An `Edge` represents a slot in an object (a.k.a. a field), on the stack (i.e. a local variable)
+/// or any other places (such as global variables).  A slot may hold an object reference. We can
+/// load the object reference from it, and we can store an ObjectReference into it.  For some VMs,
+/// a slot may sometimes not hold an object reference.  For example, it can hold a special `NULL`
+/// pointer which does not point to any object, or it can hold a tagged non-reference value, such
+/// as small integers and special values such as `true`, `false`, `null` (a.k.a. "none", "nil",
+/// etc. for other VMs), `undefined`, etc.
 ///
 /// This intends to abstract out the differences of reference field representation among different
 /// VMs.  If the VM represent a reference field as a word that holds the pointer to the object, it
@@ -40,10 +45,31 @@ use crate::util::{Address, ObjectReference};
 /// semantics, such as whether it holds strong or weak references.  If a VM holds a weak reference
 /// in a word as a pointer, it can also use `SimpleEdge` for weak reference fields.
 pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash + Sized {
-    /// Load object reference from the edge.
+    /// Load object reference from the slot.
+    ///
+    /// If the slot is not holding an object reference (For example, if it is holding NULL or a
+    /// tagged non-reference value.  See trait-level doc comment.), this method should return
+    /// `ObjectReference::NULL`.
+    ///
+    /// If the slot holds an object reference with tag bits, the returned value shall be the object
+    /// reference with the tag bits removed.
     fn load(&self) -> ObjectReference;
 
-    /// Store the object reference `object` into the edge.
+    /// Store the object reference `object` into the slot.
+    ///
+    /// If the slot holds an object reference with tag bits, this method must preserve the tag
+    /// bits while updating the object reference so that it points to the forwarded object given by
+    /// the parameter `object`.
+    ///
+    /// FIXME: This design is inefficient for handling object references with tag bits.  Consider
+    /// introducing a new updating function to do the load, trace and store in one function.
+    /// See: <https://github.com/mmtk/mmtk-core/issues/1033>
+    ///
+    /// FIXME: This method is currently used by both moving GC algorithms and the subsuming write
+    /// barrier ([`crate::memory_manager::object_reference_write`]).  The two reference writing
+    /// operations have different semantics, and need to be implemented differently if the VM
+    /// supports offsetted or tagged references.
+    /// See: <https://github.com/mmtk/mmtk-core/issues/1038>
     fn store(&self, object: ObjectReference);
 
     fn compare_exchange(
@@ -156,7 +182,9 @@ fn a_simple_edge_should_have_the_same_size_as_a_pointer() {
 
 /// A abstract memory slice represents a piece of **heap** memory.
 pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
+    /// The associate type to define how to access edges from a memory slice.
     type Edge: Edge;
+    /// The associate type to define how to iterate edges in a memory slice.
     type EdgeIterator: Iterator<Item = Self::Edge>;
     type ChunkIterator: Iterator<Item = Self>;
     /// Iterate object edges within the slice. If there are non-reference values in the slice, the iterator should skip them.

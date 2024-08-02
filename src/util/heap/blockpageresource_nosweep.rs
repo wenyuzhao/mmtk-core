@@ -74,7 +74,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         metadata.local.push(BLOCK_OWNER);
     }
 
-    pub fn new_contiguous(
+    pub(crate) fn new_contiguous(
         log_pages: usize,
         start: Address,
         bytes: usize,
@@ -98,7 +98,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
     }
 
-    pub fn new_discontiguous(
+    pub(crate) fn new_discontiguous(
         log_pages: usize,
         vm_map: &'static dyn VMMap,
         _num_workers: usize,

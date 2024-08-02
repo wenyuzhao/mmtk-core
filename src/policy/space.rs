@@ -416,7 +416,7 @@ pub struct PolicyCreateSpaceArgs<'a, VM: VMBinding> {
 }
 
 impl<VM: VMBinding> PolicyCreateSpaceArgs<'_, VM> {
-    pub fn metadata(&self) -> SideMetadataContext {
+    pub(crate) fn metadata(&self) -> SideMetadataContext {
         SideMetadataContext {
             global: self.plan_args.global_side_metadata_specs.clone(),
             local: self.local_side_metadata_specs.clone(),
@@ -562,7 +562,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         rtn
     }
 
-    pub fn initialize_sft(
+    pub(crate) fn initialize_sft(
         &self,
         sft: &(dyn SFT + Sync + 'static),
         sft_map: &mut dyn crate::policy::sft_map::SFTMap,

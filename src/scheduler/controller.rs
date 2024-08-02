@@ -48,7 +48,8 @@ impl<VM: VMBinding> GCController<VM> {
         })
     }
 
-    pub fn run(&mut self, tls: VMWorkerThread) {
+    /// The main loop for the GC controller.
+    pub fn run(&mut self, tls: VMWorkerThread) -> ! {
         #[cfg(feature = "tracing")]
         probe!(mmtk, gccontroller_run);
         // Initialize the GC worker for coordinator. We are not using the run() method from

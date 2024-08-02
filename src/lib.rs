@@ -1,6 +1,3 @@
-// TODO: We should fix missing docs for public items and turn this on (Issue #309).
-// #![deny(missing_docs)]
-
 // Allow this for now. Clippy suggests we should use Sft, Mmtk, rather than SFT and MMTK.
 // According to its documentation (https://rust-lang.github.io/rust-clippy/master/index.html#upper_case_acronyms),
 // with upper-case-acronyms-aggressive turned on, it should also warn us about SFTMap, VMBinding, GCWorker.
@@ -55,15 +52,17 @@ mod mmtk;
 mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
 use std::{
+    cell::UnsafeCell,
     collections::HashMap,
     fs::File,
     io::Write,
+    ops::Deref,
     ptr::{addr_of, addr_of_mut},
     sync::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
     },
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
 
 use atomic::{Atomic, Ordering};
@@ -90,7 +89,6 @@ pub mod vm;
 pub use crate::plan::{
     AllocationSemantics, BarrierSelector, Mutator, MutatorContext, ObjectQueue, Plan,
 };
-pub use crate::policy::copy_context::PolicyCopyContext;
 
 static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 
@@ -212,14 +210,47 @@ fn disable_lasy_dec_for_current_gc() -> bool {
     crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.load(Ordering::SeqCst)
 }
 
-static GC_TRIGGER_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
-static GC_START_TIME: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
+#[derive(Debug)]
+#[repr(C)]
+pub(crate) struct Timer(UnsafeCell<Option<Instant>>);
+
+impl Timer {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    pub fn set(&self, instant: Instant) {
+        unsafe {
+            *self.0.get() = Some(instant);
+        }
+    }
+
+    pub fn start(&self) {
+        unsafe {
+            *self.0.get() = Some(Instant::now());
+        }
+    }
+}
+
+unsafe impl Sync for Timer {}
+
+impl Deref for Timer {
+    type Target = Instant;
+
+    fn deref(&self) -> &Self::Target {
+        let v = unsafe { &*self.0.get() };
+        v.as_ref().unwrap()
+    }
+}
+
+static GC_TRIGGER_TIME: Timer = Timer::new();
+static GC_START_TIME: Timer = Timer::new();
 static BOOT_TIME: spin::Lazy<SystemTime> = spin::Lazy::new(SystemTime::now);
 static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_END: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
-static SATB_START: Atomic<SystemTime> = Atomic::new(SystemTime::UNIX_EPOCH);
+static SATB_START: Timer = Timer::new();
 static PAUSE_CONCURRENT_MARKING: AtomicBool = AtomicBool::new(false);
 static MOVE_CONCURRENT_MARKING_TO_STW: AtomicBool = AtomicBool::new(false);
 
@@ -228,21 +259,11 @@ fn boot_time_secs() -> f64 {
 }
 
 fn gc_trigger_time_ms() -> f64 {
-    crate::GC_TRIGGER_TIME
-        .load(Ordering::Relaxed)
-        .elapsed()
-        .unwrap()
-        .as_micros() as f64
-        / 1000f64
+    crate::GC_TRIGGER_TIME.elapsed().as_micros() as f64 / 1000f64
 }
 
 fn gc_start_time_ms() -> f64 {
-    crate::GC_START_TIME
-        .load(Ordering::Relaxed)
-        .elapsed()
-        .unwrap()
-        .as_micros() as f64
-        / 1000f64
+    crate::GC_START_TIME.elapsed().as_micros() as f64 / 1000f64
 }
 
 #[allow(unused)]
