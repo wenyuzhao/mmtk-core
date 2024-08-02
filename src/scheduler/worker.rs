@@ -20,7 +20,7 @@ pub type ThreadId = usize;
 
 thread_local! {
     /// Current worker's ordinal
-    static WORKER_ORDINAL: Atomic<ThreadId> = Atomic::new(ThreadId::MAX);
+    static WORKER_ORDINAL: Atomic<ThreadId> = const { Atomic::new(ThreadId::MAX) };
     static _WORKER: Atomic<usize> = Atomic::new(0);
 }
 

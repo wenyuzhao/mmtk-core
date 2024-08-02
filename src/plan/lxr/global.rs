@@ -23,7 +23,7 @@ use crate::util::analysis::GcHookWork;
 use crate::util::constants::*;
 use crate::util::copy::*;
 use crate::util::heap::layout::vm_layout::*;
-use crate::util::heap::{PageResource, VMRequest};
+use crate::util::heap::{PageResource, SpaceStats, VMRequest};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::MetadataSpec;
 use crate::util::options::{GCTriggerSelector, Options};
@@ -112,7 +112,7 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
 });
 
 impl<VM: VMBinding> Plan for LXR<VM> {
-    fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
+    fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);

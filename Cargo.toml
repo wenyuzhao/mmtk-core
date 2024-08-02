@@ -1,6 +1,6 @@
 [package]
 name = "mmtk"
-version = "0.23.0"
+version = "0.24.0"
 authors = ["The MMTk Developers <>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -10,7 +10,7 @@ repository = "https://github.com/mmtk/mmtk-core"
 readme = "README.md"
 categories = ["memory-management"]
 keywords = ["gc", "garbage", "collection", "garbage-collection", "allocation"]
-rust-version = "1.70.0"
+rust-version = "1.71.1"
 build = "build.rs"
 
 [lib]
@@ -45,7 +45,8 @@ log = { version = "0.4.17", features = [
 ] }
 memoffset = "0.9"
 mimalloc-sys = { version = "0.1.6", optional = true }
-mmtk-macros = { version = "0.23.0", path = "macros/" }
+# MMTk macros - we have to specify a version here in order to publish the crate, even though we use the dependency from a local path.
+mmtk-macros = { version = "0.24.0", path = "macros/" }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
 pfm = { git = "https://github.com/wenyuzhao/pfm.git", branch = "plm0", optional = true }
