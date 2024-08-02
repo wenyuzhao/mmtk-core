@@ -100,12 +100,13 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
                 scheduler.work_buckets[WorkBucketStage::Closure].add(w);
             }
             for roots in &sanity_checker.root_nodes {
-                scheduler.work_buckets[WorkBucketStage::Closure].add(ScanObjects::<
+                scheduler.work_buckets[WorkBucketStage::Closure].add(ProcessRootNode::<
+                    P::VM,
+                    SanityGCProcessEdges<P::VM>,
                     SanityGCProcessEdges<P::VM>,
                 >::new(
                     roots.clone(),
                     false,
-                    true,
                     false,
                     false,
                     WorkBucketStage::Closure,
@@ -154,18 +155,6 @@ impl<P: Plan> GCWork<P::VM> for SanityPrepare<P> {
             let mut sanity_checker = mmtk.sanity_checker.lock().unwrap();
             sanity_checker.refs.clear();
         }
-        for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(PrepareMutator::<P::VM>::new(mutator));
-        }
-        for w in &mmtk.scheduler.generic_worker_group.workers_shared {
-            let result = w.designated_work.push(Box::new(PrepareCollector));
-            debug_assert!(result.is_ok());
-        }
-        for w in &mmtk.scheduler.stw_worker_group.workers_shared {
-            let result = w.designated_work.push(Box::new(PrepareCollector));
-            debug_assert!(result.is_ok());
-        }
         crate::SANITY_LIVE_SIZE_IX.store(0, Ordering::Relaxed);
         crate::SANITY_LIVE_SIZE_LOS.store(0, Ordering::Relaxed);
     }
@@ -185,18 +174,6 @@ impl<P: Plan> GCWork<P::VM> for SanityRelease<P> {
     fn do_work(&mut self, _worker: &mut GCWorker<P::VM>, mmtk: &'static MMTK<P::VM>) {
         info!("Sanity GC release");
         mmtk.sanity_checker.lock().unwrap().clear_roots_cache();
-        for mutator in <P::VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Release]
-                .add(ReleaseMutator::<P::VM>::new(mutator));
-        }
-        for w in &mmtk.scheduler.generic_worker_group.workers_shared {
-            let result = w.designated_work.push(Box::new(ReleaseCollector));
-            debug_assert!(result.is_ok());
-        }
-        for w in &mmtk.scheduler.stw_worker_group.workers_shared {
-            let result = w.designated_work.push(Box::new(ReleaseCollector));
-            debug_assert!(result.is_ok());
-        }
         mmtk.sanity_end();
     }
 }
@@ -393,13 +370,8 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         object
     }
 
-    fn create_scan_work(
-        &self,
-        nodes: Vec<ObjectReference>,
-        roots: bool,
-    ) -> Self::ScanObjectsWorkType {
-        let mut x =
-            ScanObjects::<Self>::new(nodes, false, roots, false, false, WorkBucketStage::Closure);
+    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
+        let mut x = ScanObjects::<Self>::new(nodes, false, false, false, WorkBucketStage::Closure);
         x.discovery = false;
         x
     }

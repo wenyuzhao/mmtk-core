@@ -657,7 +657,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         super::record_edge_for_validation(slot, new_object);
     }
 
-    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
         unreachable!()
     }
 }
@@ -947,7 +947,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         self.flush();
     }
 
-    fn create_scan_work(&self, _nodes: Vec<ObjectReference>, _roots: bool) -> ScanObjects<Self> {
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
         unreachable!()
     }
 }

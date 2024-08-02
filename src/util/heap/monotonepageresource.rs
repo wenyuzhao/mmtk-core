@@ -151,6 +151,12 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                 new_current_chunk = new_current_chunk - BYTES_IN_CHUNK;
             }
             if self.common().contiguous && new_current_chunk != sync.current_chunk {
+                debug_assert!(
+                    chunk_align_down(sync.cursor) > sync.current_chunk,
+                    "Not monotonic.  chunk_align_down(sync.cursor): {}, sync.current_chunk: {}",
+                    chunk_align_down(sync.cursor),
+                    sync.current_chunk,
+                );
                 if sync.current_chunk.is_zero() {
                     growed_chunks = 1
                         + ((new_current_chunk - sync.contiguous_start_chunk) >> LOG_BYTES_IN_CHUNK);

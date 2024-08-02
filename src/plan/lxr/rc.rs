@@ -1110,11 +1110,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         }
     }
 
-    fn create_scan_work(
-        &self,
-        _nodes: Vec<ObjectReference>,
-        _roots: bool,
-    ) -> Self::ScanObjectsWorkType {
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
         unimplemented!()
     }
 }

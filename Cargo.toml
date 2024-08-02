@@ -1,6 +1,6 @@
 [package]
 name = "mmtk"
-version = "0.22.0"
+version = "0.23.0"
 authors = ["The MMTk Developers <>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -45,7 +45,7 @@ log = { version = "0.4.17", features = [
 ] }
 memoffset = "0.9"
 mimalloc-sys = { version = "0.1.6", optional = true }
-mmtk-macros = { path = "macros/" }
+mmtk-macros = { version = "0.23.0", path = "macros/" }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
 pfm = { git = "https://github.com/wenyuzhao/pfm.git", branch = "plm0", optional = true }
@@ -291,6 +291,10 @@ malloc_counted_size = []
 
 # Count the size of all live objects in GC
 count_live_bytes_in_gc = []
+
+# Workaround a problem where bpftrace scripts (see tools/tracing/timeline/capture.bt) cannot
+# capture the type names of work packets.
+bpftrace_workaround = []
 
 # Do not modify the following line - ci-common.sh matches it
 # -- Mutally exclusive features --
