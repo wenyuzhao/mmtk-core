@@ -580,6 +580,26 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         // gc_log!("Bulk release blocks {}", count);
     }
 
+    // pub fn iterate_blocks<F>(&self, mut f: F)
+    // where
+    //     F: FnMut(B),
+    // {
+    //     let chunks = self.chunks.read().unwrap();
+    //     for c in &*chunks {
+    //         for i in 0..Self::BLOCKS_IN_CHUNK {
+    //             let block = B::from_aligned_address(c.start() + (i << B::LOG_BYTES));
+    //             f(block);
+    //         }
+    //     }
+    // }
+
+    pub fn exhausted_reusable_space(&self) -> bool {
+        let chunks = self.chunks.read().unwrap();
+        let max_b_index = chunks.len() << (Chunk::LOG_BYTES - B::LOG_BYTES);
+        self.reuse_block_cursor.load(Ordering::Relaxed) >= max_b_index
+            && self.reuse_block_steal_cursor.load(Ordering::Relaxed) == 0
+    }
+
     pub fn prepare_gc(&self) {
         let _chunks = self.chunks.write().unwrap();
         self.clean_block_cursor.store(0, Ordering::SeqCst);

@@ -41,11 +41,6 @@ pub fn reset_workers<VM: VMBinding>() {
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
 pub fn current_worker_ordinal() -> Option<ThreadId> {
     let ordinal = WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed));
-    debug_assert_ne!(
-        ordinal,
-        ThreadId::MAX,
-        "Thread-local variable WORKER_ORDINAL not set yet."
-    );
     if ordinal == ThreadId::MAX {
         None
     } else {

@@ -233,9 +233,9 @@ mod tests {
     fn ensure_mapped_1page() {
         serial_test(|| {
             let pages = 1;
-            let start_chunk = ByteMapMmapper::address_to_mmap_chunks_down(FIXED_ADDRESS);
+            let start_chunk = ByteMapMmapper::address_to_mmap_chunks_down(*FIXED_ADDRESS);
             let end_chunk =
-                ByteMapMmapper::address_to_mmap_chunks_up(FIXED_ADDRESS + pages_to_bytes(pages));
+                ByteMapMmapper::address_to_mmap_chunks_up(*FIXED_ADDRESS + pages_to_bytes(pages));
             let test_memory_bytes = (end_chunk - start_chunk) * MMAP_CHUNK_BYTES;
             with_cleanup(
                 || {
@@ -260,9 +260,9 @@ mod tests {
     fn ensure_mapped_1chunk() {
         serial_test(|| {
             let pages = MMAP_CHUNK_BYTES >> LOG_BYTES_IN_PAGE as usize;
-            let start_chunk = ByteMapMmapper::address_to_mmap_chunks_down(FIXED_ADDRESS);
+            let start_chunk = ByteMapMmapper::address_to_mmap_chunks_down(*FIXED_ADDRESS);
             let end_chunk =
-                ByteMapMmapper::address_to_mmap_chunks_up(FIXED_ADDRESS + pages_to_bytes(pages));
+                ByteMapMmapper::address_to_mmap_chunks_up(*FIXED_ADDRESS + pages_to_bytes(pages));
             let test_memory_bytes = (end_chunk - start_chunk) * MMAP_CHUNK_BYTES;
             with_cleanup(
                 || {
@@ -287,9 +287,9 @@ mod tests {
     fn ensure_mapped_more_than_1chunk() {
         serial_test(|| {
             let pages = (MMAP_CHUNK_BYTES + MMAP_CHUNK_BYTES / 2) >> LOG_BYTES_IN_PAGE as usize;
-            let start_chunk = ByteMapMmapper::address_to_mmap_chunks_down(FIXED_ADDRESS);
+            let start_chunk = ByteMapMmapper::address_to_mmap_chunks_down(*FIXED_ADDRESS);
             let end_chunk =
-                ByteMapMmapper::address_to_mmap_chunks_up(FIXED_ADDRESS + pages_to_bytes(pages));
+                ByteMapMmapper::address_to_mmap_chunks_up(*FIXED_ADDRESS + pages_to_bytes(pages));
             let test_memory_bytes = (end_chunk - start_chunk) * MMAP_CHUNK_BYTES;
             with_cleanup(
                 || {

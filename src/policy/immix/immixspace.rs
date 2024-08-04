@@ -53,8 +53,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub line_mark_state: AtomicU8,
     /// Line mark state in previous GC
     line_unavail_state: AtomicU8,
-    /// A list of all reusable blocks
-    pub reusable_blocks: ReusableBlockPool,
     /// Defrag utilities
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
@@ -340,6 +338,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
                 #[cfg(feature = "object_pinning")]
                 *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC,
+                MetadataSpec::OnSide(Block::PHASE_EPOCH),
             ]
         } else {
             vec![
@@ -351,6 +350,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
                 #[cfg(feature = "object_pinning")]
                 *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC,
+                MetadataSpec::OnSide(Block::PHASE_EPOCH),
             ]
         })
     }
@@ -406,7 +406,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
             lines_consumed: AtomicUsize::new(0),
             reused_lines_consumed: AtomicUsize::new(0),
-            reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
             mark_state: Self::MARKED_STATE,
@@ -432,7 +431,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Flush the thread-local queues in BlockPageResource
     pub fn flush_page_resource(&self) {
-        self.reusable_blocks.flush_all();
         #[cfg(target_pointer_width = "64")]
         self.pr.flush_all()
     }
@@ -461,7 +459,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             collect_whole_heap,
             collection_attempts,
             user_triggered_collection,
-            self.reusable_blocks.len() == 0,
+            self.pr.exhausted_reusable_space(),
             full_heap_system_gc,
             self.cm_enabled,
             self.rc_enabled,
@@ -615,7 +613,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) {
         self.initial_mark_pause = initial_mark_pause;
         debug_assert!(!self.rc_enabled);
-        // self.block_allocation.reset();
+        self.pr.prepare_gc();
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -708,10 +706,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 );
             }
         }
-        // Clear reusable blocks list
-        if !super::BLOCK_ONLY {
-            self.reusable_blocks.reset();
-        }
+        self.pr.reset();
         // Sweep chunks and blocks
         let work_packets = self.generate_sweep_tasks();
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
@@ -948,6 +943,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
     }
 
+    /// Release a block.
+    pub fn release_block(&self, block: Block) {
+        block.deinit(self);
+    }
+
     /// Allocate a clean block.
     pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
         let block_address = self.acquire(tls, Block::PAGES);
@@ -1036,22 +1036,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if self.rc_enabled {
                 // pass
             } else {
+                // TODO: we haven't support sticky immix yet
                 // Get available lines. Do this before block.init which will reset block state.
-                let lines_delta = match block.get_state() {
-                    BlockState::Reusable { unavailable_lines } => {
-                        Block::LINES - unavailable_lines as usize
-                    }
-                    BlockState::Unmarked => Block::LINES,
-                    _ => unreachable!("{:?} {:?}", block, block.get_state()),
-                };
-                self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
+                // let lines_delta = match block.get_state() {
+                //     BlockState::Reusable { unavailable_lines } => {
+                //         Block::LINES - unavailable_lines as usize
+                //     }
+                //     BlockState::Unmarked => Block::LINES,
+                //     _ => unreachable!("{:?} {:?}", block, block.get_state()),
+                // };
+                // self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
             }
             block.init(copy, true, self);
         }
-    }
-
-    pub fn reusable_blocks_drained(&self) -> bool {
-        self.reusable_blocks.len() == 0
     }
 
     /// Trace and mark objects without evacuation.
@@ -1719,6 +1716,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             };
             // number of allocated blocks.
             let mut allocated_blocks = 0;
+            let mut freed_blocks = 0;
             // Iterate over all allocated blocks in this chunk.
             for block in self
                 .chunk
@@ -1728,12 +1726,15 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 if !block.sweep(self.space, &mut histogram, line_mark_state) {
                     // Block is live. Increment the allocated block count.
                     allocated_blocks += 1;
+                } else {
+                    freed_blocks += 1;
                 }
             }
             // Set this chunk as free if there is not live blocks.
             if allocated_blocks == 0 {
                 self.space.chunk_map.set(self.chunk, ChunkState::Free)
             }
+            self.space.pr.bulk_release_blocks(freed_blocks);
         }
         self.space.defrag.add_completed_mark_histogram(histogram);
         self.epilogue.finish_one_work_packet();

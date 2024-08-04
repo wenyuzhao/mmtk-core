@@ -110,6 +110,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // release the collected region
         self.last_gc_was_defrag
             .store(self.immix_space.release(true), Ordering::Relaxed);
+        Block::update_global_phase_epoch(&self.immix_space);
+    }
+    
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+        Block::update_global_phase_epoch(&self.immix_space);
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
