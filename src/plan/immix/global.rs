@@ -110,10 +110,38 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         // release the collected region
         self.last_gc_was_defrag
             .store(self.immix_space.release(true), Ordering::Relaxed);
+    }
+
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
         Block::update_global_phase_epoch(&self.immix_space);
     }
-    
-    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+
+    fn gc_pause_end(&self) {
+        // use crate::util::linear_scan::Region;
+        // let mut live_lines = 0;
+        // let mut total_lines = 0;
+        // let mut live_blocks = 0;
+        // for chunk in self.immix_space.chunk_map.all_chunks() {
+        //     if !self.immix_space.address_in_space(chunk.start()) {
+        //         continue;
+        //     }
+        //     for block in chunk.iter_region::<Block>() {
+        //         if block.get_state() == BlockState::Unallocated {
+        //             continue;
+        //         }
+        //         total_lines += Block::LINES;
+        //         live_blocks += 1;
+        //         for line in block.lines() {
+        //             if line.is_marked(self.immix_space.line_mark_state.load(Ordering::Relaxed)) {
+        //                 live_lines += 1;
+        //             }
+        //         }
+        //     }
+        // }
+        // println!(
+        //     "GC End: live_lines: {}, total_lines: {}, live_blocks: {}",
+        //     live_lines, total_lines, live_blocks
+        // );
         Block::update_global_phase_epoch(&self.immix_space);
     }
 

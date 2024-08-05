@@ -59,6 +59,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     pub fn reset(&mut self) {
+        if !self.space.rc_enabled {
+            for b in self.local_clean_blocks.iter() {
+                b.set_owner(None)
+            }
+            for b in self.local_reuse_blocks.iter() {
+                b.set_owner(None)
+            }
+        }
         if !self.copy {
             *self.local_clean_blocks = self
                 .local_clean_blocks
@@ -90,7 +98,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.request_for_large = false;
         self.line = None;
-        if self.copy {
+        if self.copy || !self.space.rc_enabled {
             // println!("copy allocator reset");
             self.local_clean_blocks.clear();
             self.local_reuse_blocks.clear();
