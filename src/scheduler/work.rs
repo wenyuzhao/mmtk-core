@@ -5,13 +5,6 @@ use crate::vm::VMBinding;
 use std::any::TypeId;
 use std::any::{type_name, Any};
 
-/// A special kind of work that will execute on the coordinator (i.e. controller) thread
-///
-/// The coordinator thread holds the global monitor lock when executing `CoordinatorWork`s.
-/// So, directly adding new work to any buckets will cause dead lock.
-/// For this case, use `WorkBucket::add_with_priority_unsync` instead.
-pub trait CoordinatorWork<VM: VMBinding>: 'static + Send + GCWork<VM> {}
-
 /// This defines a GC work packet which are assigned to the [`GCWorker`]s by the scheduler.
 /// Work packets carry payloads that indicate the work to be done. For example, a work packet may
 /// contain a pointer to a stack that must be scanned, or it may contain a large buffer of pointers
