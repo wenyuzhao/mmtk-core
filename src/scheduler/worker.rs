@@ -133,7 +133,7 @@ pub(crate) struct WorkerShouldExit;
 pub(crate) type PollResult<VM> = Result<Box<dyn GCWork<VM>>, WorkerShouldExit>;
 
 impl<VM: VMBinding> GCWorker<VM> {
-    pub fn new(
+    pub(crate) fn new(
         mmtk: &'static MMTK<VM>,
         ordinal: ThreadId,
         scheduler: Arc<GCWorkScheduler<VM>>,
@@ -329,7 +329,7 @@ enum WorkerCreationState<VM: VMBinding> {
 }
 
 /// A worker group to manage all the GC workers.
-pub struct WorkerGroup<VM: VMBinding> {
+pub(crate) struct WorkerGroup<VM: VMBinding> {
     /// Shared worker data
     pub workers_shared: Vec<Arc<GCWorkerShared<VM>>>,
     /// The stateful part.  `None` means state transition is underway.

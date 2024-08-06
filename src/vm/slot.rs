@@ -48,7 +48,7 @@ use crate::util::{Address, ObjectReference};
 ///
 /// Note: this trait only concerns the representation (i.e. the shape) of the slot, not its
 /// semantics, such as whether it holds strong or weak references.  If a VM holds a weak reference
-/// in a word as a pointer, it can also use `SimpleEdge` for weak reference fields.
+/// in a word as a pointer, it can also use `SimpleSlot` for weak reference fields.
 pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
     /// Load object reference from the slot.
     ///
@@ -200,12 +200,12 @@ fn a_simple_slot_should_have_the_same_size_as_a_pointer() {
 
 /// A abstract memory slice represents a piece of **heap** memory which may contains many slots.
 pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
-    /// The associate type to define how to access edges from a memory slice.
+    /// The associate type to define how to access slots from a memory slice.
     type SlotType: Slot;
-    /// The associate type to define how to iterate edges in a memory slice.
+    /// The associate type to define how to iterate slots in a memory slice.
     type SlotIterator: Iterator<Item = Self::SlotType>;
     type ChunkIterator: Iterator<Item = Self>;
-    /// Iterate object edges within the slice. If there are non-reference values in the slice, the iterator should skip them.
+    /// Iterate object slots within the slice. If there are non-reference values in the slice, the iterator should skip them.
     fn iter_slots(&self) -> Self::SlotIterator;
     /// Split the slice into smaller chunks and iterate over them.
     fn chunks(&self, chunk_size: usize) -> Self::ChunkIterator;
@@ -216,12 +216,12 @@ pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
     fn object(&self) -> Option<ObjectReference>;
     /// Start address of the memory slice
     fn start(&self) -> Address;
-    /// Size of the memory slice in bytes
+    /// Size of the memory slice
     fn bytes(&self) -> usize;
-    /// Number of elements in the memory slice
-    fn len(&self) -> usize;
     /// Memory copy support
     fn copy(src: &Self, tgt: &Self);
+    /// Number of elements in the memory slice
+    fn len(&self) -> usize;
     fn get(&self, index: usize) -> Self::SlotType;
 }
 
@@ -273,10 +273,6 @@ impl MemorySlice for Range<Address> {
         self.end - self.start
     }
 
-    fn len(&self) -> usize {
-        (self.end - self.start) >> LOG_BYTES_IN_ADDRESS
-    }
-
     fn copy(src: &Self, tgt: &Self) {
         debug_assert_eq!(src.bytes(), tgt.bytes());
         debug_assert_eq!(
@@ -291,6 +287,10 @@ impl MemorySlice for Range<Address> {
             let tgt = tgt.start().to_mut_ptr::<usize>();
             std::ptr::copy(src, tgt, words)
         }
+    }
+
+    fn len(&self) -> usize {
+        (self.end - self.start) >> LOG_BYTES_IN_ADDRESS
     }
 
     fn get(&self, index: usize) -> Self::SlotType {
@@ -349,11 +349,11 @@ impl<SL: Slot> MemorySlice for UnimplementedMemorySlice<SL> {
         unimplemented!()
     }
 
-    fn len(&self) -> usize {
+    fn copy(_src: &Self, _tgt: &Self) {
         unimplemented!()
     }
 
-    fn copy(_src: &Self, _tgt: &Self) {
+    fn len(&self) -> usize {
         unimplemented!()
     }
 

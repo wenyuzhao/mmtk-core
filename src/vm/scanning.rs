@@ -132,8 +132,8 @@ pub trait RootsWorkFactory<SL: Slot>: Clone + Send + 'static {
     /// The work packet may update the slots.
     ///
     /// Arguments:
-    /// * `edges`: A vector of edges.
-    fn create_process_roots_work(&mut self, edges: Vec<SL>, kind: RootKind);
+    /// * `slots`: A vector of slots.
+    fn create_process_roots_work(&mut self, slots: Vec<SL>, kind: RootKind);
 
     /// Create work packets to handle non-transitively pinning roots.
     ///
@@ -194,17 +194,17 @@ pub trait Scanning<VM: VMBinding> {
     /// Arguments:
     /// * `tls`: The VM-specific thread-local storage for the current worker.
     /// * `object`: The object to be scanned.
-    /// * `edge_visitor`: Called back for each edge.
+    /// * `slot_visitor`: Called back for each field.
     fn scan_object(
         tls: VMWorkerThread,
         object: ObjectReference,
-        edge_visitor: &mut impl SlotVisitor<VM::VMSlot>,
+        slot_visitor: &mut impl SlotVisitor<VM::VMSlot>,
     );
 
     fn scan_object_with_klass(
         tls: VMWorkerThread,
         object: ObjectReference,
-        edge_visitor: &mut impl SlotVisitor<VM::VMSlot>,
+        slot_visitor: &mut impl SlotVisitor<VM::VMSlot>,
         klass: Address,
     );
 

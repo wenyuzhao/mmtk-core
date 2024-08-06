@@ -8,7 +8,6 @@ pub struct GCRequester<VM: VMBinding> {
     /// Set by mutators to trigger GC.  It is atomic so that mutators can check if GC has already
     /// been requested efficiently in `poll` without acquiring any mutex.
     request_flag: AtomicBool,
-    concurrent: AtomicBool,
     scheduler: Arc<GCWorkScheduler<VM>>,
 }
 
@@ -16,24 +15,18 @@ impl<VM: VMBinding> GCRequester<VM> {
     pub fn new(scheduler: Arc<GCWorkScheduler<VM>>) -> Self {
         GCRequester {
             request_flag: AtomicBool::new(false),
-            concurrent: AtomicBool::new(false),
             scheduler,
         }
     }
 
-    pub fn is_concurrent_collection(&self) -> bool {
-        self.concurrent.load(Ordering::SeqCst)
-    }
-
     /// Request a GC.  Called by mutators when polling (during allocation) and when handling user
     /// GC requests (e.g. `System.gc();` in Java).
-    pub fn request(&self, concurrent: bool) {
+    pub fn request(&self) {
         if self.request_flag.load(Ordering::Relaxed) {
             return;
         }
 
         if !self.request_flag.swap(true, Ordering::Relaxed) {
-            self.concurrent.store(concurrent, Ordering::SeqCst);
             // `GCWorkScheduler::request_schedule_collection` needs to hold a mutex to communicate
             // with GC workers, which is expensive for functions like `poll`.  We use the atomic
             // flag `request_flag` to elide the need to acquire the mutex in subsequent calls.

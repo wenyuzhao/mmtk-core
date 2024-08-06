@@ -128,6 +128,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
         // initialize_collection() has to be called so we know GC is initialized.
         let allow_gc = should_poll && self.common().global_state.is_initialized();
+
+        trace!("Reserving pages");
         let pr = self.get_page_resource();
         let pages_reserved = pr.reserve_pages(pages);
         trace!("Pages reserved");
@@ -172,7 +174,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         .on_pending_allocation(pages_reserved);
 
                     VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
-                    Address::ZERO
+                    unsafe { Address::zero() }
                 }
             }
         }
@@ -564,7 +566,12 @@ impl<VM: VMBinding> CommonSpace<VM> {
         sft_map: &mut dyn crate::policy::sft_map::SFTMap,
         metadata: &SideMetadataContext,
     ) {
-        // For contiguous space, we eagerly initialize SFT map based on its address range.
+        // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks
+        // as new chunks (new_chunks = true). In that case, in grow_space(), we do not set SFT when new_chunks = false.
+        // We can fix this by either of these:
+        // * fix page resource, so it propelry returns new_chunk
+        // * change grow_space() so it sets SFT no matter what the new_chunks value is.
+        // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
             // FIXME(wenyuzhao):
             // Move this if-block from CommonSpace::new to here, to fix the mutator performance

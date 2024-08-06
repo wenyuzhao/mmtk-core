@@ -23,7 +23,7 @@ pub struct GCTrigger<VM: VMBinding> {
     plan: MaybeUninit<&'static dyn Plan<VM = VM>>,
     /// The triggering policy.
     pub policy: Box<dyn GCTriggerPolicy<VM>>,
-    pub gc_requester: Arc<GCRequester<VM>>,
+    gc_requester: Arc<GCRequester<VM>>,
     options: Arc<Options>,
     state: Arc<GlobalState>,
 }
@@ -87,7 +87,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_reserved_pages(),
                 plan.get_total_pages(),
             );
-            self.gc_requester.request(false);
+            self.gc_requester.request();
             return true;
         }
         false

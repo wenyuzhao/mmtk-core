@@ -201,6 +201,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `size`: the allocation size in bytes.
     /// * `align`: the required alignment in bytes.
     /// * `offset` the required offset in bytes.
+    #[inline(never)]
     fn alloc_slow(&mut self, size: usize, align: usize, offset: usize) -> Address {
         self.alloc_slow_inline(size, align, offset)
     }

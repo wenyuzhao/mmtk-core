@@ -109,7 +109,7 @@ pub struct MMTK<VM: VMBinding> {
     pub options: Arc<Options>,
     pub(crate) state: Arc<GlobalState>,
     pub(crate) plan: UnsafeCell<Box<dyn Plan<VM = VM>>>,
-    pub reference_processors: ReferenceProcessors,
+    pub(crate) reference_processors: ReferenceProcessors,
     pub(crate) finalizable_processor:
         Mutex<FinalizableProcessor<<VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType>>,
     pub scheduler: Arc<GCWorkScheduler<VM>>,
@@ -455,7 +455,7 @@ impl<VM: VMBinding> MMTK<VM> {
             self.state
                 .user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            self.gc_requester.request(false);
+            self.gc_requester.request();
             if !tls.0 .0.is_null() {
                 VM::VMCollection::block_for_gc(tls);
             }
@@ -474,7 +474,7 @@ impl<VM: VMBinding> MMTK<VM> {
             .store(true, Ordering::Relaxed);
         // TODO: The current `GCRequester::request()` is probably incorrect for internally triggered GC.
         // Consider removing functions related to "internal triggered collection".
-        self.gc_requester.request(true);
+        self.gc_requester.request();
     }
 
     /// Get a reference to the plan.

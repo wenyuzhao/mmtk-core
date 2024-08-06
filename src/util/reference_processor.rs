@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::vec::Vec;
 
@@ -21,17 +20,14 @@ pub struct ReferenceProcessors {
     soft: ReferenceProcessor,
     weak: ReferenceProcessor,
     phantom: ReferenceProcessor,
-    allow_new_candidate: Arc<AtomicBool>,
 }
 
 impl ReferenceProcessors {
     pub fn new() -> Self {
-        let allow_new_candidate = Arc::new(AtomicBool::new(true));
         ReferenceProcessors {
-            soft: ReferenceProcessor::new(Semantics::SOFT, allow_new_candidate.clone()),
-            weak: ReferenceProcessor::new(Semantics::WEAK, allow_new_candidate.clone()),
-            phantom: ReferenceProcessor::new(Semantics::PHANTOM, allow_new_candidate.clone()),
-            allow_new_candidate,
+            soft: ReferenceProcessor::new(Semantics::SOFT),
+            weak: ReferenceProcessor::new(Semantics::WEAK),
+            phantom: ReferenceProcessor::new(Semantics::PHANTOM),
         }
     }
 
@@ -41,10 +37,6 @@ impl ReferenceProcessors {
             Semantics::WEAK => &self.weak,
             Semantics::PHANTOM => &self.phantom,
         }
-    }
-
-    pub fn allow_new_candidate(&self) -> bool {
-        self.allow_new_candidate.load(Ordering::SeqCst)
     }
 
     pub fn add_soft_candidate(&self, reff: ObjectReference) {
@@ -152,7 +144,7 @@ pub struct ReferenceProcessor {
     // 5. When we trace objects in the node buffer, we will attempt to add WR as a candidate. As we have updated WR to WR' in our reference
     //    table, we would accept WR as a candidate. But we will not trace WR again, and WR will be invalid after this GC.
     // This flag is set to false after Step 4, so in Step 5, we will ignore adding WR.
-    allow_new_candidate: Arc<AtomicBool>,
+    allow_new_candidate: AtomicBool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -179,7 +171,7 @@ struct ReferenceProcessorSync {
 }
 
 impl ReferenceProcessor {
-    pub fn new(semantics: Semantics, allow_new_candidate: Arc<AtomicBool>) -> Self {
+    pub fn new(semantics: Semantics) -> Self {
         ReferenceProcessor {
             sync: Mutex::new(ReferenceProcessorSync {
                 references: HashSet::with_capacity(INITIAL_SIZE),
@@ -187,7 +179,7 @@ impl ReferenceProcessor {
                 nursery_index: 0,
             }),
             semantics,
-            allow_new_candidate,
+            allow_new_candidate: AtomicBool::new(true),
         }
     }
 
@@ -359,7 +351,6 @@ impl ReferenceProcessor {
     // to point to the reference that we last scanned. However, when we use HashSet for reference table,
     // we can no longer do that.
     fn scan<VM: VMBinding>(&self, _nursery: bool) {
-        self.disallow_new_candidate();
         let mut sync = self.sync.lock().unwrap();
 
         debug!("Starting ReferenceProcessor.scan({:?})", self.semantics);

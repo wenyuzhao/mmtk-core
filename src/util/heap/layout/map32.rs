@@ -279,6 +279,8 @@ impl VMMap for Map32 {
         let unavail_start_chunk = last_chunk + 1;
         let trailing_chunks = vm_layout().max_chunks() - unavail_start_chunk;
         let pages = (1 + last_chunk - first_chunk) * PAGES_IN_CHUNK;
+        // start_address=0xb0000000, first_chunk=704, last_chunk=703, unavail_start_chunk=704, trailing_chunks=320, pages=0
+        // startAddress=0x68000000 firstChunk=416 lastChunk=703 unavailStartChunk=704 trailingChunks=320 pages=294912
         self_mut.global_page_map.resize_freelist(pages, pages as _);
 
         on_discontig_start_determined(start_address);

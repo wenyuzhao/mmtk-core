@@ -251,12 +251,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
-        let pause = self.select_collection_kind(
-            self.base()
-                .gc_trigger
-                .gc_requester
-                .is_concurrent_collection(),
-        );
+        let pause = self.select_collection_kind();
         if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
             crate::counters()
                 .rc_during_satb
@@ -869,7 +864,7 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     #[allow(clippy::collapsible_else_if)]
-    fn select_collection_kind(&self, _concurrent: bool) -> Pause {
+    fn select_collection_kind(&self) -> Pause {
         if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
             INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
         }

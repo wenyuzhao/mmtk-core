@@ -34,6 +34,17 @@ pub trait FreeList: Sync + Downcast {
             s = self.get_size(unit);
             s < size
         }) {}
+        // loop {
+        //   unit = self.get_next(unit);
+        //   // println!("Current unit={}", unit);
+        //   if unit != self.head() {
+        //     break;
+        //   }
+        //   s = self.get_size(unit);
+        //   if s < size {
+        //     break;
+        //   }
+        // }
         if unit == self.head() {
             FAILURE
         } else {

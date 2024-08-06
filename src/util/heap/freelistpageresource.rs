@@ -173,7 +173,7 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
 }
 
 impl<VM: VMBinding> FreeListPageResource<VM> {
-    pub(crate) fn new_contiguous(
+    pub fn new_contiguous(
         start: Address,
         bytes: usize,
         vm_map: &'static dyn VMMap,
@@ -321,10 +321,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         if !region.is_zero() {
             self.total_chunks
                 .fetch_add(required_chunks, Ordering::Relaxed);
-            // debug_assert_eq!(
-            //     self.vm_map().get_contiguous_region_chunks(region),
-            //     required_chunks
-            // );
             let region_start = conversions::bytes_to_pages_up(region - sync.start);
             let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
             sync.free_list.set_uncoalescable(region_start as _);
@@ -374,8 +370,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             .extract_side_spec()
             .bzero_metadata(first, (pages as usize) << LOG_BYTES_IN_PAGE);
 
-        // if (VM.config.ZERO_PAGES_ON_RELEASE)
-        //     VM.memory.zero(false, first, Conversions.pagesToBytes(pages));
         debug_assert!(pages as usize <= self.common().accounting.get_committed_pages());
 
         if self.protect_memory_on_release {
