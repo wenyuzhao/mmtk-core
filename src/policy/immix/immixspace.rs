@@ -113,7 +113,6 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     }
 
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
-        debug_assert!(!object.is_null());
         if object_forwarding::is_forwarded::<VM>(object) {
             Some(object_forwarding::read_forwarding_pointer::<VM>(object))
         } else {
@@ -262,7 +261,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        debug_assert!(!object.is_null());
         if KIND == TRACE_KIND_TRANSITIVE_PIN {
             self.trace_object_without_moving(queue, object)
         } else if KIND == TRACE_KIND_DEFRAG {

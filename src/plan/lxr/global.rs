@@ -1104,7 +1104,6 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     pub fn mark(&self, o: ObjectReference) -> bool {
-        debug_assert!(!o.is_null());
         if self.immix_space.in_space(o) {
             self.immix_space.attempt_mark(o)
         } else {
@@ -1113,7 +1112,6 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     pub fn mark2(&self, o: ObjectReference, los: bool) -> bool {
-        debug_assert!(!o.is_null());
         if !los {
             self.immix_space.attempt_mark(o)
         } else {
@@ -1122,7 +1120,6 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     pub fn is_marked(&self, o: ObjectReference) -> bool {
-        debug_assert!(!o.is_null());
         if self.immix_space.in_space(o) {
             self.immix_space.is_marked(o)
         } else {

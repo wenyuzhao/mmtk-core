@@ -26,9 +26,6 @@ use std::sync::Arc;
 
 #[inline]
 fn prefetch_object<VM: VMBinding>(o: ObjectReference, ix: &ImmixSpace<VM>) {
-    if o.is_null() {
-        return;
-    }
     if crate::args::PREFETCH_HEADER {
         o.prefetch_read();
     }
@@ -163,7 +160,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        debug_assert!(!object.is_null());
         // debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         if self.plan.immix_space.in_space(object) {
             self.plan
@@ -201,10 +197,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
         let n = slice.len();
         for (i, e) in slice.iter_edges().enumerate() {
-            let t = e.load();
-            if t.is_null() {
+            let Some(t) = e.load() else {
                 continue;
-            }
+            };
             if SRC_IN_IMMIX
                 && Line::is_aligned(e.to_address())
                 && self.plan.immix_space.line_is_marked(e.to_address())
@@ -221,10 +216,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             self.trace_object(t);
             if crate::args::PREFETCH {
                 if i + crate::args::PREFETCH_STEP < n {
-                    prefetch_object(
-                        slice.get(i + crate::args::PREFETCH_STEP).load(),
-                        &self.plan.immix_space,
-                    );
+                    if let Some(o) = slice.get(i + crate::args::PREFETCH_STEP).load() {
+                        prefetch_object(o, &self.plan.immix_space);
+                    }
                 }
             }
         }
@@ -257,10 +251,9 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             CLDScanPolicy::Claim,
             RefScanPolicy::Discover,
             |e, out_of_heap| {
-                let t = e.load();
-                if t.is_null() {
+                let Some(t) = e.load() else {
                     return;
-                }
+                };
                 #[cfg(feature = "measure_trace_rate")]
                 {
                     self.scanned_non_null_slots += 1;
@@ -448,7 +441,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
             if cfg!(any(feature = "sanity", debug_assertions)) {
                 for o in &nodes {
                     assert!(
-                        o.is_null() || o.to_address::<VM>().is_mapped(),
+                        o.to_address::<VM>().is_mapped(),
                         "Invalid object {:?}: address is not mapped",
                         o
                     );
@@ -462,7 +455,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
             if cfg!(any(feature = "sanity", debug_assertions)) {
                 for o in &*nodes {
                     assert!(
-                        o.is_null() || o.to_address::<VM>().is_mapped(),
+                        o.to_address::<VM>().is_mapped(),
                         "Invalid object {:?}: address is not mapped",
                         o
                     );
@@ -555,9 +548,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 
     /// Trace  and evacuate objects.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
         // The memory (lines) of these edges can be reused at any time during mature evacuation.
         // Filter out invalid target objects.
         if self.remset_recorded_edges
@@ -648,11 +638,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+        let Some(object) = slot.load() else {
+            return;
+        };
         let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
+        if Self::OVERWRITE_REFERENCE && new_object != object {
             debug_assert!(!self.remset_recorded_edges);
-            slot.store(new_object);
+            slot.store(Some(new_object));
         }
         super::record_edge_for_validation(slot, new_object);
     }
@@ -664,9 +656,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
         debug_assert!(object.is_in_any_space::<VM>());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());
@@ -706,30 +695,38 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     }
 
     fn process_remset_edge(&mut self, slot: EdgeOf<Self>, i: usize) {
-        let object = slot.load();
+        let Some(object) = slot.load() else {
+            return;
+        };
         if object != self.refs[i] {
             return;
         }
         let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
+        if Self::OVERWRITE_REFERENCE && new_object != object {
             if slot.to_address().is_in_mmtk_heap() {
                 debug_assert!(self.remset_recorded_edges);
                 // Don't do the store if the original is already overwritten
-                let _ =
-                    slot.compare_exchange(object, new_object, Ordering::SeqCst, Ordering::SeqCst);
+                let _ = slot.compare_exchange(
+                    Some(object),
+                    Some(new_object),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
             } else {
-                slot.store(new_object);
+                slot.store(Some(new_object));
             }
         }
         super::record_edge_for_validation(slot, new_object);
     }
 
     fn process_mark_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+        let Some(object) = slot.load() else {
+            return;
+        };
         let new_object = self.trace_and_mark_object(object);
         super::record_edge_for_validation(slot, new_object);
-        if Self::OVERWRITE_REFERENCE && !new_object.is_null() && new_object != object {
-            slot.store(new_object);
+        if Self::OVERWRITE_REFERENCE && new_object != object {
+            slot.store(Some(new_object));
         }
     }
 
@@ -744,7 +741,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 self.process_mark_edge(*e);
                 if crate::args::PREFETCH {
                     if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
-                        prefetch_object(e.load(), &self.lxr.immix_space);
+                        if let Some(o) = e.load() {
+                            prefetch_object(o, &self.lxr.immix_space);
+                        }
                     }
                 }
             }
@@ -753,7 +752,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 self.process_remset_edge(*e, i);
                 if crate::args::PREFETCH {
                     if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
-                        prefetch_object(e.load(), &self.lxr.immix_space);
+                        if let Some(o) = e.load() {
+                            prefetch_object(o, &self.lxr.immix_space);
+                        }
                     }
                 }
             }
@@ -762,7 +763,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 self.process_edge(*e);
                 if crate::args::PREFETCH {
                     if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
-                        prefetch_object(e.load(), &self.lxr.immix_space);
+                        if let Some(o) = e.load() {
+                            prefetch_object(o, &self.lxr.immix_space);
+                        }
                     }
                 }
             }
@@ -775,7 +778,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                     if crate::args::PREFETCH {
                         if i + crate::args::PREFETCH_STEP < n {
                             let e = slice.get(i + crate::args::PREFETCH_STEP);
-                            prefetch_object(e.load(), &self.lxr.immix_space);
+                            if let Some(o) = e.load() {
+                                prefetch_object(o, &self.lxr.immix_space);
+                            }
                         }
                     }
                 }
@@ -788,7 +793,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                     if crate::args::PREFETCH {
                         if i + crate::args::PREFETCH_STEP < n {
                             let e = slice.get(i + crate::args::PREFETCH_STEP);
-                            prefetch_object(e.load(), &self.lxr.immix_space);
+                            if let Some(o) = e.load() {
+                                prefetch_object(o, &self.lxr.immix_space);
+                            }
                         }
                     }
                 }
@@ -827,10 +834,9 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                     CLDScanPolicy::Claim,
                     RefScanPolicy::Discover,
                     |e, _| {
-                        let o = e.load();
-                        if o.is_null() {
+                        let Some(o) = e.load() else {
                             return;
-                        }
+                        };
                         if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                             return;
                         }
@@ -904,9 +910,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
     /// Trace  and evacuate objects.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        if object.is_null() {
-            return object;
-        }
         if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
@@ -924,10 +927,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
-        let object = slot.load();
+        let Some(object) = slot.load() else {
+            return;
+        };
         let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE && new_object != object && !new_object.is_null() {
-            slot.store(new_object);
+        if Self::OVERWRITE_REFERENCE && new_object != object {
+            slot.store(Some(new_object));
         }
     }
 
@@ -937,7 +942,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             ProcessEdgesWork::process_edge(self, self.edges[i]);
             if crate::args::PREFETCH {
                 if let Some(e) = self.edges.get(i + crate::args::PREFETCH_STEP) {
-                    prefetch_object(e.load(), &self.lxr.immix_space);
+                    if let Some(o) = e.load() {
+                        prefetch_object(o, &self.lxr.immix_space);
+                    }
                 }
             }
         }

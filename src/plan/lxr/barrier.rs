@@ -114,7 +114,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<Option<ObjectReference>, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
             let old = edge.load();
             self.log_and_unlock_edge(edge);
@@ -125,7 +125,10 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     #[allow(unused)]
-    fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target_sloppy(
+        &self,
+        edge: VM::VMEdge,
+    ) -> Result<Option<ObjectReference>, ()> {
         if !edge.to_address().is_field_logged::<VM>() {
             let old = edge.load();
             edge.to_address().log_field::<VM>();
@@ -135,7 +138,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
+    fn slow(
+        &mut self,
+        _src: Option<ObjectReference>,
+        edge: VM::VMEdge,
+        old: Option<ObjectReference>,
+    ) {
         // FIXME: This assertion may fail!
         // #[cfg(any(
         //     feature = "sanity",
@@ -155,15 +163,15 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
                 .get(&edge.to_address())
                 .cloned()
                 .expect(&format!("Unknown edge {:?} -> {:?}", edge, old));
-            if old != o {
+            if old != Some(o) {
                 println!("barrier {:?} old={:?}", edge, old);
                 {
                     let _g = super::LAST_REFERENTS.lock();
-                    println!("{:?} {}", old, VM::VMObjectModel::dump_object_s(old));
-                    println!("{:?} {}", _src, VM::VMObjectModel::dump_object_s(_src));
+                    // println!("{:?} {}", old, VM::VMObjectModel::dump_object_s(old));
+                    // println!("{:?} {}", _src, VM::VMObjectModel::dump_object_s(_src));
                 }
                 assert!(
-                    old == o,
+                    old == Some(o),
                     "Untracked old referent {:?} -> {:?} should be {:?}  ",
                     edge,
                     old,
@@ -172,7 +180,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             }
         }
         // Reference counting
-        if !old.is_null() {
+        if let Some(old) = old {
             if !cfg!(feature = "lxr_no_decs") || !self.lxr.is_marked(old) {
                 self.decs.push(old);
                 if self.decs.is_full() {
@@ -195,7 +203,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     fn enqueue_node(
         &mut self,
-        src: ObjectReference,
+        src: Option<ObjectReference>,
         edge: VM::VMEdge,
         _new: Option<ObjectReference>,
     ) -> bool {
@@ -285,11 +293,11 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
 
     fn object_reference_write_slow(
         &mut self,
-        src: ObjectReference,
+        src: Option<ObjectReference>,
         slot: VM::VMEdge,
-        target: ObjectReference,
+        target: Option<ObjectReference>,
     ) {
-        self.enqueue_node(src, slot, Some(target));
+        self.enqueue_node(src, slot, target);
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
@@ -328,7 +336,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e, _| {
-            let _succ = self.enqueue_node(obj, e, None);
+            let _succ = self.enqueue_node(Some(obj), e, None);
             #[cfg(feature = "lxr_precise_incs_counter")]
             {
                 assert!(_succ);

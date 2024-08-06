@@ -64,7 +64,9 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
-        let o = e.load();
+        let Some(o) = e.load() else {
+            return false;
+        };
         if old_ref != o {
             return false;
         }

@@ -251,9 +251,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     #[cfg(feature = "fragmentation_analysis")]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         use crate::util::address::{CLDScanPolicy, RefScanPolicy};
-        if object.is_null() {
-            return object;
-        }
         if self.attempt_mark(object) {
             let lxr = self
                 .mmtk()

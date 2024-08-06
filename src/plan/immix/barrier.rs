@@ -100,7 +100,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<Option<ObjectReference>, ()> {
         if self.attempt_to_lock_edge_bailout_if_logged(edge) {
             let old = edge.load();
             self.log_and_unlock_edge(edge);
@@ -111,7 +111,10 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     #[allow(unused)]
-    fn log_edge_and_get_old_target_sloppy(&self, edge: VM::VMEdge) -> Result<ObjectReference, ()> {
+    fn log_edge_and_get_old_target_sloppy(
+        &self,
+        edge: VM::VMEdge,
+    ) -> Result<Option<ObjectReference>, ()> {
         if !edge.to_address().is_field_logged::<VM>() {
             let old = edge.load();
             edge.to_address().log_field::<VM>();
@@ -121,8 +124,13 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         }
     }
 
-    fn slow(&mut self, _src: ObjectReference, edge: VM::VMEdge, old: ObjectReference) {
-        if !old.is_null() {
+    fn slow(
+        &mut self,
+        _src: Option<ObjectReference>,
+        edge: VM::VMEdge,
+        old: Option<ObjectReference>,
+    ) {
+        if let Some(old) = old {
             self.decs.push(old);
             if self.decs.is_full() {
                 self.flush_decs();
@@ -136,7 +144,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
 
     fn enqueue_node(
         &mut self,
-        src: ObjectReference,
+        src: Option<ObjectReference>,
         edge: VM::VMEdge,
         _new: Option<ObjectReference>,
     ) {
@@ -191,11 +199,11 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
 
     fn object_reference_write_slow(
         &mut self,
-        src: ObjectReference,
+        src: Option<ObjectReference>,
         slot: VM::VMEdge,
-        target: ObjectReference,
+        target: Option<ObjectReference>,
     ) {
-        self.enqueue_node(src, slot, Some(target));
+        self.enqueue_node(src, slot, target);
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
@@ -216,7 +224,7 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
 
     fn object_probable_write_slow(&mut self, obj: ObjectReference) {
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e, _| {
-            self.enqueue_node(obj, e, None);
+            self.enqueue_node(Some(obj), e, None);
         })
     }
 }

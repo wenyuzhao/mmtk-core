@@ -31,9 +31,6 @@ use std::sync::Arc;
 
 #[inline]
 fn prefetch_object<VM: VMBinding>(o: ObjectReference, rc: &RefCountHelper<VM>) {
-    if o.is_null() {
-        return;
-    }
     if crate::args::PREFETCH_HEADER {
         o.prefetch_read();
     }
@@ -272,10 +269,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                         self.stat.los_rec_incs += 1;
                     }
                 }
-                let target = edge.load();
-                if target.is_null() {
+                let Some(target) = edge.load() else {
                     return;
-                }
+                };
                 // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
                 debug_assert!(
                     target.to_address::<VM>().is_mapped(),
@@ -448,10 +444,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if K == EDGE_KIND_MATURE {
             e.to_address().unlog_field_relaxed::<VM>();
         }
-        if o.is_null() {
-            return None;
-        }
-        Some(o)
+        o
     }
 
     fn process_edge<const K: EdgeKind>(
@@ -463,7 +456,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = match self.unlog_and_load_rc_object::<K>(e) {
             Some(o) => o,
             _ => {
-                super::record_edge_for_validation(e, ObjectReference::NULL);
+                // super::record_edge_for_validation(e, ObjectReference::NULL);
                 return None;
             }
         };
@@ -483,7 +476,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             //     self.rc.count(new),
             //     K
             // );
-            e.store(new)
+            e.store(Some(new))
         } else {
             // gc_log!(
             //     " -- inc {:?}: {:?} rc={} {:?}",
@@ -520,7 +513,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 }
                 if crate::args::PREFETCH {
                     if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
-                        self.prefetch_object(e.load());
+                        if let Some(o) = e.load() {
+                            self.prefetch_object(o);
+                        }
                     }
                 }
             }
@@ -538,7 +533,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 self.process_edge::<K>(*e, depth, false);
                 if crate::args::PREFETCH {
                     if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
-                        self.prefetch_object(e.load());
+                        if let Some(o) = e.load() {
+                            self.prefetch_object(o);
+                        }
                     }
                 }
             }
@@ -557,7 +554,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             if crate::args::PREFETCH {
                 if i + crate::args::PREFETCH_STEP < n {
                     let e = slice.get(i + crate::args::PREFETCH_STEP);
-                    self.prefetch_object(e.load());
+                    if let Some(o) = e.load() {
+                        self.prefetch_object(o);
+                    }
                 }
             }
         }
@@ -663,7 +662,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 if cfg!(any(feature = "sanity", debug_assertions)) {
                     for r in &roots {
                         assert!(
-                            r.is_null() || r.to_address::<VM>().is_mapped(),
+                            r.to_address::<VM>().is_mapped(),
                             "Invalid object {:?}: address is not mapped",
                             r
                         );
@@ -914,8 +913,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 CLDScanPolicy::Claim,
                 RefScanPolicy::Follow,
                 |edge, out_of_heap| {
-                    let x = edge.load();
-                    if !x.is_null() {
+                    if let Some(x) = edge.load() {
                         // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
                         if !out_of_heap {
                             let rc = self.rc.count(x);
@@ -979,9 +977,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
         for (i, o) in decs.iter().enumerate() {
             // println!("dec {:?}", o);
-            if o.is_null() {
-                continue;
-            }
+            // if o.is_null() {
+            //     continue;
+            // }
             if self.rc.is_dead_or_stuck(*o)
                 || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
             {
