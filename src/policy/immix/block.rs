@@ -472,13 +472,12 @@ impl Block {
         // if !copy && !reuse && space.rc_enabled {
         //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
         // }
+        self.update_phase_epoch();
         if space.rc_enabled {
             if !reuse {
-                self.clear_in_place_promoted();
                 debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
             self.clear_in_place_promoted();
-            self.update_phase_epoch();
             if copy {
                 debug_assert!((self.phase_epoch() & 1) == 0);
             } else {
@@ -513,7 +512,9 @@ impl Block {
     /// Deinitalize a block before releasing.
     pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         self.set_state(BlockState::Unallocated);
-        self.clear_in_place_promoted();
+        if space.rc_enabled {
+            self.clear_in_place_promoted();
+        }
         if space.rc_enabled {
             BLOCK_OWNER.store_atomic(self.start(), 0usize, Ordering::Relaxed);
             self.set_as_defrag_source(false);
@@ -604,7 +605,7 @@ impl Block {
         Self::NURSERY_PROMOTION_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
     }
 
-    pub fn clear_in_place_promoted(&self) {
+    fn clear_in_place_promoted(&self) {
         Self::NURSERY_PROMOTION_STATE_TABLE.store_atomic(self.start(), 0u8, Ordering::Relaxed);
     }
 
@@ -716,7 +717,8 @@ impl Block {
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
                 // Release the block if non of its lines are marked.
-                unimplemented!();
+                space.release_block(*self);
+                true
             } else {
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -724,7 +726,6 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: usize::min(marked_lines, u8::MAX as usize) as _,
                     });
-                    space.reusable_blocks.push(*self)
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
@@ -908,6 +909,7 @@ pub struct ReusableBlockPool {
     num_workers: usize,
 }
 
+#[allow(unused)]
 impl ReusableBlockPool {
     /// Create empty block list
     pub fn new(num_workers: usize) -> Self {
