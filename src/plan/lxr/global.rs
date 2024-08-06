@@ -618,7 +618,6 @@ impl<VM: VMBinding> LXR<VM> {
             ImmixSpaceArgs {
                 unlog_object_when_traced: false,
                 reset_log_bit_in_major_gc: false,
-                mixed_age: false,
             },
         );
         immix_space.cm_enabled = true;

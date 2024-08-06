@@ -88,7 +88,7 @@ impl Defrag {
         if cfg!(feature = "ix_always_defrag") {
             in_defrag = true;
         }
-        // println!("Defrag: {}", in_defrag);
+        info!("Defrag: {}", in_defrag);
         self.in_defrag_collection
             .store(in_defrag, Ordering::Release)
     }

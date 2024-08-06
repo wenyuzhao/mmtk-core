@@ -150,7 +150,7 @@ impl Address {
     /// The lowest possible address.
     pub const ZERO: Self = Address(0);
     /// The highest possible address.
-    pub const MAX: Self = Address(usize::max_value());
+    pub const MAX: Self = Address(usize::MAX);
 
     pub fn prefetch_read(self) {
         unsafe {
@@ -192,7 +192,6 @@ impl Address {
     /// It is unsafe and the user needs to be aware that they are creating an invalid address.
     /// The max address should only be used as unininitialized or sentinel values in performance critical code (where you dont want to use `Option<Address>`).
     pub unsafe fn max() -> Address {
-        use std::usize;
         Address(usize::MAX)
     }
 
