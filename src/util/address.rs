@@ -12,7 +12,7 @@ use crate::plan::barriers::LOCKED_VALUE;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOCKED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
-use crate::plan::EdgeIterator;
+use crate::plan::SlotIterator;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::vm::{ObjectModel, VMBinding};
 
@@ -613,7 +613,7 @@ mod tests {
 /// the opaque `ObjectReference` type, and we haven't seen a use case for now.
 ///
 /// Note that [`ObjectReference`] cannot be null.  For the cases where a non-null object reference
-/// may or may not exist, (such as the result of [`crate::vm::edge_shape::Edge::load`])
+/// may or may not exist, (such as the result of [`crate::vm::slot::Slot::load`])
 /// `Option<ObjectReference>` should be used.  [`ObjectReference`] is backed by `NonZeroUsize`
 /// which cannot be zero, and it has the `#[repr(transparent)]` attribute.  Thanks to [null pointer
 /// optimization (NPO)][NPO], `Option<ObjectReference>` has the same size as `NonZeroUsize` and
@@ -822,13 +822,13 @@ impl ObjectReference {
         }
     }
 
-    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMEdge, bool)>(
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(VM::VMSlot, bool)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate(
+        SlotIterator::<VM>::iterate(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,
@@ -838,14 +838,14 @@ impl ObjectReference {
         )
     }
 
-    pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMEdge, bool)>(
+    pub fn iterate_fields_with_klass<VM: VMBinding, F: FnMut(VM::VMSlot, bool)>(
         self,
         cld_scan: CLDScanPolicy,
         ref_scan: RefScanPolicy,
         klass: Address,
         f: F,
     ) {
-        EdgeIterator::<VM>::iterate(
+        SlotIterator::<VM>::iterate(
             self,
             ref_scan == RefScanPolicy::Discover,
             cld_scan == CLDScanPolicy::Claim,

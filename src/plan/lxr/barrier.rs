@@ -22,8 +22,8 @@ use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::util::*;
-use crate::vm::edge_shape::Edge;
-use crate::vm::edge_shape::MemorySlice;
+use crate::vm::slot::MemorySlice;
+use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::LazySweepingJobsCounter;
 use crate::MMTK;
@@ -37,7 +37,7 @@ pub const LOCKED_VALUE: u8 = 0b1;
 
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    incs: VectorQueue<VM::VMEdge>,
+    incs: VectorQueue<VM::VMSlot>,
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
     lxr: &'static LXR<VM>,
@@ -64,20 +64,20 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    fn get_edge_logging_state(&self, edge: VM::VMEdge) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(edge.to_address()) }
+    fn get_slot_logging_state(&self, slot: VM::VMSlot) -> u8 {
+        unsafe { Self::UNLOG_BITS.load(slot.to_address()) }
     }
 
-    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: VM::VMEdge) -> bool {
+    fn attempt_to_lock_slot_bailout_if_logged(&self, slot: VM::VMSlot) -> bool {
         loop {
             // Bailout if logged
-            if self.get_edge_logging_state(edge) == LOGGED_VALUE {
+            if self.get_slot_logging_state(slot) == LOGGED_VALUE {
                 return false;
             }
-            // Attempt to lock the edges
+            // Attempt to lock the slots
             if Self::LOCK_BITS
                 .compare_exchange_atomic(
-                    edge.to_address(),
+                    slot.to_address(),
                     UNLOCKED_VALUE,
                     LOCKED_VALUE,
                     Ordering::Relaxed,
@@ -85,39 +85,39 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
                 )
                 .is_ok()
             {
-                if self.get_edge_logging_state(edge) == LOGGED_VALUE {
-                    self.unlock_edge(edge);
+                if self.get_slot_logging_state(slot) == LOGGED_VALUE {
+                    self.unlock_slot(slot);
                     return false;
                 }
                 return true;
             }
-            // Failed to lock the edge. Spin.
+            // Failed to lock the slot. Spin.
             std::hint::spin_loop();
         }
     }
 
-    fn unlock_edge(&self, edge: VM::VMEdge) {
-        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
+    fn unlock_slot(&self, slot: VM::VMSlot) {
+        RC_LOCK_BITS.store_atomic(slot.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
+    fn log_and_unlock_slot(&self, slot: VM::VMSlot) {
         let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
             32usize
         } else {
             64
         };
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
-            unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
+            unsafe { Self::UNLOG_BITS.store(slot.to_address(), LOGGED_VALUE) };
         } else {
-            Self::UNLOG_BITS.store_atomic(edge.to_address(), LOGGED_VALUE, Ordering::Relaxed);
+            Self::UNLOG_BITS.store_atomic(slot.to_address(), LOGGED_VALUE, Ordering::Relaxed);
         }
-        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
+        RC_LOCK_BITS.store_atomic(slot.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<Option<ObjectReference>, ()> {
-        if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old = edge.load();
-            self.log_and_unlock_edge(edge);
+    fn log_slot_and_get_old_target(&self, slot: VM::VMSlot) -> Result<Option<ObjectReference>, ()> {
+        if self.attempt_to_lock_slot_bailout_if_logged(slot) {
+            let old = slot.load();
+            self.log_and_unlock_slot(slot);
             Ok(old)
         } else {
             Err(())
@@ -125,13 +125,13 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     }
 
     #[allow(unused)]
-    fn log_edge_and_get_old_target_sloppy(
+    fn log_slot_and_get_old_target_sloppy(
         &self,
-        edge: VM::VMEdge,
+        slot: VM::VMSlot,
     ) -> Result<Option<ObjectReference>, ()> {
-        if !edge.to_address().is_field_logged::<VM>() {
-            let old = edge.load();
-            edge.to_address().log_field::<VM>();
+        if !slot.to_address().is_field_logged::<VM>() {
+            let old = slot.load();
+            slot.to_address().log_field::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -141,7 +141,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn slow(
         &mut self,
         _src: Option<ObjectReference>,
-        edge: VM::VMEdge,
+        slot: VM::VMSlot,
         old: Option<ObjectReference>,
     ) {
         // FIXME: This assertion may fail!
@@ -153,27 +153,27 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         // debug_assert!(
         //     old.is_null() || self.lxr.rc.count(old) != 0,
         //     "zero rc count {:?} -> {:?}",
-        //     edge,
+        //     slot,
         //     old
         // );
         if cfg!(feature = "field_barrier_validation") {
             let o = super::LAST_REFERENTS
                 .lock()
                 .unwrap()
-                .get(&edge.to_address())
+                .get(&slot.to_address())
                 .cloned()
-                .expect(&format!("Unknown edge {:?} -> {:?}", edge, old));
-            if old != Some(o) {
-                println!("barrier {:?} old={:?}", edge, old);
+                .expect(&format!("Unknown slot {:?} -> {:?}", slot, old));
+            if old != o {
+                println!("barrier {:?} old={:?}", slot, old);
                 {
                     let _g = super::LAST_REFERENTS.lock();
                     // println!("{:?} {}", old, VM::VMObjectModel::dump_object_s(old));
                     // println!("{:?} {}", _src, VM::VMObjectModel::dump_object_s(_src));
                 }
                 assert!(
-                    old == Some(o),
+                    old == o,
                     "Untracked old referent {:?} -> {:?} should be {:?}  ",
-                    edge,
+                    slot,
                     old,
                     o,
                 )
@@ -188,11 +188,11 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
                 }
             }
         }
-        self.incs.push(edge);
+        self.incs.push(slot);
         #[cfg(feature = "lxr_precise_incs_counter")]
         {
             self.stat.total_incs += 1;
-            if self.lxr.los().address_in_space(edge.to_address()) {
+            if self.lxr.los().address_in_space(slot.to_address()) {
                 self.stat.los_incs += 1;
             }
         }
@@ -204,17 +204,17 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
     fn enqueue_node(
         &mut self,
         src: Option<ObjectReference>,
-        edge: VM::VMEdge,
+        slot: VM::VMSlot,
         _new: Option<ObjectReference>,
     ) -> bool {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if let Ok(old) = self.log_edge_and_get_old_target(edge) {
+        if let Ok(old) = self.log_slot_and_get_old_target(slot) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            self.slow(src, edge, old);
+            self.slow(src, slot, old);
             true
         } else {
             false
@@ -294,7 +294,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     fn object_reference_write_slow(
         &mut self,
         src: Option<ObjectReference>,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         target: Option<ObjectReference>,
     ) {
         self.enqueue_node(src, slot, target);
@@ -303,8 +303,8 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
-        for e in dst.iter_edges() {
-            let _succ = self.enqueue_node(ObjectReference::NULL, e, None);
+        for s in dst.iter_slots() {
+            let _succ = self.enqueue_node(ObjectReference::NULL, s, None);
             #[cfg(feature = "lxr_precise_incs_counter")]
             if _succ {
                 slots += 1;
@@ -335,8 +335,8 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         // assert_eq!(self.lxr.rc.count(obj), 1);
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
-        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e, _| {
-            let _succ = self.enqueue_node(Some(obj), e, None);
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |s, _| {
+            let _succ = self.enqueue_node(Some(obj), s, None);
             #[cfg(feature = "lxr_precise_incs_counter")]
             {
                 assert!(_succ);

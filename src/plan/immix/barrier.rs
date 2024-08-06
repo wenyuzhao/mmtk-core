@@ -8,15 +8,15 @@ use crate::plan::barriers::BarrierSemantics;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::VectorQueue;
 use crate::scheduler::gc_work::DummyPacket;
-use crate::scheduler::gc_work::UnlogEdges;
+use crate::scheduler::gc_work::UnlogSlots;
 use crate::scheduler::WorkBucketStage;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::RC_LOCK_BITS;
 use crate::util::*;
-use crate::vm::edge_shape::Edge;
-use crate::vm::edge_shape::MemorySlice;
+use crate::vm::slot::MemorySlice;
+use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::MMTK;
 
@@ -29,7 +29,7 @@ pub const LOCKED_VALUE: u8 = 0b1;
 
 pub struct ImmixFakeFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    incs: VectorQueue<VM::VMEdge>,
+    incs: VectorQueue<VM::VMSlot>,
     decs: VectorQueue<ObjectReference>,
     refs: VectorQueue<ObjectReference>,
 }
@@ -50,20 +50,20 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         }
     }
 
-    fn get_edge_logging_state(&self, edge: VM::VMEdge) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(edge.to_address()) }
+    fn get_slot_logging_state(&self, slot: VM::VMSlot) -> u8 {
+        unsafe { Self::UNLOG_BITS.load(slot.to_address()) }
     }
 
-    fn attempt_to_lock_edge_bailout_if_logged(&self, edge: VM::VMEdge) -> bool {
+    fn attempt_to_lock_slot_bailout_if_logged(&self, slot: VM::VMSlot) -> bool {
         loop {
             // Bailout if logged
-            if self.get_edge_logging_state(edge) == LOGGED_VALUE {
+            if self.get_slot_logging_state(slot) == LOGGED_VALUE {
                 return false;
             }
-            // Attempt to lock the edges
+            // Attempt to lock the slots
             if Self::LOCK_BITS
                 .compare_exchange_atomic(
-                    edge.to_address(),
+                    slot.to_address(),
                     UNLOCKED_VALUE,
                     LOCKED_VALUE,
                     Ordering::Relaxed,
@@ -71,39 +71,39 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
                 )
                 .is_ok()
             {
-                if self.get_edge_logging_state(edge) == LOGGED_VALUE {
-                    self.unlock_edge(edge);
+                if self.get_slot_logging_state(slot) == LOGGED_VALUE {
+                    self.unlock_slot(slot);
                     return false;
                 }
                 return true;
             }
-            // Failed to lock the edge. Spin.
+            // Failed to lock the slot. Spin.
             std::hint::spin_loop();
         }
     }
 
-    fn unlock_edge(&self, edge: VM::VMEdge) {
-        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
+    fn unlock_slot(&self, slot: VM::VMSlot) {
+        RC_LOCK_BITS.store_atomic(slot.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_and_unlock_edge(&self, edge: VM::VMEdge) {
+    fn log_and_unlock_slot(&self, slot: VM::VMSlot) {
         let heap_bytes_per_unlog_byte = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
             32usize
         } else {
             64
         };
         if (1 << crate::args::LOG_BYTES_PER_RC_LOCK_BIT) >= heap_bytes_per_unlog_byte {
-            unsafe { Self::UNLOG_BITS.store(edge.to_address(), LOGGED_VALUE) };
+            unsafe { Self::UNLOG_BITS.store(slot.to_address(), LOGGED_VALUE) };
         } else {
-            Self::UNLOG_BITS.store_atomic(edge.to_address(), LOGGED_VALUE, Ordering::Relaxed);
+            Self::UNLOG_BITS.store_atomic(slot.to_address(), LOGGED_VALUE, Ordering::Relaxed);
         }
-        RC_LOCK_BITS.store_atomic(edge.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
+        RC_LOCK_BITS.store_atomic(slot.to_address(), UNLOCKED_VALUE, Ordering::Relaxed);
     }
 
-    fn log_edge_and_get_old_target(&self, edge: VM::VMEdge) -> Result<Option<ObjectReference>, ()> {
-        if self.attempt_to_lock_edge_bailout_if_logged(edge) {
-            let old = edge.load();
-            self.log_and_unlock_edge(edge);
+    fn log_slot_and_get_old_target(&self, slot: VM::VMSlot) -> Result<Option<ObjectReference>, ()> {
+        if self.attempt_to_lock_slot_bailout_if_logged(slot) {
+            let old = slot.load();
+            self.log_and_unlock_slot(slot);
             Ok(old)
         } else {
             Err(())
@@ -111,13 +111,13 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     #[allow(unused)]
-    fn log_edge_and_get_old_target_sloppy(
+    fn log_slot_and_get_old_target_sloppy(
         &self,
-        edge: VM::VMEdge,
+        slot: VM::VMSlot,
     ) -> Result<Option<ObjectReference>, ()> {
-        if !edge.to_address().is_field_logged::<VM>() {
-            let old = edge.load();
-            edge.to_address().log_field::<VM>();
+        if !slot.to_address().is_field_logged::<VM>() {
+            let old = slot.load();
+            slot.to_address().log_field::<VM>();
             Ok(old)
         } else {
             Err(())
@@ -127,7 +127,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn slow(
         &mut self,
         _src: Option<ObjectReference>,
-        edge: VM::VMEdge,
+        slot: VM::VMSlot,
         old: Option<ObjectReference>,
     ) {
         if let Some(old) = old {
@@ -136,7 +136,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
                 self.flush_decs();
             }
         }
-        self.incs.push(edge);
+        self.incs.push(slot);
         if self.incs.is_full() {
             self.flush_incs();
         }
@@ -145,7 +145,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn enqueue_node(
         &mut self,
         src: Option<ObjectReference>,
-        edge: VM::VMEdge,
+        slot: VM::VMSlot,
         _new: Option<ObjectReference>,
     ) {
         if crate::args::BARRIER_MEASUREMENT_NO_SLOW {
@@ -154,11 +154,11 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if let Ok(old) = self.log_edge_and_get_old_target(edge) {
+        if let Ok(old) = self.log_slot_and_get_old_target(slot) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
-            self.slow(src, edge, old);
+            self.slow(src, slot, old);
         }
     }
 
@@ -166,7 +166,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(UnlogEdges(incs));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(UnlogSlots(incs));
         }
     }
 
@@ -200,15 +200,15 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     fn object_reference_write_slow(
         &mut self,
         src: Option<ObjectReference>,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         target: Option<ObjectReference>,
     ) {
         self.enqueue_node(src, slot, target);
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
-        for e in dst.iter_edges() {
-            self.enqueue_node(ObjectReference::NULL, e, None);
+        for s in dst.iter_slots() {
+            self.enqueue_node(ObjectReference::NULL, s, None);
         }
     }
 
@@ -223,8 +223,8 @@ impl<VM: VMBinding> BarrierSemantics for ImmixFakeFieldBarrierSemantics<VM> {
     }
 
     fn object_probable_write_slow(&mut self, obj: ObjectReference) {
-        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |e, _| {
-            self.enqueue_node(Some(obj), e, None);
+        obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |s, _| {
+            self.enqueue_node(Some(obj), s, None);
         })
     }
 }

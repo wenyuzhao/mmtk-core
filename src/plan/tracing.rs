@@ -3,11 +3,11 @@
 
 use std::marker::PhantomData;
 
-use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
+use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::Address;
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
-use crate::vm::EdgeVisitor;
+use crate::vm::SlotVisitor;
 use crate::vm::{Scanning, VMBinding};
 
 /// This trait represents an object queue to enqueue objects during tracing.
@@ -99,11 +99,11 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
     }
 }
 
-/// A transitive closure visitor to collect the edges from objects.
-/// It maintains a buffer for the edges, and flushes edges to a new work packet
+/// A transitive closure visitor to collect the slots from objects.
+/// It maintains a buffer for the slots, and flushes slots to a new work packet
 /// if the buffer is full or if the type gets dropped.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: VectorQueue<EdgeOf<E>>,
+    buffer: VectorQueue<SlotOf<E>>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     should_discover_references: bool,
     should_claim_and_scan_clds: bool,
@@ -142,7 +142,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
+impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
     }
@@ -152,12 +152,12 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     fn should_follow_clds(&self) -> bool {
         self.should_claim_and_scan_clds
     }
-    fn visit_edge(&mut self, slot: EdgeOf<E>, _out_of_haep: bool) {
+    fn visit_slot(&mut self, slot: SlotOf<E>, _out_of_heap: bool) {
         #[cfg(debug_assertions)]
         {
-            use crate::vm::edge_shape::Edge;
+            use crate::vm::slot::Slot;
             trace!(
-                "(ObjectsClosure) Visit edge {:?} (pointing to {:?})",
+                "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
                 slot,
                 slot.load()
             );
@@ -178,7 +178,7 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
-struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge, bool)> {
+struct SlotIteratorImpl<VM: VMBinding, F: FnMut(VM::VMSlot, bool)> {
     f: F,
     should_discover_references: bool,
     should_claim_clds: bool,
@@ -186,8 +186,8 @@ struct EdgeIteratorImpl<VM: VMBinding, F: FnMut(VM::VMEdge, bool)> {
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding, F: FnMut(VM::VMEdge, bool)> EdgeVisitor<VM::VMEdge>
-    for EdgeIteratorImpl<VM, F>
+impl<VM: VMBinding, F: FnMut(VM::VMSlot, bool)> SlotVisitor<VM::VMSlot>
+    for SlotIteratorImpl<VM, F>
 {
     fn should_discover_references(&self) -> bool {
         self.should_discover_references
@@ -198,25 +198,25 @@ impl<VM: VMBinding, F: FnMut(VM::VMEdge, bool)> EdgeVisitor<VM::VMEdge>
     fn should_follow_clds(&self) -> bool {
         self.should_follow_clds
     }
-    fn visit_edge(&mut self, slot: VM::VMEdge, out_of_heap: bool) {
+    fn visit_slot(&mut self, slot: VM::VMSlot, out_of_heap: bool) {
         (self.f)(slot, out_of_heap);
     }
 }
 
-pub struct EdgeIterator<VM: VMBinding> {
+pub struct SlotIterator<VM: VMBinding> {
     _p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> EdgeIterator<VM> {
+impl<VM: VMBinding> SlotIterator<VM> {
     pub fn iterate(
         o: ObjectReference,
         should_discover_references: bool,
         should_claim_clds: bool,
         should_follow_clds: bool,
-        f: impl FnMut(VM::VMEdge, bool),
+        f: impl FnMut(VM::VMSlot, bool),
         klass: Option<Address>,
     ) {
-        let mut x = EdgeIteratorImpl::<VM, _> {
+        let mut x = SlotIteratorImpl::<VM, _> {
             f,
             should_discover_references,
             should_claim_clds,

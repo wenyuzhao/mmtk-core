@@ -3,17 +3,17 @@ use super::cm::LXRStopTheWorldProcessEdges;
 use super::SurvivalRatioPredictorLocal;
 use super::LXR;
 use crate::plan::VectorQueue;
-use crate::scheduler::gc_work::EdgeOf;
 use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
+use crate::scheduler::gc_work::SlotOf;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::rc::*;
-use crate::vm::edge_shape::Edge;
-use crate::vm::edge_shape::MemorySlice;
+use crate::vm::slot::MemorySlice;
+use crate::vm::slot::Slot;
 use crate::LazySweepingJobsCounter;
 use crate::{
     plan::immix::Pause,
@@ -41,10 +41,10 @@ fn prefetch_object<VM: VMBinding>(o: ObjectReference, rc: &RefCountHelper<VM>) {
 
 pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
-    incs: Vec<VM::VMEdge>,
+    incs: Vec<VM::VMSlot>,
     inc_slices: Vec<VM::VMMemorySlice>,
     /// Recursively generated new increments
-    new_incs: VectorQueue<VM::VMEdge>,
+    new_incs: VectorQueue<VM::VMSlot>,
     new_inc_slices: VectorQueue<VM::VMMemorySlice>,
     new_incs_count: u32,
     pause: Pause,
@@ -105,21 +105,21 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    fn add_new_edge(&mut self, e: VM::VMEdge) {
-        self.new_incs.push(e);
+    fn add_new_slot(&mut self, s: VM::VMSlot) {
+        self.new_incs.push(s);
         self.new_incs_count += 1;
         if self.new_incs_count as usize >= Self::CAPACITY {
             self.flush();
         }
     }
 
-    fn add_new_slice(&mut self, e: VM::VMMemorySlice) {
-        let len = e.len();
+    fn add_new_slice(&mut self, s: VM::VMMemorySlice) {
+        let len = s.len();
         if self.new_incs_count as usize + len >= Self::CAPACITY {
             self.flush();
         }
         self.new_incs_count += len as u32;
-        self.new_inc_slices.push(e);
+        self.new_inc_slices.push(s);
         if self.new_incs_count as usize >= Self::CAPACITY {
             self.flush();
         }
@@ -129,7 +129,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         unreachable!()
     }
 
-    pub fn new(incs: Vec<VM::VMEdge>, lxr: &'static LXR<VM>) -> Self {
+    pub fn new(incs: Vec<VM::VMSlot>, lxr: &'static LXR<VM>) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::INC_BUFFER_COUNTER.add(incs.len());
         }
@@ -180,23 +180,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn record_mature_evac_remset2(
         &mut self,
-        edge_in_defrag: bool,
-        e: VM::VMEdge,
+        slot_in_defrag: bool,
+        s: VM::VMSlot,
         o: ObjectReference,
     ) {
         if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        if !edge_in_defrag && self.lxr.in_defrag(o) {
-            self.lxr.immix_space.mature_evac_remset.record(e, o);
+        if !slot_in_defrag && self.lxr.in_defrag(o) {
+            self.lxr.immix_space.mature_evac_remset.record(s, o);
         }
     }
 
-    fn record_mature_evac_remset(&mut self, e: VM::VMEdge, o: ObjectReference) {
+    fn record_mature_evac_remset(&mut self, s: VM::VMSlot, o: ObjectReference) {
         if !(crate::args::RC_MATURE_EVACUATION && (self.in_cm || self.pause == Pause::FinalMark)) {
             return;
         }
-        self.record_mature_evac_remset2(self.lxr.address_in_defrag(e.to_address()), e, o);
+        self.record_mature_evac_remset2(self.lxr.address_in_defrag(s.to_address()), s, o);
     }
 
     fn scan_nursery_object(
@@ -261,7 +261,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
         } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
-            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |edge, _| {
+            o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |slot, _| {
                 #[cfg(feature = "lxr_precise_incs_counter")]
                 {
                     self.stat.rec_incs += 1;
@@ -269,35 +269,35 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                         self.stat.los_rec_incs += 1;
                     }
                 }
-                let Some(target) = edge.load() else {
+                let Some(target) = slot.load() else {
                     return;
                 };
-                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, edge, target);
+                // println!(" -- rec inc opt {:?}.{:?} -> {:?}", o, slot, target);
                 debug_assert!(
                     target.to_address::<VM>().is_mapped(),
                     "Unmapped obj {:?}.{:?} -> {:?}",
                     o,
-                    edge,
+                    slot,
                     target
                 );
                 debug_assert!(
                     target.is_in_any_space::<VM>(),
                     "Unmapped obj {:?}.{:?} -> {:?}",
                     o,
-                    edge,
+                    slot,
                     target
                 );
                 // debug_assert!(
                 //     target.class_is_valid::<VM>(),
                 //     "Invalid object {:?}.{:?} -> {:?}",
                 //     o,
-                //     edge,
+                //     slot,
                 //     target
                 // );
                 let rc = self.rc.count(target);
                 if rc == 0 {
-                    // println!(" -- rec inc {:?}.{:?} -> {:?}", o, edge, target);
-                    self.add_new_edge(edge);
+                    // println!(" -- rec inc {:?}.{:?} -> {:?}", o, slot, target);
+                    self.add_new_slot(slot);
                 } else {
                     if rc != crate::util::rc::MAX_REF_COUNT {
                         let _ = self.rc.inc(target);
@@ -306,9 +306,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                             self.inc_objs += 1;
                         }
                     }
-                    self.record_mature_evac_remset2(obj_in_defrag, edge, target);
+                    self.record_mature_evac_remset2(obj_in_defrag, slot, target);
                 }
-                super::record_edge_for_validation(edge, target);
+                super::record_slot_for_validation(slot, Some(target));
             });
         }
     }
@@ -433,60 +433,60 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
-    /// Return `None` if the increment of the edge should be delayed
+    /// Return `None` if the increment of the slot should be delayed
     fn unlog_and_load_rc_object<const K: EdgeKind>(
         &mut self,
-        e: VM::VMEdge,
+        s: VM::VMSlot,
     ) -> Option<ObjectReference> {
         debug_assert!(!crate::args::EAGER_INCREMENTS);
-        let o = e.load();
-        // unlog edge
+        let o = s.load();
+        // unlog slot
         if K == EDGE_KIND_MATURE {
-            e.to_address().unlog_field_relaxed::<VM>();
+            s.to_address().unlog_field_relaxed::<VM>();
         }
         o
     }
 
-    fn process_edge<const K: EdgeKind>(
+    fn process_slot<const K: EdgeKind>(
         &mut self,
-        e: VM::VMEdge,
+        s: VM::VMSlot,
         depth: u32,
         add_root_to_remset: bool,
     ) -> Option<ObjectReference> {
-        let o = match self.unlog_and_load_rc_object::<K>(e) {
+        let o = match self.unlog_and_load_rc_object::<K>(s) {
             Some(o) => o,
             _ => {
-                // super::record_edge_for_validation(e, ObjectReference::NULL);
+                super::record_slot_for_validation(s, ObjectReference::NULL);
                 return None;
             }
         };
-        // println!(" - inc {:?}: {:?} rc={}", e, o, self.rc.count(o));
+        // println!(" - inc {:?}: {:?} rc={}", s, o, self.rc.count(o));
         o.verify::<VM>();
         let new = self.process_inc_and_evacuate(o, depth);
-        // Put this into remset if this is a mature edge, or a weak root
+        // Put this into remset if this is a mature slot, or a weak root
         if K != EDGE_KIND_ROOT || add_root_to_remset {
-            self.record_mature_evac_remset(e, new);
+            self.record_mature_evac_remset(s, new);
         }
         if new != o {
             // gc_log!(
             //     " -- inc {:?}: {:?} => {:?} rc={} {:?}",
-            //     e,
+            //     s,
             //     o,
             //     new.range::<VM>(),
             //     self.rc.count(new),
             //     K
             // );
-            e.store(Some(new))
+            s.store(Some(new))
         } else {
             // gc_log!(
             //     " -- inc {:?}: {:?} rc={} {:?}",
-            //     e,
+            //     s,
             //     o.range::<VM>(),
             //     self.rc.count(o),
             //     K
             // );
         }
-        super::record_edge_for_validation(e, new);
+        super::record_slot_for_validation(s, Some(new));
         Some(new)
     }
 
@@ -497,23 +497,23 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     fn process_incs<const K: EdgeKind>(
         &mut self,
-        mut incs: AddressBuffer<'_, VM::VMEdge>,
+        mut incs: AddressBuffer<'_, VM::VMSlot>,
         depth: u32,
         add_root_to_remset: bool,
     ) -> Option<Vec<ObjectReference>> {
         if K == EDGE_KIND_ROOT {
             let roots = incs.as_mut_ptr() as *mut ObjectReference;
             let mut num_roots = 0usize;
-            for (i, e) in incs.iter().enumerate() {
-                if let Some(new) = self.process_edge::<K>(*e, depth, add_root_to_remset) {
+            for (i, s) in incs.iter().enumerate() {
+                if let Some(new) = self.process_slot::<K>(*s, depth, add_root_to_remset) {
                     unsafe {
                         roots.add(num_roots).write(new);
                     }
                     num_roots += 1;
                 }
                 if crate::args::PREFETCH {
-                    if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = e.load() {
+                    if let Some(s) = incs.get(i + crate::args::PREFETCH_STEP) {
+                        if let Some(o) = s.load() {
                             self.prefetch_object(o);
                         }
                     }
@@ -529,11 +529,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 None
             }
         } else {
-            for (i, e) in incs.iter().enumerate() {
-                self.process_edge::<K>(*e, depth, false);
+            for (i, s) in incs.iter().enumerate() {
+                self.process_slot::<K>(*s, depth, false);
                 if crate::args::PREFETCH {
-                    if let Some(e) = incs.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = e.load() {
+                    if let Some(s) = incs.get(i + crate::args::PREFETCH_STEP) {
+                        if let Some(o) = s.load() {
                             self.prefetch_object(o);
                         }
                     }
@@ -549,12 +549,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         depth: u32,
     ) -> Option<Vec<ObjectReference>> {
         let n = slice.len();
-        for (i, e) in slice.iter_edges().enumerate() {
-            self.process_edge::<K>(e, depth, false);
+        for (i, s) in slice.iter_slots().enumerate() {
+            self.process_slot::<K>(s, depth, false);
             if crate::args::PREFETCH {
                 if i + crate::args::PREFETCH_STEP < n {
-                    let e = slice.get(i + crate::args::PREFETCH_STEP);
-                    if let Some(o) = e.load() {
+                    let s = slice.get(i + crate::args::PREFETCH_STEP);
+                    if let Some(o) = s.load() {
                         self.prefetch_object(o);
                     }
                 }
@@ -569,13 +569,13 @@ pub const EDGE_KIND_ROOT: u8 = 0;
 pub const EDGE_KIND_NURSERY: u8 = 1;
 pub const EDGE_KIND_MATURE: u8 = 2;
 
-enum AddressBuffer<'a, E: Edge> {
-    Owned(Vec<E>),
-    Ref(&'a mut Vec<E>),
+enum AddressBuffer<'a, S: Slot> {
+    Owned(Vec<S>),
+    Ref(&'a mut Vec<S>),
 }
 
-impl<E: Edge> Deref for AddressBuffer<'_, E> {
-    type Target = Vec<E>;
+impl<S: Slot> Deref for AddressBuffer<'_, S> {
+    type Target = Vec<S>;
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Owned(x) => x,
@@ -584,7 +584,7 @@ impl<E: Edge> Deref for AddressBuffer<'_, E> {
     }
 }
 
-impl<E: Edge> DerefMut for AddressBuffer<'_, E> {
+impl<S: Slot> DerefMut for AddressBuffer<'_, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Owned(x) => x,
@@ -633,7 +633,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if KIND == EDGE_KIND_ROOT {
             self.stat.roots = self.incs.len();
         }
-        let root_edges = if KIND == EDGE_KIND_ROOT
+        let root_slots = if KIND == EDGE_KIND_ROOT
             && (self.pause == Pause::FinalMark || self.pause == Pause::Full)
         {
             self.incs.clone()
@@ -673,9 +673,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     .postpone(LXRConcurrentTraceObjects::new(roots.clone(), mmtk));
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::Full {
-                if !root_edges.is_empty() {
+                if !root_slots.is_empty() {
                     let mut w = LXRStopTheWorldProcessEdges::new(
-                        root_edges,
+                        root_slots,
                         true,
                         mmtk,
                         WorkBucketStage::Closure,
@@ -867,12 +867,12 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
     }
 
-    fn record_mature_evac_remset(&mut self, lxr: &LXR<VM>, e: VM::VMEdge, o: ObjectReference) {
+    fn record_mature_evac_remset(&mut self, lxr: &LXR<VM>, s: VM::VMSlot, o: ObjectReference) {
         if !(crate::args::RC_MATURE_EVACUATION && self.concurrent_marking_in_progress) {
             return;
         }
-        if !lxr.address_in_defrag(e.to_address()) && lxr.in_defrag(o) {
-            lxr.immix_space.mature_evac_remset.record(e, o);
+        if !lxr.address_in_defrag(s.to_address()) && lxr.in_defrag(o) {
+            lxr.immix_space.mature_evac_remset.record(s, o);
         }
     }
 
@@ -912,16 +912,16 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             o.iterate_fields::<VM, _>(
                 CLDScanPolicy::Claim,
                 RefScanPolicy::Follow,
-                |edge, out_of_heap| {
-                    if let Some(x) = edge.load() {
-                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, edge, x);
+                |slot, out_of_heap| {
+                    if let Some(x) = slot.load() {
+                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, slot, x);
                         if !out_of_heap {
                             let rc = self.rc.count(x);
                             if rc != MAX_REF_COUNT && rc != 0 {
                                 self.recursive_dec(x);
                             }
                         } else {
-                            self.record_mature_evac_remset(lxr, edge, x);
+                            self.record_mature_evac_remset(lxr, slot, x);
                         }
                         if self.concurrent_marking_in_progress && !lxr.is_marked(x) {
                             if cfg!(any(feature = "sanity", debug_assertions)) {
@@ -929,7 +929,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                                     x.to_address::<VM>().is_mapped(),
                                     "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
                                     o,
-                                    edge,
+                                    slot,
                                     x
                                 );
                             }
@@ -1076,13 +1076,13 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
     fn new(
-        edges: Vec<EdgeOf<Self>>,
+        slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
         debug_assert!(roots);
-        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         Self { base }
     }
 
@@ -1090,18 +1090,18 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         unreachable!()
     }
 
-    fn process_edges(&mut self) {
-        if !self.edges.is_empty() {
+    fn process_slots(&mut self) {
+        if !self.slots.is_empty() {
             #[cfg(feature = "sanity")]
             if self.roots
                 && !self.mmtk().get_plan().is_in_sanity()
                 && (cfg!(feature = "fragmentation_analysis") || crate::frag_exp_enabled())
                 && self.root_kind != Some(RootKind::Weak)
             {
-                self.cache_roots_for_sanity_gc(self.edges.clone());
+                self.cache_roots_for_sanity_gc(self.slots.clone());
             }
             let lxr = self.mmtk().get_plan().downcast_ref::<LXR<VM>>().unwrap();
-            let roots = std::mem::take(&mut self.edges);
+            let roots = std::mem::take(&mut self.slots);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
             w.root_kind = self.root_kind;
             GCWork::do_work(&mut w, self.worker(), self.mmtk());

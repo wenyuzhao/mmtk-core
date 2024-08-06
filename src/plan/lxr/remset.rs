@@ -6,7 +6,7 @@ use crate::{
     plan::lxr::LXR,
     scheduler::{GCWork, GCWorker},
     util::Address,
-    vm::{edge_shape::Edge, VMBinding},
+    vm::{slot::Slot, VMBinding},
     MMTK,
 };
 
@@ -18,12 +18,12 @@ use std::sync::atomic::AtomicUsize;
 pub(super) struct RemSetEntry(Address, ObjectReference);
 
 impl RemSetEntry {
-    fn encode<VM: VMBinding>(edge: VM::VMEdge, o: ObjectReference) -> Self {
-        Self(edge.raw_address(), o)
+    fn encode<VM: VMBinding>(slot: VM::VMSlot, o: ObjectReference) -> Self {
+        Self(slot.raw_address(), o)
     }
 
-    pub fn decode<VM: VMBinding>(&self) -> (VM::VMEdge, ObjectReference) {
-        (VM::VMEdge::from_address(self.0), self.1)
+    pub fn decode<VM: VMBinding>(&self) -> (VM::VMSlot, ObjectReference) {
+        (VM::VMSlot::from_address(self.0), self.1)
     }
 }
 
@@ -95,12 +95,12 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
         }
     }
 
-    pub fn record(&self, e: VM::VMEdge, o: ObjectReference) {
+    pub fn record(&self, s: VM::VMSlot, o: ObjectReference) {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.add(1);
         }
         let id = crate::gc_worker_id().unwrap();
-        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(e, o));
+        self.gc_buffer(id).push(RemSetEntry::encode::<VM>(s, o));
         if self.gc_buffer(id).len() >= EvacuateMatureObjects::<VM>::CAPACITY {
             self.flush(id)
         }

@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::util::ObjectReference;
-use crate::vm::edge_shape::Edge;
+use crate::vm::slot::Slot;
 use crate::{
     plan::{immix::Pause, lxr::cm::LXRStopTheWorldProcessEdges},
     policy::{
@@ -32,25 +32,25 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         }
     }
 
-    fn address_is_valid_oop_edge(&self, e: VM::VMEdge, lxr: &LXR<VM>) -> bool {
-        // Keep edges not in the mmtk heap
-        // These should be edges in the c++ `ClassLoaderData` objects. We remember these edges
+    fn address_is_valid_oop_slot(&self, s: VM::VMSlot, lxr: &LXR<VM>) -> bool {
+        // Keep slots not in the mmtk heap
+        // These should be slots in the c++ `ClassLoaderData` objects. We remember these slots
         // in the remembered-set to avoid expensive CLD scanning.
-        if !lxr.immix_space.address_in_space(e.to_address())
-            && !lxr.los().address_in_space(e.to_address())
+        if !lxr.immix_space.address_in_space(s.to_address())
+            && !lxr.los().address_in_space(s.to_address())
         {
             return true;
         }
-        // Skip edges in collection set
-        if lxr.address_in_defrag(e.to_address()) {
+        // Skip slots in collection set
+        if lxr.address_in_defrag(s.to_address()) {
             return false;
         }
         if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
             return true;
         }
         // Check if it is a real oop field
-        if lxr.immix_space.address_in_space(e.to_address()) {
-            let block = Block::of(e.to_address());
+        if lxr.immix_space.address_in_space(s.to_address()) {
+            let block = Block::of(s.to_address());
             if block.get_state() == BlockState::Unallocated {
                 return false;
             }
@@ -58,13 +58,13 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         true
     }
 
-    fn process_edge(&mut self, e: VM::VMEdge, old_ref: ObjectReference, lxr: &LXR<VM>) -> bool {
-        // Skip edges that does not contain a real oop
-        if !self.address_is_valid_oop_edge(e, lxr) {
+    fn process_slot(&mut self, s: VM::VMSlot, old_ref: ObjectReference, lxr: &LXR<VM>) -> bool {
+        // Skip slots that does not contain a real oop
+        if !self.address_is_valid_oop_slot(s, lxr) {
             return false;
         }
         // Skip objects that are dead or out of the collection set.
-        let Some(o) = e.load() else {
+        let Some(o) = s.load() else {
             return false;
         };
         if old_ref != o {
@@ -84,25 +84,25 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 
-    fn process_edges(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {
+    fn process_slots(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
                 || lxr.current_pause() == Some(Pause::Full)
         );
         let remset = std::mem::take(&mut self.remset);
-        let mut edges = vec![];
+        let mut slots = vec![];
         let mut refs = vec![];
         for entry in remset {
-            let (e, o) = entry.decode::<VM>();
-            if self.process_edge(e, o, lxr) {
-                edges.push(e);
+            let (s, o) = entry.decode::<VM>();
+            if self.process_slot(s, o, lxr) {
+                slots.push(s);
                 refs.push(o);
             }
         }
-        if !edges.is_empty() {
+        if !slots.is_empty() {
             Some(Box::new(LXRStopTheWorldProcessEdges::new_remset(
-                edges, refs, mmtk,
+                slots, refs, mmtk,
             )))
         } else {
             None
@@ -112,7 +112,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let Some(work) = self.process_edges(mmtk) else {
+        let Some(work) = self.process_slots(mmtk) else {
             return;
         };
         // transitive closure

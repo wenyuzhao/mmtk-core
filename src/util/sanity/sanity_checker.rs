@@ -4,7 +4,7 @@ use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::ObjectReference;
-use crate::vm::edge_shape::Edge;
+use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::MMTK;
 use crate::{scheduler::*, ObjectQueue};
@@ -13,33 +13,33 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[allow(dead_code)]
-pub struct SanityChecker<ES: Edge> {
+pub struct SanityChecker<SL: Slot> {
     /// Visited objects
     refs: HashSet<ObjectReference>,
     /// Cached root edges for sanity root scanning
-    root_edges: Vec<(Vec<ES>, RootKind)>,
+    root_slots: Vec<(Vec<SL>, RootKind)>,
     /// Cached root nodes for sanity root scanning
     root_nodes: Vec<Vec<ObjectReference>>,
 }
 
-impl<ES: Edge> Default for SanityChecker<ES> {
+impl<SL: Slot> Default for SanityChecker<SL> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<ES: Edge> SanityChecker<ES> {
+impl<SL: Slot> SanityChecker<SL> {
     pub fn new() -> Self {
         Self {
             refs: HashSet::new(),
-            root_edges: vec![],
+            root_slots: vec![],
             root_nodes: vec![],
         }
     }
 
-    /// Cache a list of root edges to the sanity checker.
-    pub fn add_root_edges(&mut self, roots: Vec<ES>, kind: RootKind) {
-        self.root_edges.push((roots, kind))
+    /// Cache a list of root slots to the sanity checker.
+    pub fn add_root_slots(&mut self, roots: Vec<SL>, kind: RootKind) {
+        self.root_slots.push((roots, kind))
     }
 
     pub fn add_root_nodes(&mut self, roots: Vec<ObjectReference>) {
@@ -48,7 +48,7 @@ impl<ES: Edge> SanityChecker<ES> {
 
     /// Reset roots cache at the end of the sanity gc.
     pub(crate) fn clear_roots_cache(&mut self) {
-        self.root_edges.clear();
+        self.root_slots.clear();
         self.root_nodes.clear();
     }
 }
@@ -70,9 +70,9 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
 
         scheduler.reset_state();
 
-        // We are going to do sanity GC which will traverse the object graph again. Reset edge logger to clear recorded edges.
+        // We are going to do sanity GC which will traverse the object graph again. Reset slot logger to clear recorded slots.
         #[cfg(feature = "extreme_assertions")]
-        mmtk.edge_logger.reset();
+        mmtk.slot_logger.reset();
 
         mmtk.sanity_begin(); // Stop & scan mutators (mutator scanning can happen before STW)
 
@@ -89,7 +89,7 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
         // }
         {
             let sanity_checker = mmtk.sanity_checker.lock().unwrap();
-            for (roots, kind) in &sanity_checker.root_edges {
+            for (roots, kind) in &sanity_checker.root_slots {
                 let mut w = SanityGCProcessEdges::<P::VM>::new(
                     roots.clone(),
                     true,
@@ -227,13 +227,13 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
 
     const OVERWRITE_REFERENCE: bool = false;
     fn new(
-        edges: Vec<EdgeOf<Self>>,
+        slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
         Self {
-            base: ProcessEdgesBase::new(edges, roots, mmtk, bucket),
+            base: ProcessEdgesBase::new(slots, roots, mmtk, bucket),
             // ..Default::default()
             edge: None,
         }

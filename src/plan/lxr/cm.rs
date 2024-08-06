@@ -5,13 +5,13 @@ use crate::policy::immix::block::Block;
 use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
-use crate::scheduler::gc_work::{EdgeOf, ScanObjects};
+use crate::scheduler::gc_work::{ScanObjects, SlotOf};
 use crate::scheduler::RootKind;
 use crate::util::address::{CLDScanPolicy, RefScanPolicy};
 use crate::util::copy::CopySemantics;
 use crate::util::rc::RefCountHelper;
 use crate::util::{Address, ObjectReference};
-use crate::vm::edge_shape::{Edge, MemorySlice};
+use crate::vm::slot::{MemorySlice, Slot};
 use crate::{
     plan::ObjectQueue,
     scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
@@ -186,23 +186,23 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         &mut self,
         slice: &VM::VMMemorySlice,
     ) {
-        let e = slice.iter_edges().next().unwrap();
+        let s = slice.iter_slots().next().unwrap();
         if SRC_IN_IMMIX
             && self
                 .plan
                 .immix_space
-                .is_marked(e.to_address().to_object_reference::<VM>())
+                .is_marked(s.to_address().to_object_reference::<VM>())
         {
             return;
         }
         let n = slice.len();
-        for (i, e) in slice.iter_edges().enumerate() {
-            let Some(t) = e.load() else {
+        for (i, s) in slice.iter_slots().enumerate() {
+            let Some(t) = s.load() else {
                 continue;
             };
             if SRC_IN_IMMIX
-                && Line::is_aligned(e.to_address())
-                && self.plan.immix_space.line_is_marked(e.to_address())
+                && Line::is_aligned(s.to_address())
+                && self.plan.immix_space.line_is_marked(s.to_address())
             {
                 return;
             }
@@ -211,7 +211,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 self.scanned_non_null_slots += 1;
             }
             if crate::args::RC_MATURE_EVACUATION && !SRC_IN_DEFRAG && self.plan.in_defrag(t) {
-                self.plan.immix_space.mature_evac_remset.record(e, t);
+                self.plan.immix_space.mature_evac_remset.record(s, t);
             }
             self.trace_object(t);
             if crate::args::PREFETCH {
@@ -250,8 +250,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         object.iterate_fields::<VM, _>(
             CLDScanPolicy::Claim,
             RefScanPolicy::Discover,
-            |e, out_of_heap| {
-                let Some(t) = e.load() else {
+            |s, out_of_heap| {
+                let Some(t) = s.load() else {
                     return;
                 };
                 #[cfg(feature = "measure_trace_rate")]
@@ -262,7 +262,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     && (CHECK_REMSET || out_of_heap)
                     && self.plan.in_defrag(t)
                 {
-                    self.plan.immix_space.mature_evac_remset.record(e, t);
+                    self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
                 self.next_objects.push(t);
                 if self.next_objects.len() > 8192 {
@@ -477,25 +477,25 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     base: ProcessEdgesBase<VM>,
     array_slices: Vec<VM::VMMemorySlice>,
     forwarded_roots: Vec<ObjectReference>,
-    next_edges: VectorQueue<EdgeOf<Self>>,
+    next_slots: VectorQueue<SlotOf<Self>>,
     next_array_slices: VectorQueue<VM::VMMemorySlice>,
-    next_edge_count: u32,
-    remset_recorded_edges: bool,
+    next_slot_count: u32,
+    remset_recorded_slots: bool,
     refs: Vec<ObjectReference>,
     should_record_forwarded_roots: bool,
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     pub(super) fn new_remset(
-        edges: Vec<EdgeOf<Self>>,
+        slots: Vec<SlotOf<Self>>,
         refs: Vec<ObjectReference>,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
         }
-        let mut me = Self::new(edges, false, mmtk, WorkBucketStage::Closure);
-        me.remset_recorded_edges = true;
+        let mut me = Self::new(slots, false, mmtk, WorkBucketStage::Closure);
+        me.remset_recorded_slots = true;
         me.refs = refs;
         me
     }
@@ -507,15 +507,15 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(
-        edges: Vec<EdgeOf<Self>>,
+        slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
         }
-        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
             lxr,
@@ -523,10 +523,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             pause: Pause::RefCount,
             forwarded_roots: vec![],
             array_slices: vec![],
-            next_edges: VectorQueue::new(),
+            next_slots: VectorQueue::new(),
             next_array_slices: VectorQueue::new(),
-            next_edge_count: 0,
-            remset_recorded_edges: false,
+            next_slot_count: 0,
+            remset_recorded_slots: false,
             refs: vec![],
             should_record_forwarded_roots: false,
         }
@@ -534,23 +534,23 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
-            let edges = self.next_edges.take();
+        if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+            let slots = self.next_slots.take();
             let slices = self.next_array_slices.take();
-            let mut w = Self::new(edges, false, self.mmtk(), self.bucket);
+            let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
             self.worker()
                 .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
         assert!(self.nodes.is_empty());
-        self.next_edge_count = 0;
+        self.next_slot_count = 0;
     }
 
     /// Trace  and evacuate objects.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        // The memory (lines) of these edges can be reused at any time during mature evacuation.
+        // The memory (lines) of these slots can be reused at any time during mature evacuation.
         // Filter out invalid target objects.
-        if self.remset_recorded_edges
+        if self.remset_recorded_slots
             && (!object.is_in_any_space::<VM>() || !object.to_address::<VM>().is_aligned_to(8))
         {
             return object;
@@ -569,7 +569,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             object.to_address::<VM>().is_aligned_to(8),
             "Invalid {:?} remset={}",
             object,
-            self.remset_recorded_edges
+            self.remset_recorded_slots
         );
         debug_assert!(object.class_is_valid::<VM>());
         let object = object.get_forwarded_object::<VM>().unwrap_or(object);
@@ -600,7 +600,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         new_object
     }
 
-    fn process_edges(&mut self) {
+    fn process_slots(&mut self) {
         self.should_record_forwarded_roots = self.roots
             && !self
                 .root_kind
@@ -608,27 +608,27 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 .unwrap_or_default();
         self.pause = self.lxr.current_pause().unwrap();
         if self.should_record_forwarded_roots {
-            self.forwarded_roots.reserve(self.edges.len());
+            self.forwarded_roots.reserve(self.slots.len());
         }
-        let edges = std::mem::take(&mut self.edges);
+        let slots = std::mem::take(&mut self.slots);
         let slices = std::mem::take(&mut self.array_slices);
-        self.process_edges_impl(&edges, &slices, self.remset_recorded_edges);
+        self.process_slots_impl(&slots, &slices, self.remset_recorded_slots);
         self.roots = false;
-        self.remset_recorded_edges = false;
+        self.remset_recorded_slots = false;
         let should_record_forwarded_roots = self.should_record_forwarded_roots;
         self.should_record_forwarded_roots = false;
-        let mut edges = vec![];
+        let mut slots = vec![];
         let mut slices = vec![];
-        while !self.next_edges.is_empty() || !self.next_array_slices.is_empty() {
-            self.next_edge_count = 0;
-            edges.clear();
+        while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+            self.next_slot_count = 0;
+            slots.clear();
             slices.clear();
-            self.next_edges.swap(&mut edges);
+            self.next_slots.swap(&mut slots);
             self.next_array_slices.swap(&mut slices);
-            self.process_edges_impl(&edges, &slices, false);
+            self.process_slots_impl(&slots, &slices, false);
         }
         if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
         }
         self.flush();
         if should_record_forwarded_roots {
@@ -637,16 +637,16 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         }
     }
 
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             return;
         };
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object {
-            debug_assert!(!self.remset_recorded_edges);
+            debug_assert!(!self.remset_recorded_slots);
             slot.store(Some(new_object));
         }
-        super::record_edge_for_validation(slot, new_object);
+        super::record_slot_for_validation(slot, Some(new_object));
     }
 
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
@@ -694,7 +694,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         x
     }
 
-    fn process_remset_edge(&mut self, slot: EdgeOf<Self>, i: usize) {
+    fn process_remset_slot(&mut self, slot: SlotOf<Self>, i: usize) {
         let Some(object) = slot.load() else {
             return;
         };
@@ -704,7 +704,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object {
             if slot.to_address().is_in_mmtk_heap() {
-                debug_assert!(self.remset_recorded_edges);
+                debug_assert!(self.remset_recorded_slots);
                 // Don't do the store if the original is already overwritten
                 let _ = slot.compare_exchange(
                     Some(object),
@@ -716,54 +716,54 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
                 slot.store(Some(new_object));
             }
         }
-        super::record_edge_for_validation(slot, new_object);
+        super::record_slot_for_validation(slot, Some(new_object));
     }
 
-    fn process_mark_edge(&mut self, slot: EdgeOf<Self>) {
+    fn process_mark_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             return;
         };
         let new_object = self.trace_and_mark_object(object);
-        super::record_edge_for_validation(slot, new_object);
+        super::record_slot_for_validation(slot, Some(new_object));
         if Self::OVERWRITE_REFERENCE && new_object != object {
             slot.store(Some(new_object));
         }
     }
 
-    fn process_edges_impl(
+    fn process_slots_impl(
         &mut self,
-        edges: &[VM::VMEdge],
+        slots: &[VM::VMSlot],
         slices: &[VM::VMMemorySlice],
-        remset_edges: bool,
+        remset_slots: bool,
     ) {
         if self.pause == Pause::Full {
-            for (i, e) in edges.iter().enumerate() {
-                self.process_mark_edge(*e);
+            for (i, s) in slots.iter().enumerate() {
+                self.process_mark_slot(*s);
                 if crate::args::PREFETCH {
-                    if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = e.load() {
+                    if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
+                        if let Some(o) = s.load() {
                             prefetch_object(o, &self.lxr.immix_space);
                         }
                     }
                 }
             }
-        } else if remset_edges {
-            for (i, e) in edges.iter().enumerate() {
-                self.process_remset_edge(*e, i);
+        } else if remset_slots {
+            for (i, s) in slots.iter().enumerate() {
+                self.process_remset_slot(*s, i);
                 if crate::args::PREFETCH {
-                    if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = e.load() {
+                    if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
+                        if let Some(o) = s.load() {
                             prefetch_object(o, &self.lxr.immix_space);
                         }
                     }
                 }
             }
         } else {
-            for (i, e) in edges.iter().enumerate() {
-                self.process_edge(*e);
+            for (i, s) in slots.iter().enumerate() {
+                self.process_slot(*s);
                 if crate::args::PREFETCH {
-                    if let Some(e) = edges.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = e.load() {
+                    if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
+                        if let Some(o) = s.load() {
                             prefetch_object(o, &self.lxr.immix_space);
                         }
                     }
@@ -773,12 +773,12 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if self.pause == Pause::Full {
             for slice in slices {
                 let n = slice.len();
-                for (i, e) in slice.iter_edges().enumerate() {
-                    self.process_mark_edge(e);
+                for (i, s) in slice.iter_slots().enumerate() {
+                    self.process_mark_slot(s);
                     if crate::args::PREFETCH {
                         if i + crate::args::PREFETCH_STEP < n {
-                            let e = slice.get(i + crate::args::PREFETCH_STEP);
-                            if let Some(o) = e.load() {
+                            let s = slice.get(i + crate::args::PREFETCH_STEP);
+                            if let Some(o) = s.load() {
                                 prefetch_object(o, &self.lxr.immix_space);
                             }
                         }
@@ -788,12 +788,12 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         } else {
             for slice in slices {
                 let n = slice.len();
-                for (i, e) in slice.iter_edges().enumerate() {
-                    self.process_edge(e);
+                for (i, s) in slice.iter_slots().enumerate() {
+                    self.process_slot(s);
                     if crate::args::PREFETCH {
                         if i + crate::args::PREFETCH_STEP < n {
-                            let e = slice.get(i + crate::args::PREFETCH_STEP);
-                            if let Some(o) = e.load() {
+                            let s = slice.get(i + crate::args::PREFETCH_STEP);
+                            if let Some(o) = s.load() {
                                 prefetch_object(o, &self.lxr.immix_space);
                             }
                         }
@@ -818,12 +818,12 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                 let data = VM::VMScanning::obj_array_data(object);
                 for chunk in data.chunks(Self::CAPACITY) {
                     let len: usize = chunk.len();
-                    if self.next_edge_count as usize + len >= Self::CAPACITY {
+                    if self.next_slot_count as usize + len >= Self::CAPACITY {
                         self.flush();
                     }
-                    self.next_edge_count += len as u32;
+                    self.next_slot_count += len as u32;
                     self.next_array_slices.push(chunk);
-                    if self.next_edge_count as usize >= Self::CAPACITY {
+                    if self.next_slot_count as usize >= Self::CAPACITY {
                         self.flush();
                     }
                 }
@@ -833,16 +833,16 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                 object.iterate_fields::<VM, _>(
                     CLDScanPolicy::Claim,
                     RefScanPolicy::Discover,
-                    |e, _| {
-                        let Some(o) = e.load() else {
+                    |s, _| {
+                        let Some(o) = s.load() else {
                             return;
                         };
                         if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                             return;
                         }
-                        self.next_edges.push(e);
-                        self.next_edge_count += 1;
-                        if self.next_edge_count as usize >= Self::CAPACITY {
+                        self.next_slots.push(s);
+                        self.next_slot_count += 1;
+                        if self.next_slot_count as usize >= Self::CAPACITY {
                             self.flush();
                         }
                     },
@@ -869,7 +869,7 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
-    next_edges: VectorQueue<EdgeOf<Self>>,
+    next_slots: VectorQueue<SlotOf<Self>>,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
@@ -878,31 +878,31 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(
-        edges: Vec<EdgeOf<Self>>,
+        slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(edges.len());
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
         }
-        let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
             lxr,
             base,
             pause: Pause::RefCount,
-            next_edges: VectorQueue::new(),
+            next_slots: VectorQueue::new(),
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_edges.is_empty() {
-            let edges = self.next_edges.take();
+        if !self.next_slots.is_empty() {
+            let slots = self.next_slots.take();
             self.worker().add_boxed_work(
                 WorkBucketStage::Unconstrained,
-                Box::new(Self::new(edges, false, self.mmtk(), self.bucket)),
+                Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
             );
         }
         assert!(self.nodes.is_empty());
@@ -926,7 +926,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         }
     }
 
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             return;
         };
@@ -936,20 +936,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         }
     }
 
-    fn process_edges(&mut self) {
+    fn process_slots(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
-        for i in 0..self.edges.len() {
-            ProcessEdgesWork::process_edge(self, self.edges[i]);
+        for i in 0..self.slots.len() {
+            self.process_slot(self.slots[i]);
             if crate::args::PREFETCH {
-                if let Some(e) = self.edges.get(i + crate::args::PREFETCH_STEP) {
-                    if let Some(o) = e.load() {
+                if let Some(s) = self.slots.get(i + crate::args::PREFETCH_STEP) {
+                    if let Some(o) = s.load() {
                         prefetch_object(o, &self.lxr.immix_space);
                     }
                 }
             }
         }
         if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.edges.len());
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
         }
         self.flush();
     }
@@ -967,9 +967,9 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |e, _| {
-            self.next_edges.push(e);
-            if self.next_edges.is_full() {
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |s, _| {
+            self.next_slots.push(s);
+            if self.next_slots.is_full() {
                 self.flush();
             }
         })

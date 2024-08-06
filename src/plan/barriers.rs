@@ -2,7 +2,7 @@
 
 use std::sync::atomic::AtomicUsize;
 
-use crate::vm::edge_shape::{Edge, MemorySlice};
+use crate::vm::slot::{MemorySlice, Slot};
 use crate::vm::ObjectModel;
 use crate::{
     util::{metadata::MetadataSpec, *},
@@ -60,7 +60,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write(
         &mut self,
         src: Option<ObjectReference>,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         target: Option<ObjectReference>,
     ) {
         self.object_reference_write_pre(src, slot, target);
@@ -72,7 +72,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_pre(
         &mut self,
         _src: Option<ObjectReference>,
-        _slot: VM::VMEdge,
+        _slot: VM::VMSlot,
         _target: Option<ObjectReference>,
     ) {
     }
@@ -81,7 +81,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_post(
         &mut self,
         _src: Option<ObjectReference>,
-        _slot: VM::VMEdge,
+        _slot: VM::VMSlot,
         _target: Option<ObjectReference>,
     ) {
     }
@@ -91,7 +91,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_slow(
         &mut self,
         _src: Option<ObjectReference>,
-        _slot: VM::VMEdge,
+        _slot: VM::VMSlot,
         _target: Option<ObjectReference>,
     ) {
     }
@@ -159,7 +159,7 @@ pub trait BarrierSemantics: 'static + Send {
     fn object_reference_write_slow(
         &mut self,
         src: Option<ObjectReference>,
-        slot: <Self::VM as VMBinding>::VMEdge,
+        slot: <Self::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     );
 
@@ -234,7 +234,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_post(
         &mut self,
         src: Option<ObjectReference>,
-        slot: <S::VM as VMBinding>::VMEdge,
+        slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
         let Some(src) = src else {
@@ -248,7 +248,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_slow(
         &mut self,
         src: Option<ObjectReference>,
-        slot: <S::VM as VMBinding>::VMEdge,
+        slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
         let Some(src) = src else {
@@ -310,7 +310,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
     fn object_reference_write_pre(
         &mut self,
         src: Option<ObjectReference>,
-        slot: <S::VM as VMBinding>::VMEdge,
+        slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
         self.semantics
@@ -320,7 +320,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
     fn object_reference_write_post(
         &mut self,
         _src: Option<ObjectReference>,
-        _slot: <S::VM as VMBinding>::VMEdge,
+        _slot: <S::VM as VMBinding>::VMSlot,
         _target: Option<ObjectReference>,
     ) {
         unimplemented!()
@@ -329,7 +329,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for FieldBarrier<S> {
     fn object_reference_write_slow(
         &mut self,
         src: Option<ObjectReference>,
-        slot: <S::VM as VMBinding>::VMEdge,
+        slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
         self.semantics

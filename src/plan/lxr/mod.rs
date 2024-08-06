@@ -20,7 +20,7 @@ use atomic::Ordering;
 
 use crate::util::Address;
 use crate::util::ObjectReference;
-use crate::vm::edge_shape::Edge;
+use crate::vm::slot::Slot;
 
 const CYCLE_TRIGGER_THRESHOLD: usize = crate::args::CYCLE_TRIGGER_THRESHOLD;
 
@@ -231,10 +231,11 @@ impl MatureLivePredictor {
 }
 
 lazy_static! {
-    static ref LAST_REFERENTS: Mutex<HashMap<Address, ObjectReference>> = Default::default();
+    static ref LAST_REFERENTS: Mutex<HashMap<Address, Option<ObjectReference>>> =
+        Default::default();
 }
 
-pub fn record_edge_for_validation(slot: impl Edge, obj: ObjectReference) {
+pub fn record_slot_for_validation(slot: impl Slot, obj: Option<ObjectReference>) {
     if cfg!(feature = "field_barrier_validation") {
         LAST_REFERENTS
             .lock()
