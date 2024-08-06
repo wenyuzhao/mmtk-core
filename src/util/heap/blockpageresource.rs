@@ -37,6 +37,10 @@ impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
         self.flpr.common_mut()
     }
 
+    fn update_discontiguous_start(&mut self, start: Address) {
+        self.flpr.update_discontiguous_start(start)
+    }
+
     fn alloc_pages(
         &self,
         space: &dyn Space<VM>,
@@ -128,7 +132,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         }
         let start = self
             .common()
-            .grow_discontiguous_space(space.common().descriptor, 1);
+            .grow_discontiguous_space(space.common().descriptor, 1, None);
         if start.is_zero() {
             return None;
         }

@@ -1,6 +1,7 @@
 use crate::policy::space::Space;
 use crate::util::address::Address;
 use crate::util::conversions;
+use crate::util::freelist::FreeList;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::ActivePlan;
@@ -110,6 +111,13 @@ pub trait PageResource<VM: VMBinding>: 'static {
         self.common().vm_map
     }
 
+    // Some page resources need to record the start address.
+    // This method will be called after the start address of the discontigous region is determined.
+    // `start` is the computed start address.  By default, this does nothing.
+    fn update_discontiguous_start(&mut self, _start: Address) {
+        // Do nothing.
+    }
+
     fn has_chunk_fragmentation_info(&self) -> bool {
         false
     }
@@ -161,10 +169,14 @@ impl CommonPageResource {
     /// Extend the virtual memory associated with a particular discontiguous
     /// space.  This simply involves requesting a suitable number of chunks
     /// from the pool of chunks available to discontiguous spaces.
+    ///
+    /// If the concrete page resource is using a `FreeList`, it should pass it
+    /// via `freelist`, or `None` if not using `FreeList`.
     pub fn grow_discontiguous_space(
         &self,
         space_descriptor: SpaceDescriptor,
         chunks: usize,
+        freelist: Option<&mut dyn FreeList>,
     ) -> Address {
         let mut head_discontiguous_region = self.head_discontiguous_region.lock().unwrap();
 
@@ -173,6 +185,7 @@ impl CommonPageResource {
                 space_descriptor,
                 chunks,
                 *head_discontiguous_region,
+                freelist,
             )
         };
         if new_head.is_zero() {

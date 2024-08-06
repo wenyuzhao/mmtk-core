@@ -120,9 +120,11 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
             /* we're out of virtual memory within our discontiguous region, so ask for more */
             let required_chunks = required_chunks(required_pages);
             growed_chunks = required_chunks;
-            sync.current_chunk = self
-                .common
-                .grow_discontiguous_space(space.common().descriptor, required_chunks); // Returns zero on failure
+            sync.current_chunk = self.common.grow_discontiguous_space(
+                space.common().descriptor,
+                required_chunks,
+                None,
+            ); // Returns zero on failure
             sync.cursor = sync.current_chunk;
             sync.sentinel = sync.cursor
                 + if sync.current_chunk.is_zero() {

@@ -112,6 +112,10 @@ pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints
 });
 
 impl<VM: VMBinding> Plan for LXR<VM> {
+    fn current_gc_may_move_object(&self) -> bool {
+        true
+    }
+
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
         // Spaces or heap full
         if self.base().collection_required(self, space_full) {

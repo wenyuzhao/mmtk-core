@@ -545,7 +545,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     fn alloc_chunk(&self, space: &dyn Space<VM>) -> Option<Chunk> {
         let start = self
             .common()
-            .grow_discontiguous_space(space.common().descriptor, 1);
+            .grow_discontiguous_space(space.common().descriptor, 1, None);
         if start.is_zero() {
             return None;
         }

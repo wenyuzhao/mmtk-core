@@ -1,16 +1,15 @@
+use super::map::CreateFreeListResult;
 use super::map::VMMap;
 use crate::mmtk::SFT_MAP;
 use crate::util::alloc::embedded_meta_data::LOG_PAGES_IN_REGION;
 use crate::util::conversions;
 use crate::util::freelist::FreeList;
-use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
 use crate::util::heap::layout::heap_parameters::*;
 use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::int_array_freelist::IntArrayFreeList;
 use crate::util::Address;
 use std::cell::UnsafeCell;
-use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
@@ -32,7 +31,6 @@ pub struct Map32Inner {
     large_region_map: IntArrayFreeList,
     global_page_map: IntArrayFreeList,
     shared_discontig_fl_count: usize,
-    shared_fl_map: Vec<Option<NonNull<CommonFreeListPageResource>>>,
     total_available_discontiguous_chunks: usize,
     total_available_large_discontiguous_chunks: usize,
     finalized: bool,
@@ -61,7 +59,6 @@ impl Map32 {
                 large_region_map: IntArrayFreeList::new(max_chunks, max_chunks as _, 1),
                 global_page_map: IntArrayFreeList::new(1, 1, MAX_SPACES),
                 shared_discontig_fl_count: 0,
-                shared_fl_map: vec![None; MAX_SPACES],
                 total_available_discontiguous_chunks: 0,
                 total_available_large_discontiguous_chunks: 0,
                 finalized: false,
@@ -120,11 +117,15 @@ impl VMMap for Map32 {
         }
     }
 
-    fn create_freelist(&self, _start: Address) -> Box<dyn FreeList> {
-        Box::new(IntArrayFreeList::from_parent(
+    fn create_freelist(&self, _start: Address) -> CreateFreeListResult {
+        let free_list = Box::new(IntArrayFreeList::from_parent(
             &self.global_page_map,
             self.get_discontig_freelist_pr_ordinal() as _,
-        ))
+        ));
+        CreateFreeListResult {
+            free_list,
+            space_displacement: 0,
+        }
     }
 
     fn create_parent_freelist(
@@ -132,18 +133,12 @@ impl VMMap for Map32 {
         _start: Address,
         units: usize,
         grain: i32,
-    ) -> Box<dyn FreeList> {
-        Box::new(IntArrayFreeList::new(units, grain, 1))
-    }
-
-    unsafe fn bind_freelist(&self, pr: *const CommonFreeListPageResource) {
-        let ordinal: usize = (*pr)
-            .free_list
-            .downcast_ref::<IntArrayFreeList>()
-            .unwrap()
-            .get_ordinal() as usize;
-        let self_mut: &mut Map32Inner = self.mut_self();
-        self_mut.shared_fl_map[ordinal] = Some(NonNull::new_unchecked(pr as *mut _));
+    ) -> CreateFreeListResult {
+        let free_list = Box::new(IntArrayFreeList::new(units, grain, 1));
+        CreateFreeListResult {
+            free_list,
+            space_displacement: 0,
+        }
     }
 
     unsafe fn allocate_contiguous_chunks(
@@ -151,6 +146,7 @@ impl VMMap for Map32 {
         descriptor: SpaceDescriptor,
         chunks: usize,
         head: Address,
+        _maybe_freelist: Option<&mut dyn FreeList>,
     ) -> Address {
         let (_sync, self_mut) = self.mut_self_with_sync();
         let mut large = false;
@@ -267,7 +263,12 @@ impl VMMap for Map32 {
         freed_chunks
     }
 
-    fn finalize_static_space_map(&self, from: Address, to: Address) {
+    fn finalize_static_space_map(
+        &self,
+        from: Address,
+        to: Address,
+        on_discontig_start_determined: &mut dyn FnMut(Address),
+    ) {
         // This is only called during boot process by a single thread.
         // It is fine to get a mutable reference.
         let self_mut: &mut Map32Inner = unsafe { self.mut_self() };
@@ -279,17 +280,18 @@ impl VMMap for Map32 {
         let trailing_chunks = vm_layout().max_chunks() - unavail_start_chunk;
         let pages = (1 + last_chunk - first_chunk) * PAGES_IN_CHUNK;
         self_mut.global_page_map.resize_freelist(pages, pages as _);
-        // TODO: Clippy favors using iter().flatten() rather than iter() with if-let.
-        // https://rust-lang.github.io/rust-clippy/master/index.html#manual_flatten
-        // Yi: I am not doing this refactoring right now, as I am not familiar with flatten() and
-        // there is no test to ensure the refactoring will be correct.
-        #[allow(clippy::manual_flatten)]
-        for fl in self_mut.shared_fl_map.iter().copied() {
-            if let Some(mut fl) = fl {
-                let fl_mut = unsafe { fl.as_mut() };
-                fl_mut.resize_freelist(start_address);
-            }
-        }
+
+        on_discontig_start_determined(start_address);
+
+        // [
+        //  2: -1073741825
+        //  3: -1073741825
+        //  5: -2147482624
+        //  2048: -2147483648
+        //  2049: -2147482624
+        //  2050: 1024
+        //  2051: 1024
+        // ]
         /* set up the region map free list */
         if first_chunk != 0 {
             self_mut.region_map.alloc_first_fit(first_chunk as _); // block out entire bottom of address range
