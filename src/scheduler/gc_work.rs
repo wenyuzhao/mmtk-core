@@ -1,7 +1,6 @@
 use self::global_state::GcStatus;
 use super::work_bucket::WorkBucketStage;
 use super::*;
-use crate::plan::immix::Pause;
 use crate::plan::lxr::LXR;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
@@ -41,8 +40,6 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     }
 }
 
-impl<VM: VMBinding> CoordinatorWork<VM> for ScheduleCollection {}
-
 /// The global GC Preparation Work
 /// This work packet invokes prepare() for the plan (which will invoke prepare() for each space), and
 /// pushes work packets for preparing mutators and collectors.
@@ -79,8 +76,10 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             }
         }
         if !plan_mut.no_worker_prepare() {
-            mmtk.scheduler
-                .push_designated_work(|| Box::new(PrepareCollector));
+            for w in &mmtk.scheduler.worker_group.workers_shared {
+                let result = w.designated_work.push(Box::new(PrepareCollector));
+                debug_assert!(result.is_ok());
+            }
         }
     }
 }
@@ -159,8 +158,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             }
         }
         if !plan_mut.fast_worker_release() {
-            mmtk.scheduler
-                .push_designated_work(|| Box::new(ReleaseCollector));
+            for w in &mmtk.scheduler.worker_group.workers_shared {
+                let result = w.designated_work.push(Box::new(ReleaseCollector));
+                debug_assert!(result.is_ok());
+            }
         } else {
             crate::scheduler::worker::reset_workers::<C::VM>();
         }
@@ -222,14 +223,6 @@ impl<C: GCWorkContext> StopMutators<C> {
 
 impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
-        // If the VM requires that only the coordinator thread can stop the world,
-        // we delegate the work to the coordinator.
-        if <C::VM as VMBinding>::VMCollection::COORDINATOR_ONLY_STW && !worker.is_coordinator() {
-            mmtk.scheduler
-                .add_coordinator_work(StopMutators::<C>::new(), worker);
-            return;
-        }
-
         trace!("stop_all_mutators start");
         mmtk.state.prepare_for_stack_scanning();
         const BULK_THREAD_SCAN: bool = true;
@@ -280,108 +273,6 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         mmtk.scheduler.notify_mutators_paused(mmtk);
     }
 }
-
-impl<C: GCWorkContext> CoordinatorWork<C::VM> for StopMutators<C> {}
-
-#[derive(Default)]
-pub struct EndOfGC {
-    pub elapsed: std::time::Duration,
-}
-
-impl<VM: VMBinding> GCWork<VM> for EndOfGC {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
-        if mmtk.get_plan().downcast_ref::<LXR<VM>>().is_none() {
-            if perform_class_unloading {
-                gc_log!([3] "    - class unloading");
-            }
-            <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
-        }
-        let pause_time = crate::GC_START_TIME.elapsed();
-        let pause = mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .map(|ix| ix.current_pause().unwrap())
-            .unwrap_or(Pause::Full);
-        crate::add_pause_time(pause, pause_time.as_nanos());
-        if crate::verbose(2) {
-            let _released_n =
-                crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
-            let _released =
-                crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
-            crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
-            crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
-
-            let pause_time = pause_time.as_micros() as f64 / 1000f64;
-            let pause_s = match pause {
-                Pause::RefCount => "RefCount",
-                Pause::InitialMark => "InitialMark",
-                Pause::FinalMark => "FinalMark",
-                _ => "Full",
-            };
-            gc_log!([2]
-                "GC({}) {} finished. {}M->{}M({}M) used={}M pause-time={:.3}ms",
-                crate::GC_EPOCH.load(Ordering::SeqCst),
-                pause_s,
-                crate::RESERVED_PAGES_AT_GC_START.load(Ordering::SeqCst) / 256,
-                mmtk.get_plan().get_reserved_pages() / 256,
-                mmtk.get_plan().get_total_pages() / 256,
-                mmtk.get_plan().get_used_pages() / 256,
-                pause_time
-            );
-            if cfg!(feature = "lxr_precise_incs_counter") {
-                crate::RC_STAT.dump(pause, pause_time);
-            }
-            crate::RESERVED_PAGES_AT_GC_END
-                .store(mmtk.get_plan().get_reserved_pages(), Ordering::SeqCst);
-        }
-        info!(
-            "End of GC ({}/{} pages, took {} ms)",
-            mmtk.get_plan().get_reserved_pages(),
-            mmtk.get_plan().get_total_pages(),
-            self.elapsed.as_millis()
-        );
-
-        #[cfg(feature = "count_live_bytes_in_gc")]
-        {
-            let live_bytes = mmtk.state.get_live_bytes_in_last_gc();
-            let used_bytes =
-                mmtk.get_plan().get_used_pages() << crate::util::constants::LOG_BYTES_IN_PAGE;
-            debug_assert!(
-                live_bytes <= used_bytes,
-                "Live bytes of all live objects ({} bytes) is larger than used pages ({} bytes), something is wrong.",
-                live_bytes, used_bytes
-            );
-            info!(
-                "Live objects = {} bytes ({:04.1}% of {} used pages)",
-                live_bytes,
-                live_bytes as f64 * 100.0 / used_bytes as f64,
-                mmtk.get_plan().get_used_pages()
-            );
-        }
-
-        // We assume this is the only running work packet that accesses plan at the point of execution
-        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
-        plan_mut.end_of_gc(worker.tls);
-
-        #[cfg(feature = "extreme_assertions")]
-        if crate::util::edge_logger::should_check_duplicate_edges(mmtk.get_plan()) {
-            // reset the logging info at the end of each GC
-            mmtk.edge_logger.reset();
-        }
-
-        mmtk.get_plan().gc_pause_end();
-
-        // Reset the triggering information.
-        mmtk.state.reset_collection_trigger();
-
-        // Set to NotInGC after everything, and right before resuming mutators.
-        mmtk.set_gc_status(GcStatus::NotInGC);
-        <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
-    }
-}
-
-impl<VM: VMBinding> CoordinatorWork<VM> for EndOfGC {}
 
 /// This implements `ObjectTracer` by forwarding the `trace_object` calls to the wrapped
 /// `ProcessEdgesWork` instance.
@@ -490,7 +381,7 @@ impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
-        trace!("ProcessWeakRefs");
+        trace!("VMProcessWeakRefs");
         <<E::VM as VMBinding>::VMCollection as Collection<E::VM>>::process_weak_refs::<E>(worker);
         // TODO: Pass a factory/callback to decide what work packet to create.
     }
@@ -706,12 +597,15 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
         self.worker = worker;
     }
+
     pub fn worker(&self) -> &'static mut GCWorker<VM> {
         unsafe { &mut *self.worker }
     }
+
     pub fn mmtk(&self) -> &'static MMTK<VM> {
         self.mmtk
     }
+
     pub fn plan(&self) -> &'static dyn Plan<VM = VM> {
         self.mmtk.get_plan()
     }

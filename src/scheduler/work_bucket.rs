@@ -1,4 +1,4 @@
-use super::worker::WorkerGroup;
+use super::worker_monitor::WorkerMonitor;
 use super::*;
 use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
@@ -60,17 +60,12 @@ pub struct WorkBucket<VM: VMBinding> {
     /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
     /// can be used repeatedly to discover and process more such objects.
     sentinel: Mutex<Option<Box<dyn GCWork<VM>>>>,
-    generic_group: Arc<WorkerGroup<VM>>,
-    stw_group: Arc<WorkerGroup<VM>>,
+    monitor: Arc<WorkerMonitor>,
     in_concurrent: AtomicBool,
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
-    pub fn new(
-        active: bool,
-        generic_group: Arc<WorkerGroup<VM>>,
-        stw_group: Arc<WorkerGroup<VM>>,
-    ) -> Self {
+    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
         Self {
             disable: AtomicBool::new(false),
             active: AtomicBool::new(active),
@@ -78,8 +73,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
             prioritized_queue: None,
             can_open: None,
             sentinel: Mutex::new(None),
-            generic_group,
-            stw_group,
+            monitor,
             in_concurrent: AtomicBool::new(true),
         }
     }
@@ -134,33 +128,16 @@ impl<VM: VMBinding> WorkBucket<VM> {
             return;
         }
         // Notify one if there're any parked workers.
-        if !self.in_concurrent.load(Ordering::SeqCst) {
-            if self.generic_group.parked_workers_in_group() > 0 {
-                self.generic_group.monitor.1.notify_one();
-            } else if self.stw_group.parked_workers_in_group() > 0 {
-                self.stw_group.monitor.1.notify_one();
-            }
-        } else {
-            if self.generic_group.parked_workers_in_group() > 0 {
-                self.generic_group.monitor.1.notify_one();
-            }
-        }
+        self.monitor.notify_work_available(false);
     }
 
-    fn notify_all_workers(&self) {
+    pub fn notify_all_workers(&self) {
         // If the bucket is not activated, don't notify anyone.
         if !self.is_activated() {
             return;
         }
         // Notify all if there're any parked workers.
-        if self.generic_group.parked_workers_in_group() > 0 {
-            self.generic_group.monitor.1.notify_all();
-        }
-        if !self.in_concurrent.load(Ordering::SeqCst) {
-            if self.stw_group.parked_workers_in_group() > 0 {
-                self.stw_group.monitor.1.notify_all();
-            }
-        }
+        self.monitor.notify_work_available(true);
     }
 
     pub fn is_activated(&self) -> bool {
@@ -215,6 +192,19 @@ impl<VM: VMBinding> WorkBucket<VM> {
         debug_assert!(!self.disabled());
         self.queue.push(work);
         self.notify_one_worker();
+    }
+
+    /// Add a work packet to this bucket, but do not notify any workers.
+    /// This is useful when the current thread is holding the mutex of `WorkerMonitor` which is
+    /// used for notifying workers.  This usually happens if the current thread is the last worker
+    /// parked.
+    pub(crate) fn add_no_notify<W: GCWork<VM>>(&self, work: W) {
+        self.queue.push(Box::new(work));
+    }
+
+    /// Like [`WorkBucket::add_no_notify`], but the work is boxed.
+    pub(crate) fn add_boxed_no_notify(&self, work: Box<dyn GCWork<VM>>) {
+        self.queue.push(work);
     }
 
     /// Add multiple packets with a higher priority.
@@ -295,14 +285,10 @@ impl<VM: VMBinding> WorkBucket<VM> {
             sentinel.take()
         };
         if let Some(work) = maybe_sentinel {
-            // We cannot call `self.add` now, because:
-            // 1.  The current function is called only when all workers parked, and we are holding
-            //     the monitor lock.  `self.add` also needs that lock to notify other workers.
-            //     Trying to lock it again will result in deadlock.
-            // 2.  After this function returns, the current worker will check if there is pending
-            //     work immediately, and notify other workers.
-            // So we can just "sneak" the sentinel work packet into the current bucket now.
-            self.queue.push(work);
+            // We don't need to notify other workers because this function is called by the last
+            // parked worker.  After this function returns, the caller will notify workers because
+            // more work packets become available.
+            self.add_boxed_no_notify(work);
             true
         } else {
             false
