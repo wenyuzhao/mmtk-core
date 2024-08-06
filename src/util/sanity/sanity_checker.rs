@@ -297,6 +297,9 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         }
         if self.attempt_mark(object) {
             // FIXME steveb consider VM-specific integrity check on reference.
+            assert!(object.is_sane::<VM>(), "Invalid reference {:?}", object);
+
+            // Let plan check object
             assert!(
                 object.to_raw_address().is_mapped(),
                 "Invalid reference {:?} -> {:?}",

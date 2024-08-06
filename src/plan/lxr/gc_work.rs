@@ -8,8 +8,8 @@ pub(super) struct LXRGCWorkContext<E: ProcessEdgesWork>(std::marker::PhantomData
 impl<E: ProcessEdgesWork> crate::scheduler::GCWorkContext for LXRGCWorkContext<E> {
     type VM = E::VM;
     type PlanType = LXR<E::VM>;
-    type ProcessEdgesWorkType = E;
-    type TPProcessEdges = UnsupportedProcessEdges<Self::VM>;
+    type DefaultProcessEdges = E;
+    type PinningProcessEdges = UnsupportedProcessEdges<Self::VM>;
 }
 
 pub(super) struct LXRWeakRefWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
@@ -17,8 +17,8 @@ pub(super) struct LXRWeakRefWorkContext<VM: VMBinding>(std::marker::PhantomData<
 impl<VM: VMBinding> crate::scheduler::GCWorkContext for LXRWeakRefWorkContext<VM> {
     type VM = VM;
     type PlanType = LXR<VM>;
-    type ProcessEdgesWorkType = LXRWeakRefProcessEdges<VM>;
-    type TPProcessEdges = UnsupportedProcessEdges<Self::VM>;
+    type DefaultProcessEdges = LXRWeakRefProcessEdges<VM>;
+    type PinningProcessEdges = UnsupportedProcessEdges<Self::VM>;
 }
 
 pub struct FastRCPrepare;

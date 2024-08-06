@@ -285,7 +285,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     target
                 );
                 debug_assert!(
-                    target.is_in_any_space(),
+                    target.is_in_any_space::<VM>(),
                     "Unmapped obj {:?}.{:?} -> {:?}",
                     o,
                     edge,

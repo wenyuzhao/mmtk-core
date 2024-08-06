@@ -561,7 +561,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         // The memory (lines) of these edges can be reused at any time during mature evacuation.
         // Filter out invalid target objects.
         if self.remset_recorded_edges
-            && (!object.is_in_any_space() || !object.to_address::<VM>().is_aligned_to(8))
+            && (!object.is_in_any_space::<VM>() || !object.to_address::<VM>().is_aligned_to(8))
         {
             return object;
         }
@@ -574,7 +574,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         {
             return object;
         }
-        debug_assert!(object.is_in_any_space(), "Invalid {:?}", object);
+        debug_assert!(object.is_in_any_space::<VM>(), "Invalid {:?}", object);
         debug_assert!(
             object.to_address::<VM>().is_aligned_to(8),
             "Invalid {:?} remset={}",
@@ -582,7 +582,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             self.remset_recorded_edges
         );
         debug_assert!(object.class_is_valid::<VM>());
-        let object = object.get_forwarded_object().unwrap_or(object);
+        let object = object.get_forwarded_object::<VM>().unwrap_or(object);
         let new_object = if self.lxr.immix_space.in_space(object) {
             if self
                 .lxr
@@ -667,7 +667,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if object.is_null() {
             return object;
         }
-        debug_assert!(object.is_in_any_space());
+        debug_assert!(object.is_in_any_space::<VM>());
         debug_assert!(object.to_address::<VM>().is_aligned_to(8));
         // debug_assert!(object.class_is_valid::<VM>());
         if self.roots
