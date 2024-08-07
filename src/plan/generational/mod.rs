@@ -21,15 +21,15 @@ use super::mutator_context::ReservedAllocators;
 
 // Generational plans:
 
-pub mod barrier;
-/// Generational copying (GenCopy)
-pub mod copying;
-/// Generational immix (GenImmix)
-pub mod immix;
+// pub mod barrier;
+// /// Generational copying (GenCopy)
+// pub mod copying;
+// /// Generational immix (GenImmix)
+// pub mod immix;
 
 // Common generational code
 
-pub(super) mod gc_work;
+// pub(super) mod gc_work;
 pub(super) mod global;
 
 /// # Barrier overhead measurement:

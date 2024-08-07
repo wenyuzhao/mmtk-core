@@ -39,26 +39,27 @@ pub fn create_mutator<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
 ) -> Box<Mutator<VM>> {
     Box::new(match *mmtk.options.plan {
-        PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, mmtk),
-        PlanSelector::SemiSpace => crate::plan::semispace::mutator::create_ss_mutator(tls, mmtk),
-        PlanSelector::GenCopy => {
-            crate::plan::generational::copying::mutator::create_gencopy_mutator(tls, mmtk)
-        }
-        PlanSelector::GenImmix => {
-            crate::plan::generational::immix::mutator::create_genimmix_mutator(tls, mmtk)
-        }
-        PlanSelector::MarkSweep => crate::plan::marksweep::mutator::create_ms_mutator(tls, mmtk),
+        // PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, mmtk),
+        // PlanSelector::SemiSpace => crate::plan::semispace::mutator::create_ss_mutator(tls, mmtk),
+        // PlanSelector::GenCopy => {
+        //     crate::plan::generational::copying::mutator::create_gencopy_mutator(tls, mmtk)
+        // }
+        // PlanSelector::GenImmix => {
+        //     crate::plan::generational::immix::mutator::create_genimmix_mutator(tls, mmtk)
+        // }
+        // PlanSelector::MarkSweep => crate::plan::marksweep::mutator::create_ms_mutator(tls, mmtk),
         PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, mmtk),
-        PlanSelector::PageProtect => {
-            crate::plan::pageprotect::mutator::create_pp_mutator(tls, mmtk)
-        }
-        PlanSelector::MarkCompact => {
-            crate::plan::markcompact::mutator::create_markcompact_mutator(tls, mmtk)
-        }
-        PlanSelector::StickyImmix => {
-            crate::plan::sticky::immix::mutator::create_stickyimmix_mutator(tls, mmtk)
-        }
+        // PlanSelector::PageProtect => {
+        //     crate::plan::pageprotect::mutator::create_pp_mutator(tls, mmtk)
+        // }
+        // PlanSelector::MarkCompact => {
+        //     crate::plan::markcompact::mutator::create_markcompact_mutator(tls, mmtk)
+        // }
+        // PlanSelector::StickyImmix => {
+        //     crate::plan::sticky::immix::mutator::create_stickyimmix_mutator(tls, mmtk)
+        // }
         PlanSelector::LXR => crate::plan::lxr::mutator::create_lxr_mutator(tls, mmtk),
+        _ => unimplemented!(),
     })
 }
 
@@ -67,32 +68,33 @@ pub fn create_plan<VM: VMBinding>(
     args: CreateGeneralPlanArgs<VM>,
 ) -> Box<dyn Plan<VM = VM>> {
     let plan = match plan {
-        PlanSelector::NoGC => {
-            Box::new(crate::plan::nogc::NoGC::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::SemiSpace => {
-            Box::new(crate::plan::semispace::SemiSpace::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::GenCopy => Box::new(crate::plan::generational::copying::GenCopy::new(args))
-            as Box<dyn Plan<VM = VM>>,
-        PlanSelector::GenImmix => Box::new(crate::plan::generational::immix::GenImmix::new(args))
-            as Box<dyn Plan<VM = VM>>,
-        PlanSelector::MarkSweep => {
-            Box::new(crate::plan::marksweep::MarkSweep::new(args)) as Box<dyn Plan<VM = VM>>
-        }
+        // PlanSelector::NoGC => {
+        //     Box::new(crate::plan::nogc::NoGC::new(args)) as Box<dyn Plan<VM = VM>>
+        // }
+        // PlanSelector::SemiSpace => {
+        //     Box::new(crate::plan::semispace::SemiSpace::new(args)) as Box<dyn Plan<VM = VM>>
+        // }
+        // PlanSelector::GenCopy => Box::new(crate::plan::generational::copying::GenCopy::new(args))
+        //     as Box<dyn Plan<VM = VM>>,
+        // PlanSelector::GenImmix => Box::new(crate::plan::generational::immix::GenImmix::new(args))
+        //     as Box<dyn Plan<VM = VM>>,
+        // PlanSelector::MarkSweep => {
+        //     Box::new(crate::plan::marksweep::MarkSweep::new(args)) as Box<dyn Plan<VM = VM>>
+        // }
         PlanSelector::Immix => {
             Box::new(crate::plan::immix::Immix::new(args)) as Box<dyn Plan<VM = VM>>
         }
-        PlanSelector::PageProtect => {
-            Box::new(crate::plan::pageprotect::PageProtect::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::MarkCompact => {
-            Box::new(crate::plan::markcompact::MarkCompact::new(args)) as Box<dyn Plan<VM = VM>>
-        }
-        PlanSelector::StickyImmix => {
-            Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM>>
-        }
+        // PlanSelector::PageProtect => {
+        //     Box::new(crate::plan::pageprotect::PageProtect::new(args)) as Box<dyn Plan<VM = VM>>
+        // }
+        // PlanSelector::MarkCompact => {
+        //     Box::new(crate::plan::markcompact::MarkCompact::new(args)) as Box<dyn Plan<VM = VM>>
+        // }
+        // PlanSelector::StickyImmix => {
+        //     Box::new(crate::plan::sticky::immix::StickyImmix::new(args)) as Box<dyn Plan<VM = VM>>
+        // }
         PlanSelector::LXR => crate::plan::lxr::LXR::new(args) as Box<dyn Plan<VM = VM>>,
+        _ => unimplemented!(),
     };
 
     // We have created Plan in the heap, and we won't explicitly move it.
