@@ -30,6 +30,7 @@ pub struct BlockPageResource<VM: VMBinding, B: Region + 'static> {
     clean_block_cursor_before_gc: AtomicUsize,
     reuse_block_cursor_before_gc: AtomicUsize,
     _p: PhantomData<B>,
+    rc_enabled: bool,
 }
 
 impl<VM: VMBinding, B: Region> PageResource<VM> for BlockPageResource<VM, B> {
@@ -94,6 +95,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             reuse_block_steal_cursor: AtomicUsize::new(0),
             clean_block_cursor_before_gc: AtomicUsize::new(0),
             reuse_block_cursor_before_gc: AtomicUsize::new(0),
+            rc_enabled: false,
             _p: PhantomData,
         }
     }
@@ -116,8 +118,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             reuse_block_steal_cursor: AtomicUsize::new(0),
             clean_block_cursor_before_gc: AtomicUsize::new(0),
             reuse_block_cursor_before_gc: AtomicUsize::new(0),
+            rc_enabled: false,
             _p: PhantomData,
         }
+    }
+
+    pub(crate) fn rc(mut self, lxr: bool) -> Self {
+        self.rc_enabled = lxr;
+        self
     }
 
     fn block_index_to_block(&self, chunks: &[Chunk], i: usize) -> B {
@@ -127,6 +135,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             chunk.start() + ((i & (Self::BLOCKS_IN_CHUNK - 1)) << B::LOG_BYTES),
         );
         block
+    }
+
+    fn block_is_in_defrag_source(&self, copy: bool, block: Block) -> bool {
+        if !self.rc_enabled {
+            // Not LXR.
+            // For mutator-allocators, we will never visit defrag source blocks.
+            return copy && block.is_defrag_source();
+        } else {
+            // LXR.
+            return block.is_defrag_source();
+        }
     }
 
     /// Check if a block is available for allocation
@@ -144,7 +163,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return state != BlockState::Unallocated
                 && !b.is_reusing()
                 && (!copy || !b.is_gc_reusing())
-                && !b.is_defrag_source()
+                && !self.block_is_in_defrag_source(copy, b)
                 && (copy || b.get_owner().is_none());
         }
         // Don't allocate into a non-empty block
@@ -169,6 +188,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         clean: bool,
         owner: VMThread,
         skip_lock_check: bool,
+        copy: bool,
     ) -> bool {
         let block = Block::from_aligned_address(block.start());
         if clean {
@@ -188,7 +208,10 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         } else {
             let state = block.get_state();
             // Don't steal empty, used, or defrag blocks
-            if state == BlockState::Unallocated || block.is_reusing() || block.is_defrag_source() {
+            if state == BlockState::Unallocated
+                || block.is_reusing()
+                || self.block_is_in_defrag_source(copy, block)
+            {
                 return false;
             }
             let block_owner = block.get_owner();
@@ -225,13 +248,13 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 if clean {
                     if b.get_state() != BlockState::Unallocated || (!mature_evac && b.is_nursery())
                     {
-                        debug_assert!(!b.is_defrag_source());
+                        // debug_assert!(!b.is_defrag_source());
                         return;
                     }
                 } else {
                     if b.get_state() == BlockState::Unallocated
                         || b.is_reusing()
-                        || b.is_defrag_source()
+                        || self.block_is_in_defrag_source(copy, b)
                     {
                         return;
                     }
@@ -244,11 +267,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     // Attempt to steal a block.
-    fn attempt_to_steal(&self, block: B, owner: VMThread, clean: bool) -> bool {
+    fn attempt_to_steal(&self, block: B, owner: VMThread, clean: bool, copy: bool) -> bool {
         // Attempt to set as in-use
         let b = Block::from_aligned_address(block.start());
         let locked =
-            b.try_lock_with_condition(|| self.block_is_stealable(block, clean, owner, true));
+            b.try_lock_with_condition(|| self.block_is_stealable(block, clean, owner, true, copy));
         if !locked {
             return false;
         }
@@ -396,7 +419,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     while i > 0 {
                         let block = self.block_index_to_block(chunks, i - 1);
                         i -= 1;
-                        if self.block_is_stealable(block, false, owner, false) {
+                        if self.block_is_stealable(block, false, owner, false, copy) {
                             curr_count += 1;
                             if curr_count >= count {
                                 break;
@@ -415,8 +438,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let old = old.unwrap();
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
-                if self.block_is_stealable(block, false, owner, false) {
-                    if self.attempt_to_steal(block, owner, false) {
+                if self.block_is_stealable(block, false, owner, false, copy) {
+                    if self.attempt_to_steal(block, owner, false, copy) {
                         self.append_to_buf(buf, block, copy, false, true, owner, false);
                     }
                 }
@@ -452,7 +475,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                     while i > 0 {
                         let block = self.block_index_to_block(chunks, i - 1);
                         i -= 1;
-                        if self.block_is_stealable(block, true, owner, false) {
+                        if self.block_is_stealable(block, true, owner, false, copy) {
                             curr_count += 1;
                             if curr_count >= count {
                                 break;
@@ -471,8 +494,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             let old = old.unwrap();
             for i in new_cursor..old {
                 let block = self.block_index_to_block(chunks, i);
-                if self.block_is_stealable(block, true, owner, false) {
-                    if self.attempt_to_steal(block, owner, true) {
+                if self.block_is_stealable(block, true, owner, false, copy) {
+                    if self.attempt_to_steal(block, owner, true, copy) {
                         self.append_to_buf(buf, block, copy, false, true, owner, true);
                     }
                 }
