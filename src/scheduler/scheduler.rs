@@ -27,15 +27,15 @@ use std::time::Instant;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
     /// Work buckets
-    pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
+    pub work_buckets: EnumMap<WorkBucketStage, WorkBucket>,
     /// Workers
     pub(crate) worker_group: Arc<WorkerGroup<VM>>,
     /// For synchronized communication between workers and with mutators.
     pub(crate) worker_monitor: Arc<WorkerMonitor>,
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
-    pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
-    pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork>>>,
+    pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork>>>,
     in_gc_pause: AtomicBool,
     bucket_update_progress: AtomicUsize,
 }
@@ -150,35 +150,35 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
     }
 
-    pub fn postpone(&self, w: impl GCWork<VM>) {
+    pub fn postpone(&self, w: impl GCWork) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(Box::new(w))
     }
 
-    pub fn postpone_prioritized(&self, w: impl GCWork<VM>) {
+    pub fn postpone_prioritized(&self, w: impl GCWork) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized
             .read()
             .push(Box::new(w))
     }
 
-    pub fn postpone_dyn(&self, w: Box<dyn GCWork<VM>>) {
+    pub fn postpone_dyn(&self, w: Box<dyn GCWork>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(w)
     }
 
-    pub fn postpone_dyn_prioritized(&self, w: Box<dyn GCWork<VM>>) {
+    pub fn postpone_dyn_prioritized(&self, w: Box<dyn GCWork>) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized.read().push(w)
     }
 
-    pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+    pub fn postpone_all(&self, ws: Vec<Box<dyn GCWork>>) {
         let postponed_concurrent_work = self.postponed_concurrent_work.read();
         ws.into_iter()
             .for_each(|w| postponed_concurrent_work.push(w));
     }
 
-    pub fn postpone_all_prioritized(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+    pub fn postpone_all_prioritized(&self, ws: Vec<Box<dyn GCWork>>) {
         let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
         ws.into_iter()
             .for_each(|w| postponed_concurrent_work.push(w));
@@ -238,7 +238,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Add the `ScheduleCollection` packet.  Called by the last parked worker.
     fn add_schedule_collection_packet(&self) {
         // We are still holding the mutex `WorkerMonitor::sync`.  Do not notify now.
-        self.work_buckets[WorkBucketStage::Unconstrained].add_no_notify(ScheduleCollection);
+        self.work_buckets[WorkBucketStage::Unconstrained]
+            .add_no_notify(ScheduleCollection::<VM>::default());
     }
 
     pub fn schedule_common_work_no_refs<C: GCWorkContext<VM = VM>>(
@@ -416,8 +417,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub(super) fn schedule_concurrent_packets(
         &self,
-        queue: Injector<Box<dyn GCWork<VM>>>,
-        pqueue: Injector<Box<dyn GCWork<VM>>>,
+        queue: Injector<Box<dyn GCWork>>,
+        pqueue: Injector<Box<dyn GCWork>>,
     ) {
         crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
         crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
@@ -581,7 +582,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
+    fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork>> {
         let mut should_retry = false;
         // Try find a packet that can be processed only by this worker.
         if let Some(w) = worker.shared.designated_work.pop() {
@@ -614,7 +615,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet.
-    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork<VM>>> {
+    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork>> {
         // Loop until we successfully get a packet.
         loop {
             match self.poll_schedulable_work_once(worker) {
@@ -634,14 +635,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called by workers to get a schedulable work packet.
     /// Park the worker if there're no available packets.
-    pub(crate) fn poll(&self, worker: &GCWorker<VM>) -> PollResult<VM> {
+    pub(crate) fn poll(&self, worker: &GCWorker<VM>) -> PollResult {
         if let Some(work) = self.poll_schedulable_work(worker) {
             return Ok(work);
         }
         self.poll_slow(worker)
     }
 
-    fn poll_slow(&self, worker: &GCWorker<VM>) -> PollResult<VM> {
+    fn poll_slow(&self, worker: &GCWorker<VM>) -> PollResult {
         loop {
             flush_logs!();
             // Retry polling
@@ -818,13 +819,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     fn schedule_postponed_concurrent_packets(
         &self,
-    ) -> (Injector<Box<dyn GCWork<VM>>>, Injector<Box<dyn GCWork<VM>>>) {
+    ) -> (Injector<Box<dyn GCWork>>, Injector<Box<dyn GCWork>>) {
         let mut queue = Injector::new();
-        type Q<VM> = Injector<Box<dyn GCWork<VM>>>;
-        std::mem::swap::<Q<VM>>(&mut queue, &mut self.postponed_concurrent_work.write());
+        type Q = Injector<Box<dyn GCWork>>;
+        std::mem::swap::<Q>(&mut queue, &mut self.postponed_concurrent_work.write());
 
         let mut pqueue = Injector::new();
-        std::mem::swap::<Q<VM>>(
+        std::mem::swap::<Q>(
             &mut pqueue,
             &mut self.postponed_concurrent_work_prioritized.write(),
         );
@@ -990,7 +991,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 pub trait BucketKey:
     Enum + EnumArray<Vec<Self>> + EnumArray<AtomicBool> + EnumArray<AtomicUsize>
 {
-    fn get_bucket<VM: VMBinding>(&self) -> &WorkBucket;
+    fn get_bucket(&self) -> &WorkBucket;
 }
 
 pub struct BucketGraph<Bkt: BucketKey> {

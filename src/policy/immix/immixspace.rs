@@ -594,7 +594,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.evac_set.sweep_mature_evac_candidates(self);
             let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
             let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
+            let sweep_los =
+                RCSweepMatureAfterSATBLOS::<VM>::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS
                 && !disable_lasy_dec_for_current_gc
                 && !cfg!(feature = "fragmentation_analysis")
@@ -637,7 +638,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
             // # Safety: ImmixSpace reference is always valid within this collection cycle.
             let space = unsafe { &*(self as *const Self) };
-            let work_packets = self.chunk_map.generate_tasks(|chunk| {
+            let work_packets = self.chunk_map.generate_tasks::<VM>(|chunk| {
                 Box::new(PrepareBlockState {
                     space,
                     chunk,
@@ -1603,7 +1604,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let packets = bins
             .into_iter()
             .map::<Box<dyn GCWork>, _>(|blocks| {
-                Box::new(SweepBlocksAfterDecs::new(blocks, counter.clone()))
+                Box::new(SweepBlocksAfterDecs::<VM>::new(blocks, counter.clone()))
             })
             .collect();
         self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);

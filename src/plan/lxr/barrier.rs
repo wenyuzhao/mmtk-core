@@ -252,11 +252,11 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
                 self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                    .add(ProcessModBufSATB::new_arc(decs.clone()));
-                ProcessDecs::new_arc(decs, LazySweepingJobsCounter::new_decs())
+                    .add(ProcessModBufSATB::<VM>::new_arc(decs.clone()));
+                ProcessDecs::<VM>::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
-                ProcessDecs::new(decs, LazySweepingJobsCounter::new_decs())
+                ProcessDecs::<VM>::new(decs, LazySweepingJobsCounter::new_decs())
             };
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);
@@ -272,7 +272,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
             self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ProcessModBufSATB::new(nodes));
+                .add(ProcessModBufSATB::<VM>::new(nodes));
         }
     }
 }

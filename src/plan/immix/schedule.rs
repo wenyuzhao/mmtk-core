@@ -7,7 +7,7 @@ use crate::scheduler::{WorkBucket, WorkBucketStage};
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
 pub enum ImmixBuckets {
     Start,
-    Prepare,   
+    Prepare,
     Roots,
     Closure,
     Release,
@@ -15,16 +15,8 @@ pub enum ImmixBuckets {
 }
 
 impl BucketKey for ImmixBuckets {
-    fn get_bucket<VM: crate::vm::VMBinding>(&self) -> &WorkBucket<VM> {
-        let
-        match self {
-            ImmixBuckets::Start => &crate::plan::immix::gc_work::Start::<VM>::BUCKET,
-            ImmixBuckets::Prepare => &crate::plan::immix::gc_work::Prepare::<VM>::BUCKET,
-            ImmixBuckets::Roots => &crate::plan::immix::gc_work::Roots::<VM>::BUCKET,
-            ImmixBuckets::Closure => &crate::plan::immix::gc_work::Closure::<VM>::BUCKET,
-            ImmixBuckets::Release => &crate::plan::immix::gc_work::Release::<VM>::BUCKET,
-            ImmixBuckets::Finish => &crate::plan::immix::gc_work::Finish::<VM>::BUCKET,
-        }
+    fn get_bucket(&self) -> &WorkBucket {
+        unimplemented!()
     }
 }
 

@@ -1059,13 +1059,13 @@ impl<VM: VMBinding> LXR<VM> {
         let mut work_packets: Vec<Box<dyn GCWork>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
             count += decs.len();
-            work_packets.push(Box::new(ProcessDecs::new(
+            work_packets.push(Box::new(ProcessDecs::<VM>::new(
                 decs,
                 LazySweepingJobsCounter::new_decs(),
             )))
         }
         if work_packets.is_empty() {
-            work_packets.push(Box::new(ProcessDecs::new(
+            work_packets.push(Box::new(ProcessDecs::<VM>::new(
                 vec![],
                 LazySweepingJobsCounter::new_decs(),
             )));

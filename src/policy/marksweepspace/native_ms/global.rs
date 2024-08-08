@@ -357,7 +357,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         let space = unsafe { &*(self as *const Self) };
         let work_packets = self
             .chunk_map
-            .generate_tasks(|chunk| Box::new(PrepareChunkMap { space, chunk }));
+            .generate_tasks::<VM>(|chunk| Box::new(PrepareChunkMap { space, chunk }));
         self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Prepare]
             .bulk_add(work_packets);
     }

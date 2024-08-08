@@ -414,11 +414,11 @@ impl MatureEvacuationSet {
     }
 
     pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        let tasks = space.chunk_map.generate_tasks(|chunk| {
+        let tasks = space.chunk_map.generate_tasks::<VM>(|chunk| {
             Box::new(SelectDefragBlocksInChunk {
                 chunk,
                 defrag_threshold: 1,
-                p: PhantomData,
+                p: PhantomData::<VM>,
             })
         });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);

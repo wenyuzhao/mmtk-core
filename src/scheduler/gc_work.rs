@@ -15,6 +15,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 
+#[derive(Default)]
 pub struct ScheduleCollection<VM: VMBinding>(PhantomData<VM>);
 
 impl<VM: VMBinding> GCWork for ScheduleCollection<VM> {

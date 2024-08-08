@@ -166,7 +166,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(UnlogSlots(incs));
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(UnlogSlots::<VM>(incs));
         }
     }
 
