@@ -296,6 +296,15 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 }
 
+#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
+pub enum WorkGroup {
+    Prepare,
+    Roots,
+    Closure,
+    Release,
+    Finish,
+}
+
 /// This enum defines all the work bucket types. The scheduler
 /// will instantiate a work bucket for each stage defined here.
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]

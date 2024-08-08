@@ -19,7 +19,7 @@ use crate::vm::VMBinding;
 use crate::Pause;
 use crate::Plan;
 use crossbeam::deque::{Injector, Steal};
-use enum_map::{Enum, EnumMap};
+use enum_map::{Enum, EnumArray, EnumMap};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -95,6 +95,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             in_gc_pause: AtomicBool::new(false),
             bucket_update_progress: AtomicUsize::new(0),
         })
+    }
+
+    pub fn execute<Bkt: BucketKey>(&self, graph: &'static BucketGraph<Bkt>) {
+        // reset all buckets
+        for i in 0..Bkt::LENGTH {
+            let bucket_id = Bkt::from_usize(i);
+            graph.is_open[bucket_id].store(false, Ordering::SeqCst);
+        }
+        // open the first bucket(s)
+        
+
     }
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
@@ -975,5 +986,27 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
     pub fn wakeup_all_conc_workers(&self) {
         self.worker_monitor.notify_work_available(true);
+    }
+}
+
+pub trait BucketKey: Enum + EnumArray<Vec<Self>> + EnumArray<AtomicBool> {
+    fn get_bucket<VM: VMBinding>(&self) -> &WorkBucket<VM>;
+}
+
+pub struct BucketGraph<Bkt: BucketKey> {
+    pub(crate) deps: EnumMap<Bkt, Vec<Bkt>>,
+    pub(crate) is_open: EnumMap<Bkt, AtomicBool>,
+}
+
+impl<Bkt: BucketKey> BucketGraph<Bkt> {
+    pub fn new() -> Self {
+        Self {
+            deps: EnumMap::default(),
+            is_open: EnumMap::default(),
+        }
+    }
+
+    pub fn dep(&mut self, parent: Bkt, children: Vec<Bkt>) {
+        self.deps[parent].extend(children);
     }
 }

@@ -3,7 +3,7 @@
 pub(crate) mod affinity;
 
 #[allow(clippy::module_inception)]
-mod scheduler;
+pub(crate) mod scheduler;
 pub(crate) use scheduler::GCWorkScheduler;
 
 mod stat;
@@ -14,7 +14,7 @@ pub use work::GCWork;
 pub(crate) use work::GCWorkContext;
 
 mod work_bucket;
-pub use work_bucket::WorkBucketStage;
+pub use work_bucket::{WorkBucket, WorkBucketStage, WorkGroup};
 
 pub mod worker;
 mod worker_goals;

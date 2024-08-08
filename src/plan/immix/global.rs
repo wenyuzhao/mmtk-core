@@ -89,7 +89,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-        >(self, &self.immix_space, scheduler)
+        >(self, &self.immix_space, scheduler);
+        scheduler.execute(&*super::schedule::DEFAULT_SCHEDULE);
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
