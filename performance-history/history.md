@@ -1,3 +1,17 @@
+# LXR Performance History
+
+This page monitors the performance evolution of LXR by consistently conducting the same throughput measurements outlined in the original paper (Table 6). Unless specified otherwise, these measurements are performed on a 2x min-heap, using the most recent versions of the DaCapo benchmarks and LXR.
+
+# [2024-Aug-06] core-abd73a8, binding-5f79679, jdk-bc9669a
+
+![](./20240806-core_abd73a8-binding_5f79679.png)
+
+Plotty Log: [[lxr-regression]xput-boar-2024-08-06-Tue-135725](http://squirrel.anu.edu.au/plotty-public/wenyuz/v8/p/u9ynbN)
+
+LXR total time geomean: 0.891 (highest: tomcat=1.056, lowest: xalan=0.436).
+
+_Note: Merged mmtk v0.26.0 from upstream._
+
 # [2024-Mar-21] core-1665a55, binding-2cf7c70, jdk-bc9669a
 
 ![](./20240321-core_1665a55-binding_2cf7c70.png)
@@ -63,3 +77,9 @@ Plotty Log: [lxr-xput-boar-2023-02-08-Wed-081345](http://squirrel.anu.edu.au/plo
 LXR total time geomean: 0.955 (highest: h2o=1.093, lowest: xalan=0.598).
 
 _Note: This run uses exploded builds._
+
+# [2022] Original Throughput Result on 2x Heap
+
+<!-- ![](./lxr-pldi-2022-table-6.png) -->
+
+<img src="./lxr-pldi-2022-table-6.png" style="width: 30%">
