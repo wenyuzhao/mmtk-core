@@ -1,6 +1,6 @@
 # LXR Performance History
 
-This page monitors the performance evolution of LXR by consistently conducting the same throughput measurements outlined in the original paper (Table 6). Unless specified otherwise, these measurements are performed on a 2x min-heap, using the most recent versions of the DaCapo benchmarks and LXR.
+This page monitors the performance evolution of LXR by consistently conducting the same throughput measurements outlined in the original paper ([Table 6](#2022-original-throughput-result-on-2x-heap)). Unless specified otherwise, these measurements are performed on a 2x min-heap, using the most recent versions of the DaCapo benchmarks and LXR.
 
 # [2024-Aug-06] core-abd73a8, binding-5f79679, jdk-bc9669a
 
@@ -82,4 +82,4 @@ _Note: This run uses exploded builds._
 
 <!-- ![](./lxr-pldi-2022-table-6.png) -->
 
-<img src="./lxr-pldi-2022-table-6.png" style="width: 30%">
+<img src="./lxr-pldi-2022-table-6.png" style="width: 50%">
