@@ -21,10 +21,13 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for LXRWeakRefWorkContext<VM
     type PinningProcessEdges = UnsupportedProcessEdges<Self::VM>;
 }
 
-pub struct FastRCPrepare;
+#[derive(Default)]
+pub struct FastRCPrepare<VM>(std::marker::PhantomData<VM>);
 
-impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for FastRCPrepare<VM> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         #[allow(invalid_reference_casting)]
         let lxr = unsafe { &mut *(lxr as *const LXR<VM> as *mut LXR<VM>) };
@@ -32,10 +35,13 @@ impl<VM: VMBinding> GCWork<VM> for FastRCPrepare {
     }
 }
 
-pub struct ReleaseLOSNursery;
+#[derive(Default)]
+pub struct ReleaseLOSNursery<VM>(std::marker::PhantomData<VM>);
 
-impl<VM: VMBinding> GCWork<VM> for ReleaseLOSNursery {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for ReleaseLOSNursery<VM> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         lxr.los().release_rc_nursery_objects();
     }

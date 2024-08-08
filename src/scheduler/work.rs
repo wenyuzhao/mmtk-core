@@ -12,7 +12,7 @@ use std::any::{type_name, Any};
 /// of the work packet will need to consider at least two points of tension: the work packet must be large
 /// enough to ensure that the costs of managing the work packets do not dominate, and the packet must be
 /// small enough that good load balancing is achieved.
-pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
+pub trait GCWork: 'static + Send + Any {
     fn should_defer(&self) -> bool {
         false
     }
@@ -30,16 +30,16 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     /// this is what you intend.  But you should always consider adding the work packet
     /// into a bucket so that other GC workers can execute it in parallel, unless the context-
     /// switching overhead is a problem.
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>);
+    fn do_work(&mut self);
 
     /// Do work and collect statistics. This internally calls `do_work()`. In most cases,
     /// this should be called rather than `do_work()` so that MMTk can correctly collect
     /// statistics for the work packets.
     /// If the feature "work_packet_stats" is not enabled, this call simply forwards the call
     /// to `do_work()`.
-    fn do_work_with_stat(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work_with_stat(&mut self) {
         debug!("{}", std::any::type_name::<Self>());
-        debug_assert!(!worker.tls.0.0.is_null(), "TLS must be set correctly for a GC worker before the worker does any work. GC Worker {} has no valid tls.", worker.ordinal);
+        // debug_assert!(!worker.tls.0.0.is_null(), "TLS must be set correctly for a GC worker before the worker does any work. GC Worker {} has no valid tls.", worker.ordinal);
 
         #[cfg(feature = "work_packet_stats")]
         // Start collecting statistics
@@ -48,12 +48,12 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
             worker_stat.measure_work(TypeId::of::<Self>(), type_name::<Self>(), mmtk)
         };
 
-        if crate::args::LOG_WORK_PACKETS {
-            println!("{} > {}", worker.ordinal, type_name::<Self>());
-        }
+        // if crate::args::LOG_WORK_PACKETS {
+        //     println!("{} > {}", worker.ordinal, type_name::<Self>());
+        // }
 
         // Do the actual work
-        self.do_work(worker, mmtk);
+        self.do_work();
 
         #[cfg(feature = "work_packet_stats")]
         // Finish collecting statistics

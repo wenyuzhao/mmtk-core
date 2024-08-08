@@ -466,7 +466,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
     pub fn release(&mut self) {
         use crate::scheduler::WorkBucketStage;
-        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+        let mut work_packets: Vec<Box<dyn GCWork>> = vec![];
         let mut chunk = self.chunk_addr_min.load(Ordering::Relaxed);
         let end = self.chunk_addr_max.load(Ordering::Relaxed) + BYTES_IN_CHUNK;
 
@@ -814,8 +814,8 @@ pub struct MSSweepChunk<VM: VMBinding> {
     chunk: Address,
 }
 
-impl<VM: VMBinding> GCWork<VM> for MSSweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for MSSweepChunk<VM> {
+    fn do_work(&mut self) {
         self.ms.sweep_chunk(self.chunk);
     }
 }

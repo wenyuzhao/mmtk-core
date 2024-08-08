@@ -104,8 +104,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             graph.is_open[bucket_id].store(false, Ordering::SeqCst);
         }
         // open the first bucket(s)
-        
-
     }
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
@@ -989,13 +987,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 }
 
-pub trait BucketKey: Enum + EnumArray<Vec<Self>> + EnumArray<AtomicBool> {
-    fn get_bucket<VM: VMBinding>(&self) -> &WorkBucket<VM>;
+pub trait BucketKey:
+    Enum + EnumArray<Vec<Self>> + EnumArray<AtomicBool> + EnumArray<AtomicUsize>
+{
+    fn get_bucket<VM: VMBinding>(&self) -> &WorkBucket;
 }
 
 pub struct BucketGraph<Bkt: BucketKey> {
     pub(crate) deps: EnumMap<Bkt, Vec<Bkt>>,
     pub(crate) is_open: EnumMap<Bkt, AtomicBool>,
+    pub(crate) counts: EnumMap<Bkt, AtomicUsize>,
 }
 
 impl<Bkt: BucketKey> BucketGraph<Bkt> {
@@ -1003,6 +1004,7 @@ impl<Bkt: BucketKey> BucketGraph<Bkt> {
         Self {
             deps: EnumMap::default(),
             is_open: EnumMap::default(),
+            counts: EnumMap::default(),
         }
     }
 

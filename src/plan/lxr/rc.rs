@@ -593,8 +593,10 @@ impl<S: Slot> DerefMut for AddressBuffer<'_, S> {
     }
 }
 
-impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         #[cfg(any(feature = "log_outstanding_packets", feature = "measure_rc_rate"))]
         let t = std::time::SystemTime::now();
 
@@ -1017,8 +1019,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for ProcessDecs<VM> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         if cfg!(feature = "lxr_no_decs") {
             return;
         }
@@ -1104,7 +1108,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             let roots = std::mem::take(&mut self.slots);
             let mut w = ProcessIncs::<_, EDGE_KIND_ROOT>::new(roots, lxr);
             w.root_kind = self.root_kind;
-            GCWork::do_work(&mut w, self.worker(), self.mmtk());
+            GCWork::do_work(&mut w);
         }
     }
 

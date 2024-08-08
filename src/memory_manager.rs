@@ -903,7 +903,7 @@ pub fn num_of_workers<VM: VMBinding>(mmtk: &'static MMTK<VM>) -> usize {
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `bucket`: Which work bucket to add this packet to.
 /// * `packet`: The work packet to be added.
-pub fn add_work_packet<VM: VMBinding, W: GCWork<VM>>(
+pub fn add_work_packet<VM: VMBinding, W: GCWork>(
     mmtk: &'static MMTK<VM>,
     bucket: WorkBucketStage,
     packet: W,
@@ -921,7 +921,7 @@ pub fn add_work_packet<VM: VMBinding, W: GCWork<VM>>(
 pub fn add_work_packets<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     bucket: WorkBucketStage,
-    packets: Vec<Box<dyn GCWork<VM>>>,
+    packets: Vec<Box<dyn GCWork>>,
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }

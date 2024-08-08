@@ -498,8 +498,10 @@ pub(crate) struct RescanReferences<VM: VMBinding> {
     pub phantom_data: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> GCWork<VM> for RescanReferences<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for RescanReferences<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let worker = GCWorker::<VM>::current();
         if self.soft {
             mmtk.reference_processors.scan_soft_refs(mmtk);
         }
@@ -511,8 +513,10 @@ impl<VM: VMBinding> GCWork<VM> for RescanReferences<VM> {
 
 #[derive(Default)]
 pub(crate) struct SoftRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
-impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+impl<E: ProcessEdgesWork> GCWork for SoftRefProcessing<E> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<E::VM>::mmtk();
+        let worker = GCWorker::<E::VM>::current();
         <E::VM as VMBinding>::VMCollection::process_soft_refs::<E>(worker);
     }
 }
@@ -524,8 +528,8 @@ impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
 
 #[derive(Default)]
 pub(crate) struct WeakRefProcessing<VM: VMBinding>(PhantomData<VM>);
-impl<VM: VMBinding> GCWork<VM> for WeakRefProcessing<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for WeakRefProcessing<VM> {
+    fn do_work(&mut self) {
         unreachable!()
     }
 }
@@ -537,8 +541,10 @@ impl<VM: VMBinding> WeakRefProcessing<VM> {
 
 #[derive(Default)]
 pub(crate) struct PhantomRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
-impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+impl<E: ProcessEdgesWork> GCWork for PhantomRefProcessing<E> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<E::VM>::mmtk();
+        let worker = GCWorker::<E::VM>::current();
         <E::VM as VMBinding>::VMCollection::process_phantom_refs::<E>(worker);
     }
 }
@@ -550,8 +556,10 @@ impl<E: ProcessEdgesWork> PhantomRefProcessing<E> {
 
 #[derive(Default)]
 pub(crate) struct RefForwarding<E: ProcessEdgesWork>(PhantomData<E>);
-impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+impl<E: ProcessEdgesWork> GCWork for RefForwarding<E> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<E::VM>::mmtk();
+        let worker = GCWorker::<E::VM>::current();
         let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
         w.set_worker(worker);
         mmtk.reference_processors.forward_refs(&mut w, mmtk);
@@ -566,8 +574,10 @@ impl<E: ProcessEdgesWork> RefForwarding<E> {
 
 #[derive(Default)]
 pub(crate) struct RefEnqueue<VM: VMBinding>(PhantomData<VM>);
-impl<VM: VMBinding> GCWork<VM> for RefEnqueue<VM> {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for RefEnqueue<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let worker = GCWorker::<VM>::current();
         mmtk.reference_processors.enqueue_refs::<VM>(worker.tls);
     }
 }

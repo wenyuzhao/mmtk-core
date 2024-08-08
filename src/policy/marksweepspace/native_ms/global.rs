@@ -445,13 +445,13 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         }
     }
 
-    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork>> {
         let space = unsafe { &*(self as *const Self) };
         let epilogue = Arc::new(RecycleBlocks {
             space,
             counter: AtomicUsize::new(0),
         });
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
+        let tasks = self.chunk_map.generate_tasks::<VM>(|chunk| {
             Box::new(SweepChunk {
                 space,
                 chunk,
@@ -495,8 +495,8 @@ struct PrepareChunkMap<VM: VMBinding> {
     chunk: Chunk,
 }
 
-impl<VM: VMBinding> GCWork<VM> for PrepareChunkMap<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for PrepareChunkMap<VM> {
+    fn do_work(&mut self) {
         debug_assert!(self.space.chunk_map.get(self.chunk) == ChunkState::Allocated);
         // number of allocated blocks.
         let mut n_occupied_blocks = 0;
@@ -525,8 +525,8 @@ struct ReleaseMarkSweepSpace<VM: VMBinding> {
     space: &'static MarkSweepSpace<VM>,
 }
 
-impl<VM: VMBinding> GCWork<VM> for ReleaseMarkSweepSpace<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for ReleaseMarkSweepSpace<VM> {
+    fn do_work(&mut self) {
         {
             let mut abandoned = self.space.abandoned.lock().unwrap();
             abandoned.sweep_later(self.space);
@@ -545,8 +545,8 @@ struct SweepChunk<VM: VMBinding> {
     epilogue: Arc<RecycleBlocks<VM>>,
 }
 
-impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for SweepChunk<VM> {
+    fn do_work(&mut self) {
         assert_eq!(self.space.chunk_map.get(self.chunk), ChunkState::Allocated);
 
         // number of allocated blocks.

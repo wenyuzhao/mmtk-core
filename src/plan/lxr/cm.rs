@@ -19,6 +19,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_trace_rate")]
 use std::sync::atomic::AtomicUsize;
@@ -317,14 +318,15 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
+impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
     }
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self) {
+        let mmtk = crate::scheduler::GCWorker::<VM>::current().mmtk;
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
@@ -374,17 +376,19 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     }
 }
 
-pub struct ProcessModBufSATB {
+pub struct ProcessModBufSATB<VM> {
     nodes: Option<Vec<ObjectReference>>,
     nodes_arc: Option<Arc<Vec<ObjectReference>>>,
+    p: PhantomData<VM>,
 }
 
-impl ProcessModBufSATB {
+impl<VM> ProcessModBufSATB<VM> {
     pub fn new(nodes: Vec<ObjectReference>) -> Self {
         // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
             nodes: Some(nodes),
             nodes_arc: None,
+            p: PhantomData,
         }
     }
     pub fn new_arc(nodes: Arc<Vec<ObjectReference>>) -> Self {
@@ -392,6 +396,7 @@ impl ProcessModBufSATB {
         Self {
             nodes: None,
             nodes_arc: Some(nodes),
+            p: PhantomData,
         }
     }
 }
@@ -427,8 +432,10 @@ pub fn dump_trace_rate() {
     STW_SCAN_NON_NULL_SLOTS.store(0, Ordering::SeqCst);
 }
 
-impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for ProcessModBufSATB<VM> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         #[cfg(feature = "measure_trace_rate")]
         if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
@@ -465,7 +472,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
         } else {
             return;
         };
-        GCWork::do_work(&mut w, worker, mmtk);
+        GCWork::do_work(&mut w);
 
         // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
     }

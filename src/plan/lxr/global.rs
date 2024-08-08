@@ -345,7 +345,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.common.los.is_end_of_satb_or_full_gc = true;
             // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
             self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                .add(ReleaseLOSNursery);
+                .add(ReleaseLOSNursery::<VM>::default());
         }
         self.common
             .prepare(tls, pause == Pause::Full || pause == Pause::InitialMark);
@@ -353,7 +353,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         {
             self.immix_space.process_mature_evacuation_remset();
             self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                .add(FlushMatureEvacRemsets);
+                .add(FlushMatureEvacRemsets::<VM>::default());
         }
         self.immix_space.prepare_rc(pause);
         // if pause == Pause::FinalMark {
@@ -970,7 +970,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E<VM>>>::new()));
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
+        scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare::<VM>::default());
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
@@ -1056,7 +1056,7 @@ impl<VM: VMBinding> LXR<VM> {
     fn process_prev_roots(&self, scheduler: &GCWorkScheduler<VM>) {
         let mut count = 0usize;
         let prev_roots = self.prev_roots.write().unwrap();
-        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = Vec::with_capacity(prev_roots.len());
+        let mut work_packets: Vec<Box<dyn GCWork>> = Vec::with_capacity(prev_roots.len());
         while let Some(decs) = prev_roots.pop() {
             count += decs.len();
             work_packets.push(Box::new(ProcessDecs::new(

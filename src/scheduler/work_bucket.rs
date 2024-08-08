@@ -6,12 +6,12 @@ use enum_map::Enum;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-struct BucketQueue<VM: VMBinding> {
+struct BucketQueue {
     // FIXME: Performance!
-    queue: RwLock<Injector<Box<dyn GCWork<VM>>>>,
+    queue: RwLock<Injector<Box<dyn GCWork>>>,
 }
 
-impl<VM: VMBinding> BucketQueue<VM> {
+impl BucketQueue {
     fn new() -> Self {
         Self {
             queue: RwLock::new(Injector::new()),
@@ -22,32 +22,29 @@ impl<VM: VMBinding> BucketQueue<VM> {
         self.queue.read().unwrap().is_empty()
     }
 
-    fn steal_batch_and_pop(
-        &self,
-        dest: &Worker<Box<dyn GCWork<VM>>>,
-    ) -> Steal<Box<dyn GCWork<VM>>> {
+    fn steal_batch_and_pop(&self, dest: &Worker<Box<dyn GCWork>>) -> Steal<Box<dyn GCWork>> {
         self.queue.read().unwrap().steal_batch_and_pop(dest)
     }
 
-    fn push(&self, w: Box<dyn GCWork<VM>>) {
+    fn push(&self, w: Box<dyn GCWork>) {
         self.queue.read().unwrap().push(w);
     }
 
-    fn push_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+    fn push_all(&self, ws: Vec<Box<dyn GCWork>>) {
         for w in ws {
             self.queue.read().unwrap().push(w);
         }
     }
 }
 
-pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send>;
+pub type BucketOpenCondition = Box<dyn (Fn() -> bool) + Send>;
 
-pub struct WorkBucket<VM: VMBinding> {
+pub struct WorkBucket {
     disable: AtomicBool,
     active: AtomicBool,
-    queue: BucketQueue<VM>,
-    prioritized_queue: Option<BucketQueue<VM>>,
-    can_open: Option<BucketOpenCondition<VM>>,
+    queue: BucketQueue,
+    prioritized_queue: Option<BucketQueue>,
+    can_open: Option<BucketOpenCondition>,
     /// After this bucket is activated and all pending work packets (including the packets in this
     /// bucket) are drained, this work packet, if exists, will be added to this bucket.  When this
     /// happens, it will prevent opening subsequent work packets.
@@ -59,12 +56,12 @@ pub struct WorkBucket<VM: VMBinding> {
     /// This is useful for handling weak references that may expand the transitive closure
     /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
     /// can be used repeatedly to discover and process more such objects.
-    sentinel: Mutex<Option<Box<dyn GCWork<VM>>>>,
+    sentinel: Mutex<Option<Box<dyn GCWork>>>,
     monitor: Arc<WorkerMonitor>,
     in_concurrent: AtomicBool,
 }
 
-impl<VM: VMBinding> WorkBucket<VM> {
+impl WorkBucket {
     pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
         Self {
             disable: AtomicBool::new(false),
@@ -100,17 +97,17 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     pub fn swap_queue(
         &self,
-        mut new_queue: Injector<Box<dyn GCWork<VM>>>,
-    ) -> Injector<Box<dyn GCWork<VM>>> {
+        mut new_queue: Injector<Box<dyn GCWork>>,
+    ) -> Injector<Box<dyn GCWork>> {
         let mut queue = self.queue.queue.write().unwrap();
-        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
+        std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
         new_queue
     }
 
     pub fn swap_queue_prioritized(
         &self,
-        mut new_queue: Injector<Box<dyn GCWork<VM>>>,
-    ) -> Injector<Box<dyn GCWork<VM>>> {
+        mut new_queue: Injector<Box<dyn GCWork>>,
+    ) -> Injector<Box<dyn GCWork>> {
         let mut queue = self
             .prioritized_queue
             .as_ref()
@@ -118,7 +115,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
             .queue
             .write()
             .unwrap();
-        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
+        std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
         new_queue
     }
 
@@ -174,21 +171,21 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     /// Add a work packet to this bucket
     /// Panic if this bucket cannot receive prioritized packets.
-    pub fn add_prioritized(&self, work: Box<dyn GCWork<VM>>) {
+    pub fn add_prioritized(&self, work: Box<dyn GCWork>) {
         debug_assert!(!self.disabled());
         self.prioritized_queue.as_ref().unwrap().push(work);
         self.notify_one_worker();
     }
 
     /// Add a work packet to this bucket
-    pub fn add<W: GCWork<VM>>(&self, work: W) {
+    pub fn add<W: GCWork>(&self, work: W) {
         debug_assert!(!self.disabled());
         self.queue.push(Box::new(work));
         self.notify_one_worker();
     }
 
     /// Add a work packet to this bucket
-    pub fn add_boxed(&self, work: Box<dyn GCWork<VM>>) {
+    pub fn add_boxed(&self, work: Box<dyn GCWork>) {
         debug_assert!(!self.disabled());
         self.queue.push(work);
         self.notify_one_worker();
@@ -198,18 +195,18 @@ impl<VM: VMBinding> WorkBucket<VM> {
     /// This is useful when the current thread is holding the mutex of `WorkerMonitor` which is
     /// used for notifying workers.  This usually happens if the current thread is the last worker
     /// parked.
-    pub(crate) fn add_no_notify<W: GCWork<VM>>(&self, work: W) {
+    pub(crate) fn add_no_notify<W: GCWork>(&self, work: W) {
         self.queue.push(Box::new(work));
     }
 
     /// Like [`WorkBucket::add_no_notify`], but the work is boxed.
-    pub(crate) fn add_boxed_no_notify(&self, work: Box<dyn GCWork<VM>>) {
+    pub(crate) fn add_boxed_no_notify(&self, work: Box<dyn GCWork>) {
         self.queue.push(work);
     }
 
     /// Add multiple packets with a higher priority.
     /// Panic if this bucket cannot receive prioritized packets.
-    pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+    pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork>>) {
         debug_assert!(!self.disabled());
         self.prioritized_queue.as_ref().unwrap().push_all(work_vec);
         if self.is_activated() {
@@ -218,7 +215,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 
     /// Add multiple packets
-    pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+    pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork>>) {
         debug_assert!(!self.disabled());
         if work_vec.is_empty() {
             return;
@@ -235,7 +232,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
     }
 
     /// Get a work packet from this bucket
-    pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
+    pub fn poll(&self, worker: &Worker<Box<dyn GCWork>>) -> Steal<Box<dyn GCWork>> {
         if self.disabled() || !self.is_activated() || self.is_empty() {
             return Steal::Empty;
         }
@@ -248,14 +245,11 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
 
-    pub fn set_open_condition(
-        &mut self,
-        pred: impl Fn(&GCWorkScheduler<VM>) -> bool + Send + 'static,
-    ) {
+    pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
         self.can_open = Some(Box::new(pred));
     }
 
-    pub fn set_sentinel(&self, new_sentinel: Box<dyn GCWork<VM>>) {
+    pub fn set_sentinel(&self, new_sentinel: Box<dyn GCWork>) {
         let mut sentinel = self.sentinel.lock().unwrap();
         *sentinel = Some(new_sentinel);
     }
@@ -265,9 +259,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
         sentinel.is_some()
     }
 
-    pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
+    pub fn update<VM: VMBinding>(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
         if let Some(can_open) = self.can_open.as_ref() {
-            if !self.is_activated() && can_open(scheduler) {
+            if !self.is_activated() && can_open() {
                 self.activate();
                 return true;
             }

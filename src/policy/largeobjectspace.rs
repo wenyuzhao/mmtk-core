@@ -20,6 +20,7 @@ use crate::vm::VMBinding;
 use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 
@@ -539,22 +540,23 @@ fn get_super_page(cell: Address) -> Address {
     cell.align_down(BYTES_IN_PAGE)
 }
 
-pub struct RCSweepMatureAfterSATBLOS {
+pub struct RCSweepMatureAfterSATBLOS<VM: VMBinding> {
     _counter: LazySweepingJobsCounter,
+    _p: std::marker::PhantomData<VM>,
 }
 
-impl RCSweepMatureAfterSATBLOS {
+impl<VM: VMBinding> RCSweepMatureAfterSATBLOS<VM> {
     pub fn new(counter: LazySweepingJobsCounter) -> Self {
-        Self { _counter: counter }
+        Self {
+            _counter: counter,
+            _p: PhantomData,
+        }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for RCSweepMatureAfterSATBLOS {
-    fn do_work(
-        &mut self,
-        _worker: &mut crate::scheduler::GCWorker<VM>,
-        mmtk: &'static crate::MMTK<VM>,
-    ) {
+impl<VM: VMBinding> GCWork for RCSweepMatureAfterSATBLOS<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
         let los = mmtk.get_plan().common().get_los();
         los.sweep_rc_mature_objects_after_satb(&|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
     }

@@ -29,7 +29,7 @@ impl RemSetEntry {
 
 pub struct MatureEvecRemSet<VM: VMBinding> {
     pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
-    local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
+    local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork>>>>,
     _p: PhantomData<VM>,
     size: AtomicUsize,
 }
@@ -64,7 +64,7 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
                 if cfg!(feature = "rust_mem_counter") {
                     crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
                 }
-                mature_evac_remsets.push(Box::new(EvacuateMatureObjects::new(remset)));
+                mature_evac_remsets.push(Box::new(EvacuateMatureObjects::<VM>::new(remset)));
             }
         }
         for id in 0..self.local_packets.len() {
@@ -89,7 +89,7 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
             if cfg!(feature = "rust_mem_counter") {
                 crate::rust_mem_counter::MATURE_EVAC_REMSET_COUNTER.sub(remset.len());
             }
-            let w = EvacuateMatureObjects::new(remset);
+            let w = EvacuateMatureObjects::<VM>::new(remset);
             let packet_buffer = unsafe { &mut *self.local_packets[id].get() };
             packet_buffer.push(Box::new(w));
         }
@@ -107,10 +107,13 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
     }
 }
 
-pub struct FlushMatureEvacRemsets;
+#[derive(Default)]
+pub struct FlushMatureEvacRemsets<VM>(PhantomData<VM>);
 
-impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for FlushMatureEvacRemsets<VM> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         let immix_space = &mmtk
             .get_plan()
             .downcast_ref::<LXR<VM>>()

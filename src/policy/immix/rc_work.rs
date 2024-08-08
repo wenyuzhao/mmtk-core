@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Mutex};
+use std::{
+    marker::PhantomData,
+    sync::{atomic::AtomicUsize, Mutex},
+};
 
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
@@ -25,14 +28,17 @@ use super::{
 
 static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-struct SelectDefragBlocksInChunk {
+struct SelectDefragBlocksInChunk<VM: VMBinding> {
     pub chunk: Chunk,
     #[allow(unused)]
     pub defrag_threshold: usize,
+    pub p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for SelectDefragBlocksInChunk<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let worker = GCWorker::<VM>::current();
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
@@ -123,22 +129,26 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocksInChunk {
     }
 }
 
-pub(super) struct SweepBlocksAfterDecs {
+pub(super) struct SweepBlocksAfterDecs<VM: VMBinding> {
     blocks: Vec<(Block, bool)>,
     _counter: LazySweepingJobsCounter,
+    _p: PhantomData<VM>,
 }
 
-impl SweepBlocksAfterDecs {
+impl<VM: VMBinding> SweepBlocksAfterDecs<VM> {
     pub fn new(blocks: Vec<(Block, bool)>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             blocks,
             _counter: counter,
+            _p: PhantomData,
         }
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for SweepBlocksAfterDecs<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let worker = GCWorker::<VM>::current();
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         if self.blocks.is_empty() {
             return;
@@ -249,8 +259,10 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for SweepDeadCyclesChunk<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let worker = GCWorker::<VM>::current();
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
         let mut dead_blocks = 0;
@@ -283,48 +295,50 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
     }
 }
 
-pub(super) struct ConcurrentChunkMetadataZeroing {
+pub(super) struct ConcurrentChunkMetadataZeroing<VM: VMBinding> {
     pub chunk: Chunk,
+    pub p: PhantomData<VM>,
 }
 
-impl ConcurrentChunkMetadataZeroing {
+impl<VM: VMBinding> ConcurrentChunkMetadataZeroing<VM> {
     /// Clear object mark table
     #[allow(unused)]
-    fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
+    fn reset_object_mark(chunk: Chunk) {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
             .extract_side_spec()
             .bzero_metadata(chunk.start(), Chunk::BYTES);
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        Self::reset_object_mark::<VM>(self.chunk);
+impl<VM: VMBinding> GCWork for ConcurrentChunkMetadataZeroing<VM> {
+    fn do_work(&mut self) {
+        Self::reset_object_mark(self.chunk);
     }
 }
 
 /// A work packet to prepare each block for GC.
 /// Performs the action on a range of chunks.
-pub(super) struct PrepareChunk {
+pub(super) struct PrepareChunk<VM: VMBinding> {
     pub chunk: Chunk,
     pub cm_enabled: bool,
     pub rc_enabled: bool,
+    pub p: PhantomData<VM>,
 }
 
-impl PrepareChunk {
+impl<VM: VMBinding> PrepareChunk<VM> {
     /// Clear object mark table
     #[allow(unused)]
-    fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
+    fn reset_object_mark(chunk: Chunk) {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
             .extract_side_spec()
             .bzero_metadata(chunk.start(), Chunk::BYTES);
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for PrepareChunk {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for PrepareChunk<VM> {
+    fn do_work(&mut self) {
         if !self.rc_enabled {
-            Self::reset_object_mark::<VM>(self.chunk);
+            Self::reset_object_mark(self.chunk);
         }
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
@@ -404,6 +418,7 @@ impl MatureEvacuationSet {
             Box::new(SelectDefragBlocksInChunk {
                 chunk,
                 defrag_threshold: 1,
+                p: PhantomData,
             })
         });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);

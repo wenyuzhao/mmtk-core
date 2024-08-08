@@ -84,7 +84,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 
-    fn process_slots(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {
+    fn process_slots(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork>> {
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         debug_assert!(
             lxr.current_pause() == Some(Pause::FinalMark)
@@ -110,8 +110,10 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for EvacuateMatureObjects<VM> {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for EvacuateMatureObjects<VM> {
+    fn do_work(&mut self) {
+        let worker = GCWorker::<VM>::current();
+        let mmtk = worker.mmtk;
         let Some(work) = self.process_slots(mmtk) else {
             return;
         };

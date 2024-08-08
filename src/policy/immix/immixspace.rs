@@ -33,6 +33,7 @@ use crate::{
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
+use std::marker::PhantomData;
 use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
@@ -67,7 +68,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub block_allocation: BlockAllocation<VM>,
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
-    pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
+    pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork>>>,
     pub num_clean_blocks_released_young: AtomicUsize,
     pub num_clean_blocks_released_mature: AtomicUsize,
     pub num_clean_blocks_released_lazy: AtomicUsize,
@@ -727,7 +728,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep tasks
-    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork>> {
         self.defrag.mark_histograms.lock().clear();
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
@@ -735,8 +736,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space,
             counter: AtomicUsize::new(0),
         });
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepChunk {
+        let tasks = self.chunk_map.generate_tasks::<VM>(|chunk| {
+            Box::new(SweepChunk::<VM> {
                 space,
                 chunk,
                 epilogue: epilogue.clone(),
@@ -747,9 +748,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep work packets.
-    pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepDeadCyclesChunk::new(
+    pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork>> {
+        self.chunk_map.generate_tasks::<VM>(|chunk| {
+            Box::new(SweepDeadCyclesChunk::<VM>::new(
                 chunk,
                 LazySweepingJobsCounter::new_decs(),
             ))
@@ -757,21 +758,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep work packets.
-    fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork>> {
         let rc_enabled = self.rc_enabled;
         let cm_enabled = self.cm_enabled;
-        self.chunk_map.generate_tasks(|chunk| {
-            Box::new(PrepareChunk {
+        self.chunk_map.generate_tasks::<VM>(|chunk| {
+            Box::new(PrepareChunk::<VM> {
                 chunk,
                 rc_enabled,
                 cm_enabled,
+                p: PhantomData,
             })
         })
     }
 
-    pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map
-            .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
+    pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork>> {
+        self.chunk_map.generate_tasks::<VM>(|chunk| {
+            Box::new(ConcurrentChunkMetadataZeroing {
+                chunk,
+                p: PhantomData::<VM>,
+            })
+        })
     }
 
     /// Dump fragmentation distribution and heap usage
@@ -1596,7 +1602,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let packets = bins
             .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
+            .map::<Box<dyn GCWork>, _>(|blocks| {
                 Box::new(SweepBlocksAfterDecs::new(blocks, counter.clone()))
             })
             .collect();
@@ -1665,8 +1671,8 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for PrepareBlockState<VM> {
+    fn do_work(&mut self) {
         // Clear object mark table for this chunk
         self.reset_object_mark();
         // Iterate over all blocks in this chunk
@@ -1707,8 +1713,10 @@ struct SweepChunk<VM: VMBinding> {
     epilogue: Arc<FlushPageResource<VM>>,
 }
 
-impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> GCWork for SweepChunk<VM> {
+    fn do_work(&mut self) {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let worker = GCWorker::<VM>::current();
         assert_eq!(self.space.chunk_map.get(self.chunk), ChunkState::Allocated);
 
         let mut histogram = self.space.defrag.new_histogram();
@@ -1917,7 +1925,7 @@ struct ClearVOBitsAfterPrepare {
 }
 
 #[cfg(feature = "vo_bit")]
-impl<VM: VMBinding> GCWork<VM> for ClearVOBitsAfterPrepare {
+impl<VM: VMBinding> GCWork for ClearVOBitsAfterPrepare {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         match self.scope {
             VOBitsClearingScope::FullGC => {
