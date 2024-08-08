@@ -402,7 +402,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     scheduler.num_workers(),
                     metadata,
                 )
-            },
+            }
+            .rc(rc_enabled),
             common,
             chunk_map: ChunkMap::new(),
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
@@ -1758,7 +1759,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             } else {
                 freed_blocks += 1;
             }
-            self.space.pr.bulk_release_blocks(freed_blocks);
         }
         #[cfg(feature = "tracing")]
         probe!(mmtk, sweep_chunk, allocated_blocks);

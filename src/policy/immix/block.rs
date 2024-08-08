@@ -672,6 +672,7 @@ impl Block {
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
+        self.set_as_defrag_source(false);
         if super::BLOCK_ONLY {
             match self.get_state() {
                 BlockState::Unallocated => false,
