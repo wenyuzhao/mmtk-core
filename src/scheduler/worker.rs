@@ -59,13 +59,13 @@ pub struct GCWorkerShared<VM: VMBinding> {
     #[cfg(feature = "count_live_bytes_in_gc")]
     live_bytes: AtomicUsize,
     /// A queue of GCWork that can only be processed by the owned thread.
-    pub designated_work: ArrayQueue<Box<dyn GCWork>>,
+    pub designated_work: ArrayQueue<(BucketId, Box<dyn GCWork>)>,
     /// Handle for stealing packets from the current worker
-    pub stealer: Option<Stealer<Box<dyn GCWork>>>,
+    pub stealer: Option<Stealer<(BucketId, Box<dyn GCWork>)>>,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
-    pub fn new(stealer: Option<Stealer<Box<dyn GCWork>>>) -> Self {
+    pub fn new(stealer: Option<Stealer<(BucketId, Box<dyn GCWork>)>>) -> Self {
         Self {
             stat: Default::default(),
             #[cfg(feature = "count_live_bytes_in_gc")]
@@ -101,7 +101,7 @@ pub struct GCWorker<VM: VMBinding> {
     /// Reference to the shared part of the GC worker.  It is used for synchronization.
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
-    pub local_work_buffer: deque::Worker<Box<dyn GCWork>>,
+    pub local_work_buffer: deque::Worker<(BucketId, Box<dyn GCWork>)>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -130,7 +130,7 @@ pub(crate) struct WorkerShouldExit;
 /// Too many functions return `Option<Box<dyn GCWork<VM>>>`.  In most cases, when `None` is
 /// returned, the caller should try getting work packets from another place.  To avoid confusion,
 /// we use `Err(WorkerShouldExit)` to clearly indicate that the worker should exit immediately.
-pub(crate) type PollResult = Result<Box<dyn GCWork>, WorkerShouldExit>;
+pub(crate) type PollResult = Result<(BucketId, Box<dyn GCWork>), WorkerShouldExit>;
 
 impl<VM: VMBinding> GCWorker<VM> {
     pub(crate) fn new(
@@ -138,7 +138,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         ordinal: ThreadId,
         scheduler: Arc<GCWorkScheduler<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
-        local_work_buffer: deque::Worker<Box<dyn GCWork>>,
+        local_work_buffer: deque::Worker<(BucketId, Box<dyn GCWork>)>,
     ) -> Self {
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
@@ -167,38 +167,38 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// Add a work packet to the work queue and mark it with a higher priority.
     /// If the bucket is activated, the packet will be pushed to the local queue, otherwise it will be
     /// pushed to the global bucket with a higher priority.
-    pub fn add_work_prioritized(&mut self, bucket: WorkBucketStage, work: impl GCWork) {
-        if !self.scheduler().work_buckets[bucket].is_activated()
-            || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
-        {
-            self.scheduler.work_buckets[bucket].add_prioritized(Box::new(work));
-            return;
-        }
-        self.local_work_buffer.push(Box::new(work));
-    }
+    // pub fn add_work_prioritized(&mut self, bucket: WorkBucketStage, work: impl GCWork) {
+    //     if !self.scheduler().work_buckets[bucket].is_activated()
+    //         || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
+    //     {
+    //         self.scheduler.work_buckets[bucket].add_prioritized(Box::new(work));
+    //         return;
+    //     }
+    //     self.local_work_buffer.push(Box::new(work));
+    // }
 
-    pub fn add_boxed_work(&mut self, bucket: WorkBucketStage, work: Box<dyn GCWork>) {
-        if !self.scheduler().work_buckets[bucket].is_activated()
-            || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
-        {
-            self.scheduler.work_buckets[bucket].add_boxed(work);
-            return;
-        }
-        self.local_work_buffer.push(work);
-    }
+    // pub fn add_boxed_work(&mut self, bucket: WorkBucketStage, work: Box<dyn GCWork>) {
+    //     if !self.scheduler().work_buckets[bucket].is_activated()
+    //         || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
+    //     {
+    //         self.scheduler.work_buckets[bucket].add_boxed(work);
+    //         return;
+    //     }
+    //     self.local_work_buffer.push(work);
+    // }
 
-    /// Add a work packet to the work queue.
-    /// If the bucket is activated, the packet will be pushed to the local queue, otherwise it will be
-    /// pushed to the global bucket.
-    pub fn add_work(&mut self, bucket: WorkBucketStage, work: impl GCWork) {
-        if !self.scheduler().work_buckets[bucket].is_activated()
-            || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
-        {
-            self.scheduler.work_buckets[bucket].add(work);
-            return;
-        }
-        self.local_work_buffer.push(Box::new(work));
-    }
+    // /// Add a work packet to the work queue.
+    // /// If the bucket is activated, the packet will be pushed to the local queue, otherwise it will be
+    // /// pushed to the global bucket.
+    // pub fn add_work(&mut self, bucket: WorkBucketStage, work: impl GCWork) {
+    //     if !self.scheduler().work_buckets[bucket].is_activated()
+    //         || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
+    //     {
+    //         self.scheduler.work_buckets[bucket].add(work);
+    //         return;
+    //     }
+    //     self.local_work_buffer.push(Box::new(work));
+    // }
 
     /// Get the scheduler. There is only one scheduler per MMTk instance.
     pub fn scheduler(&self) -> &GCWorkScheduler<VM> {
@@ -275,13 +275,13 @@ impl<VM: VMBinding> GCWorker<VM> {
             // poll.
             #[cfg(feature = "tracing")]
             probe!(mmtk, work_poll);
-            let Ok(mut work) = self.poll() else {
+            let Ok((bucket, mut work)) = self.poll() else {
                 // The worker is asked to exit.  Break from the loop.
                 break;
             };
             // probe! expands to an empty block on unsupported platforms
             #[allow(unused_variables)]
-            #[cfg(feature = "tracing")]
+            // #[cfg(feature = "tracing")]
             let typename = work.get_type_name();
 
             #[cfg(feature = "bpftrace_workaround")]
@@ -294,6 +294,10 @@ impl<VM: VMBinding> GCWorker<VM> {
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             work.do_work_with_stat();
             std::mem::drop(work);
+            if bucket.get_bucket().dec(typename) {
+                println!("Bucket {:?} is empty", bucket);
+                self.mmtk.scheduler.notify_bucket_empty()
+            }
             flush_logs!();
         }
         debug!(
@@ -314,7 +318,7 @@ enum WorkerCreationState<VM: VMBinding> {
     /// been spawn.
     Initial {
         /// The local work queues for to-be-created workers.
-        local_work_queues: Vec<deque::Worker<Box<dyn GCWork>>>,
+        local_work_queues: Vec<deque::Worker<(BucketId, Box<dyn GCWork>)>>,
     },
     /// All worker threads are spawn and running.  `GCWorker` structs have been transferred to
     /// worker threads.
@@ -397,7 +401,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     #[allow(clippy::vec_box)] // See `WorkerCreationState::Surrendered`.
     fn create_workers(
         &self,
-        local_work_queues: Vec<deque::Worker<Box<dyn GCWork>>>,
+        local_work_queues: Vec<deque::Worker<(BucketId, Box<dyn GCWork>)>>,
         mmtk: &'static MMTK<VM>,
     ) -> Vec<Box<GCWorker<VM>>> {
         debug!("Creating GCWorker instances...");

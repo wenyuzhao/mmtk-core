@@ -2,13 +2,16 @@ use super::worker_monitor::WorkerMonitor;
 use super::*;
 use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
+use crossbeam::queue::SegQueue;
 use enum_map::Enum;
+use portable_atomic::AtomicUsize;
+use spin::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 struct BucketQueue {
     // FIXME: Performance!
-    queue: RwLock<Injector<Box<dyn GCWork>>>,
+    queue: RwLock<Injector<(BucketId, Box<dyn GCWork>)>>,
 }
 
 impl BucketQueue {
@@ -22,172 +25,156 @@ impl BucketQueue {
         self.queue.read().unwrap().is_empty()
     }
 
-    fn steal_batch_and_pop(&self, dest: &Worker<Box<dyn GCWork>>) -> Steal<Box<dyn GCWork>> {
+    fn steal_batch_and_pop(
+        &self,
+        dest: &Worker<(BucketId, Box<dyn GCWork>)>,
+    ) -> Steal<(BucketId, Box<dyn GCWork>)> {
         self.queue.read().unwrap().steal_batch_and_pop(dest)
     }
 
-    fn push(&self, w: Box<dyn GCWork>) {
-        self.queue.read().unwrap().push(w);
+    fn push(&self, b: BucketId, w: Box<dyn GCWork>) {
+        self.queue.read().unwrap().push((b, w));
     }
 
-    fn push_all(&self, ws: Vec<Box<dyn GCWork>>) {
-        for w in ws {
-            self.queue.read().unwrap().push(w);
-        }
-    }
+    // fn push_all(&self, ws: Vec<Box<dyn GCWork>>) {
+    //     for w in ws {
+    //         self.queue.read().unwrap().push(w);
+    //     }
+    // }
 }
 
 pub type BucketOpenCondition = Box<dyn (Fn() -> bool) + Send>;
 
 pub struct WorkBucket {
-    disable: AtomicBool,
-    active: AtomicBool,
-    queue: BucketQueue,
-    prioritized_queue: Option<BucketQueue>,
-    can_open: Option<BucketOpenCondition>,
-    /// After this bucket is activated and all pending work packets (including the packets in this
-    /// bucket) are drained, this work packet, if exists, will be added to this bucket.  When this
-    /// happens, it will prevent opening subsequent work packets.
-    ///
-    /// The sentinel work packet may set another work packet as the new sentinel which will be
-    /// added to this bucket again after all pending work packets are drained.  This may happend
-    /// again and again, causing the GC to stay at the same stage and drain work packets in a loop.
-    ///
-    /// This is useful for handling weak references that may expand the transitive closure
-    /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
-    /// can be used repeatedly to discover and process more such objects.
-    sentinel: Mutex<Option<Box<dyn GCWork>>>,
-    monitor: Arc<WorkerMonitor>,
-    in_concurrent: AtomicBool,
+    name: &'static str,
+    count: AtomicUsize,
+    queue: RwLock<SegQueue<Box<dyn GCWork>>>,
 }
 
 impl WorkBucket {
-    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
-            disable: AtomicBool::new(false),
-            active: AtomicBool::new(active),
-            queue: BucketQueue::new(),
-            prioritized_queue: None,
-            can_open: None,
-            sentinel: Mutex::new(None),
-            monitor,
-            in_concurrent: AtomicBool::new(true),
+            name,
+            count: AtomicUsize::new(0),
+            queue: RwLock::new(SegQueue::new()),
         }
     }
 
-    pub fn set_in_concurrent(&self, in_concurrent: bool) {
-        self.in_concurrent.store(in_concurrent, Ordering::SeqCst);
+    pub fn reset(&self) {
+        assert!(self.count.load(Ordering::SeqCst) == 0);
+        assert!(self.queue.read().unwrap().is_empty());
     }
 
-    pub fn set_as_enabled(&self) {
-        self.disable.store(false, Ordering::SeqCst)
+    pub fn take_queue(&self) -> SegQueue<Box<dyn GCWork>> {
+        std::mem::replace(&mut self.queue.write().unwrap(), SegQueue::new())
     }
 
-    pub fn set_as_disabled(&self) {
-        self.disable.store(true, Ordering::SeqCst)
+    // pub fn swap_queue(
+    //     &self,
+    //     mut new_queue: Injector<Box<dyn GCWork>>,
+    // ) -> Injector<Box<dyn GCWork>> {
+    //     let mut queue = self.queue.queue.write().unwrap();
+    //     std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
+    //     new_queue
+    // }
+
+    /// Test if the bucket is drained
+    pub fn is_empty(&self) -> bool {
+        self.queue.read().unwrap().is_empty() && self.count.load(Ordering::Relaxed) == 0
     }
 
-    pub fn disabled(&self) -> bool {
-        self.disable.load(Ordering::Relaxed)
+    pub fn count(&self) -> usize {
+        self.count.load(Ordering::Relaxed)
     }
 
-    pub fn enable_prioritized_queue(&mut self) {
-        self.prioritized_queue = Some(BucketQueue::new());
+    pub(super) fn inc(&self) {
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn swap_queue(
-        &self,
-        mut new_queue: Injector<Box<dyn GCWork>>,
-    ) -> Injector<Box<dyn GCWork>> {
-        let mut queue = self.queue.queue.write().unwrap();
-        std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
-        new_queue
+    /// Returns true if the count is zero
+    pub(super) fn dec(&self, mut name: &str) -> bool {
+        let x = self.count.fetch_sub(1, Ordering::Relaxed);
+        if name.starts_with("mmtk::scheduler::gc_work::") {
+            name = &name[26..];
+        }
+        if let Some((x, _)) = name.split_once("<") {
+            name = x;
+        }
+        // println!("    - {:?} : {} -- {}", self.name, x, name);
+        x == 1
     }
 
-    pub fn swap_queue_prioritized(
-        &self,
-        mut new_queue: Injector<Box<dyn GCWork>>,
-    ) -> Injector<Box<dyn GCWork>> {
-        let mut queue = self
-            .prioritized_queue
-            .as_ref()
-            .unwrap()
-            .queue
-            .write()
-            .unwrap();
-        std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
-        new_queue
+    /// Add a work packet to this bucket
+    pub(super) fn add(&self, work: Box<dyn GCWork>) {
+        let queue = self.queue.read().unwrap();
+        queue.push(work);
     }
+}
+
+pub struct ActiveWorkBucket {
+    queue: BucketQueue,
+    prioritized_queue: BucketQueue,
+    monitor: Arc<WorkerMonitor>,
+}
+
+impl ActiveWorkBucket {
+    pub(crate) fn new(monitor: Arc<WorkerMonitor>) -> Self {
+        Self {
+            queue: BucketQueue::new(),
+            prioritized_queue: BucketQueue::new(),
+            monitor,
+        }
+    }
+
+    // pub fn swap_queue(
+    //     &self,
+    //     mut new_queue: Injector<Box<dyn GCWork>>,
+    // ) -> Injector<Box<dyn GCWork>> {
+    //     let mut queue = self.queue.queue.write().unwrap();
+    //     std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
+    //     new_queue
+    // }
+
+    // pub fn swap_queue_prioritized(
+    //     &self,
+    //     mut new_queue: Injector<Box<dyn GCWork>>,
+    // ) -> Injector<Box<dyn GCWork>> {
+    //     let mut queue = self.prioritized_queue.queue.write().unwrap();
+    //     std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
+    //     new_queue
+    // }
 
     fn notify_one_worker(&self) {
-        // If the bucket is not activated, don't notify anyone.
-        if !self.is_activated() {
-            return;
-        }
         // Notify one if there're any parked workers.
         self.monitor.notify_work_available(false);
     }
 
     pub fn notify_all_workers(&self) {
-        // If the bucket is not activated, don't notify anyone.
-        if !self.is_activated() {
-            return;
-        }
         // Notify all if there're any parked workers.
         self.monitor.notify_work_available(true);
     }
 
-    pub fn is_activated(&self) -> bool {
-        self.active.load(Ordering::SeqCst)
-    }
-
-    /// Enable the bucket
-    pub fn activate(&self) {
-        self.active.store(true, Ordering::SeqCst);
-    }
-
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {
-        if self.disabled() {
-            return true;
-        }
-        self.queue.is_empty()
-            && self
-                .prioritized_queue
-                .as_ref()
-                .map(|q| q.is_empty())
-                .unwrap_or(true)
-    }
-
-    pub fn is_drained(&self) -> bool {
-        self.is_activated() && self.is_empty()
-    }
-
-    /// Disable the bucket
-    pub fn deactivate(&self) {
-        debug_assert!(self.is_empty(), "Bucket not drained before close");
-        self.active.store(false, Ordering::Relaxed);
+        self.queue.is_empty() && self.prioritized_queue.is_empty()
     }
 
     /// Add a work packet to this bucket
     /// Panic if this bucket cannot receive prioritized packets.
-    pub fn add_prioritized(&self, work: Box<dyn GCWork>) {
-        debug_assert!(!self.disabled());
-        self.prioritized_queue.as_ref().unwrap().push(work);
-        self.notify_one_worker();
-    }
+    // pub fn add_prioritized(&self, work: Box<dyn GCWork>) {
+    //     self.prioritized_queue.push(work);
+    //     self.notify_one_worker();
+    // }
 
     /// Add a work packet to this bucket
-    pub fn add<W: GCWork>(&self, work: W) {
-        debug_assert!(!self.disabled());
-        self.queue.push(Box::new(work));
-        self.notify_one_worker();
-    }
+    // pub fn add<W: GCWork>(&self, work: W) {
+    //     self.queue.push(Box::new(work));
+    //     self.notify_one_worker();
+    // }
 
     /// Add a work packet to this bucket
-    pub fn add_boxed(&self, work: Box<dyn GCWork>) {
-        debug_assert!(!self.disabled());
-        self.queue.push(work);
+    pub fn add_boxed(&self, b: BucketId, work: Box<dyn GCWork>) {
+        self.queue.push(b, work);
         self.notify_one_worker();
     }
 
@@ -195,103 +182,55 @@ impl WorkBucket {
     /// This is useful when the current thread is holding the mutex of `WorkerMonitor` which is
     /// used for notifying workers.  This usually happens if the current thread is the last worker
     /// parked.
-    pub(crate) fn add_no_notify<W: GCWork>(&self, work: W) {
-        self.queue.push(Box::new(work));
-    }
+    // pub(crate) fn add_no_notify<W: GCWork>(&self, work: W) {
+    //     self.queue.push(Box::new(work));
+    // }
 
     /// Like [`WorkBucket::add_no_notify`], but the work is boxed.
-    pub(crate) fn add_boxed_no_notify(&self, work: Box<dyn GCWork>) {
-        self.queue.push(work);
+    pub(crate) fn add_boxed_no_notify(&self, b: BucketId, work: Box<dyn GCWork>) {
+        self.queue.push(b, work);
     }
 
     /// Add multiple packets with a higher priority.
     /// Panic if this bucket cannot receive prioritized packets.
-    pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork>>) {
-        debug_assert!(!self.disabled());
-        self.prioritized_queue.as_ref().unwrap().push_all(work_vec);
-        if self.is_activated() {
-            self.notify_all_workers();
-        }
-    }
+    // pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork>>) {
+    //     self.prioritized_queue.push_all(work_vec);
+    //     self.notify_all_workers();
+    // }
 
     /// Add multiple packets
-    pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork>>) {
-        debug_assert!(!self.disabled());
-        if work_vec.is_empty() {
-            return;
-        }
-        let len = work_vec.len();
-        self.queue.push_all(work_vec);
-        if self.is_activated() {
-            if len == 1 {
-                self.notify_one_worker();
-            } else {
-                self.notify_all_workers();
-            }
-        }
-    }
+    // pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork>>) {
+    //     if work_vec.is_empty() {
+    //         return;
+    //     }
+    //     let len = work_vec.len();
+    //     self.queue.push_all(work_vec);
+    //     if len == 1 {
+    //         self.notify_one_worker();
+    //     } else {
+    //         self.notify_all_workers();
+    //     }
+    // }
 
     /// Get a work packet from this bucket
-    pub fn poll(&self, worker: &Worker<Box<dyn GCWork>>) -> Steal<Box<dyn GCWork>> {
-        if self.disabled() || !self.is_activated() || self.is_empty() {
+    pub fn poll(
+        &self,
+        worker: &Worker<(BucketId, Box<dyn GCWork>)>,
+    ) -> Steal<(BucketId, Box<dyn GCWork>)> {
+        if self.is_empty() {
             return Steal::Empty;
         }
-        if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
-            prioritized_queue
-                .steal_batch_and_pop(worker)
-                .or_else(|| self.queue.steal_batch_and_pop(worker))
-        } else {
-            self.queue.steal_batch_and_pop(worker)
-        }
-    }
-
-    pub fn set_open_condition(&mut self, pred: impl Fn() -> bool + Send + 'static) {
-        self.can_open = Some(Box::new(pred));
-    }
-
-    pub fn set_sentinel(&self, new_sentinel: Box<dyn GCWork>) {
-        let mut sentinel = self.sentinel.lock().unwrap();
-        *sentinel = Some(new_sentinel);
-    }
-
-    pub fn has_sentinel(&self) -> bool {
-        let sentinel = self.sentinel.lock().unwrap();
-        sentinel.is_some()
-    }
-
-    pub fn update<VM: VMBinding>(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
-        if let Some(can_open) = self.can_open.as_ref() {
-            if !self.is_activated() && can_open() {
-                self.activate();
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn maybe_schedule_sentinel(&self) -> bool {
-        debug_assert!(
-            self.is_activated(),
-            "Attempted to schedule sentinel work while bucket is not open"
-        );
-        let maybe_sentinel = {
-            let mut sentinel = self.sentinel.lock().unwrap();
-            sentinel.take()
-        };
-        if let Some(work) = maybe_sentinel {
-            // We don't need to notify other workers because this function is called by the last
-            // parked worker.  After this function returns, the caller will notify workers because
-            // more work packets become available.
-            self.add_boxed_no_notify(work);
-            true
-        } else {
-            false
-        }
+        self.prioritized_queue
+            .steal_batch_and_pop(worker)
+            .or_else(|| self.queue.steal_batch_and_pop(worker))
     }
 }
 
-#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
-pub enum WorkGroup {
+/// This enum defines all the work bucket types. The scheduler
+/// will instantiate a work bucket for each stage defined here.
+#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum BucketId {
+    Start,
     Prepare,
     Roots,
     Closure,
@@ -299,79 +238,22 @@ pub enum WorkGroup {
     Finish,
 }
 
-/// This enum defines all the work bucket types. The scheduler
-/// will instantiate a work bucket for each stage defined here.
-#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum WorkBucketStage {
-    /// This bucket is always open.
-    Unconstrained,
-    FinishConcurrentWork,
-    Initial,
-    /// Preparation work.  Plans, spaces, GC workers, mutators, etc. should be prepared for GC at
-    /// this stage.
-    Prepare,
-    /// Clear the VO bit metadata.  Mainly used by ImmixSpace.
-    #[cfg(feature = "vo_bit")]
-    ClearVOBits,
-    /// Compute the transtive closure starting from transitively pinning (TP) roots following only strong references.
-    /// No objects in this closure are allow to move.
-    TPinningClosure,
-    /// Trace (non-transitively) pinning roots. Objects pointed by those roots must not move, but their children may. To ensure correctness, these must be processed after TPinningClosure
-    PinningRootsTrace,
-    /// Compute the transtive closure following only strong references.
-    Closure,
-    /// Handle Java-style soft references, and potentially expand the transitive closure.
-    SoftRefClosure,
-    /// Handle Java-style weak references.
-    WeakRefClosure,
-    /// Resurrect Java-style finalizable objects, and potentially expand the transitive closure.
-    FinalRefClosure,
-    /// Handle Java-style phantom references.
-    PhantomRefClosure,
-    /// Let the VM handle VM-specific weak data structures, including weak references, weak
-    /// collections, table of finalizable objects, ephemerons, etc.  Potentially expand the
-    /// transitive closure.
-    ///
-    /// NOTE: This stage is intended to replace the Java-specific weak reference handling stages
-    /// above.
-    VMRefClosure,
-    /// Compute the forwarding addresses of objects (mark-compact-only).
-    CalculateForwarding,
-    /// Scan roots again to initiate another transitive closure to update roots and reference
-    /// after computing the forwarding addresses (mark-compact-only).
-    SecondRoots,
-    /// Update Java-style weak references after computing forwarding addresses (mark-compact-only).
-    ///
-    /// NOTE: This stage should be updated to adapt to the VM-side reference handling.  It shall
-    /// be kept after removing `{Soft,Weak,Final,Phantom}RefClosure`.
-    RefForwarding,
-    /// Update the list of Java-style finalization cadidates and finalizable objects after
-    /// computing forwarding addresses (mark-compact-only).
-    FinalizableForwarding,
-    /// Let the VM handle the forwarding of reference fields in any VM-specific weak data
-    /// structures, including weak references, weak collections, table of finalizable objects,
-    /// ephemerons, etc., after computing forwarding addresses (mark-compact-only).
-    ///
-    /// NOTE: This stage is intended to replace Java-specific forwarding phases above.
-    VMRefForwarding,
-    /// Compact objects (mark-compact-only).
-    Compact,
-    /// Work packets that should be done just before GC shall go here.  This includes releasing
-    /// resources and setting states in plans, spaces, GC workers, mutators, etc.
-    Release,
-    STWRCDecsAndSweep,
-    /// Resume mutators and end GC.
-    Final,
-}
+static START: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("start"));
+static ROOTS: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("roots"));
+static PREPARE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("prepare"));
+static CLOSURE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("closure"));
+static RELEASE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("release"));
+static FINISH: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("finish"));
 
-// Alias
-#[allow(non_upper_case_globals)]
-impl WorkBucketStage {
-    /// The first stop-the-world bucket.
-    pub fn first_stw_stage() -> Self {
-        WorkBucketStage::from_usize(1)
+impl BucketId {
+    pub fn get_bucket(&self) -> &'static WorkBucket {
+        match self {
+            BucketId::Start => &*START,
+            BucketId::Prepare => &*PREPARE,
+            BucketId::Roots => &*ROOTS,
+            BucketId::Closure => &*CLOSURE,
+            BucketId::Release => &*RELEASE,
+            BucketId::Finish => &*FINISH,
+        }
     }
-
-    pub const RCProcessIncs: Self = Self::Initial;
-    pub const RCEvacuateMature: Self = Self::Closure;
 }

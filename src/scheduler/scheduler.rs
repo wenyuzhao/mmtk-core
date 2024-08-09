@@ -10,6 +10,7 @@ use super::*;
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
 use crate::plan::lxr::LXR;
+use crate::plan::HasSpaces;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::reference_processor::PhantomRefProcessing;
@@ -20,14 +21,13 @@ use crate::Pause;
 use crate::Plan;
 use crossbeam::deque::{Injector, Steal};
 use enum_map::{Enum, EnumArray, EnumMap};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
-    /// Work buckets
-    pub work_buckets: EnumMap<WorkBucketStage, WorkBucket>,
+    active_bucket: ActiveWorkBucket,
     /// Workers
     pub(crate) worker_group: Arc<WorkerGroup<VM>>,
     /// For synchronized communication between workers and with mutators.
@@ -37,7 +37,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork>>>,
     pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork>>>,
     in_gc_pause: AtomicBool,
-    bucket_update_progress: AtomicUsize,
+    current_schedule: AtomicPtr<BucketGraph>,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -52,102 +52,98 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let worker_monitor: Arc<WorkerMonitor> = Arc::new(WorkerMonitor::new(num_workers));
         let worker_group = WorkerGroup::new(num_workers);
 
-        // Create work buckets for workers.
-        // TODO: Replace `array_from_fn` with `std::array::from_fn` after bumping MSRV.
-        let mut work_buckets = EnumMap::from_array(array_from_fn(|stage_num| {
-            let stage = WorkBucketStage::from_usize(stage_num);
-            let active = stage == WorkBucketStage::Unconstrained;
-            WorkBucket::new(active, worker_monitor.clone())
-        }));
-
-        work_buckets[WorkBucketStage::Unconstrained].enable_prioritized_queue();
-
-        // Set the open condition of each bucket.
-        {
-            let first_stw_stage = WorkBucketStage::first_stw_stage();
-            let mut open_stages: Vec<WorkBucketStage> = vec![first_stw_stage];
-            let stages = (0..WorkBucketStage::LENGTH).map(WorkBucketStage::from_usize);
-            for stage in stages {
-                // Unconstrained is always open.
-                // The first STW stage (Prepare) will be opened when the world stopped
-                // (i.e. when all mutators are suspended).
-                if stage != WorkBucketStage::Unconstrained && stage != first_stw_stage {
-                    // Other work packets will be opened after previous stages are done
-                    // (i.e their buckets are drained and all workers parked).
-                    let cur_stages = open_stages.clone();
-                    work_buckets[stage].set_open_condition(
-                        move |scheduler: &GCWorkScheduler<VM>| {
-                            scheduler.are_buckets_drained(&cur_stages)
-                        },
-                    );
-                    open_stages.push(stage);
-                }
-            }
-        }
-
         Arc::new(Self {
-            work_buckets,
+            active_bucket: ActiveWorkBucket::new(worker_monitor.clone()),
             worker_group,
             worker_monitor,
             affinity,
             postponed_concurrent_work: spin::RwLock::new(Injector::new()),
             postponed_concurrent_work_prioritized: spin::RwLock::new(Injector::new()),
             in_gc_pause: AtomicBool::new(false),
-            bucket_update_progress: AtomicUsize::new(0),
+            current_schedule: AtomicPtr::new(std::ptr::null_mut()),
         })
     }
 
-    pub fn execute<Bkt: BucketKey>(&self, graph: &'static BucketGraph<Bkt>) {
-        // reset all buckets
-        for i in 0..Bkt::LENGTH {
-            let bucket_id = Bkt::from_usize(i);
-            graph.is_open[bucket_id].store(false, Ordering::SeqCst);
+    pub fn spawn_boxed(&self, bucket: BucketId, w: Box<dyn GCWork>) {
+        // Increment counter
+        bucket.get_bucket().inc();
+        // Add to the corresponding bucket/queue
+        if self.schedule().is_open[bucket].load(Ordering::SeqCst) {
+            // The bucket is open. Either add to the global pool, or the thread local queue
+            self.active_bucket.add_boxed(bucket, w);
+        } else {
+            // The bucket is closed. Add to the bucket's queue
+            bucket.get_bucket().add(w);
         }
+    }
+
+    pub fn spawn(&self, bucket: BucketId, w: impl GCWork) {
+        self.spawn_boxed(bucket, Box::new(w))
+    }
+
+    pub fn spawn_bulk(&self, bucket: BucketId, ws: Vec<Box<dyn GCWork>>) {
+        for w in ws {
+            self.spawn_boxed(bucket, w);
+        }
+    }
+
+    pub fn execute(&self, graph: &'static BucketGraph) {
+        println!("EXECUTE GRAPH");
+        // reset all buckets
+        graph.reset();
+        self.current_schedule.store(
+            graph as *const BucketGraph as *mut BucketGraph,
+            Ordering::SeqCst,
+        );
         // open the first bucket(s)
+        // self.notify_bucket_empty();
     }
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
-        let mut unconstrained_queue = Injector::new();
-        unconstrained_queue =
-            self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
-        let postponed_queue = self.postponed_concurrent_work.read();
-        if !unconstrained_queue.is_empty() {
-            loop {
-                match unconstrained_queue.steal() {
-                    Steal::Empty => break,
-                    Steal::Success(x) => postponed_queue.push(x),
-                    Steal::Retry => continue,
-                }
-            }
-        }
-        crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
+        // let mut unconstrained_queue = Injector::new();
+        // unconstrained_queue =
+        //     self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
+        // let postponed_queue = self.postponed_concurrent_work.read();
+        // if !unconstrained_queue.is_empty() {
+        //     loop {
+        //         match unconstrained_queue.steal() {
+        //             Steal::Empty => break,
+        //             Steal::Success(x) => postponed_queue.push(x),
+        //             Steal::Retry => continue,
+        //         }
+        //     }
+        // }
+        // crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
+        unimplemented!()
     }
 
     pub fn process_lazy_decrement_packets(&self) {
-        let mut no_postpone = vec![];
-        let mut cm_packets = vec![];
-        // Buggy
-        let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
-        loop {
-            if postponed_concurrent_work.is_empty() {
-                break;
-            }
-            match postponed_concurrent_work.steal() {
-                Steal::Success(w) => {
-                    if !w.is_concurrent_marking_work() {
-                        no_postpone.push(w)
-                    } else {
-                        cm_packets.push(w)
-                    }
-                }
-                Steal::Empty => break,
-                Steal::Retry => {}
-            }
-        }
-        for w in cm_packets {
-            postponed_concurrent_work.push(w)
-        }
-        self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
+        // let mut no_postpone = vec![];
+        // let mut cm_packets = vec![];
+        // // Buggy
+        // let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
+        // loop {
+        //     if postponed_concurrent_work.is_empty() {
+        //         break;
+        //     }
+        //     match postponed_concurrent_work.steal() {
+        //         Steal::Success(w) => {
+        //             if !w.is_concurrent_marking_work() {
+        //                 no_postpone.push(w)
+        //             } else {
+        //                 cm_packets.push(w)
+        //             }
+        //         }
+        //         Steal::Empty => break,
+        //         Steal::Retry => {}
+        //     }
+        // }
+        // for w in cm_packets {
+        //     postponed_concurrent_work.push(w)
+        // }
+        // self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
+
+        unimplemented!()
     }
 
     pub fn postpone(&self, w: impl GCWork) {
@@ -238,8 +234,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Add the `ScheduleCollection` packet.  Called by the last parked worker.
     fn add_schedule_collection_packet(&self) {
         // We are still holding the mutex `WorkerMonitor::sync`.  Do not notify now.
-        self.work_buckets[WorkBucketStage::Unconstrained]
-            .add_no_notify(ScheduleCollection::<VM>::default());
+        self.spawn(BucketId::Start, ScheduleCollection::<VM>::default());
     }
 
     pub fn schedule_common_work_no_refs<C: GCWorkContext<VM = VM>>(
@@ -248,13 +243,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ) {
         use crate::scheduler::gc_work::*;
         // Stop & scan mutators (mutator scanning can happen before STW)
-        self.work_buckets[WorkBucketStage::Unconstrained].add(StopMutators::<C>::new());
+        self.spawn(BucketId::Start, StopMutators::<C>::new());
 
         // Prepare global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Prepare].add(Prepare::<C>::new(plan));
+        self.spawn(BucketId::Prepare, Prepare::<C>::new(plan));
 
         // Release global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Release].add(Release::<C>::new(plan));
+        self.spawn(BucketId::Release, Release::<C>::new(plan));
 
         // Analysis GC work
         #[cfg(feature = "analysis")]
@@ -279,46 +274,46 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ) {
         self.schedule_common_work_no_refs::<C>(plan);
 
-        use crate::scheduler::gc_work::*;
+        // use crate::scheduler::gc_work::*;
         // Reference processing
-        if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
-            // use crate::util::reference_processor::{
-            //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            // };
-            // self.work_buckets[WorkBucketStage::WeakRefClosure]
-            //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
-            // self.work_buckets[WorkBucketStage::WeakRefClosure]
-            //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
-            self.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
+        // if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
+        //     // use crate::util::reference_processor::{
+        //     //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+        //     // };
+        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
+        //     //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
+        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
+        //     //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
+        //     self.work_buckets[WorkBucketStage::PhantomRefClosure]
+        //         .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
 
-            // VM-specific weak ref processing
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
+        //     // VM-specific weak ref processing
+        //     self.work_buckets[WorkBucketStage::WeakRefClosure]
+        //         .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
 
-            // use crate::util::reference_processor::RefForwarding;
-            // if plan.constraints().needs_forward_after_liveness {
-            //     self.work_buckets[WorkBucketStage::RefForwarding]
-            //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
-            // }
+        //     // use crate::util::reference_processor::RefForwarding;
+        //     // if plan.constraints().needs_forward_after_liveness {
+        //     //     self.work_buckets[WorkBucketStage::RefForwarding]
+        //     //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
+        //     // }
 
-            // use crate::util::reference_processor::RefEnqueue;
-            // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
-        }
+        //     // use crate::util::reference_processor::RefEnqueue;
+        //     // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+        // }
 
         // Finalization
-        if !*plan.base().options.no_finalizer {
-            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-            // finalization
-            self.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<C::DefaultProcessEdges>::new());
-            // forward refs
-            if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
-                unimplemented!()
-            }
-        }
+        // if !*plan.base().options.no_finalizer {
+        //     use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
+        //     // finalization
+        //     self.work_buckets[WorkBucketStage::FinalRefClosure]
+        //         .add(Finalization::<C::DefaultProcessEdges>::new());
+        //     // forward refs
+        //     if plan.constraints().needs_forward_after_liveness {
+        //         self.work_buckets[WorkBucketStage::FinalizableForwarding]
+        //             .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+        //         unimplemented!()
+        //     }
+        // }
     }
 
     /// Schedule all the common work packets
@@ -329,44 +324,44 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         use crate::scheduler::gc_work::*;
 
         // Reference processing
-        if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
-            // use crate::util::reference_processor::{
-            //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            // };
-            // self.work_buckets[WorkBucketStage::WeakRefClosure]
-            //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
-            // self.work_buckets[WorkBucketStage::WeakRefClosure]
-            //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
+        // if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
+        //     // use crate::util::reference_processor::{
+        //     //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+        //     // };
+        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
+        //     //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
+        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
+        //     //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
 
-            // VM-specific weak ref processing
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
-            self.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
+        //     // VM-specific weak ref processing
+        //     self.work_buckets[WorkBucketStage::WeakRefClosure]
+        //         .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
+        //     self.work_buckets[WorkBucketStage::PhantomRefClosure]
+        //         .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
 
-            // use crate::util::reference_processor::RefForwarding;
-            // if plan.constraints().needs_forward_after_liveness {
-            //     self.work_buckets[WorkBucketStage::RefForwarding]
-            //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
-            // }
+        //     // use crate::util::reference_processor::RefForwarding;
+        //     // if plan.constraints().needs_forward_after_liveness {
+        //     //     self.work_buckets[WorkBucketStage::RefForwarding]
+        //     //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
+        //     // }
 
-            // use crate::util::reference_processor::RefEnqueue;
-            // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
-        }
+        //     // use crate::util::reference_processor::RefEnqueue;
+        //     // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+        // }
 
-        // Finalization
-        if !*plan.base().options.no_finalizer {
-            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-            // finalization
-            self.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<C::DefaultProcessEdges>::new());
-            // forward refs
-            if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
-                unimplemented!()
-            }
-        }
+        // // Finalization
+        // if !*plan.base().options.no_finalizer {
+        //     use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
+        //     // finalization
+        //     self.work_buckets[WorkBucketStage::FinalRefClosure]
+        //         .add(Finalization::<C::DefaultProcessEdges>::new());
+        //     // forward refs
+        //     if plan.constraints().needs_forward_after_liveness {
+        //         self.work_buckets[WorkBucketStage::FinalizableForwarding]
+        //             .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+        //         unimplemented!()
+        //     }
+        // }
 
         // We add the VM-specific weak ref processing work regardless of MMTK-side options,
         // including Options::no_finalizer and Options::no_reference_types.
@@ -401,18 +396,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // self.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());
     }
 
-    fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
-        // debug_assert!(
-        //     self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
-        //     "GCWorker attempted to open buckets when there are pending coordinator work packets"
-        // );
-        buckets
-            .iter()
-            .all(|&b| self.work_buckets[b].is_drained() || self.work_buckets[b].disabled())
-    }
+    // fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
+    //     // debug_assert!(
+    //     //     self.pending_coordinator_packets.load(Ordering::SeqCst) == 0,
+    //     //     "GCWorker attempted to open buckets when there are pending coordinator work packets"
+    //     // );
+    //     buckets
+    //         .iter()
+    //         .all(|&b| self.work_buckets[b].is_drained() || self.work_buckets[b].disabled())
+    // }
 
     pub fn all_buckets_empty(&self) -> bool {
-        self.work_buckets.values().all(|bucket| bucket.is_empty())
+        self.schedule()
+            .all_buckets
+            .iter()
+            .all(|&b| b.get_bucket().is_empty())
     }
 
     pub(super) fn schedule_concurrent_packets(
@@ -420,35 +418,46 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         queue: Injector<Box<dyn GCWork>>,
         pqueue: Injector<Box<dyn GCWork>>,
     ) {
-        crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
-        crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
-        let mut notify = false;
-        if !queue.is_empty() {
-            let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
-            debug_assert!(old_queue.is_empty());
-            notify = true;
-        }
-        if !pqueue.is_empty() {
-            let old_queue =
-                self.work_buckets[WorkBucketStage::Unconstrained].swap_queue_prioritized(pqueue);
-            debug_assert!(old_queue.is_empty());
-            notify = true;
-        }
-        if notify {
-            self.wakeup_all_conc_workers();
-        }
+        // crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
+        // crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
+        // let mut notify = false;
+        // if !queue.is_empty() {
+        //     let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
+        //     debug_assert!(old_queue.is_empty());
+        //     notify = true;
+        // }
+        // if !pqueue.is_empty() {
+        //     let old_queue =
+        //         self.work_buckets[WorkBucketStage::Unconstrained].swap_queue_prioritized(pqueue);
+        //     debug_assert!(old_queue.is_empty());
+        //     notify = true;
+        // }
+        // if notify {
+        //     self.wakeup_all_conc_workers();
+        // }
+        // unimplemented!()
     }
 
     /// Schedule "sentinel" work packets for all activated buckets.
     pub(crate) fn schedule_sentinels(&self) -> bool {
-        let mut new_packets = false;
-        for (id, work_bucket) in self.work_buckets.iter() {
-            if work_bucket.is_activated() && work_bucket.maybe_schedule_sentinel() {
-                trace!("Scheduled sentinel packet into {:?}", id);
-                new_packets = true;
-            }
+        // let mut new_packets = false;
+        // for (id, work_bucket) in self.work_buckets.iter() {
+        //     if work_bucket.is_activated() && work_bucket.maybe_schedule_sentinel() {
+        //         trace!("Scheduled sentinel packet into {:?}", id);
+        //         new_packets = true;
+        //     }
+        // }
+        // new_packets
+        // unimplemented!()
+        false
+    }
+
+    pub(crate) fn schedule(&self) -> &'static BucketGraph {
+        let ptr = self.current_schedule.load(Ordering::SeqCst);
+        if ptr.is_null() {
+            panic!("Schedule is not set yet.");
         }
-        new_packets
+        unsafe { &*ptr }
     }
 
     /// Open buckets if their conditions are met.
@@ -457,124 +466,130 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// No workers will be waked up by this function. The caller is responsible for that.
     ///
     /// Return true if there're any non-empty buckets updated.
-    pub(crate) fn update_buckets(&self) -> bool {
-        let mut buckets_updated = false;
-        let mut new_packets = false;
-        let start_index = self.bucket_update_progress.load(Ordering::SeqCst) + 1;
-        let mut new_progress = WorkBucketStage::LENGTH;
-        for i in start_index..WorkBucketStage::LENGTH {
-            let id = WorkBucketStage::from_usize(i);
-            if id == WorkBucketStage::Unconstrained {
-                continue;
+    pub(crate) fn notify_bucket_empty(&self) {
+        println!("NOTIFY BUCKET EMPTY");
+        let mut new_buckets = false;
+        let mut new_work = false;
+        self.schedule().update(|b| {
+            println!("Open Bucket: {:?}", b);
+            // dump everything to the active bucket
+            let q = b.get_bucket().take_queue();
+            while let Some(q) = q.pop() {
+                self.active_bucket.add_boxed_no_notify(b, q);
+                new_work = true;
             }
-
-            let bucket = &self.work_buckets[id];
-            if bucket.disabled() || bucket.is_activated() {
-                continue;
-            }
-            let bucket_opened = bucket.update(self);
-            #[cfg(feature = "tracing")]
-            if bucket_opened {
-                probe!(mmtk, bucket_opened, id);
-            }
-            let verbose = crate::verbose(3);
-            if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
-                if verbose {
-                    gc_log!([3]
-                        " - ({:.3}ms) Start GC Stage: {:?}",
-                        crate::GC_START_TIME
-                            .elapsed()
-                            .as_nanos() as f64
-                            / 1000000f64,
-                        id
-                    );
-                }
-            }
-            if cfg!(feature = "yield_and_roots_timer")
-                && bucket_opened
-                && id == WorkBucketStage::Prepare
-            {
-                let t = crate::GC_START_TIME.elapsed().as_nanos();
-                crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
-            }
-            buckets_updated = buckets_updated || bucket_opened;
-            if bucket_opened {
-                #[cfg(feature = "tracing")]
-                probe!(mmtk, bucket_opened, id);
-                new_packets = new_packets || !bucket.is_drained();
-                new_packets = new_packets || bucket.maybe_schedule_sentinel();
-                if new_packets {
-                    new_progress = i;
-                    // Quit the loop. A sentinel packet is added to the newly opened buckets.
-                    trace!("Sentinel is scheduled at stage {:?}.  Break.", id);
-                    break;
-                }
-            }
-        }
-        if buckets_updated && new_packets {
-            self.bucket_update_progress
-                .store(new_progress, Ordering::SeqCst);
+            new_buckets = true;
+        });
+        if new_buckets && new_work {
+            println!("New work available. Notify workers.");
+            self.worker_monitor.notify_work_available(true)
         } else {
-            self.bucket_update_progress.store(0, Ordering::SeqCst);
+            println!(
+                "No new work. new_buckets: {}, new_work: {}",
+                new_buckets, new_work
+            );
         }
-        buckets_updated && new_packets
+
+        // let mut buckets_updated = false;
+        // let mut new_packets = false;
+        // let start_index = self.bucket_update_progress.load(Ordering::SeqCst) + 1;
+        // let mut new_progress = WorkBucketStage::LENGTH;
+        // for i in start_index..WorkBucketStage::LENGTH {
+        //     let id = WorkBucketStage::from_usize(i);
+        //     if id == WorkBucketStage::Unconstrained {
+        //         continue;
+        //     }
+
+        //     let bucket = &self.work_buckets[id];
+        //     if bucket.disabled() || bucket.is_activated() {
+        //         continue;
+        //     }
+        //     let bucket_opened = bucket.update(self);
+        //     #[cfg(feature = "tracing")]
+        //     if bucket_opened {
+        //         probe!(mmtk, bucket_opened, id);
+        //     }
+        //     let verbose = crate::verbose(3);
+        //     if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
+        //         if verbose {
+        //             gc_log!([3]
+        //                 " - ({:.3}ms) Start GC Stage: {:?}",
+        //                 crate::GC_START_TIME
+        //                     .elapsed()
+        //                     .as_nanos() as f64
+        //                     / 1000000f64,
+        //                 id
+        //             );
+        //         }
+        //     }
+        //     if cfg!(feature = "yield_and_roots_timer")
+        //         && bucket_opened
+        //         && id == WorkBucketStage::Prepare
+        //     {
+        //         let t = crate::GC_START_TIME.elapsed().as_nanos();
+        //         crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
+        //     }
+        //     buckets_updated = buckets_updated || bucket_opened;
+        //     if bucket_opened {
+        //         #[cfg(feature = "tracing")]
+        //         probe!(mmtk, bucket_opened, id);
+        //         new_packets = new_packets || !bucket.is_drained();
+        //         new_packets = new_packets || bucket.maybe_schedule_sentinel();
+        //         if new_packets {
+        //             new_progress = i;
+        //             // Quit the loop. A sentinel packet is added to the newly opened buckets.
+        //             trace!("Sentinel is scheduled at stage {:?}.  Break.", id);
+        //             break;
+        //         }
+        //     }
+        // }
+        // if buckets_updated && new_packets {
+        //     self.bucket_update_progress
+        //         .store(new_progress, Ordering::SeqCst);
+        // } else {
+        //     self.bucket_update_progress.store(0, Ordering::SeqCst);
+        // }
+        // buckets_updated && new_packets
     }
 
     pub fn deactivate_all(&self) {
-        self.work_buckets.iter().for_each(|(id, bkt)| {
-            if id != WorkBucketStage::Unconstrained {
-                bkt.deactivate();
-                bkt.set_as_enabled();
-            }
-        });
-        self.bucket_update_progress.store(0, Ordering::SeqCst);
+        self.schedule().reset();
+        self.current_schedule
+            .store(std::ptr::null_mut(), Ordering::SeqCst);
     }
 
     pub fn reset_state(&self) {
-        let first_stw_stage = WorkBucketStage::first_stw_stage();
-        self.work_buckets.iter().for_each(|(id, bkt)| {
-            if id != WorkBucketStage::Unconstrained && id != first_stw_stage {
-                bkt.deactivate();
-                bkt.set_as_enabled();
-            }
-        });
-        self.bucket_update_progress.store(0, Ordering::SeqCst);
+        self.schedule().reset();
+        self.current_schedule
+            .store(std::ptr::null_mut(), Ordering::SeqCst);
     }
 
     pub fn debug_assert_all_buckets_deactivated(&self) {
         if cfg!(debug_assertions) {
-            self.work_buckets.iter().for_each(|(id, bkt)| {
-                if id != WorkBucketStage::Unconstrained {
-                    assert!(!bkt.is_activated());
-                }
-            });
+            for b in self.schedule().all_buckets.iter() {
+                assert!(!self.schedule().is_open[*b].load(Ordering::SeqCst));
+            }
         }
     }
 
     /// Check if all the work buckets are empty
     #[allow(unused)]
     pub(crate) fn assert_all_activated_buckets_are_empty(&self) {
-        let mut error_example = None;
-        for (id, bucket) in self.work_buckets.iter() {
-            if bucket.is_activated() && !bucket.is_empty() {
-                error!("Work bucket {:?} is active but not empty!", id);
-                // This error can be hard to reproduce.
-                // If an error happens in the release build where logs are turned off,
-                // we should show at least one abnormal bucket in the panic message
-                // so that we still have some information for debugging.
-                error_example = Some(id);
-            }
+        // let mut error_example = None;
+        for b in self.schedule().all_buckets.iter() {
+            assert!(b.get_bucket().is_empty());
         }
-        if let Some(id) = error_example {
-            panic!("Some active buckets (such as {:?}) are not empty.", id);
-        }
+        assert!(self.active_bucket.is_empty());
+        // if let Some(id) = error_example {
+        //     panic!("Some active buckets (such as {:?}) are not empty.", id);
+        // }
     }
 
     pub(super) fn set_in_gc_pause(&self, in_gc_pause: bool) {
         self.in_gc_pause.store(in_gc_pause, Ordering::SeqCst);
-        for wb in self.work_buckets.values() {
-            wb.set_in_concurrent(!in_gc_pause);
-        }
+        // for wb in self.work_buckets.values() {
+        //     wb.set_in_concurrent(!in_gc_pause);
+        // }
     }
 
     pub fn in_concurrent(&self) -> bool {
@@ -582,19 +597,20 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    fn poll_schedulable_work_once(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork>> {
+    fn poll_schedulable_work_once(
+        &self,
+        worker: &GCWorker<VM>,
+    ) -> Steal<(BucketId, Box<dyn GCWork>)> {
         let mut should_retry = false;
         // Try find a packet that can be processed only by this worker.
         if let Some(w) = worker.shared.designated_work.pop() {
             return Steal::Success(w);
         }
-        // Try get a packet from a work bucket.
-        for work_bucket in self.work_buckets.values() {
-            match work_bucket.poll(&worker.local_work_buffer) {
-                Steal::Success(w) => return Steal::Success(w),
-                Steal::Retry => should_retry = true,
-                _ => {}
-            }
+        // Try get a packet from the active work bucket.
+        match self.active_bucket.poll(&worker.local_work_buffer) {
+            Steal::Success(w) => return Steal::Success(w),
+            Steal::Retry => should_retry = true,
+            _ => {}
         }
         // Try steal some packets from any worker
         for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
@@ -615,7 +631,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet.
-    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<Box<dyn GCWork>> {
+    fn poll_schedulable_work(&self, worker: &GCWorker<VM>) -> Option<(BucketId, Box<dyn GCWork>)> {
         // Loop until we successfully get a packet.
         loop {
             match self.poll_schedulable_work_once(worker) {
@@ -684,6 +700,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
                 // Find more work for workers to do.
                 let found_more_work = self.find_more_work_for_workers();
+                println!("found_more_work: {}", found_more_work);
 
                 if found_more_work {
                     LastParkedResult::WakeAll
@@ -720,7 +737,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         match goal {
             WorkerGoal::Gc => {
-                trace!("A mutator requested a GC to be scheduled.");
+                println!("A mutator requested a GC to be scheduled.");
 
                 // We set the eBPF trace point here so that bpftrace scripts can start recording
                 // work packet events before the `ScheduleCollection` work packet starts.
@@ -733,6 +750,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     *gc_start_time = Some(Instant::now());
                 }
 
+                GCWorker::<VM>::mmtk().get_plan().schedule_collection(self);
                 self.add_schedule_collection_packet();
                 LastParkedResult::WakeSelf
             }
@@ -757,10 +775,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
-        if self.update_buckets() {
-            trace!("Some buckets are opened.");
-            return true;
-        }
+        // if self.update_buckets() {
+        //     trace!("Some buckets are opened.");
+        //     return true;
+        // }
 
         // If all of the above failed, it means GC has finished.
         false
@@ -834,13 +852,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called when GC has finished, i.e. when all work packets have been executed.
     fn on_gc_finished(&self, worker: &GCWorker<VM>) {
+        println!("GC FINISHED");
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         debug_assert!(self.all_buckets_empty());
 
         // Deactivate all work buckets to prepare for the next GC.
         self.deactivate_all();
-        self.debug_assert_all_buckets_deactivated();
+        // self.debug_assert_all_buckets_deactivated();
 
         self.do_class_unloading(worker.mmtk);
         self.dump_gc_stats(worker.mmtk);
@@ -913,7 +932,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         self.set_in_gc_pause(false);
         self.schedule_concurrent_packets(queue, pqueue);
-        self.debug_assert_all_buckets_deactivated();
+        // self.debug_assert_all_buckets_deactivated();
     }
 
     pub fn enable_stat(&self) {
@@ -953,63 +972,122 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
         mmtk.gc_requester.clear_request();
-        let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
-        // debug_assert!(!first_stw_bucket.is_activated());
-        // Note: This is the only place where a bucket is opened without having all workers parked.
-        // We usually require all workers to park before opening new buckets because otherwise
-        // packets will be executed out of order.  However, since `Prepare` is the first STW
-        // bucket, and all subsequent buckets require all workers to park before opening, workers
-        // cannot execute work packets out of order.  This is not generally true if we are not
-        // opening the first STW bucket.  In the future, we should redesign the opening condition
-        // of work buckets to make the synchronization more robust,
-        first_stw_bucket.activate();
-        gc_log!([3]
-            " - ({:.3}ms) Start GC Stage: {:?}",
-            crate::gc_start_time_ms(),
-            WorkBucketStage::from_usize(1)
-        );
-        if first_stw_bucket.is_empty()
-            && self.worker_monitor.parked.load(Ordering::SeqCst) + 1 == self.num_workers()
-            && crate::concurrent_marking_packets_drained()
-            && crate::LazySweepingJobs::all_finished()
-        {
-            let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
-            second_stw_bucket.activate();
-            gc_log!([3]
-                " - ({:.3}ms) Start GC Stage: {:?}",
-                crate::gc_start_time_ms(),
-                WorkBucketStage::from_usize(2)
-            );
-        }
-        self.worker_monitor.notify_work_available(true);
+        // let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
+        // // debug_assert!(!first_stw_bucket.is_activated());
+        // // Note: This is the only place where a bucket is opened without having all workers parked.
+        // // We usually require all workers to park before opening new buckets because otherwise
+        // // packets will be executed out of order.  However, since `Prepare` is the first STW
+        // // bucket, and all subsequent buckets require all workers to park before opening, workers
+        // // cannot execute work packets out of order.  This is not generally true if we are not
+        // // opening the first STW bucket.  In the future, we should redesign the opening condition
+        // // of work buckets to make the synchronization more robust,
+        // first_stw_bucket.activate();
+        // gc_log!([3]
+        //     " - ({:.3}ms) Start GC Stage: {:?}",
+        //     crate::gc_start_time_ms(),
+        //     WorkBucketStage::from_usize(1)
+        // );
+        // if first_stw_bucket.is_empty()
+        //     && self.worker_monitor.parked.load(Ordering::SeqCst) + 1 == self.num_workers()
+        //     && crate::concurrent_marking_packets_drained()
+        //     && crate::LazySweepingJobs::all_finished()
+        // {
+        //     let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
+        //     second_stw_bucket.activate();
+        //     gc_log!([3]
+        //         " - ({:.3}ms) Start GC Stage: {:?}",
+        //         crate::gc_start_time_ms(),
+        //         WorkBucketStage::from_usize(2)
+        //     );
+        // }
+        // self.worker_monitor.notify_work_available(true);
     }
+
     pub fn wakeup_all_conc_workers(&self) {
         self.worker_monitor.notify_work_available(true);
     }
 }
 
-pub trait BucketKey:
-    Enum + EnumArray<Vec<Self>> + EnumArray<AtomicBool> + EnumArray<AtomicUsize>
-{
-    fn get_bucket(&self) -> &WorkBucket;
+pub struct BucketGraph {
+    pub(crate) preds: EnumMap<BucketId, Vec<BucketId>>,
+    pub(crate) is_open: EnumMap<BucketId, AtomicBool>,
+    // pub(crate) counts: EnumMap<BucketId, AtomicUsize>,
+    pub(crate) all_buckets: HashSet<BucketId>,
 }
 
-pub struct BucketGraph<Bkt: BucketKey> {
-    pub(crate) deps: EnumMap<Bkt, Vec<Bkt>>,
-    pub(crate) is_open: EnumMap<Bkt, AtomicBool>,
-    pub(crate) counts: EnumMap<Bkt, AtomicUsize>,
-}
-
-impl<Bkt: BucketKey> BucketGraph<Bkt> {
+impl BucketGraph {
     pub fn new() -> Self {
         Self {
-            deps: EnumMap::default(),
+            preds: EnumMap::default(),
             is_open: EnumMap::default(),
-            counts: EnumMap::default(),
+            // counts: EnumMap::default(),
+            all_buckets: HashSet::new(),
         }
     }
 
-    pub fn dep(&mut self, parent: Bkt, children: Vec<Bkt>) {
-        self.deps[parent].extend(children);
+    pub fn dep(&mut self, parent: BucketId, children: Vec<BucketId>) {
+        self.all_buckets.insert(parent);
+        for c in &children {
+            self.all_buckets.insert(*c);
+        }
+        // self.deps[parent].extend(children);
+        for c in children {
+            self.preds[c].push(parent);
+        }
+    }
+
+    fn reset(&self) {
+        for b in &self.all_buckets {
+            self.is_open[*b].store(false, Ordering::SeqCst);
+            // self.counts[*b].store(0, Ordering::SeqCst);
+            b.get_bucket().reset()
+        }
+    }
+
+    fn bucket_can_open(&self, b: BucketId) -> bool {
+        if self.is_open[b].load(Ordering::SeqCst) {
+            return false;
+        }
+        for pred in &self.preds[b] {
+            println!(
+                ">> {:?} PRED: {:?} open={} count={}",
+                b,
+                pred,
+                self.is_open[*pred].load(Ordering::SeqCst),
+                pred.get_bucket().count()
+            );
+            if !self.is_open[*pred].load(Ordering::SeqCst) {
+                return false;
+            }
+            if !pred.get_bucket().is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn update(&self, mut on_bucket_open: impl FnMut(BucketId)) {
+        let mut open_buckets = vec![];
+        loop {
+            let mut new_bucket = false;
+            println!(">> update");
+            for b in &self.all_buckets {
+                if open_buckets.contains(b) {
+                    continue;
+                }
+                if self.bucket_can_open(*b) {
+                    println!(">> OPEN BUCKET: {:?}", b);
+                    new_bucket = true;
+                    open_buckets.push(*b);
+                }
+            }
+            if !new_bucket {
+                break;
+            }
+        }
+        for b in open_buckets {
+            self.is_open[b].store(true, Ordering::SeqCst);
+            on_bucket_open(b);
+        }
     }
 }

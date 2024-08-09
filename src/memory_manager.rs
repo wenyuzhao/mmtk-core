@@ -15,7 +15,7 @@ use crate::mmtk::MMTKBuilder;
 use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
-use crate::scheduler::WorkBucketStage;
+use crate::scheduler::BucketId;
 use crate::scheduler::{GCWork, GCWorker};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
@@ -905,10 +905,10 @@ pub fn num_of_workers<VM: VMBinding>(mmtk: &'static MMTK<VM>) -> usize {
 /// * `packet`: The work packet to be added.
 pub fn add_work_packet<VM: VMBinding, W: GCWork>(
     mmtk: &'static MMTK<VM>,
-    bucket: WorkBucketStage,
+    bucket: BucketId,
     packet: W,
 ) {
-    mmtk.scheduler.work_buckets[bucket].add(packet)
+    mmtk.scheduler.spawn(bucket, packet)
 }
 
 /// Bulk add a number of work packets to the given work bucket. Note that this simply adds the work packets
@@ -920,8 +920,8 @@ pub fn add_work_packet<VM: VMBinding, W: GCWork>(
 /// * `packet`: The work packets to be added.
 pub fn add_work_packets<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
-    bucket: WorkBucketStage,
+    bucket: BucketId,
     packets: Vec<Box<dyn GCWork>>,
 ) {
-    mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
+    mmtk.scheduler.spawn_bulk(bucket, packets)
 }

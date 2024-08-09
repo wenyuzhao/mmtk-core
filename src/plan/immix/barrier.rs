@@ -9,7 +9,7 @@ use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::VectorQueue;
 use crate::scheduler::gc_work::DummyPacket;
 use crate::scheduler::gc_work::UnlogSlots;
-use crate::scheduler::WorkBucketStage;
+use crate::scheduler::BucketId;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -166,7 +166,9 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(UnlogSlots::<VM>(incs));
+
+            // self.mmtk.scheduler.spawn(WorkBucketStage::Prepare].add(UnlogSlots::<VM>(incs));
+            unimplemented!()
         }
     }
 
@@ -174,7 +176,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn flush_decs(&mut self) {
         if !self.refs.is_empty() {
             let decs = self.decs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(DummyPacket(decs));
+            unimplemented!()
         }
     }
 
@@ -182,7 +184,7 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     fn flush_weak_refs(&mut self) {
         if !self.refs.is_empty() {
             let nodes = self.refs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(DummyPacket(nodes));
+            unimplemented!()
         }
     }
 }

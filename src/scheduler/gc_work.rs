@@ -1,5 +1,5 @@
 use self::global_state::GcStatus;
-use super::work_bucket::WorkBucketStage;
+use super::work_bucket::BucketId;
 use super::*;
 use crate::plan::lxr::LXR;
 use crate::plan::ObjectsClosure;
@@ -39,7 +39,7 @@ impl<VM: VMBinding> GCWork for ScheduleCollection<VM> {
         mmtk.set_gc_status(GcStatus::GcPrepare);
 
         // Let the plan to schedule collection work
-        mmtk.get_plan().schedule_collection(worker.scheduler());
+        // mmtk.get_plan().schedule_collection(worker.scheduler());
     }
 }
 
@@ -76,17 +76,18 @@ impl<C: GCWorkContext> GCWork for Prepare<C> {
 
         if !plan_mut.no_mutator_prepare_release() && plan_mut.constraints().needs_prepare_mutator {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                    .add(PrepareMutator::<C::VM>::new(mutator));
+                mmtk.scheduler
+                    .spawn(BucketId::Prepare, PrepareMutator::<C::VM>::new(mutator));
             }
         }
         if !plan_mut.no_worker_prepare() {
-            for w in &mmtk.scheduler.worker_group.workers_shared {
-                let result = w
-                    .designated_work
-                    .push(Box::new(PrepareCollector::<C::VM>::default()));
-                debug_assert!(result.is_ok());
-            }
+            // for w in &mmtk.scheduler.worker_group.workers_shared {
+            //     let result = w
+            //         .designated_work
+            //         .push(Box::new(PrepareCollector::<C::VM>::default()));
+            //     debug_assert!(result.is_ok());
+            // }
+            unimplemented!()
         }
     }
 }
@@ -166,17 +167,18 @@ impl<C: GCWorkContext + 'static> GCWork for Release<C> {
 
         if !plan_mut.no_mutator_prepare_release() {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                mmtk.scheduler.work_buckets[WorkBucketStage::Release]
-                    .add(ReleaseMutator::<C::VM>::new(mutator));
+                mmtk.scheduler
+                    .spawn(BucketId::Release, ReleaseMutator::<C::VM>::new(mutator));
             }
         }
         if !plan_mut.fast_worker_release() {
-            for w in &mmtk.scheduler.worker_group.workers_shared {
-                let result = w
-                    .designated_work
-                    .push(Box::new(ReleaseCollector::<C::VM>::default()));
-                debug_assert!(result.is_ok());
-            }
+            // for w in &mmtk.scheduler.worker_group.workers_shared {
+            //     let result = w
+            //         .designated_work
+            //         .push(Box::new(ReleaseCollector::<C::VM>::default()));
+            //     debug_assert!(result.is_ok());
+            // }
+            unimplemented!()
         } else {
             crate::scheduler::worker::reset_workers::<C::VM>();
         }
@@ -261,8 +263,9 @@ impl<C: GCWorkContext> GCWork for StopMutators<C> {
                 } else {
                     // TODO: The stack scanning work won't start immediately, as the `Prepare` bucket is not opened yet (the bucket is opened in notify_mutators_paused).
                     // Should we push to Unconstrained instead?
-                    mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                        .add(ScanMutatorRoots::<C>(mutator));
+                    // mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    //     .add(ScanMutatorRoots::<C>(mutator));
+                    unimplemented!()
                 }
                 n += 1;
             },
@@ -274,8 +277,10 @@ impl<C: GCWorkContext> GCWork for StopMutators<C> {
         if BULK_THREAD_SCAN {
             let n_workers: usize = mmtk.scheduler.num_workers();
             for ms in mutators.chunks(std::cmp::max(mutators.len() / n_workers / 2, 1)) {
-                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
-                    .add(ScanMultipleStacks::<C>(ms.to_vec(), PhantomData));
+                mmtk.scheduler.spawn(
+                    BucketId::Roots,
+                    ScanMultipleStacks::<C>(ms.to_vec(), PhantomData),
+                );
             }
         }
         trace!("stop_all_mutators end");
@@ -301,7 +306,7 @@ impl<C: GCWorkContext> GCWork for StopMutators<C> {
 /// `ProcessEdgesWork` instance.
 pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
     process_edges_work: E,
-    stage: WorkBucketStage,
+    bucket: BucketId,
 }
 
 impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
@@ -332,7 +337,7 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
         assert!(!next_nodes.is_empty());
         let work_packet = self.process_edges_work.create_scan_work(next_nodes);
         let worker = self.process_edges_work.worker();
-        worker.scheduler().work_buckets[self.stage].add(work_packet);
+        worker.scheduler().spawn(self.bucket, work_packet);
     }
 }
 
@@ -341,7 +346,7 @@ impl<E: ProcessEdgesWork> ProcessEdgesWorkTracer<E> {
 /// packets using the methods of the `ProcessEdgesWork` and add the work packet into the given
 /// `stage`.
 pub(crate) struct ProcessEdgesWorkTracerContext<E: ProcessEdgesWork> {
-    stage: WorkBucketStage,
+    bucket: BucketId,
     phantom_data: PhantomData<E>,
 }
 
@@ -361,7 +366,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         let mmtk = worker.mmtk;
 
         // Prepare the underlying ProcessEdgesWork
-        let mut process_edges_work = E::new(vec![], false, mmtk, self.stage);
+        let mut process_edges_work = E::new(vec![], false, mmtk, self.bucket);
         // FIXME: This line allows us to omit the borrowing lifetime of worker.
         // We should refactor ProcessEdgesWork so that it uses `worker` locally, not as a member.
         process_edges_work.set_worker(worker);
@@ -369,7 +374,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         // Cretae the tracer.
         let mut tracer = ProcessEdgesWorkTracer {
             process_edges_work,
-            stage: self.stage,
+            bucket: self.bucket,
         };
 
         // The caller can use the tracer here.
@@ -436,13 +441,14 @@ impl<E: ProcessEdgesWork> GCWork for VMForwardWeakRefs<E> {
         let worker = GCWorker::<E::VM>::current();
         trace!("VMForwardWeakRefs");
 
-        let stage = WorkBucketStage::VMRefForwarding;
+        // let stage = WorkBucketStage::VMRefForwarding;
+        unimplemented!()
 
-        let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
-            stage,
-            phantom_data: PhantomData,
-        };
-        <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
+        // let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
+        //     stage,
+        //     phantom_data: PhantomData,
+        // };
+        // <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
     }
 }
 
@@ -597,7 +603,7 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     worker: *mut GCWorker<VM>,
     pub roots: bool,
     pub root_kind: Option<RootKind>,
-    pub bucket: WorkBucketStage,
+    pub bucket: BucketId,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
@@ -609,7 +615,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
         slots: Vec<VM::VMSlot>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         #[cfg(feature = "extreme_assertions")]
         if crate::util::slot_logger::should_check_duplicate_slots(mmtk.get_plan()) {
@@ -714,7 +720,7 @@ pub trait ProcessEdgesWork:
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<Self::VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self;
 
     /// Trace an MMTk object. The implementation should forward this call to the policy-specific
@@ -746,8 +752,8 @@ pub trait ProcessEdgesWork:
             // Executing these work packets now can remarkably reduce the global synchronization time.
             work_packet.do_work();
         } else {
-            debug_assert!(self.bucket != WorkBucketStage::Unconstrained);
-            self.mmtk.scheduler.work_buckets[self.bucket].add(work_packet);
+            // debug_assert!(self.bucket != BucketId::Unconstrained);
+            self.mmtk.scheduler.spawn(self.bucket, work_packet);
         }
     }
 
@@ -833,7 +839,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         Self { base }
@@ -887,39 +893,31 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
             true,
             self.mmtk,
             if DPE::RC_ROOTS {
-                WorkBucketStage::RCProcessIncs
+                // BucketId::RCProcessIncs
+                unimplemented!()
             } else {
-                WorkBucketStage::Closure
+                BucketId::Closure
             },
         );
         w.root_kind = Some(kind);
         crate::memory_manager::add_work_packet(
             self.mmtk,
             if DPE::RC_ROOTS {
-                WorkBucketStage::RCProcessIncs
+                // BucketId::RCProcessIncs
+                unimplemented!()
             } else {
-                WorkBucketStage::Closure
+                BucketId::Closure
             },
             w,
         );
     }
 
     fn create_process_pinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
-        // Will process roots within the PinningRootsTrace bucket
-        // And put work in the Closure bucket
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::PinningRootsTrace,
-            ProcessRootNode::<VM, PPE, DPE>::new(nodes, WorkBucketStage::Closure),
-        );
+        unimplemented!()
     }
 
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::TPinningClosure,
-            ProcessRootNode::<VM, PPE, PPE>::new(nodes, WorkBucketStage::TPinningClosure),
-        );
+        unimplemented!()
     }
 }
 
@@ -957,7 +955,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork + Sized {
     fn post_scan_object(&self, object: ObjectReference);
 
     /// Return the work bucket for this work packet and its derived work packets.
-    fn get_bucket(&self) -> WorkBucketStage;
+    fn get_bucket(&self) -> BucketId;
 
     /// The common code for ScanObjects and PlanScanObjects.
     fn do_work_common(
@@ -1009,7 +1007,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork + Sized {
         // If any object does not support slot-enqueuing, we process them now.
         if !scan_later.is_empty() {
             let object_tracer_context = ProcessEdgesWorkTracerContext::<Self::E> {
-                stage: self.get_bucket(),
+                bucket: self.get_bucket(),
                 phantom_data: PhantomData,
             };
 
@@ -1043,7 +1041,7 @@ pub struct ScanObjects<Edges: ProcessEdgesWork> {
     phantom: PhantomData<Edges>,
     pub discovery: bool,
     claim_and_scan_clds: bool,
-    bucket: WorkBucketStage,
+    bucket: BucketId,
 }
 
 impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
@@ -1052,7 +1050,7 @@ impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
         concurrent: bool,
         discovery: bool,
         claim_and_scan_clds: bool,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         Self {
             buffer,
@@ -1068,7 +1066,7 @@ impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
 impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanObjects<E> {
     type E = E;
 
-    fn get_bucket(&self) -> WorkBucketStage {
+    fn get_bucket(&self) -> BucketId {
         self.bucket
     }
 
@@ -1149,7 +1147,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref::<P>().unwrap();
@@ -1157,7 +1155,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
-        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, true, true, self.bucket)
+        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, false, true, self.bucket)
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
@@ -1206,7 +1204,7 @@ pub struct PlanScanObjects<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceO
     concurrent: bool,
     discover_refs: bool,
     claim_and_scan_clds: bool,
-    bucket: WorkBucketStage,
+    bucket: BucketId,
     _p: PhantomData<E>,
 }
 
@@ -1217,7 +1215,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> PlanScan
         concurrent: bool,
         discover_refs: bool,
         claim_and_scan_clds: bool,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         Self {
             plan,
@@ -1236,7 +1234,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> ScanObje
 {
     type E = E;
 
-    fn get_bucket(&self) -> WorkBucketStage {
+    fn get_bucket(&self) -> BucketId {
         self.bucket
     }
 
@@ -1289,13 +1287,13 @@ pub(crate) struct ProcessRootNode<
 > {
     phantom: PhantomData<(VM, R2OPE, O2OPE)>,
     roots: Vec<ObjectReference>,
-    bucket: WorkBucketStage,
+    bucket: BucketId,
 }
 
 impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM = VM>>
     ProcessRootNode<VM, R2OPE, O2OPE>
 {
-    pub fn new(nodes: Vec<ObjectReference>, bucket: WorkBucketStage) -> Self {
+    pub fn new(nodes: Vec<ObjectReference>, bucket: BucketId) -> Self {
         Self {
             phantom: PhantomData,
             roots: nodes,
@@ -1332,22 +1330,23 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         // first time.  We will create a work packet for scanning those roots.
         let scanned_root_objects = {
             // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work =
-                R2OPE::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
-            process_edges_work.set_worker(worker);
+            // let mut process_edges_work =
+            //     R2OPE::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
+            // process_edges_work.set_worker(worker);
+            unimplemented!()
 
-            for object in self.roots.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
-                debug_assert_eq!(
-                    object, new_object,
-                    "Object moved while tracing root unmovable root object: {} -> {}",
-                    object, new_object
-                );
-            }
+            // for object in self.roots.iter().copied() {
+            //     let new_object = process_edges_work.trace_object(object);
+            //     debug_assert_eq!(
+            //         object, new_object,
+            //         "Object moved while tracing root unmovable root object: {} -> {}",
+            //         object, new_object
+            //     );
+            // }
 
-            // This contains root objects that are visited the first time.
-            // It is sufficient to only scan these objects.
-            VectorQueue::take(&mut process_edges_work.nodes)
+            // // This contains root objects that are visited the first time.
+            // // It is sufficient to only scan these objects.
+            // VectorQueue::take(&mut process_edges_work.nodes)
         };
 
         let process_edges_work = O2OPE::new(vec![], false, mmtk, self.bucket);
@@ -1387,7 +1386,7 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         _slots: Vec<SlotOf<Self>>,
         _roots: bool,
         _mmtk: &'static MMTK<Self::VM>,
-        _bucket: WorkBucketStage,
+        _bucket: BucketId,
     ) -> Self {
         panic!("unsupported!")
     }

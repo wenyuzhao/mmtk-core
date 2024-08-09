@@ -1,6 +1,6 @@
 use crate::plan::is_nursery_gc;
 use crate::scheduler::gc_work::ProcessEdgesWork;
-use crate::scheduler::{worker, GCWork, GCWorker, WorkBucketStage};
+use crate::scheduler::{worker, BucketId, GCWork, GCWorker};
 #[allow(unused)]
 use crate::util::reference_processor::RescanReferences;
 use crate::util::ObjectReference;
@@ -159,13 +159,14 @@ impl<E: ProcessEdgesWork> GCWork for ForwardFinalization<E> {
         let mmtk = GCWorker::<E::VM>::mmtk();
         let worker = GCWorker::<E::VM>::current();
         trace!("Forward finalization");
-        let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);
-        w.set_worker(worker);
-        finalizable_processor.forward_candidate(&mut w, is_nursery_gc(mmtk.get_plan()));
+        // let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
+        // let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);
+        // w.set_worker(worker);
+        // finalizable_processor.forward_candidate(&mut w, is_nursery_gc(mmtk.get_plan()));
 
-        finalizable_processor.forward_finalizable(&mut w, is_nursery_gc(mmtk.get_plan()));
-        trace!("Finished forwarding finlizable");
+        // finalizable_processor.forward_finalizable(&mut w, is_nursery_gc(mmtk.get_plan()));
+        // trace!("Finished forwarding finlizable");
+        unimplemented!()
     }
 }
 impl<E: ProcessEdgesWork> ForwardFinalization<E> {

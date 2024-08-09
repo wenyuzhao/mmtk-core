@@ -8,7 +8,7 @@ use crate::{
         immix::block::{Block, BlockState},
         space::Space,
     },
-    scheduler::{GCWork, GCWorker, WorkBucketStage},
+    scheduler::{BucketId, GCWork, GCWorker},
     vm::VMBinding,
     MMTK,
 };
@@ -118,6 +118,7 @@ impl<VM: VMBinding> GCWork for EvacuateMatureObjects<VM> {
             return;
         };
         // transitive closure
-        worker.add_boxed_work(WorkBucketStage::Closure, work)
+        // worker.add_boxed_work(WorkBucketStage::Closure, work)
+        unimplemented!()
     }
 }

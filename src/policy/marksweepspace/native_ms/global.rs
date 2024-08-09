@@ -5,7 +5,7 @@ use std::sync::{
 
 use crate::{
     policy::{marksweepspace::native_ms::*, sft::GCWorkerMutRef},
-    scheduler::{GCWorkScheduler, GCWorker, WorkBucketStage},
+    scheduler::{BucketId, GCWorkScheduler, GCWorker},
     util::{
         copy::CopySemantics,
         heap::{BlockPageResource, PageResource},
@@ -358,8 +358,9 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         let work_packets = self
             .chunk_map
             .generate_tasks::<VM>(|chunk| Box::new(PrepareChunkMap { space, chunk }));
-        self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Prepare]
-            .bulk_add(work_packets);
+        // self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Prepare]
+        //     .bulk_add(work_packets);
+        unimplemented!()
     }
 
     pub fn release(&mut self) {
@@ -372,7 +373,8 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         // blocks all `ReleaseMutator` packets.
         let space = unsafe { &*(self as *const Self) };
         let work_packet = ReleaseMarkSweepSpace { space };
-        self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Release].add(work_packet);
+        // self.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Release].add(work_packet);
+        unimplemented!()
     }
 
     /// Release a block.
@@ -437,7 +439,8 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
                 // When doing eager sweeping, we start sweeing now.
                 // After sweeping, we will recycle blocks.
                 let work_packets = self.generate_sweep_tasks();
-                self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+                // self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+                unimplemented!()
             } else {
                 // When doing lazy sweeping, we recycle blocks now.
                 self.recycle_blocks();

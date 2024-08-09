@@ -465,7 +465,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
     pub fn prepare(&mut self) {}
 
     pub fn release(&mut self) {
-        use crate::scheduler::WorkBucketStage;
+        use crate::scheduler::BucketId;
         let mut work_packets: Vec<Box<dyn GCWork>> = vec![];
         let mut chunk = self.chunk_addr_min.load(Ordering::Relaxed);
         let end = self.chunk_addr_max.load(Ordering::Relaxed) + BYTES_IN_CHUNK;
@@ -491,7 +491,8 @@ impl<VM: VMBinding> MallocSpace<VM> {
             self.work_live_bytes.store(0, Ordering::SeqCst);
         }
 
-        self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        // self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        unimplemented!()
     }
 
     pub fn end_of_gc(&mut self) {}

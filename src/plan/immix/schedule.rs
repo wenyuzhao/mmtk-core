@@ -1,37 +1,28 @@
 use enum_map::Enum;
 use spin::Lazy;
 
-use crate::scheduler::scheduler::{BucketGraph, BucketKey};
-use crate::scheduler::{WorkBucket, WorkBucketStage};
+use crate::scheduler::scheduler::BucketGraph;
+use crate::scheduler::BucketId;
+use crate::scheduler::WorkBucket;
 
-#[derive(Debug, Enum, Copy, Clone, Eq, PartialEq)]
-pub enum ImmixBuckets {
-    Start,
-    Prepare,
-    Roots,
-    Closure,
-    Release,
-    Finish,
-}
+static START: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("start"));
+static ROOTS: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("roots"));
+static PREPARE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("prepare"));
+static CLOSURE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("closure"));
+static RELEASE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("release"));
 
-impl BucketKey for ImmixBuckets {
-    fn get_bucket(&self) -> &WorkBucket {
-        unimplemented!()
-    }
-}
-
-pub static DEFAULT_SCHEDULE: Lazy<BucketGraph<ImmixBuckets>> = Lazy::new(|| {
+pub static DEFAULT_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
-    g.dep(ImmixBuckets::Start, vec![ImmixBuckets::Prepare]);
-    g.dep(ImmixBuckets::Start, vec![ImmixBuckets::Roots]);
+    g.dep(BucketId::Start, vec![BucketId::Prepare]);
+    g.dep(BucketId::Start, vec![BucketId::Roots]);
 
-    g.dep(ImmixBuckets::Prepare, vec![ImmixBuckets::Closure]);
+    g.dep(BucketId::Prepare, vec![BucketId::Closure]);
 
-    g.dep(ImmixBuckets::Roots, vec![ImmixBuckets::Release]);
-    g.dep(ImmixBuckets::Closure, vec![ImmixBuckets::Release]);
+    g.dep(BucketId::Roots, vec![BucketId::Release]);
+    g.dep(BucketId::Closure, vec![BucketId::Release]);
 
-    g.dep(ImmixBuckets::Release, vec![ImmixBuckets::Finish]);
+    g.dep(BucketId::Release, vec![BucketId::Finish]);
 
     g
 });

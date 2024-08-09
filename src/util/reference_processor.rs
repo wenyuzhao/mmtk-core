@@ -6,7 +6,6 @@ use std::vec::Vec;
 
 use crate::plan::is_nursery_gc;
 use crate::scheduler::ProcessEdgesWork;
-use crate::scheduler::WorkBucketStage;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
 use crate::vm::Collection;
@@ -560,10 +559,11 @@ impl<E: ProcessEdgesWork> GCWork for RefForwarding<E> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<E::VM>::mmtk();
         let worker = GCWorker::<E::VM>::current();
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
-        w.set_worker(worker);
-        mmtk.reference_processors.forward_refs(&mut w, mmtk);
-        w.flush();
+        // let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
+        // w.set_worker(worker);
+        // mmtk.reference_processors.forward_refs(&mut w, mmtk);
+        // w.flush();
+        unimplemented!()
     }
 }
 impl<E: ProcessEdgesWork> RefForwarding<E> {

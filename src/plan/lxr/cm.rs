@@ -14,7 +14,7 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::slot::{MemorySlice, Slot};
 use crate::{
     plan::ObjectQueue,
-    scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
+    scheduler::{gc_work::ProcessEdgesBase, BucketId, GCWork, GCWorker, ProcessEdgesWork},
     vm::*,
     MMTK,
 };
@@ -140,7 +140,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
+                // worker.add_work(WorkBucketStage::Unconstrained, w);
+                unimplemented!()
             }
         }
     }
@@ -155,7 +156,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
+                // worker.add_work(WorkBucketStage::Unconstrained, w);
+                unimplemented!()
             }
         }
     }
@@ -327,7 +329,8 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self) {
         let mmtk = crate::scheduler::GCWorker::<VM>::current().mmtk;
-        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        // debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        unimplemented!();
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
         #[cfg(feature = "measure_trace_rate")]
@@ -365,7 +368,8 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
         self.flush();
         // CM: Decrease counter
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        // debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        unimplemented!();
         #[cfg(feature = "measure_trace_rate")]
         if record {
             let us = t.elapsed().unwrap().as_micros() as usize;
@@ -501,7 +505,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
         }
-        let mut me = Self::new(slots, false, mmtk, WorkBucketStage::Closure);
+        let mut me = Self::new(slots, false, mmtk, BucketId::Closure);
         me.remset_recorded_slots = true;
         me.refs = refs;
         me
@@ -517,7 +521,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
@@ -546,8 +550,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             let slices = self.next_array_slices.take();
             let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
-            self.worker()
-                .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
+            // self.worker()
+            //     .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
+            unimplemented!()
         }
         assert!(self.nodes.is_empty());
         self.next_slot_count = 0;
@@ -882,13 +887,14 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
+
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
 
     fn new(
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
@@ -907,10 +913,11 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
             let slots = self.next_slots.take();
-            self.worker().add_boxed_work(
-                WorkBucketStage::Unconstrained,
-                Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
-            );
+            // self.worker().add_boxed_work(
+            //     WorkBucketStage::Unconstrained,
+            //     Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
+            // );
+            unimplemented!()
         }
         assert!(self.nodes.is_empty());
     }

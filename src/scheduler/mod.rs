@@ -14,7 +14,7 @@ pub use work::GCWork;
 pub(crate) use work::GCWorkContext;
 
 mod work_bucket;
-pub use work_bucket::{WorkBucket, WorkBucketStage, WorkGroup};
+pub use work_bucket::{BucketId, WorkBucket};
 
 pub mod worker;
 mod worker_goals;

@@ -18,7 +18,7 @@ use crate::LazySweepingJobsCounter;
 use crate::{
     plan::immix::Pause,
     policy::{immix::block::Block, space::Space},
-    scheduler::{gc_work::ProcessEdgesBase, GCWork, GCWorker, ProcessEdgesWork, WorkBucketStage},
+    scheduler::{gc_work::ProcessEdgesBase, BucketId, GCWork, GCWorker, ProcessEdgesWork},
     util::{metadata::side_metadata, object_forwarding, ObjectReference},
     vm::*,
     MMTK,
@@ -321,7 +321,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             w.inc_slices = new_inc_slices;
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            // self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            unimplemented!()
         }
         self.new_incs_count = 0;
     }
@@ -676,14 +677,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::Full {
                 if !root_slots.is_empty() {
-                    let mut w = LXRStopTheWorldProcessEdges::new(
-                        root_slots,
-                        true,
-                        mmtk,
-                        WorkBucketStage::Closure,
-                    );
+                    let mut w =
+                        LXRStopTheWorldProcessEdges::new(root_slots, true, mmtk, BucketId::Closure);
                     w.root_kind = self.root_kind;
-                    worker.add_work(WorkBucketStage::Closure, w)
+                    // worker.add_work(WorkBucketStage::Closure, w)
+                    unimplemented!()
                 }
             } else if !self.root_kind.unwrap().should_skip_decs() {
                 self.lxr.curr_roots.read().unwrap().push(roots);
@@ -705,7 +703,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                 let (a, b) = incs.split_at(incs.len() / 2);
                 let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(b.to_vec(), self.lxr);
                 w.depth = depth;
-                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+                // self.worker().add_work(WorkBucketStage::Unconstrained, w);
+                unimplemented!();
                 incs = a.to_vec();
             }
             if !incs.is_empty() {
@@ -841,10 +840,12 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
         if lxr.current_pause().is_none() {
-            self.worker()
-                .add_work_prioritized(WorkBucketStage::Unconstrained, w);
+            // self.worker()
+            //     .add_work_prioritized(WorkBucketStage::Unconstrained, w);
+            unimplemented!()
         } else {
-            self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            // self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            unimplemented!()
         }
     }
 
@@ -862,7 +863,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let objects = self.mark_objects.take();
             let w = LXRConcurrentTraceObjects::new(objects, mmtk);
             if crate::args::LAZY_DECREMENTS {
-                self.worker().add_work(WorkBucketStage::Unconstrained, w);
+                // self.worker().add_work(WorkBucketStage::Unconstrained, w);
+                unimplemented!()
             } else {
                 self.worker().scheduler().postpone(w);
             }
@@ -1083,7 +1085,7 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);

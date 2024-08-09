@@ -16,7 +16,7 @@ use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::VectorQueue;
 #[cfg(feature = "lxr_precise_incs_counter")]
 use crate::policy::space::Space;
-use crate::scheduler::WorkBucketStage;
+use crate::scheduler::BucketId;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -232,12 +232,13 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
             self.lxr.rc.increase_inc_buffer_size(incs.len());
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
-                _,
-                EDGE_KIND_MATURE,
-            >::new(
-                incs, self.lxr
-            ));
+            // self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
+            //     _,
+            //     EDGE_KIND_MATURE,
+            // >::new(
+            //     incs, self.lxr
+            // ));
+            unimplemented!();
         }
     }
 
@@ -251,8 +252,9 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             }
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                    .add(ProcessModBufSATB::<VM>::new_arc(decs.clone()));
+                // self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                //     .add(ProcessModBufSATB::<VM>::new_arc(decs.clone()));
+                unimplemented!();
                 ProcessDecs::<VM>::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
@@ -261,7 +263,8 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);
             } else {
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(w);
+                // self.mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(w);
+                unimplemented!();
             }
         }
     }
@@ -271,8 +274,9 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ProcessModBufSATB::<VM>::new(nodes));
+            // self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            //     .add(ProcessModBufSATB::<VM>::new(nodes));
+            unimplemented!();
         }
     }
 }

@@ -85,12 +85,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        scheduler.execute(&*super::schedule::DEFAULT_SCHEDULE);
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
         >(self, &self.immix_space, scheduler);
-        scheduler.execute(&*super::schedule::DEFAULT_SCHEDULE);
+        scheduler.notify_bucket_empty();
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -104,6 +105,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             false,
             crate::policy::immix::defrag::StatsForDefrag::new(self),
         );
+    }
+
+    fn no_worker_prepare(&self) -> bool {
+        true
+    }
+
+    fn fast_worker_release(&self) -> bool {
+        true
     }
 
     fn release(&mut self, tls: VMWorkerThread) {

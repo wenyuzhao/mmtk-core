@@ -4,7 +4,7 @@
 use std::marker::PhantomData;
 
 use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
-use crate::scheduler::{GCWorker, WorkBucketStage};
+use crate::scheduler::{BucketId, GCWorker};
 use crate::util::Address;
 use crate::util::{ObjectReference, VMThread, VMWorkerThread};
 use crate::vm::SlotVisitor;
@@ -107,7 +107,7 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     should_discover_references: bool,
     should_claim_and_scan_clds: bool,
-    bucket: WorkBucketStage,
+    bucket: BucketId,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -120,7 +120,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         worker: &'a mut GCWorker<E::VM>,
         should_discover_references: bool,
         should_claim_and_scan_clds: bool,
-        bucket: WorkBucketStage,
+        bucket: BucketId,
     ) -> Self {
         Self {
             buffer: VectorQueue::new(),
@@ -134,7 +134,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     fn flush(&mut self) {
         let buf = VectorQueue::take(&mut self.buffer);
         if !buf.is_empty() {
-            self.worker.add_work(
+            self.worker.scheduler().spawn(
                 self.bucket,
                 E::new(buf, false, self.worker.mmtk, self.bucket),
             );
