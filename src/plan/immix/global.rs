@@ -91,7 +91,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
         >(self, &self.immix_space, scheduler);
-        scheduler.notify_bucket_empty();
+        scheduler.notify_bucket_empty(None);
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {

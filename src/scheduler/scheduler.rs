@@ -20,7 +20,7 @@ use crossbeam::deque::{Injector, Steal};
 use enum_map::EnumMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -462,10 +462,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// No workers will be waked up by this function. The caller is responsible for that.
     ///
     /// Return true if there're any non-empty buckets updated.
-    pub(crate) fn notify_bucket_empty(&self) {
+    pub(crate) fn notify_bucket_empty(&self, bucket: Option<BucketId>) {
         let mut new_buckets = false;
         let mut new_work = false;
-        self.schedule().update(|b| {
+        self.schedule().update(bucket, |b| {
             // dump everything to the active bucket
             let q = b.get_bucket().take_queue();
             while let Some(q) = q.pop() {
@@ -996,18 +996,22 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
 pub struct BucketGraph {
     pub(crate) preds: EnumMap<BucketId, Vec<BucketId>>,
+    pub(crate) succs: EnumMap<BucketId, Vec<BucketId>>,
     pub(crate) is_open: EnumMap<BucketId, AtomicBool>,
     // pub(crate) counts: EnumMap<BucketId, AtomicUsize>,
     pub(crate) all_buckets: HashSet<BucketId>,
+    lock: Mutex<()>,
 }
 
 impl BucketGraph {
     pub fn new() -> Self {
         Self {
             preds: EnumMap::default(),
+            succs: EnumMap::default(),
             is_open: EnumMap::default(),
             // counts: EnumMap::default(),
             all_buckets: HashSet::new(),
+            lock: Mutex::new(()),
         }
     }
 
@@ -1019,6 +1023,7 @@ impl BucketGraph {
         // self.deps[parent].extend(children);
         for c in children {
             self.preds[c].push(parent);
+            self.succs[parent].push(c);
         }
     }
 
@@ -1045,23 +1050,40 @@ impl BucketGraph {
         true
     }
 
-    fn update(&self, mut on_bucket_open: impl FnMut(BucketId)) {
+    fn update(&self, bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
+        let _lock = self.lock.lock().unwrap();
         let mut open_buckets = vec![];
-        loop {
-            let mut new_bucket = false;
-            for b in &self.all_buckets {
-                if open_buckets.contains(b) {
-                    continue;
+        if let Some(b) = bucket {
+            // Check successors
+            for s in &self.succs[b] {
+                if self.bucket_can_open(*s) {
+                    open_buckets.push(*s);
                 }
+            }
+        } else {
+            // Check all buckets
+            for b in &self.all_buckets {
                 if self.bucket_can_open(*b) {
-                    new_bucket = true;
                     open_buckets.push(*b);
                 }
             }
-            if !new_bucket {
-                break;
-            }
         }
+        // If the newly opened bucket is empty, we can open its successors.
+        // loop {
+        //     let mut new_bucket = false;
+        //     for b in &self.all_buckets {
+        //         if open_buckets.contains(b) {
+        //             continue;
+        //         }
+        //         if self.bucket_can_open(*b) {
+        //             new_bucket = true;
+        //             open_buckets.push(*b);
+        //         }
+        //     }
+        //     if !new_bucket {
+        //         break;
+        //     }
+        // }
         for b in open_buckets {
             self.is_open[b].store(true, Ordering::SeqCst);
             on_bucket_open(b);
