@@ -1,9 +1,7 @@
-use super::worker::*;
-use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
+use std::any::Any;
 #[cfg(feature = "work_packet_stats")]
 use std::any::TypeId;
-use std::any::{type_name, Any};
 
 /// This defines a GC work packet which are assigned to the [`GCWorker`]s by the scheduler.
 /// Work packets carry payloads that indicate the work to be done. For example, a work packet may

@@ -7,9 +7,6 @@ use atomic::Ordering;
 use crate::plan::barriers::BarrierSemantics;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::VectorQueue;
-use crate::scheduler::gc_work::DummyPacket;
-use crate::scheduler::gc_work::UnlogSlots;
-use crate::scheduler::BucketId;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -165,9 +162,6 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     #[cold]
     fn flush_incs(&mut self) {
         if !self.incs.is_empty() {
-            let incs = self.incs.take();
-
-            // self.mmtk.scheduler.spawn(WorkBucketStage::Prepare].add(UnlogSlots::<VM>(incs));
             unimplemented!()
         }
     }
@@ -175,7 +169,6 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     #[cold]
     fn flush_decs(&mut self) {
         if !self.refs.is_empty() {
-            let decs = self.decs.take();
             unimplemented!()
         }
     }
@@ -183,7 +176,6 @@ impl<VM: VMBinding> ImmixFakeFieldBarrierSemantics<VM> {
     #[cold]
     fn flush_weak_refs(&mut self) {
         if !self.refs.is_empty() {
-            let nodes = self.refs.take();
             unimplemented!()
         }
     }

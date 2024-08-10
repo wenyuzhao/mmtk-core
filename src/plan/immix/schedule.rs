@@ -1,15 +1,7 @@
-use enum_map::Enum;
 use spin::Lazy;
 
 use crate::scheduler::scheduler::BucketGraph;
 use crate::scheduler::BucketId;
-use crate::scheduler::WorkBucket;
-
-static START: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("start"));
-static ROOTS: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("roots"));
-static PREPARE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("prepare"));
-static CLOSURE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("closure"));
-static RELEASE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("release"));
 
 pub static DEFAULT_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();

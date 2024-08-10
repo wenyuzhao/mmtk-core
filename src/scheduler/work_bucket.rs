@@ -1,13 +1,12 @@
 use super::worker_monitor::WorkerMonitor;
 use super::*;
-use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use crossbeam::queue::SegQueue;
 use enum_map::Enum;
 use portable_atomic::AtomicUsize;
 use spin::Lazy;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock};
 
 struct BucketQueue {
     // FIXME: Performance!
@@ -35,17 +34,10 @@ impl BucketQueue {
     fn push(&self, b: BucketId, w: Box<dyn GCWork>) {
         self.queue.read().unwrap().push((b, w));
     }
-
-    // fn push_all(&self, ws: Vec<Box<dyn GCWork>>) {
-    //     for w in ws {
-    //         self.queue.read().unwrap().push(w);
-    //     }
-    // }
 }
 
-pub type BucketOpenCondition = Box<dyn (Fn() -> bool) + Send>;
-
 pub struct WorkBucket {
+    #[allow(unused)]
     name: &'static str,
     count: AtomicUsize,
     queue: RwLock<SegQueue<Box<dyn GCWork>>>,
@@ -92,15 +84,8 @@ impl WorkBucket {
     }
 
     /// Returns true if the count is zero
-    pub(super) fn dec(&self, mut name: &str) -> bool {
+    pub(super) fn dec(&self, _name: &str) -> bool {
         let x = self.count.fetch_sub(1, Ordering::Relaxed);
-        if name.starts_with("mmtk::scheduler::gc_work::") {
-            name = &name[26..];
-        }
-        if let Some((x, _)) = name.split_once("<") {
-            name = x;
-        }
-        // println!("    - {:?} : {} -- {}", self.name, x, name);
         x == 1
     }
 
@@ -147,11 +132,6 @@ impl ActiveWorkBucket {
     fn notify_one_worker(&self) {
         // Notify one if there're any parked workers.
         self.monitor.notify_work_available(false);
-    }
-
-    pub fn notify_all_workers(&self) {
-        // Notify all if there're any parked workers.
-        self.monitor.notify_work_available(true);
     }
 
     /// Test if the bucket is drained

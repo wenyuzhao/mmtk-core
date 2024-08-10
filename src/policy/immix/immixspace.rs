@@ -29,7 +29,6 @@ use crate::{
     plan::ObjectQueue,
     scheduler::{GCWork, GCWorkScheduler, GCWorker},
     util::opaque_pointer::{VMThread, VMWorkerThread},
-    MMTK,
 };
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
@@ -494,14 +493,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     unimplemented!("cyclic mark bits is not supported at the moment");
             // }
             // Reset block mark and object mark table.
-            let work_packets = self.generate_lxr_full_trace_prepare_tasks();
+            // let work_packets = self.generate_lxr_full_trace_prepare_tasks();
             // self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
             unimplemented!()
         }
     }
 
-    pub fn schedule_mark_table_zeroing_tasks(&self, stage: BucketId) {
-        let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
+    pub fn schedule_mark_table_zeroing_tasks(&self, _stage: BucketId) {
+        // let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
         // self.scheduler().work_buckets[stage].bulk_add(work_packets);
         unimplemented!()
     }
@@ -763,6 +762,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep work packets.
+    #[allow(unused)]
     fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork>> {
         let rc_enabled = self.rc_enabled;
         let cm_enabled = self.cm_enabled;
@@ -1591,6 +1591,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    #[allow(unused)]
     pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
         // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
         //     x.set_state(BlockState::Marked);
@@ -1627,6 +1628,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
     }
 
+    #[allow(unused)]
     pub(crate) fn get_pages_allocated(&self) -> usize {
         debug_assert!(!self.rc_enabled);
         self.lines_consumed.load(Ordering::Relaxed) >> (LOG_BYTES_IN_PAGE - Line::LOG_BYTES as u8)
@@ -1728,7 +1730,6 @@ struct SweepChunk<VM: VMBinding> {
 impl<VM: VMBinding> GCWork for SweepChunk<VM> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
-        let worker = GCWorker::<VM>::current();
         assert_eq!(self.space.chunk_map.get(self.chunk), ChunkState::Allocated);
 
         let mut histogram = self.space.defrag.new_histogram();

@@ -10,19 +10,16 @@ use super::*;
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
 use crate::plan::lxr::LXR;
-use crate::plan::HasSpaces;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
-use crate::util::reference_processor::PhantomRefProcessing;
-use crate::util::rust_util::array_from_fn;
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::Pause;
 use crate::Plan;
 use crossbeam::deque::{Injector, Steal};
-use enum_map::{Enum, EnumArray, EnumMap};
+use enum_map::EnumMap;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -88,7 +85,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn execute(&self, graph: &'static BucketGraph) {
-        println!("EXECUTE GRAPH");
         // reset all buckets
         graph.reset();
         self.current_schedule.store(
@@ -321,7 +317,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         &self,
         plan: &'static C::PlanType,
     ) {
-        use crate::scheduler::gc_work::*;
 
         // Reference processing
         // if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
@@ -413,6 +408,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .all(|&b| b.get_bucket().is_empty())
     }
 
+    #[allow(unused)]
     pub(super) fn schedule_concurrent_packets(
         &self,
         queue: Injector<Box<dyn GCWork>>,
@@ -467,11 +463,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ///
     /// Return true if there're any non-empty buckets updated.
     pub(crate) fn notify_bucket_empty(&self) {
-        println!("NOTIFY BUCKET EMPTY");
         let mut new_buckets = false;
         let mut new_work = false;
         self.schedule().update(|b| {
-            println!("Open Bucket: {:?}", b);
             // dump everything to the active bucket
             let q = b.get_bucket().take_queue();
             while let Some(q) = q.pop() {
@@ -481,13 +475,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             new_buckets = true;
         });
         if new_buckets && new_work {
-            println!("New work available. Notify workers.");
             self.worker_monitor.notify_work_available(true)
-        } else {
-            println!(
-                "No new work. new_buckets: {}, new_work: {}",
-                new_buckets, new_work
-            );
         }
 
         // let mut buckets_updated = false;
@@ -700,7 +688,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
                 // Find more work for workers to do.
                 let found_more_work = self.find_more_work_for_workers();
-                println!("found_more_work: {}", found_more_work);
 
                 if found_more_work {
                     LastParkedResult::WakeAll
@@ -737,7 +724,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         match goal {
             WorkerGoal::Gc => {
-                println!("A mutator requested a GC to be scheduled.");
+                trace!("A mutator requested a GC to be scheduled.");
 
                 // We set the eBPF trace point here so that bpftrace scripts can start recording
                 // work packet events before the `ScheduleCollection` work packet starts.
@@ -852,7 +839,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called when GC has finished, i.e. when all work packets have been executed.
     fn on_gc_finished(&self, worker: &GCWorker<VM>) {
-        println!("GC FINISHED");
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         debug_assert!(self.all_buckets_empty());
@@ -1049,13 +1035,6 @@ impl BucketGraph {
             return false;
         }
         for pred in &self.preds[b] {
-            println!(
-                ">> {:?} PRED: {:?} open={} count={}",
-                b,
-                pred,
-                self.is_open[*pred].load(Ordering::SeqCst),
-                pred.get_bucket().count()
-            );
             if !self.is_open[*pred].load(Ordering::SeqCst) {
                 return false;
             }
@@ -1070,13 +1049,11 @@ impl BucketGraph {
         let mut open_buckets = vec![];
         loop {
             let mut new_bucket = false;
-            println!(">> update");
             for b in &self.all_buckets {
                 if open_buckets.contains(b) {
                     continue;
                 }
                 if self.bucket_can_open(*b) {
-                    println!(">> OPEN BUCKET: {:?}", b);
                     new_bucket = true;
                     open_buckets.push(*b);
                 }

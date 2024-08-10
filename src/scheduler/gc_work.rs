@@ -4,7 +4,6 @@ use super::*;
 use crate::plan::lxr::LXR;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
-use crate::plan::VectorQueue;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
@@ -21,7 +20,6 @@ pub struct ScheduleCollection<VM: VMBinding>(PhantomData<VM>);
 impl<VM: VMBinding> GCWork for ScheduleCollection<VM> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
-        let worker = GCWorker::<VM>::current();
         crate::GC_TRIGGER_TIME.start();
         crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         // Tell GC trigger that GC started.
@@ -108,7 +106,6 @@ impl<VM: VMBinding> PrepareMutator<VM> {
 
 impl<VM: VMBinding> GCWork for PrepareMutator<VM> {
     fn do_work(&mut self) {
-        let mmtk = GCWorker::<VM>::mmtk();
         let worker = GCWorker::<VM>::current();
         trace!("Prepare Mutator");
         self.mutator.prepare(worker.tls);
@@ -210,7 +207,6 @@ impl<VM: VMBinding> ReleaseMutator<VM> {
 
 impl<VM: VMBinding> GCWork for ReleaseMutator<VM> {
     fn do_work(&mut self) {
-        let mmtk = GCWorker::<VM>::mmtk();
         let worker = GCWorker::<VM>::current();
         trace!("Release Mutator");
         self.mutator.release(worker.tls);
@@ -225,7 +221,6 @@ pub struct ReleaseCollector<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork for ReleaseCollector<VM> {
     fn do_work(&mut self) {
-        let mmtk = GCWorker::<VM>::mmtk();
         let worker = GCWorker::<VM>::current();
         trace!("Release Collector");
         worker.get_copy_context_mut().release();
@@ -399,6 +394,7 @@ pub struct VMProcessWeakRefs<E: ProcessEdgesWork> {
 }
 
 impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self {
             phantom_data: PhantomData,
@@ -408,7 +404,6 @@ impl<E: ProcessEdgesWork> VMProcessWeakRefs<E> {
 
 impl<E: ProcessEdgesWork> GCWork for VMProcessWeakRefs<E> {
     fn do_work(&mut self) {
-        let mmtk = GCWorker::<E::VM>::mmtk();
         let worker = GCWorker::<E::VM>::current();
         trace!("VMProcessWeakRefs");
         <<E::VM as VMBinding>::VMCollection as Collection<E::VM>>::process_weak_refs::<E>(worker);
@@ -428,6 +423,7 @@ pub struct VMForwardWeakRefs<E: ProcessEdgesWork> {
 }
 
 impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self {
             phantom_data: PhantomData,
@@ -437,8 +433,6 @@ impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
 
 impl<E: ProcessEdgesWork> GCWork for VMForwardWeakRefs<E> {
     fn do_work(&mut self) {
-        let mmtk = GCWorker::<E::VM>::mmtk();
-        let worker = GCWorker::<E::VM>::current();
         trace!("VMForwardWeakRefs");
 
         // let stage = WorkBucketStage::VMRefForwarding;
@@ -466,7 +460,6 @@ pub struct VMPostForwarding<VM: VMBinding> {
 impl<VM: VMBinding> GCWork for VMPostForwarding<VM> {
     fn do_work(&mut self) {
         trace!("VMPostForwarding start");
-        let mmtk = GCWorker::<VM>::mmtk();
         let worker = GCWorker::<VM>::current();
         <VM as VMBinding>::VMCollection::post_forwarding(worker.tls);
         trace!("VMPostForwarding end");
@@ -528,6 +521,7 @@ impl<C: GCWorkContext> GCWork for ScanMultipleStacks<C> {
 pub struct ScanVMSpecificRoots<C: GCWorkContext>(PhantomData<C>);
 
 impl<C: GCWorkContext> ScanVMSpecificRoots<C> {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self(PhantomData)
     }
@@ -797,7 +791,6 @@ pub trait ProcessEdgesWork:
 
 impl<E: ProcessEdgesWork> GCWork for E {
     fn do_work(&mut self) {
-        let mmtk = GCWorker::<E::VM>::mmtk();
         let worker = GCWorker::<E::VM>::current();
         self.set_worker(worker);
         #[cfg(feature = "sanity")]
@@ -884,6 +877,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
     }
 }
 
+#[allow(unused)]
 impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = VM>>
     RootsWorkFactory<VM::VMSlot> for ProcessEdgesWorkRootsWorkFactory<VM, DPE, PPE>
 {
@@ -1280,6 +1274,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork
 /// -   If `O2OPE` may move objects, then this `ProcessRootsNode<VM, R2OPE, O2OPE>` work packet
 ///     will only pin the objects in `roots` (because `R2OPE` must not move objects anyway), but
 ///     not their descendents.
+#[allow(unused)]
 pub(crate) struct ProcessRootNode<
     VM: VMBinding,
     R2OPE: ProcessEdgesWork<VM = VM>,
@@ -1293,6 +1288,7 @@ pub(crate) struct ProcessRootNode<
 impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM = VM>>
     ProcessRootNode<VM, R2OPE, O2OPE>
 {
+    #[allow(unused)]
     pub fn new(nodes: Vec<ObjectReference>, bucket: BucketId) -> Self {
         Self {
             phantom: PhantomData,
@@ -1305,9 +1301,9 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
 impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM = VM>> GCWork
     for ProcessRootNode<VM, R2OPE, O2OPE>
 {
+    #[allow(unused)]
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
-        let worker = GCWorker::<VM>::current();
         trace!("ProcessRootNode");
 
         #[cfg(feature = "sanity")]

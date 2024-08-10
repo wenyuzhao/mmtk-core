@@ -295,7 +295,6 @@ impl<VM: VMBinding> GCWorker<VM> {
             work.do_work_with_stat();
             std::mem::drop(work);
             if bucket.get_bucket().dec(typename) {
-                println!("Bucket {:?} is empty", bucket);
                 self.mmtk.scheduler.notify_bucket_empty()
             }
             flush_logs!();

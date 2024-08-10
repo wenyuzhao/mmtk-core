@@ -465,7 +465,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
     pub fn prepare(&mut self) {}
 
     pub fn release(&mut self) {
-        use crate::scheduler::BucketId;
         let mut work_packets: Vec<Box<dyn GCWork>> = vec![];
         let mut chunk = self.chunk_addr_min.load(Ordering::Relaxed);
         let end = self.chunk_addr_max.load(Ordering::Relaxed) + BYTES_IN_CHUNK;
@@ -806,7 +805,6 @@ impl<VM: VMBinding> crate::util::linear_scan::LinearScanObjectSize for MallocObj
 }
 
 use crate::scheduler::GCWork;
-use crate::MMTK;
 
 /// Simple work packet that just sweeps a single chunk
 pub struct MSSweepChunk<VM: VMBinding> {

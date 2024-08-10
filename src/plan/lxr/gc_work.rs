@@ -1,7 +1,7 @@
 use super::cm::LXRWeakRefProcessEdges;
 use super::LXR;
 use crate::scheduler::{gc_work::*, GCWork, GCWorker};
-use crate::{vm::*, Plan, MMTK};
+use crate::{vm::*, Plan};
 
 pub(super) struct LXRGCWorkContext<E: ProcessEdgesWork>(std::marker::PhantomData<E>);
 

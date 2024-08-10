@@ -8,7 +8,7 @@ use crossbeam::queue::SegQueue;
 
 use crate::{
     plan::{immix::Pause, lxr::LXR},
-    scheduler::{BucketId, GCWork, GCWorker},
+    scheduler::{GCWork, GCWorker},
     util::{
         constants::LOG_BYTES_IN_PAGE,
         heap::{chunk_map::Chunk, layout::vm_layout::LOG_BYTES_IN_CHUNK, PageResource},
@@ -17,7 +17,7 @@ use crate::{
         ObjectReference,
     },
     vm::{ObjectModel, VMBinding},
-    LazySweepingJobsCounter, Plan, MMTK,
+    LazySweepingJobsCounter, Plan,
 };
 
 use super::{
@@ -129,6 +129,7 @@ impl<VM: VMBinding> GCWork for SelectDefragBlocksInChunk<VM> {
     }
 }
 
+#[allow(unused)]
 pub(super) struct SweepBlocksAfterDecs<VM: VMBinding> {
     blocks: Vec<(Block, bool)>,
     _counter: LazySweepingJobsCounter,
@@ -136,6 +137,7 @@ pub(super) struct SweepBlocksAfterDecs<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> SweepBlocksAfterDecs<VM> {
+    #[allow(unused)]
     pub fn new(blocks: Vec<(Block, bool)>, counter: LazySweepingJobsCounter) -> Self {
         Self {
             blocks,
@@ -148,7 +150,6 @@ impl<VM: VMBinding> SweepBlocksAfterDecs<VM> {
 impl<VM: VMBinding> GCWork for SweepBlocksAfterDecs<VM> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
-        let worker = GCWorker::<VM>::current();
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         if self.blocks.is_empty() {
             return;
@@ -263,7 +264,6 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
 impl<VM: VMBinding> GCWork for SweepDeadCyclesChunk<VM> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
-        let worker = GCWorker::<VM>::current();
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
         let mut dead_blocks = 0;
