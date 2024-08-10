@@ -138,7 +138,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         for w in cm_packets {
             postponed_concurrent_work.push(w)
         }
-        self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
+        // self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
+
+        unimplemented!()
     }
 
     pub fn postpone(&self, w: impl GCWork<VM>) {
@@ -304,8 +306,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 .add(Finalization::<C::DefaultProcessEdges>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+                // self.work_buckets[WorkBucketStage::FinalizableForwarding]
+                //     .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
                 unimplemented!()
             }
         }
@@ -352,8 +354,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 .add(Finalization::<C::DefaultProcessEdges>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+                // self.work_buckets[WorkBucketStage::FinalizableForwarding]
+                //     .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
                 unimplemented!()
             }
         }

@@ -352,8 +352,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if crate::args::RC_MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full)
         {
             self.immix_space.process_mature_evacuation_remset();
-            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                .add(FlushMatureEvacRemsets);
+            // self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
+            //     .add(FlushMatureEvacRemsets);
+            unimplemented!()
         }
         self.immix_space.prepare_rc(pause);
         // if pause == Pause::FinalMark {
@@ -898,8 +899,9 @@ impl<VM: VMBinding> LXR<VM> {
             if (pause == Pause::InitialMark || pause == Pause::Full)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
             {
-                self.immix_space
-                    .schedule_mark_table_zeroing_tasks(WorkBucketStage::RCProcessIncs);
+                // self.immix_space
+                //     .schedule_mark_table_zeroing_tasks(WorkBucketStage::RCProcessIncs);
+                unimplemented!()
             }
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);
@@ -928,31 +930,32 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        if pause == Pause::RefCount {
-            scheduler.work_buckets[WorkBucketStage::Prepare].set_as_disabled();
-        }
-        if pause == Pause::RefCount || pause == Pause::InitialMark {
-            scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
-            scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
-            scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
-            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
-        }
-        scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
-        scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
-        if crate::args::LAZY_DECREMENTS
-            && pause != Pause::Full
-            && !cfg!(feature = "fragmentation_analysis")
-        {
-            scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
-        }
+        // if pause == Pause::RefCount {
+        //     scheduler.work_buckets[WorkBucketStage::Prepare].set_as_disabled();
+        // }
+        // if pause == Pause::RefCount || pause == Pause::InitialMark {
+        //     scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
+        //     scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
+        //     scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
+        //     scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
+        // }
+        // scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
+        // scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
+        // if crate::args::LAZY_DECREMENTS
+        //     && pause != Pause::Full
+        //     && !cfg!(feature = "fragmentation_analysis")
+        // {
+        //     scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
+        // }
+        unimplemented!()
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -970,7 +973,8 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E<VM>>>::new()));
         // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
+        // scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
+        unimplemented!();
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
             .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
@@ -1074,7 +1078,8 @@ impl<VM: VMBinding> LXR<VM> {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
             scheduler.postpone_all_prioritized(work_packets);
         } else {
-            scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(work_packets);
+            // scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(work_packets);
+            unimplemented!()
         }
         if cfg!(feature = "decs_counter") {
             gc_log!([3] "POSTPONED {} ROOTS FOR DECREMENT", count);

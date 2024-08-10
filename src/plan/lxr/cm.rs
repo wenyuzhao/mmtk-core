@@ -325,7 +325,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         true
     }
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        // debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
         #[cfg(feature = "measure_trace_rate")]
@@ -363,7 +363,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         self.flush();
         // CM: Decrease counter
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
+        // debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
         if record {
             let us = t.elapsed().unwrap().as_micros() as usize;

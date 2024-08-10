@@ -238,7 +238,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                 } else {
                     // TODO: The stack scanning work won't start immediately, as the `Prepare` bucket is not opened yet (the bucket is opened in notify_mutators_paused).
                     // Should we push to Unconstrained instead?
-                    mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                         .add(ScanMutatorRoots::<C>(mutator));
                 }
                 n += 1;
@@ -251,7 +251,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         if BULK_THREAD_SCAN {
             let n_workers: usize = mmtk.scheduler.num_workers();
             for ms in mutators.chunks(std::cmp::max(mutators.len() / n_workers / 2, 1)) {
-                mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(ScanMultipleStacks::<C>(ms.to_vec(), PhantomData));
             }
         }
@@ -409,13 +409,15 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("VMForwardWeakRefs");
 
-        let stage = WorkBucketStage::VMRefForwarding;
+        // let stage = WorkBucketStage::VMRefForwarding;
 
-        let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
-            stage,
-            phantom_data: PhantomData,
-        };
-        <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
+        unimplemented!()
+
+        // let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
+        //     stage,
+        //     phantom_data: PhantomData,
+        // };
+        // <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
     }
 }
 
@@ -850,7 +852,8 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
             true,
             self.mmtk,
             if DPE::RC_ROOTS {
-                WorkBucketStage::RCProcessIncs
+                // WorkBucketStage::RCProcessIncs
+                unimplemented!()
             } else {
                 WorkBucketStage::Closure
             },
@@ -859,7 +862,8 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
         crate::memory_manager::add_work_packet(
             self.mmtk,
             if DPE::RC_ROOTS {
-                WorkBucketStage::RCProcessIncs
+                // WorkBucketStage::RCProcessIncs
+                unimplemented!()
             } else {
                 WorkBucketStage::Closure
             },
@@ -870,19 +874,21 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
     fn create_process_pinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         // Will process roots within the PinningRootsTrace bucket
         // And put work in the Closure bucket
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::PinningRootsTrace,
-            ProcessRootNode::<VM, PPE, DPE>::new(nodes, WorkBucketStage::Closure),
-        );
+        // crate::memory_manager::add_work_packet(
+        //     self.mmtk,
+        //     WorkBucketStage::PinningRootsTrace,
+        //     ProcessRootNode::<VM, PPE, DPE>::new(nodes, WorkBucketStage::Closure),
+        // );
+        unimplemented!()
     }
 
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
-        crate::memory_manager::add_work_packet(
-            self.mmtk,
-            WorkBucketStage::TPinningClosure,
-            ProcessRootNode::<VM, PPE, PPE>::new(nodes, WorkBucketStage::TPinningClosure),
-        );
+        // crate::memory_manager::add_work_packet(
+        //     self.mmtk,
+        //     WorkBucketStage::TPinningClosure,
+        //     ProcessRootNode::<VM, PPE, PPE>::new(nodes, WorkBucketStage::TPinningClosure),
+        // );
+        unimplemented!()
     }
 }
 
@@ -1287,29 +1293,31 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         //
         // The `scanned_root_objects` variable will hold those root objects which are traced for the
         // first time.  We will create a work packet for scanning those roots.
-        let scanned_root_objects = {
-            // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work =
-                R2OPE::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
-            process_edges_work.set_worker(worker);
+        // let scanned_root_objects = {
+        //     // We create an instance of E to use its `trace_object` method and its object queue.
+        //     let mut process_edges_work =
+        //         R2OPE::new(vec![], true, mmtk, WorkBucketStage::PinningRootsTrace);
+        //     process_edges_work.set_worker(worker);
 
-            for object in self.roots.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
-                debug_assert_eq!(
-                    object, new_object,
-                    "Object moved while tracing root unmovable root object: {} -> {}",
-                    object, new_object
-                );
-            }
+        //     for object in self.roots.iter().copied() {
+        //         let new_object = process_edges_work.trace_object(object);
+        //         debug_assert_eq!(
+        //             object, new_object,
+        //             "Object moved while tracing root unmovable root object: {} -> {}",
+        //             object, new_object
+        //         );
+        //     }
 
-            // This contains root objects that are visited the first time.
-            // It is sufficient to only scan these objects.
-            VectorQueue::take(&mut process_edges_work.nodes)
-        };
+        //     // This contains root objects that are visited the first time.
+        //     // It is sufficient to only scan these objects.
+        //     VectorQueue::take(&mut process_edges_work.nodes)
+        // };
 
-        let process_edges_work = O2OPE::new(vec![], false, mmtk, self.bucket);
-        let work = process_edges_work.create_scan_work(scanned_root_objects);
-        crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
+        // let process_edges_work = O2OPE::new(vec![], false, mmtk, self.bucket);
+        // let work = process_edges_work.create_scan_work(scanned_root_objects);
+        // crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
+
+        unimplemented!();
 
         trace!("ProcessRootNode End");
     }
