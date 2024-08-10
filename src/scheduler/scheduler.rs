@@ -12,6 +12,7 @@ use crate::mmtk::MMTK;
 use crate::plan::lxr::LXR;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
+use crate::util::reference_processor::PhantomRefProcessing;
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::Pause;
@@ -270,52 +271,56 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ) {
         self.schedule_common_work_no_refs::<C>(plan);
 
-        // use crate::scheduler::gc_work::*;
+        use crate::scheduler::gc_work::*;
         // Reference processing
-        // if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
-        //     // use crate::util::reference_processor::{
-        //     //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-        //     // };
-        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
-        //     //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
-        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
-        //     //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
-        //     self.work_buckets[WorkBucketStage::PhantomRefClosure]
-        //         .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
+        if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
+            // use crate::util::reference_processor::{
+            //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            // };
+            // self.work_buckets[WorkBucketStage::WeakRefClosure]
+            //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
+            // self.work_buckets[WorkBucketStage::WeakRefClosure]
+            //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
+            self.spawn(
+                BucketId::PhantomRefClosure,
+                PhantomRefProcessing::<C::DefaultProcessEdges>::new(),
+            );
 
-        //     // VM-specific weak ref processing
-        //     self.work_buckets[WorkBucketStage::WeakRefClosure]
-        //         .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
+            // VM-specific weak ref processing
+            self.spawn(
+                BucketId::WeakRefClosure,
+                VMProcessWeakRefs::<C::DefaultProcessEdges>::new(),
+            );
 
-        //     // use crate::util::reference_processor::RefForwarding;
-        //     // if plan.constraints().needs_forward_after_liveness {
-        //     //     self.work_buckets[WorkBucketStage::RefForwarding]
-        //     //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
-        //     // }
+            // use crate::util::reference_processor::RefForwarding;
+            // if plan.constraints().needs_forward_after_liveness {
+            //     self.work_buckets[WorkBucketStage::RefForwarding]
+            //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
+            // }
 
-        //     // use crate::util::reference_processor::RefEnqueue;
-        //     // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
-        // }
+            // use crate::util::reference_processor::RefEnqueue;
+            // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+        }
 
         // Finalization
-        // if !*plan.base().options.no_finalizer {
-        //     use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-        //     // finalization
-        //     self.work_buckets[WorkBucketStage::FinalRefClosure]
-        //         .add(Finalization::<C::DefaultProcessEdges>::new());
-        //     // forward refs
-        //     if plan.constraints().needs_forward_after_liveness {
-        //         self.work_buckets[WorkBucketStage::FinalizableForwarding]
-        //             .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
-        //         unimplemented!()
-        //     }
-        // }
+        if !*plan.base().options.no_finalizer {
+            use crate::util::finalizable_processor::Finalization;
+            // finalization
+            self.spawn(
+                BucketId::FinalRefClosure,
+                Finalization::<C::DefaultProcessEdges>::new(),
+            );
+            // forward refs
+            if plan.constraints().needs_forward_after_liveness {
+                unimplemented!()
+            }
+        }
     }
 
     /// Schedule all the common work packets
     pub fn schedule_ref_proc_work<C: GCWorkContext<VM = VM> + 'static>(
         &self,
-        plan: &'static C::PlanType,
+        _plan: &'static C::PlanType,
     ) {
 
         // Reference processing

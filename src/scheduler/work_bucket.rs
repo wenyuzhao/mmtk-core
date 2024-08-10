@@ -4,7 +4,6 @@ use crossbeam::deque::{Injector, Steal, Worker};
 use crossbeam::queue::SegQueue;
 use enum_map::Enum;
 use portable_atomic::AtomicUsize;
-use spin::Lazy;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
@@ -44,7 +43,7 @@ pub struct WorkBucket {
 }
 
 impl WorkBucket {
-    pub fn new(name: &'static str) -> Self {
+    pub const fn new(name: &'static str) -> Self {
         Self {
             name,
             count: AtomicUsize::new(0),
@@ -214,26 +213,35 @@ pub enum BucketId {
     Prepare,
     Roots,
     Closure,
+    PhantomRefClosure,
+    WeakRefClosure,
+    FinalRefClosure,
     Release,
     Finish,
 }
 
-static START: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("start"));
-static ROOTS: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("roots"));
-static PREPARE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("prepare"));
-static CLOSURE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("closure"));
-static RELEASE: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("release"));
-static FINISH: Lazy<WorkBucket> = Lazy::new(|| WorkBucket::new("finish"));
+static START: WorkBucket = WorkBucket::new("start");
+static ROOTS: WorkBucket = WorkBucket::new("roots");
+static PREPARE: WorkBucket = WorkBucket::new("prepare");
+static CLOSURE: WorkBucket = WorkBucket::new("closure");
+static RELEASE: WorkBucket = WorkBucket::new("release");
+static REF_PHANTOM: WorkBucket = WorkBucket::new("ref.phantom");
+static REF_WEAK: WorkBucket = WorkBucket::new("ref.weak");
+static REF_FINAL: WorkBucket = WorkBucket::new("ref.final");
+static FINISH: WorkBucket = WorkBucket::new("finish");
 
 impl BucketId {
     pub fn get_bucket(&self) -> &'static WorkBucket {
         match self {
-            BucketId::Start => &*START,
-            BucketId::Prepare => &*PREPARE,
-            BucketId::Roots => &*ROOTS,
-            BucketId::Closure => &*CLOSURE,
-            BucketId::Release => &*RELEASE,
-            BucketId::Finish => &*FINISH,
+            BucketId::Start => &START,
+            BucketId::Prepare => &PREPARE,
+            BucketId::Roots => &ROOTS,
+            BucketId::Closure => &CLOSURE,
+            BucketId::PhantomRefClosure => &REF_PHANTOM,
+            BucketId::WeakRefClosure => &REF_WEAK,
+            BucketId::FinalRefClosure => &REF_FINAL,
+            BucketId::Release => &RELEASE,
+            BucketId::Finish => &FINISH,
         }
     }
 }
