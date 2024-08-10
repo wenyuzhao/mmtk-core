@@ -200,6 +200,18 @@ impl<VM: VMBinding> GCWorker<VM> {
     //     self.local_work_buffer.push(Box::new(work));
     // }
 
+    pub fn add_local_packet(
+        &mut self,
+        bucket: BucketId,
+        work: Box<dyn GCWork>,
+    ) -> Result<(), Box<dyn GCWork>> {
+        if self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS {
+            return Err(work);
+        }
+        self.local_work_buffer.push((bucket, work));
+        Ok(())
+    }
+
     /// Get the scheduler. There is only one scheduler per MMTk instance.
     pub fn scheduler(&self) -> &GCWorkScheduler<VM> {
         &self.scheduler

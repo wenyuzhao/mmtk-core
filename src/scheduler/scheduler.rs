@@ -68,7 +68,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Add to the corresponding bucket/queue
         if self.schedule().is_open[bucket].load(Ordering::SeqCst) {
             // The bucket is open. Either add to the global pool, or the thread local queue
-            self.active_bucket.add_boxed(bucket, w);
+            if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
+                self.active_bucket.add_boxed(bucket, w);
+            }
         } else {
             // The bucket is closed. Add to the bucket's queue
             bucket.get_bucket().add(w);
