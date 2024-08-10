@@ -230,6 +230,14 @@ impl Timer {
             *self.0.get() = Some(Instant::now());
         }
     }
+
+    pub fn elapsed_ms(&self) -> f32 {
+        self.elapsed().as_micros() as f32 / 1000f32
+    }
+
+    pub fn ready(&self) -> bool {
+        unsafe { (*self.0.get()).is_some() }
+    }
 }
 
 unsafe impl Sync for Timer {}

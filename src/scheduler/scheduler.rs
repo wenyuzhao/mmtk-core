@@ -1054,6 +1054,13 @@ impl BucketGraph {
         let _lock = self.lock.lock().unwrap();
         let mut open_buckets = vec![];
         if let Some(b) = bucket {
+            if crate::GC_START_TIME.ready() {
+                gc_log!([3]
+                    " - ({:.3}ms) Bucket {:?} finished",
+                    crate::GC_START_TIME.elapsed_ms(),
+                    b
+                );
+            }
             // Check successors
             for s in &self.succs[b] {
                 if self.bucket_can_open(*s) {
@@ -1087,6 +1094,13 @@ impl BucketGraph {
         for b in open_buckets {
             self.is_open[b].store(true, Ordering::SeqCst);
             on_bucket_open(b);
+            if crate::GC_START_TIME.ready() {
+                gc_log!([3]
+                    " - ({:.3}ms) Bucket {:?} opened",
+                    crate::GC_START_TIME.elapsed_ms(),
+                    b
+                );
+            }
         }
     }
 }
