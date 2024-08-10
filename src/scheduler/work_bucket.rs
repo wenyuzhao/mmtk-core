@@ -213,9 +213,9 @@ pub enum BucketId {
     Prepare,
     Roots,
     Closure,
-    PhantomRefClosure,
     WeakRefClosure,
     FinalRefClosure,
+    PhantomRefClosure,
     Release,
     Finish,
 }
@@ -225,9 +225,9 @@ static ROOTS: WorkBucket = WorkBucket::new("roots");
 static PREPARE: WorkBucket = WorkBucket::new("prepare");
 static CLOSURE: WorkBucket = WorkBucket::new("closure");
 static RELEASE: WorkBucket = WorkBucket::new("release");
-static REF_PHANTOM: WorkBucket = WorkBucket::new("ref.phantom");
 static REF_WEAK: WorkBucket = WorkBucket::new("ref.weak");
 static REF_FINAL: WorkBucket = WorkBucket::new("ref.final");
+static REF_PHANTOM: WorkBucket = WorkBucket::new("ref.phantom");
 static FINISH: WorkBucket = WorkBucket::new("finish");
 
 impl BucketId {
@@ -237,9 +237,9 @@ impl BucketId {
             BucketId::Prepare => &PREPARE,
             BucketId::Roots => &ROOTS,
             BucketId::Closure => &CLOSURE,
-            BucketId::PhantomRefClosure => &REF_PHANTOM,
             BucketId::WeakRefClosure => &REF_WEAK,
             BucketId::FinalRefClosure => &REF_FINAL,
+            BucketId::PhantomRefClosure => &REF_PHANTOM,
             BucketId::Release => &RELEASE,
             BucketId::Finish => &FINISH,
         }

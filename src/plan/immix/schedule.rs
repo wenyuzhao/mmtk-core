@@ -12,13 +12,13 @@ pub static DEFAULT_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     g.dep(BucketId::Prepare, vec![BucketId::Closure]);
 
     g.dep(BucketId::Roots, vec![BucketId::Release]);
-    g.dep(BucketId::Closure, vec![BucketId::PhantomRefClosure]);
-
-    g.dep(BucketId::PhantomRefClosure, vec![BucketId::WeakRefClosure]);
+    g.dep(BucketId::Closure, vec![BucketId::WeakRefClosure]);
 
     g.dep(BucketId::WeakRefClosure, vec![BucketId::FinalRefClosure]);
 
-    g.dep(BucketId::FinalRefClosure, vec![BucketId::Release]);
+    g.dep(BucketId::FinalRefClosure, vec![BucketId::PhantomRefClosure]);
+
+    g.dep(BucketId::PhantomRefClosure, vec![BucketId::Release]);
 
     g.dep(BucketId::Release, vec![BucketId::Finish]);
 
