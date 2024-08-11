@@ -826,6 +826,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called when GC has finished, i.e. when all work packets have been executed.
     fn on_gc_finished(&self, worker: &GCWorker<VM>) {
+        let stw_us = crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
+        let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
+        super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        let utilization: f32 = busy_us as f32 / stw_us as f32;
+        super::UTILIZATIONS.push(utilization);
+        // println!("Utilization: {:.2}%", utilization * 100.0);
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         debug_assert!(self.all_buckets_empty());
@@ -940,6 +946,27 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
+        let mut utilizations = vec![];
+        while let Some(x) = super::UTILIZATIONS.pop() {
+            utilizations.push(x);
+        }
+        let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
+        let min = utilizations
+            .iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let max = utilizations
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let geomean = utilizations
+            .iter()
+            .product::<f32>()
+            .powf(1.0 / utilizations.len() as f32);
+        stat.insert("utilization.mean".to_owned(), format!("{:.2}", mean));
+        stat.insert("utilization.min".to_owned(), format!("{:.2}", min));
+        stat.insert("utilization.max".to_owned(), format!("{:.2}", max));
+        stat.insert("utilization.geomean".to_owned(), format!("{:.2}", geomean));
         stat
     }
 
