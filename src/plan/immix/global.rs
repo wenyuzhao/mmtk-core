@@ -105,6 +105,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         );
     }
 
+    fn no_worker_prepare(&self) -> bool {
+        true
+    }
+
+    fn fast_worker_release(&self) -> bool {
+        true
+    }
+
     fn release(&mut self, tls: VMWorkerThread) {
         self.common.release(tls, true);
         // release the collected region

@@ -76,10 +76,13 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             }
         }
         if !plan_mut.no_worker_prepare() {
-            for w in &mmtk.scheduler.worker_group.workers_shared {
-                let result = w.designated_work.push(Box::new(PrepareCollector));
-                debug_assert!(result.is_ok());
-            }
+            // for w in &mmtk.scheduler.worker_group.workers_shared {
+            //     let result = w
+            //         .designated_work
+            //         .push(Box::new(PrepareCollector::<C::VM>::default()));
+            //     debug_assert!(result.is_ok());
+            // }
+            unimplemented!()
         }
     }
 }
@@ -158,10 +161,13 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             }
         }
         if !plan_mut.fast_worker_release() {
-            for w in &mmtk.scheduler.worker_group.workers_shared {
-                let result = w.designated_work.push(Box::new(ReleaseCollector));
-                debug_assert!(result.is_ok());
-            }
+            // for w in &mmtk.scheduler.worker_group.workers_shared {
+            //     let result = w
+            //         .designated_work
+            //         .push(Box::new(ReleaseCollector::<C::VM>::default()));
+            //     debug_assert!(result.is_ok());
+            // }
+            unimplemented!()
         } else {
             crate::scheduler::worker::reset_workers::<C::VM>();
         }
@@ -238,8 +244,9 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                 } else {
                     // TODO: The stack scanning work won't start immediately, as the `Prepare` bucket is not opened yet (the bucket is opened in notify_mutators_paused).
                     // Should we push to Unconstrained instead?
-                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                        .add(ScanMutatorRoots::<C>(mutator));
+                    // mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
+                    //     .add(ScanMutatorRoots::<C>(mutator));
+                    unimplemented!()
                 }
                 n += 1;
             },

@@ -493,7 +493,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     unimplemented!("cyclic mark bits is not supported at the moment");
             // }
             // Reset block mark and object mark table.
-            let work_packets = self.generate_lxr_full_trace_prepare_tasks();
+            // let work_packets = self.generate_lxr_full_trace_prepare_tasks();
             // self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
             unimplemented!()
         }
