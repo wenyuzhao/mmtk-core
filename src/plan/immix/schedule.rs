@@ -11,7 +11,7 @@ pub static DEFAULT_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 
     g.dep(BucketId::Prepare, vec![BucketId::Closure]);
 
-    g.dep(BucketId::Roots, vec![BucketId::Release]);
+    g.dep(BucketId::Roots, vec![BucketId::WeakRefClosure]);
     g.dep(BucketId::Closure, vec![BucketId::WeakRefClosure]);
 
     g.dep(BucketId::WeakRefClosure, vec![BucketId::FinalRefClosure]);

@@ -21,7 +21,7 @@ use crossbeam::deque::{Injector, Steal};
 use enum_map::EnumMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -63,6 +63,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn spawn_boxed(&self, bucket: BucketId, w: Box<dyn GCWork>) {
+        let _guard = self.schedule().lock.read().unwrap();
         // Increment counter
         bucket.get_bucket().inc();
         // Add to the corresponding bucket/queue
@@ -71,9 +72,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
                 self.active_bucket.add_boxed(bucket, w);
             }
-            if bucket == BucketId::Closure {
-                assert!(!self.schedule().is_open[BucketId::FinalRefClosure].load(Ordering::SeqCst));
-            }
+            // if bucket == BucketId::Closure {
+            //     assert!(!self.schedule().is_open[BucketId::WeakRefClosure].load(Ordering::SeqCst));
+            // }
         } else {
             // The bucket is closed. Add to the bucket's queue
             bucket.get_bucket().add(w);
@@ -701,7 +702,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 let found_more_work = self.find_more_work_for_workers();
 
                 if found_more_work {
-                    LastParkedResult::WakeAll
+                    unreachable!()
                 } else {
                     // GC finished.
                     self.on_gc_finished(worker);
@@ -772,8 +773,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return true;
         }
 
-        // Try to open new buckets.
-        self.notify_bucket_empty(None)
+        false
     }
 
     fn do_class_unloading(&self, mmtk: &MMTK<VM>) {
@@ -1032,7 +1032,7 @@ pub struct BucketGraph {
     pub(crate) is_open: EnumMap<BucketId, AtomicBool>,
     // pub(crate) counts: EnumMap<BucketId, AtomicUsize>,
     pub(crate) all_buckets: HashSet<BucketId>,
-    lock: Mutex<()>,
+    lock: RwLock<()>,
 }
 
 impl BucketGraph {
@@ -1043,7 +1043,7 @@ impl BucketGraph {
             is_open: EnumMap::default(),
             // counts: EnumMap::default(),
             all_buckets: HashSet::new(),
-            lock: Mutex::new(()),
+            lock: RwLock::new(()),
         }
     }
 
@@ -1083,7 +1083,7 @@ impl BucketGraph {
     }
 
     fn update(&self, bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
-        let _lock = self.lock.lock().unwrap();
+        let _lock = self.lock.write().unwrap();
         let mut open_buckets = vec![];
         if let Some(b) = bucket {
             if crate::GC_START_TIME.ready() {
