@@ -153,6 +153,10 @@ impl<VM: VMBinding> GCWorker<VM> {
         }
     }
 
+    pub fn mmtk() -> &'static MMTK<VM> {
+        Self::current().mmtk
+    }
+
     /// Get current worker.
     pub fn current() -> &'static mut Self {
         let ptr = _WORKER.with(|x| x.load(Ordering::Relaxed)) as *mut Self;

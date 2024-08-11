@@ -1,4 +1,5 @@
 use crate::scheduler::GCWork;
+use crate::scheduler::GCWorker;
 use crate::util::linear_scan::Region;
 use crate::util::linear_scan::RegionIterator;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -110,6 +111,29 @@ impl ChunkMap {
             .filter(|c| self.get(*c) == ChunkState::Allocated)
         {
             work_packets.push(func(chunk));
+        }
+        work_packets
+    }
+
+    pub fn generate_tasks2<VM: VMBinding>(
+        &self,
+        func: impl Fn(Range<Chunk>) -> Box<dyn GCWork<VM>>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+
+        let chunk_range = self.chunk_range.lock();
+        let chunks = (chunk_range.end.start() - chunk_range.start.start()) >> Chunk::LOG_BYTES;
+        let num_bins = GCWorker::<VM>::mmtk().scheduler.num_workers() * 2;
+        let bin_size = (chunks + num_bins - 1) / num_bins;
+        for i in (0..chunks).step_by(bin_size) {
+            let start = chunk_range.start.next_nth(i);
+            let end = chunk_range.start.next_nth(i + bin_size);
+            let end = if end > chunk_range.end {
+                chunk_range.end
+            } else {
+                end
+            };
+            work_packets.push(func(start..end));
         }
         work_packets
     }
