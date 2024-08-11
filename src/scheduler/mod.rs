@@ -4,6 +4,9 @@ pub(crate) mod affinity;
 
 #[allow(clippy::module_inception)]
 pub(crate) mod scheduler;
+use std::sync::atomic::AtomicUsize;
+
+use crossbeam::queue::SegQueue;
 pub(crate) use scheduler::GCWorkScheduler;
 
 mod stat;
@@ -24,3 +27,6 @@ pub use worker::GCWorker;
 
 pub(crate) mod gc_work;
 pub use gc_work::{ProcessEdgesWork, RootKind};
+
+static TOTAL_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
+static UTILIZATIONS: SegQueue<f32> = SegQueue::new();

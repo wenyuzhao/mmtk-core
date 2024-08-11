@@ -13,6 +13,7 @@ use crossbeam::queue::ArrayQueue;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
@@ -304,8 +305,11 @@ impl<VM: VMBinding> GCWorker<VM> {
 
             #[cfg(feature = "tracing")]
             probe!(mmtk, work, typename.as_ptr(), typename.len());
+            let t = Instant::now();
             work.do_work_with_stat();
             std::mem::drop(work);
+            let us = t.elapsed().as_micros();
+            super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
             if bucket.get_bucket().dec(typename) {
                 self.mmtk.scheduler.notify_bucket_empty(Some(bucket))
             }
