@@ -123,7 +123,8 @@ impl ChunkMap {
 
         let chunk_range = self.chunk_range.lock();
         let chunks = (chunk_range.end.start() - chunk_range.start.start()) >> Chunk::LOG_BYTES;
-        let bin_size = chunks / (GCWorker::<VM>::mmtk().scheduler.num_workers() * 2);
+        let num_bins = GCWorker::<VM>::mmtk().scheduler.num_workers() * 2;
+        let bin_size = (chunks + num_bins - 1) / num_bins;
         for i in (0..chunks).step_by(bin_size) {
             let start = chunk_range.start.next_nth(i);
             let end = chunk_range.start.next_nth(i + bin_size);
