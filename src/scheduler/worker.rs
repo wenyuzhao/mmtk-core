@@ -311,7 +311,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             let us = t.elapsed().as_micros();
             super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
             if bucket.get_bucket().dec(typename) {
-                self.mmtk.scheduler.notify_bucket_empty(Some(bucket))
+                self.mmtk.scheduler.notify_bucket_empty(Some(bucket));
             }
             flush_logs!();
         }

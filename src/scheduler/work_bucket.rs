@@ -52,7 +52,11 @@ impl WorkBucket {
     }
 
     pub fn reset(&self) {
-        assert!(self.count.load(Ordering::SeqCst) == 0);
+        assert!(
+            self.count.load(Ordering::SeqCst) == 0,
+            "{:?} is not empty",
+            self.name
+        );
         assert!(self.queue.read().unwrap().is_empty());
     }
 

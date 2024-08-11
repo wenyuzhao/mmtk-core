@@ -71,6 +71,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
                 self.active_bucket.add_boxed(bucket, w);
             }
+            if bucket == BucketId::Closure {
+                assert!(!self.schedule().is_open[BucketId::FinalRefClosure].load(Ordering::SeqCst));
+            }
         } else {
             // The bucket is closed. Add to the bucket's queue
             bucket.get_bucket().add(w);
@@ -469,7 +472,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// No workers will be waked up by this function. The caller is responsible for that.
     ///
     /// Return true if there're any non-empty buckets updated.
-    pub(crate) fn notify_bucket_empty(&self, bucket: Option<BucketId>) {
+    pub(crate) fn notify_bucket_empty(&self, bucket: Option<BucketId>) -> bool {
         let mut new_buckets = false;
         let mut new_work = false;
         self.schedule().update(bucket, |b| {
@@ -484,6 +487,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if new_buckets && new_work {
             self.worker_monitor.notify_work_available(true)
         }
+        new_buckets && new_work
 
         // let mut buckets_updated = false;
         // let mut new_packets = false;
@@ -769,13 +773,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
-        // if self.update_buckets() {
-        //     trace!("Some buckets are opened.");
-        //     return true;
-        // }
-
-        // If all of the above failed, it means GC has finished.
-        false
+        self.notify_bucket_empty(None)
     }
 
     fn do_class_unloading(&self, mmtk: &MMTK<VM>) {
