@@ -848,7 +848,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
         super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
         let utilization: f32 = busy_us as f32 / stw_us as f32;
-        super::UTILIZATIONS.push(utilization);
+        if crate::inside_harness() {
+            super::UTILIZATIONS.push(utilization);
+        }
         // println!("Utilization: {:.2}%", utilization * 100.0);
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
