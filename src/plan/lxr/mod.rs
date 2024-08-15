@@ -4,6 +4,10 @@ mod gc_work;
 pub(super) mod global;
 mod mature_evac;
 pub(super) mod mutator;
+#[cfg(feature = "stack")]
+#[path = "./rc_stack.rs"]
+pub mod rc;
+#[cfg(not(feature = "stack"))]
 pub mod rc;
 mod remset;
 

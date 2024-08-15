@@ -196,6 +196,7 @@ lxr_no_decs = []
 lxr_no_recursive_dec = []
 lxr_no_prefetch = []
 utilization = []
+stack = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
