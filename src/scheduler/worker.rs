@@ -290,9 +290,12 @@ impl<VM: VMBinding> GCWorker<VM> {
             #[cfg(feature = "tracing")]
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             let t = Instant::now();
+            let record = crate::inside_harness() && !self.scheduler.in_concurrent();
             work.do_work_with_stat(&mut self, mmtk);
             let us = t.elapsed().as_micros();
-            super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+            if record && !self.scheduler.in_concurrent() {
+                super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+            }
             std::mem::drop(work);
             flush_logs!();
         }
