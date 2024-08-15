@@ -43,10 +43,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     /// Increments to process
     incs: Vec<VM::VMSlot>,
     inc_slices: Vec<VM::VMMemorySlice>,
-    /// Recursively generated new increments
-    new_incs: VectorQueue<VM::VMSlot>,
-    new_inc_slices: VectorQueue<VM::VMMemorySlice>,
-    new_incs_count: u32,
+    inc_slices_count: usize,
     pause: Pause,
     in_cm: bool,
     no_evac: bool,
@@ -84,9 +81,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         Self {
             incs: vec![],
             inc_slices: vec![],
-            new_incs: VectorQueue::default(),
-            new_inc_slices: VectorQueue::default(),
-            new_incs_count: 0,
+            inc_slices_count: 0,
             lxr,
             pause: Pause::RefCount,
             in_cm: false,
@@ -105,24 +100,25 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
     }
 
+    fn stack_size(&self) -> usize {
+        self.incs.len() + self.inc_slices_count
+    }
+
     fn add_new_slot(&mut self, s: VM::VMSlot) {
-        self.new_incs.push(s);
-        self.new_incs_count += 1;
-        if self.new_incs_count as usize >= Self::CAPACITY {
+        if self.stack_size() + 1 > Self::CAPACITY {
             self.flush();
         }
+        assert!(self.incs.len() <= Self::CAPACITY);
+        self.incs.push(s);
     }
 
     fn add_new_slice(&mut self, s: VM::VMMemorySlice) {
         let len = s.len();
-        if self.new_incs_count as usize + len >= Self::CAPACITY {
+        if self.stack_size() + len > Self::CAPACITY {
             self.flush();
         }
-        self.new_incs_count += len as u32;
-        self.new_inc_slices.push(s);
-        if self.new_incs_count as usize >= Self::CAPACITY {
-            self.flush();
-        }
+        self.inc_slices_count += len as usize;
+        self.inc_slices.push(s);
     }
 
     pub fn new_objects(_objects: Vec<ObjectReference>) -> Self {
@@ -315,15 +311,17 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[cold]
     fn flush(&mut self) {
-        if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
-            let new_incs = self.new_incs.take();
-            let new_inc_slices = self.new_inc_slices.take();
+        if !self.incs.is_empty() || !self.inc_slices.is_empty() {
+            let new_incs = std::mem::take(&mut self.incs);
+            let new_inc_slices = std::mem::take(&mut self.inc_slices);
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             w.inc_slices = new_inc_slices;
+            w.inc_slices_count = self.inc_slices_count;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
+            self.incs.reserve(Self::CAPACITY);
         }
-        self.new_incs_count = 0;
+        self.inc_slices_count = 0;
     }
 
     fn inc(&self, o: ObjectReference) -> bool {
@@ -352,7 +350,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         false
     }
-
+    #[inline(always)]
     fn process_inc_and_evacuate(&mut self, o: ObjectReference, depth: u32) -> ObjectReference {
         o.verify::<VM>();
         crate::stat(|s| {
@@ -447,6 +445,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         o
     }
 
+    #[inline(always)]
     fn process_slot<const K: EdgeKind>(
         &mut self,
         s: VM::VMSlot,
@@ -644,15 +643,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             .root_kind
             .map(|r| r.should_record_remset())
             .unwrap_or_default();
-        let roots = {
+        let roots = if KIND != EDGE_KIND_NURSERY {
             let incs = std::mem::take(&mut self.incs);
             self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, false)
+        } else {
+            None
         };
         if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
             assert!(!add_root_to_remset);
-        }
-        for s in std::mem::take(&mut self.inc_slices) {
-            self.process_incs_for_obj_array::<KIND>(s, self.depth);
         }
         if let Some(roots) = roots {
             if self.lxr.concurrent_marking_enabled()
@@ -688,31 +686,18 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         // Process recursively generated buffer
+        if self.incs.len() < Self::CAPACITY {
+            self.incs.reserve(Self::CAPACITY - self.incs.len());
+        }
         let mut depth = self.depth;
-        let mut incs = vec![];
-        let mut inc_slices = vec![];
-        const ACTIVE_PACKET_SPLIT: bool = false;
-        while !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
-            self.new_incs_count = 0;
+        while self.stack_size() != 0 {
             depth += 1;
-            incs.clear();
-            inc_slices.clear();
-            self.new_incs.swap(&mut incs);
-            self.new_inc_slices.swap(&mut inc_slices);
-            if ACTIVE_PACKET_SPLIT && depth >= 16 && incs.len() > 1 {
-                let (a, b) = incs.split_at(incs.len() / 2);
-                let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(b.to_vec(), self.lxr);
-                w.depth = depth;
-                self.worker().add_work(WorkBucketStage::Unconstrained, w);
-                incs = a.to_vec();
+            while let Some(s) = self.incs.pop() {
+                self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
             }
-            if !incs.is_empty() {
-                self.process_incs::<EDGE_KIND_NURSERY>(AddressBuffer::Ref(&mut incs), depth, false);
-            }
-            if !inc_slices.is_empty() {
-                for s in &inc_slices {
-                    self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
-                }
+            while let Some(s) = self.inc_slices.pop() {
+                self.inc_slices_count -= s.len() as usize;
+                self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
             }
         }
         self.survival_ratio_predictor_local.sync();
