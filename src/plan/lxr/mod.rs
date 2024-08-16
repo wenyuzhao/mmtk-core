@@ -4,11 +4,16 @@ mod gc_work;
 pub(super) mod global;
 mod mature_evac;
 pub(super) mod mutator;
-#[cfg(feature = "stack")]
-#[path = "./rc_stack.rs"]
-pub mod rc;
+#[path = "./rc.rs"]
+pub mod rc_queue;
+pub mod rc_stack;
+
 #[cfg(not(feature = "stack"))]
-pub mod rc;
+pub use rc_queue as rc;
+
+#[cfg(feature = "stack")]
+pub use rc_stack as rc;
+
 mod remset;
 
 use std::collections::HashMap;

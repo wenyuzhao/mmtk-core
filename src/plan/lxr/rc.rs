@@ -67,7 +67,7 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = crate::args::BUFFER_SIZE;
+    const CAPACITY: usize = 128;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
