@@ -831,6 +831,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
         let utilization: f32 = busy_us as f32 / stw_us as f32;
         if crate::inside_harness() {
+            // println!("Utilization: {stw_us} / {busy_us} = {utilization:.2}");
             super::UTILIZATIONS.push(utilization);
         }
         // println!("Utilization: {:.2}%", utilization * 100.0);
@@ -965,6 +966,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .iter()
             .product::<f32>()
             .powf(1.0 / utilizations.len() as f32);
+        println!("Utilization: {:?}", utilizations);
         stat.insert("utilization.mean".to_owned(), format!("{:.2}", mean));
         stat.insert("utilization.min".to_owned(), format!("{:.2}", min));
         stat.insert("utilization.max".to_owned(), format!("{:.2}", max));
