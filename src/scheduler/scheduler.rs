@@ -757,12 +757,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     > WorkBucketStage::RCProcessIncs.into_usize()
                 && crate::inside_harness()
             {
-                let stw_us =
-                    crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
+                let _stw_us = crate::GC_START_TIME.elapsed().as_micros();
+                let stw_us_all_workers = _stw_us * self.num_workers() as u128;
                 let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
-                let utilization: f32 = busy_us as f32 / stw_us as f32;
-                assert!(utilization <= 1.0, "{busy_us:.3} {stw_us:.3}");
+                let utilization: f32 = busy_us as f32 / stw_us_all_workers as f32;
+                assert!(utilization <= 1.0, "{busy_us:.3} {stw_us_all_workers:.3}");
                 super::INC_UTILIZATIONS.push(utilization);
+                super::INC_TIME_US.fetch_add(_stw_us as usize, Ordering::SeqCst);
             }
             return true;
         }
@@ -1009,6 +1010,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         stat.insert(
             "rc.utilization.geomean".to_owned(),
             format!("{:.2}", geomean),
+        );
+        stat.insert(
+            "rc.time.stw".to_owned(),
+            format!(
+                "{:.2}",
+                super::INC_TIME_US.load(Ordering::SeqCst) as f64 / 1000.0
+            ),
         );
 
         stat
