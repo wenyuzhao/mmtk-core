@@ -990,7 +990,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         while let Some(x) = super::INC_UTILIZATIONS.pop() {
             utilizations.push(x);
         }
-        println!("INC_UTILIZATIONS: {:?}", utilizations);
+        // println!("INC_UTILIZATIONS: {:?}", utilizations);
         let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
         let min = utilizations
             .iter()
