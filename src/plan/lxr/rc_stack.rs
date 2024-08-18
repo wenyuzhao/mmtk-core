@@ -59,12 +59,13 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     inc_objs: usize,
     #[cfg(feature = "measure_rc_rate")]
     copy_objs: usize,
+    pushes: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
 
 impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
-    const CAPACITY: usize = 128;
+    const CAPACITY: usize = crate::args::BUFFER_SIZE;
     const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
         .as_spec()
         .extract_side_spec();
@@ -97,6 +98,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             inc_objs: 0,
             #[cfg(feature = "measure_rc_rate")]
             copy_objs: 0,
+            pushes: 0,
         }
     }
 
@@ -108,8 +110,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.stack_size() + 1 > Self::CAPACITY {
             self.flush();
         }
+        if cfg!(feature = "flush_half") {
+            if self.pushes >= 512 {
+                self.flush_half_slots();
+            }
+        }
         assert!(self.incs.len() <= Self::CAPACITY);
         self.incs.push(s);
+        self.pushes += 1;
     }
 
     fn add_new_slice(&mut self, s: VM::VMMemorySlice) {
@@ -312,16 +320,37 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.incs.is_empty() || !self.inc_slices.is_empty() {
-            let new_incs = std::mem::take(&mut self.incs);
+            let new_incs = if cfg!(feature = "flush_half") && self.incs.len() > 1 {
+                let half = self.incs.len() / 2;
+                self.incs.split_off(half)
+            } else {
+                std::mem::take(&mut self.incs)
+            };
             let new_inc_slices = std::mem::take(&mut self.inc_slices);
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             w.inc_slices = new_inc_slices;
             w.inc_slices_count = self.inc_slices_count;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
-            self.incs.reserve(Self::CAPACITY);
+            self.incs.reserve(Self::CAPACITY - self.incs.len());
         }
         self.inc_slices_count = 0;
+        self.pushes = self.incs.len();
+    }
+
+    #[cold]
+    fn flush_half_slots(&mut self) {
+        let new_incs = if self.incs.len() > 1 {
+            let half = self.incs.len() / 2;
+            self.incs.split_off(half)
+        } else {
+            std::mem::take(&mut self.incs)
+        };
+        let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
+        w.depth += 1;
+        self.worker().add_work(WorkBucketStage::Unconstrained, w);
+        self.incs.reserve(Self::CAPACITY - self.incs.len());
+        self.pushes = self.incs.len();
     }
 
     fn inc(&self, o: ObjectReference) -> bool {
