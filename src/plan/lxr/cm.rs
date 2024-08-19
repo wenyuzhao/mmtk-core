@@ -894,6 +894,7 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     next_slots: VectorQueue<SlotOf<Self>>,
     next_array_slices: VectorQueue<VM::VMMemorySlice>,
     next_slot_count: u32,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> LXRWeakRefProcessEdges<VM> {
@@ -942,6 +943,7 @@ impl<VM: VMBinding> LXRWeakRefProcessEdges<VM> {
         }
         assert!(self.nodes.is_empty());
         self.next_slot_count = self.next_slots.len() as u32;
+        self.pushes = self.next_slots.len();
     }
 }
 
@@ -969,6 +971,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             next_slots: VectorQueue::new(),
             next_array_slices: VectorQueue::new(),
             next_slot_count: 0,
+            pushes: 0,
         }
     }
 
@@ -984,6 +987,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         }
         assert!(self.nodes.is_empty());
         self.next_slot_count = self.next_slots.len() as u32;
+        self.pushes = self.next_slots.len();
     }
 
     /// Trace  and evacuate objects.
@@ -1074,11 +1078,17 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
                         let Some(_) = s.load() else {
                             return;
                         };
+                        if self.next_slot_count as usize + 1 > Self::CAPACITY {
+                            self.flush();
+                        }
+                        if cfg!(feature = "flush_half") {
+                            if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
+                                self.flush_half();
+                            }
+                        }
                         self.next_slots.push(s);
                         self.next_slot_count += 1;
-                        if self.next_slot_count as usize >= Self::CAPACITY {
-                            self.flush_half();
-                        }
+                        self.pushes += 1;
                     },
                 );
             }

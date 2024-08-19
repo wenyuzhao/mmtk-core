@@ -348,10 +348,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         } else {
             self.new_incs.take()
         };
+        let len = new_incs.len();
         let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
         w.depth += 1;
         self.worker().add_work(WorkBucketStage::Unconstrained, w);
-        self.incs.reserve(Self::CAPACITY - self.incs.len());
+        self.new_incs_count -= len as u32;
         self.pushes = self.new_incs.len();
     }
 
