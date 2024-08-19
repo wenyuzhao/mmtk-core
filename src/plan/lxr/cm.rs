@@ -148,6 +148,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     fn flush_objs(&mut self) {
         if !self.next_objects.is_empty() {
             let objects = self.next_objects.take();
+            // let objects = if cfg!(feature = "flush_half") && self.next_objects.len() > 1 {
+            //     let half = self.next_objects.len() / 2;
+            //     self.next_objects.split_off(half)
+            // } else {
+            //     self.next_objects.take()
+            // };
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new(objects, worker.mmtk);
@@ -535,7 +541,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            let slots = self.next_slots.take();
+            // let slots = self.next_slots.take();
+            let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+                let half = self.next_slots.len() / 2;
+                self.next_slots.split_off(half)
+            } else {
+                self.next_slots.take()
+            };
             let slices = self.next_array_slices.take();
             let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
@@ -900,6 +912,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
             let slots = self.next_slots.take();
+            // let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+            //     let half = self.next_slots.len() / 2;
+            //     self.next_slots.split_off(half)
+            // } else {
+            //     self.next_slots.take()
+            // };
             self.worker().add_boxed_work(
                 WorkBucketStage::Unconstrained,
                 Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
