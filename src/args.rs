@@ -128,6 +128,7 @@ pub const BUFFER_SIZE: usize = {
         1024
     }
 };
+pub const FLUSH_HALF_THRESHOLD: usize = 1024;
 
 pub const HOLE_COUNTING: bool = cfg!(feature = "lxr_hole_counting");
 pub const NO_LAZY_SWEEP_WHEN_STW_CANNOT_RELEASE_ENOUGH_MEMORY: bool = false;

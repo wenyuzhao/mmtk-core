@@ -489,6 +489,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     remset_recorded_slots: bool,
     refs: Vec<ObjectReference>,
     should_record_forwarded_roots: bool,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
@@ -535,6 +536,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             remset_recorded_slots: false,
             refs: vec![],
             should_record_forwarded_roots: false,
+            pushes: 0,
         }
     }
 
@@ -555,7 +557,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
                 .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
         assert!(self.nodes.is_empty());
-        self.next_slot_count = 0;
+        self.next_slot_count = self.next_slots.len() as u32;
+        self.pushes = self.next_slots.len();
     }
 
     /// Trace  and evacuate objects.
@@ -852,11 +855,17 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                         if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                             return;
                         }
-                        self.next_slots.push(s);
-                        self.next_slot_count += 1;
-                        if self.next_slot_count as usize >= Self::CAPACITY {
+                        if self.next_slot_count as usize + 1 > Self::CAPACITY {
                             self.flush();
                         }
+                        if cfg!(feature = "flush_half") {
+                            if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
+                                self.flush();
+                            }
+                        }
+                        self.next_slots.push(s);
+                        self.next_slot_count += 1;
+                        self.pushes += 1;
                     },
                 );
             }
@@ -881,7 +890,59 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
+    array_slices: Vec<VM::VMMemorySlice>,
     next_slots: VectorQueue<SlotOf<Self>>,
+    next_array_slices: VectorQueue<VM::VMMemorySlice>,
+    next_slot_count: u32,
+}
+
+impl<VM: VMBinding> LXRWeakRefProcessEdges<VM> {
+    fn process_slots_impl(&mut self, slots: &[VM::VMSlot], slices: &[VM::VMMemorySlice]) {
+        for (i, s) in slots.iter().enumerate() {
+            self.process_slot(*s);
+            if crate::args::PREFETCH {
+                if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
+                    if let Some(o) = s.load() {
+                        prefetch_object(o, &self.lxr.immix_space);
+                    }
+                }
+            }
+        }
+        for slice in slices {
+            let n = slice.len();
+            for (i, s) in slice.iter_slots().enumerate() {
+                self.process_slot(s);
+                if crate::args::PREFETCH {
+                    if i + crate::args::PREFETCH_STEP < n {
+                        let s = slice.get(i + crate::args::PREFETCH_STEP);
+                        if let Some(o) = s.load() {
+                            prefetch_object(o, &self.lxr.immix_space);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cold]
+    fn flush_half(&mut self) {
+        if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+            // let slots = self.next_slots.take();
+            let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+                let half = self.next_slots.len() / 2;
+                self.next_slots.split_off(half)
+            } else {
+                self.next_slots.take()
+            };
+            let slices = self.next_array_slices.take();
+            let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
+            w.array_slices = slices;
+            self.worker()
+                .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
+        }
+        assert!(self.nodes.is_empty());
+        self.next_slot_count = self.next_slots.len() as u32;
+    }
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
@@ -903,27 +964,26 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         Self {
             lxr,
             base,
+            array_slices: vec![],
             pause: Pause::RefCount,
             next_slots: VectorQueue::new(),
+            next_array_slices: VectorQueue::new(),
+            next_slot_count: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_slots.is_empty() {
+        if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
             let slots = self.next_slots.take();
-            // let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
-            //     let half = self.next_slots.len() / 2;
-            //     self.next_slots.split_off(half)
-            // } else {
-            //     self.next_slots.take()
-            // };
-            self.worker().add_boxed_work(
-                WorkBucketStage::Unconstrained,
-                Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
-            );
+            let slices = self.next_array_slices.take();
+            let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
+            w.array_slices = slices;
+            self.worker()
+                .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
         assert!(self.nodes.is_empty());
+        self.next_slot_count = self.next_slots.len() as u32;
     }
 
     /// Trace  and evacuate objects.
@@ -956,15 +1016,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
     fn process_slots(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
-        for i in 0..self.slots.len() {
-            self.process_slot(self.slots[i]);
-            if crate::args::PREFETCH {
-                if let Some(s) = self.slots.get(i + crate::args::PREFETCH_STEP) {
-                    if let Some(o) = s.load() {
-                        prefetch_object(o, &self.lxr.immix_space);
-                    }
-                }
-            }
+
+        let slots = std::mem::take(&mut self.slots);
+        let slices = std::mem::take(&mut self.array_slices);
+        self.process_slots_impl(&slots, &slices);
+
+        let mut slots = vec![];
+        let mut slices = vec![];
+        while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+            self.next_slot_count = 0;
+            slots.clear();
+            slices.clear();
+            self.next_slots.swap(&mut slots);
+            self.next_array_slices.swap(&mut slices);
+            self.process_slots_impl(&slots, &slices);
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
@@ -985,12 +1050,39 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
-        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |s, _| {
-            self.next_slots.push(s);
-            if self.next_slots.is_full() {
-                self.flush();
+        match VM::VMScanning::get_obj_kind(object) {
+            ObjectKind::ObjArray(len) if len >= 1024 => {
+                let data = VM::VMScanning::obj_array_data(object);
+                for chunk in data.chunks(Self::CAPACITY) {
+                    let len: usize = chunk.len();
+                    if self.next_slot_count as usize + len >= Self::CAPACITY {
+                        self.flush_half();
+                    }
+                    self.next_slot_count += len as u32;
+                    self.next_array_slices.push(chunk);
+                    if self.next_slot_count as usize >= Self::CAPACITY {
+                        self.flush_half();
+                    }
+                }
             }
-        })
+            ObjectKind::ValArray => {}
+            _ => {
+                object.iterate_fields::<VM, _>(
+                    CLDScanPolicy::Claim,
+                    RefScanPolicy::Follow,
+                    |s, _| {
+                        let Some(_) = s.load() else {
+                            return;
+                        };
+                        self.next_slots.push(s);
+                        self.next_slot_count += 1;
+                        if self.next_slot_count as usize >= Self::CAPACITY {
+                            self.flush_half();
+                        }
+                    },
+                );
+            }
+        }
     }
 }
 
