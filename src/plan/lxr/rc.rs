@@ -328,7 +328,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             w.inc_slices = new_inc_slices;
             self.worker().add_work(WorkBucketStage::Unconstrained, w);
         }
-        self.new_incs_count = 0;
+        self.new_incs_count = self.new_incs.len() as u32;
     }
 
     fn inc(&self, o: ObjectReference) -> bool {
