@@ -54,6 +54,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     scanned_non_null_slots: usize,
     #[cfg(feature = "measure_trace_rate")]
     enqueued_objs: usize,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -76,6 +77,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            pushes: 0,
         }
     }
 
@@ -98,6 +100,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            pushes: 0,
         }
     }
 
@@ -120,6 +123,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            pushes: 0,
         }
     }
 
@@ -147,13 +151,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     #[cold]
     fn flush_objs(&mut self) {
         if !self.next_objects.is_empty() {
-            let objects = self.next_objects.take();
-            // let objects = if cfg!(feature = "flush_half") && self.next_objects.len() > 1 {
-            //     let half = self.next_objects.len() / 2;
-            //     self.next_objects.split_off(half)
-            // } else {
-            //     self.next_objects.take()
-            // };
+            let objects = if cfg!(feature = "flush_half") && self.next_objects.len() > 1 {
+                let half = self.next_objects.len() / 2;
+                self.next_objects.split_off(half)
+            } else {
+                self.next_objects.take()
+            };
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new(objects, worker.mmtk);
@@ -270,10 +273,16 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
-                self.next_objects.push(t);
-                if self.next_objects.len() > 8192 {
+                if self.next_objects.len() as usize + 1 > crate::args::BUFFER_SIZE {
                     self.flush_objs();
                 }
+                if cfg!(feature = "flush_half") {
+                    if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
+                        self.flush_objs();
+                    }
+                }
+                self.next_objects.push(t);
+                self.pushes += 1;
             },
         );
     }
