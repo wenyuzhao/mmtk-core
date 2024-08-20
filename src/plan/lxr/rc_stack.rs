@@ -110,7 +110,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.stack_size() + 1 > Self::CAPACITY {
             self.flush();
         }
-        if cfg!(feature = "flush_half") {
+        if cfg!(feature = "flush_half_rc") {
             if self.pushes >= 512 {
                 self.flush_half_slots();
             }
@@ -320,7 +320,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.incs.is_empty() || !self.inc_slices.is_empty() {
-            let new_incs = if cfg!(feature = "flush_half") && self.incs.len() > 1 {
+            let new_incs = if cfg!(feature = "flush_half_rc") && self.incs.len() > 1 {
                 let half = self.incs.len() / 2;
                 self.incs.split_off(half)
             } else {
