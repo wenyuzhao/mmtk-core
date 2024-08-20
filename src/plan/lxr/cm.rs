@@ -151,7 +151,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     #[cold]
     fn flush_objs(&mut self) {
         if !self.next_objects.is_empty() {
-            let objects = if cfg!(feature = "flush_half") && self.next_objects.len() > 1 {
+            let objects = if cfg!(feature = "flush_half_cm") && self.next_objects.len() > 1 {
                 let half = self.next_objects.len() / 2;
                 self.next_objects.split_off(half)
             } else {
@@ -273,10 +273,10 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
-                if self.next_objects.len() as usize + 1 > crate::args::BUFFER_SIZE {
+                if self.next_objects.len() as usize + 1 > 8192 {
                     self.flush_objs();
                 }
-                if cfg!(feature = "flush_half") {
+                if cfg!(feature = "flush_half_cm") {
                     if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
                         self.flush_objs();
                     }
@@ -552,8 +552,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            // let slots = self.next_slots.take();
-            let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+            let slots = if cfg!(feature = "flush_half_mature") && self.next_slots.len() > 1 {
                 let half = self.next_slots.len() / 2;
                 self.next_slots.split_off(half)
             } else {
@@ -867,7 +866,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                         if self.next_slot_count as usize + 1 > Self::CAPACITY {
                             self.flush();
                         }
-                        if cfg!(feature = "flush_half") {
+                        if cfg!(feature = "flush_half_mature") {
                             if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
                                 self.flush();
                             }
@@ -938,7 +937,7 @@ impl<VM: VMBinding> LXRWeakRefProcessEdges<VM> {
     fn flush_half(&mut self) {
         if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
             // let slots = self.next_slots.take();
-            let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+            let slots = if cfg!(feature = "flush_half_weak") && self.next_slots.len() > 1 {
                 let half = self.next_slots.len() / 2;
                 self.next_slots.split_off(half)
             } else {
@@ -1090,7 +1089,7 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
                         if self.next_slot_count as usize + 1 > Self::CAPACITY {
                             self.flush();
                         }
-                        if cfg!(feature = "flush_half") {
+                        if cfg!(feature = "flush_half_weak") {
                             if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
                                 self.flush_half();
                             }

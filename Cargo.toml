@@ -327,3 +327,9 @@ malloc_mark_sweep = []
 
 tracing = ["probe"]
 flush_half = []
+
+flush_half_512 = ["flush_half"]
+flush_half_1024 = ["flush_half"]
+flush_half_cm = ["flush_half"]
+flush_half_mature = ["flush_half"]
+flush_half_weak = ["flush_half"]
