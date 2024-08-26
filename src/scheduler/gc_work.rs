@@ -1,10 +1,11 @@
 use self::global_state::GcStatus;
+use self::util::address::CLDScanPolicy;
+use self::util::address::RefScanPolicy;
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::lxr::LXR;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
-use crate::plan::VectorQueue;
 use crate::util::metadata::side_metadata::address_to_meta_address;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
@@ -1130,15 +1131,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         Self { plan, base }
     }
 
-    fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
-        PlanScanObjects::<Self, P>::new(self.plan, nodes, false, true, true, self.bucket)
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
+        unreachable!()
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
-        self.plan
-            .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
+        self.plan.trace_object::<_, KIND>(self, object, worker)
     }
 
     fn process_slot(&mut self, slot: SlotOf<Self>) {
@@ -1149,6 +1149,53 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(Some(new_object));
+        }
+    }
+
+    fn process_slots(&mut self) {
+        while let Some(slot) = self.slots.pop() {
+            self.process_slot(slot);
+        }
+        assert!(self.nodes.is_empty());
+        assert!(self.slots.is_empty());
+    }
+
+    fn flush(&mut self) {
+        if !self.slots.is_empty() {
+            let slots = std::mem::take(&mut self.slots);
+            let w = Self::new(slots, false, self.mmtk, self.bucket);
+            self.worker().add_work(self.bucket, w);
+        }
+    }
+}
+
+impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ObjectQueue
+    for PlanProcessEdges<VM, P, KIND>
+{
+    fn enqueue(&mut self, object: ObjectReference) {
+        object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
+            let Some(_) = s.load() else { return };
+            self.slots.push(s);
+            if self.slots.len() >= crate::args::BUFFER_SIZE {
+                self.flush_half();
+            }
+        });
+        self.plan.post_scan_object(object);
+    }
+}
+impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
+    PlanProcessEdges<VM, P, KIND>
+{
+    fn flush_half(&mut self) {
+        if !self.slots.is_empty() {
+            let slots = if cfg!(feature = "flush_half") && self.slots.len() > 1 {
+                let half = self.slots.len() / 2;
+                self.slots.split_off(half)
+            } else {
+                std::mem::take(&mut self.slots)
+            };
+            let w = Self::new(slots, false, self.mmtk, self.bucket);
+            self.worker().add_work(self.bucket, w);
         }
     }
 }
