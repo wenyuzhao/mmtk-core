@@ -1112,6 +1112,7 @@ pub struct PlanProcessEdges<
 > {
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
+    next_slots: Vec<SlotOf<Self>>,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -1128,7 +1129,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     ) -> Self {
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref::<P>().unwrap();
-        Self { plan, base }
+        Self {
+            plan,
+            base,
+            next_slots: vec![],
+        }
     }
 
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
@@ -1153,18 +1158,38 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn process_slots(&mut self) {
-        while let Some(slot) = self.slots.pop() {
-            self.process_slot(slot);
+        if cfg!(feature = "stack") {
+            while let Some(slot) = self.slots.pop() {
+                self.process_slot(slot);
+            }
+        } else {
+            for i in 0..self.slots.len() {
+                self.process_slot(self.slots[i]);
+            }
+            let mut slots = vec![];
+            while !self.next_slots.is_empty() {
+                slots.clear();
+                std::mem::swap(&mut slots, &mut self.next_slots);
+                for s in &slots {
+                    self.process_slot(*s);
+                }
+            }
         }
-        assert!(self.nodes.is_empty());
-        assert!(self.slots.is_empty());
     }
 
     fn flush(&mut self) {
-        if !self.slots.is_empty() {
-            let slots = std::mem::take(&mut self.slots);
-            let w = Self::new(slots, false, self.mmtk, self.bucket);
-            self.worker().add_work(self.bucket, w);
+        if cfg!(feature = "stack") {
+            if !self.slots.is_empty() {
+                let slots = std::mem::take(&mut self.slots);
+                let w = Self::new(slots, false, self.mmtk, self.bucket);
+                self.worker().add_work(self.bucket, w);
+            }
+        } else {
+            if !self.next_slots.is_empty() {
+                let slots = std::mem::take(&mut self.next_slots);
+                let w = Self::new(slots, false, self.mmtk, self.bucket);
+                self.worker().add_work(self.bucket, w);
+            }
         }
     }
 }
@@ -1175,9 +1200,16 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
             let Some(_) = s.load() else { return };
-            self.slots.push(s);
-            if self.slots.len() >= crate::args::BUFFER_SIZE {
-                self.flush_half();
+            if cfg!(feature = "stack") {
+                self.slots.push(s);
+                if self.slots.len() >= crate::args::BUFFER_SIZE {
+                    self.flush_half();
+                }
+            } else {
+                self.next_slots.push(s);
+                if self.next_slots.len() >= crate::args::BUFFER_SIZE {
+                    self.flush_half();
+                }
             }
         });
         self.plan.post_scan_object(object);
@@ -1188,11 +1220,20 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 {
     fn flush_half(&mut self) {
         if !self.slots.is_empty() {
-            let slots = if cfg!(feature = "flush_half") && self.slots.len() > 1 {
-                let half = self.slots.len() / 2;
-                self.slots.split_off(half)
+            let slots = if cfg!(feature = "stack") {
+                if cfg!(feature = "flush_half") && self.slots.len() > 1 {
+                    let half = self.slots.len() / 2;
+                    self.slots.split_off(half)
+                } else {
+                    std::mem::take(&mut self.slots)
+                }
             } else {
-                std::mem::take(&mut self.slots)
+                if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+                    let half = self.next_slots.len() / 2;
+                    self.next_slots.split_off(half)
+                } else {
+                    std::mem::take(&mut self.next_slots)
+                }
             };
             let w = Self::new(slots, false, self.mmtk, self.bucket);
             self.worker().add_work(self.bucket, w);
