@@ -1158,7 +1158,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn process_slots(&mut self) {
-        if cfg!(feature = "stack") {
+        if !cfg!(feature = "no_stack") {
             while let Some(slot) = self.slots.pop() {
                 self.process_slot(slot);
             }
@@ -1178,7 +1178,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn flush(&mut self) {
-        if cfg!(feature = "stack") {
+        if !cfg!(feature = "no_stack") {
             if !self.slots.is_empty() {
                 let slots = std::mem::take(&mut self.slots);
                 let w = Self::new(slots, false, self.mmtk, self.bucket);
@@ -1200,7 +1200,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
             let Some(_) = s.load() else { return };
-            if cfg!(feature = "stack") {
+            if !cfg!(feature = "no_stack") {
                 self.slots.push(s);
                 if self.slots.len() >= crate::args::BUFFER_SIZE {
                     self.flush_half();
@@ -1220,7 +1220,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 {
     fn flush_half(&mut self) {
         if !self.slots.is_empty() {
-            let slots = if cfg!(feature = "stack") {
+            let slots = if !cfg!(feature = "no_stack") {
                 if cfg!(feature = "flush_half") && self.slots.len() > 1 {
                     let half = self.slots.len() / 2;
                     self.slots.split_off(half)
