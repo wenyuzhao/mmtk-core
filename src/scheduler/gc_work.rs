@@ -1,6 +1,9 @@
+use crossbeam::deque::Steal;
+
 use self::global_state::GcStatus;
 use self::util::address::CLDScanPolicy;
 use self::util::address::RefScanPolicy;
+use self::util::deque::Stolen;
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::lxr::LXR;
@@ -1159,8 +1162,38 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     fn process_slots(&mut self) {
         if !cfg!(feature = "no_stack") {
-            while let Some(slot) = self.slots.pop() {
-                self.process_slot(slot);
+            if cfg!(feature = "steal") {
+                let worker = self.worker();
+                'outer: loop {
+                    // Drain local stack
+                    while !self.slots.is_empty() || !worker.deque.is_empty() {
+                        while let Some(slot) = self.slots.pop() {
+                            if !worker.deque.push(slot) {
+                                self.process_slot(slot);
+                            }
+                        }
+                        while let Some(slot) = worker.deque.pop() {
+                            self.process_slot(slot);
+                        }
+                    }
+                    // Steal from other workers
+                    for w in &worker.scheduler().worker_group.workers_shared {
+                        if w.ordinal == worker.ordinal {
+                            continue;
+                        }
+                        if let Stolen::Data(slot) = w.deque_stealer.steal() {
+                            self.process_slot(slot);
+                            continue 'outer;
+                        }
+                    }
+                    if self.slots.is_empty() && worker.deque.is_empty() {
+                        break;
+                    }
+                }
+            } else {
+                while let Some(slot) = self.slots.pop() {
+                    self.process_slot(slot);
+                }
             }
         } else {
             for i in 0..self.slots.len() {

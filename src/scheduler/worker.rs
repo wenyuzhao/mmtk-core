@@ -15,6 +15,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+pub type ItemWorker<T> = crate::util::deque::Worker<T>;
+pub type ItemStealer<T> = crate::util::deque::Stealer<T>;
+
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
 
@@ -63,12 +66,18 @@ pub struct GCWorkerShared<VM: VMBinding> {
     pub designated_work: ArrayQueue<Box<dyn GCWork<VM>>>,
     /// Handle for stealing packets from the current worker
     pub stealer: Option<Stealer<Box<dyn GCWork<VM>>>>,
-    pub deque_stealer: Stealer<VM::VMSlot>,
+    pub deque_stealer: ItemStealer<VM::VMSlot>,
+    pub ordinal: ThreadId,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
-    pub fn new(stealer: Option<Stealer<Box<dyn GCWork<VM>>>>, ds: Stealer<VM::VMSlot>) -> Self {
+    pub fn new(
+        ordinal: ThreadId,
+        stealer: Option<Stealer<Box<dyn GCWork<VM>>>>,
+        ds: ItemStealer<VM::VMSlot>,
+    ) -> Self {
         Self {
+            ordinal,
             stat: Default::default(),
             #[cfg(feature = "count_live_bytes_in_gc")]
             live_bytes: AtomicUsize::new(0),
@@ -105,7 +114,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
-    pub deque: deque::Worker<VM::VMSlot>,
+    pub deque: ItemWorker<VM::VMSlot>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -143,7 +152,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
         local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
-        deque: deque::Worker<VM::VMSlot>,
+        deque: ItemWorker<VM::VMSlot>,
     ) -> Self {
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
@@ -327,7 +336,7 @@ enum WorkerCreationState<VM: VMBinding> {
     Initial {
         /// The local work queues for to-be-created workers.
         local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
-        local_item_queues: Vec<deque::Worker<VM::VMSlot>>,
+        local_item_queues: Vec<ItemWorker<VM::VMSlot>>,
     },
     /// All worker threads are spawn and running.  `GCWorker` structs have been transferred to
     /// worker threads.
@@ -366,12 +375,13 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             .collect::<Vec<_>>();
 
         let local_item_queues = (0..num_workers)
-            .map(|_| deque::Worker::new_lifo())
+            .map(|_| ItemWorker::new())
             .collect::<Vec<_>>();
 
         let workers_shared = (0..num_workers)
             .map(|i| {
                 Arc::new(GCWorkerShared::<VM>::new(
+                    i,
                     Some(local_work_queues[i].stealer()),
                     local_item_queues[i].stealer(),
                 ))
@@ -423,7 +433,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     fn create_workers(
         &self,
         local_work_queues: Vec<deque::Worker<Box<dyn GCWork<VM>>>>,
-        local_item_queues: Vec<deque::Worker<VM::VMSlot>>,
+        local_item_queues: Vec<ItemWorker<VM::VMSlot>>,
         mmtk: &'static MMTK<VM>,
     ) -> Vec<Box<GCWorker<VM>>> {
         debug!("Creating GCWorker instances...");
