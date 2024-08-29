@@ -79,6 +79,7 @@ default = [
     "no_meta_counting",
     "tracing",
     "flush_half",
+    "ix_always_defrag",
 ]
 # default = []
 nontemporal = []
@@ -329,3 +330,4 @@ tracing = ["probe"]
 lifo = []
 flush_half = []
 no_stack = []
+push = []
