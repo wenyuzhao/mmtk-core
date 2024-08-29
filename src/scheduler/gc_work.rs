@@ -1116,6 +1116,7 @@ pub struct PlanProcessEdges<
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
     next_slots: Vec<SlotOf<Self>>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -1136,6 +1137,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             plan,
             base,
             next_slots: vec![],
+            pushes: 0,
         }
     }
 
@@ -1224,6 +1226,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 self.worker().add_work(self.bucket, w);
             }
         }
+        self.pushes = 0;
     }
 }
 
@@ -1235,7 +1238,10 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             let Some(_) = s.load() else { return };
             if !cfg!(feature = "no_stack") {
                 self.slots.push(s);
-                if self.slots.len() >= crate::args::BUFFER_SIZE {
+                self.pushes += 1;
+                if self.slots.len() >= crate::args::BUFFER_SIZE
+                    || (cfg!(feature = "push") && self.pushes >= 512)
+                {
                     self.flush_half();
                 }
             } else {
@@ -1268,6 +1274,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     std::mem::take(&mut self.next_slots)
                 }
             };
+            self.pushes = self.slots.len();
             let w = Self::new(slots, false, self.mmtk, self.bucket);
             self.worker().add_work(self.bucket, w);
         }

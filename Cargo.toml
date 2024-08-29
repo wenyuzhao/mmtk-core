@@ -70,7 +70,6 @@ name = "main"
 harness = false
 
 [features]
-# default = ["sanity"]
 default = [
     "perf_counter",
     "dep:sysinfo",
@@ -81,7 +80,7 @@ default = [
     "flush_half",
     "ix_always_defrag",
     "fast_fence",
-]
+] # default = ["sanity"]
 # default = []
 nontemporal = []
 satb_timer = []
@@ -333,3 +332,4 @@ flush_half = []
 no_stack = []
 steal = []
 fast_fence = []
+push = []
