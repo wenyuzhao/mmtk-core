@@ -80,6 +80,7 @@ default = [
     "tracing",
     "flush_half",
     "ix_always_defrag",
+    "fast_fence",
 ]
 # default = []
 nontemporal = []

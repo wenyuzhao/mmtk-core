@@ -64,7 +64,7 @@ fn mfence() {
 }
 
 // Initial size for a buffer.
-static MIN_SIZE: usize = 64;
+const MIN_SIZE: usize = 64;
 
 struct Deque<T: Send> {
     bottom: AtomicIsize,
