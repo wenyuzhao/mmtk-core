@@ -1169,15 +1169,8 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 let worker = self.worker();
                 'outer: loop {
                     // Drain local stack
-                    while !self.slots.is_empty() || !worker.deque.is_empty() {
-                        while let Some(slot) = self.slots.pop() {
-                            if worker.deque.is_full() || !worker.deque.push(slot) {
-                                self.process_slot(slot);
-                            }
-                        }
-                        while let Some(slot) = worker.deque.pop() {
-                            self.process_slot(slot);
-                        }
+                    while let Some(slot) = self.slots.pop().or_else(|| worker.deque.pop()) {
+                        self.process_slot(slot);
                     }
                     // Steal from other workers
                     if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
@@ -1197,18 +1190,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                             continue 'outer;
                         }
                     }
-                    // for w in &worker.scheduler().worker_group.workers_shared {
-                    //     if w.ordinal == worker.ordinal {
-                    //         continue;
-                    //     }
-                    //     if let Stolen::Data(slot) = w.deque_stealer.steal() {
-                    //         self.process_slot(slot);
-                    //         continue 'outer;
-                    //     }
-                    // }
-                    if self.slots.is_empty() && worker.deque.is_empty() {
-                        break;
-                    }
+                    break;
                 }
             } else {
                 while let Some(slot) = self.slots.pop() {
@@ -1328,26 +1310,35 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         }
     }
     fn flush_half(&mut self) {
-        if !self.slots.is_empty() {
-            let slots = if !cfg!(feature = "no_stack") {
-                if cfg!(feature = "flush_half") && self.slots.len() > 1 {
+        let slots = if !cfg!(feature = "no_stack") {
+            if cfg!(feature = "flush_half") {
+                if self.slots.len() > 1 {
                     let half = self.slots.len() / 2;
                     self.slots.split_off(half)
                 } else {
-                    std::mem::take(&mut self.slots)
+                    return;
                 }
             } else {
-                if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+                std::mem::take(&mut self.slots)
+            }
+        } else {
+            if cfg!(feature = "flush_half") {
+                if self.slots.len() > 1 {
                     let half = self.next_slots.len() / 2;
                     self.next_slots.split_off(half)
                 } else {
-                    std::mem::take(&mut self.next_slots)
+                    return;
                 }
-            };
-            self.pushes = self.slots.len();
-            let w = Self::new(slots, false, self.mmtk, self.bucket);
-            self.worker().add_work(self.bucket, w);
+            } else {
+                std::mem::take(&mut self.next_slots)
+            }
+        };
+        self.pushes = self.slots.len();
+        if slots.is_empty() {
+            return;
         }
+        let w = Self::new(slots, false, self.mmtk, self.bucket);
+        self.worker().add_work(self.bucket, w);
     }
 }
 
