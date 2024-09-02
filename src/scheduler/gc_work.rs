@@ -1180,6 +1180,13 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                         }
                     }
                     // Steal from other workers
+                    if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
+                        || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                            .is_empty()
+                        || !worker.local_work_buffer.is_empty()
+                    {
+                        break;
+                    }
                     let workers = &self.worker().scheduler().worker_group.workers_shared;
                     let n = workers.len();
                     for _i in 0..n * 2 {
