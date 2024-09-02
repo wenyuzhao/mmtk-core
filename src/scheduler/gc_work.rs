@@ -4,6 +4,7 @@ use self::global_state::GcStatus;
 use self::util::address::CLDScanPolicy;
 use self::util::address::RefScanPolicy;
 use self::util::deque::Stolen;
+use self::worker::GCWorkerShared;
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::plan::lxr::LXR;
@@ -1170,7 +1171,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     // Drain local stack
                     while !self.slots.is_empty() || !worker.deque.is_empty() {
                         while let Some(slot) = self.slots.pop() {
-                            if !worker.deque.push(slot) {
+                            if worker.deque.is_full() || !worker.deque.push(slot) {
                                 self.process_slot(slot);
                             }
                         }
@@ -1179,15 +1180,25 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                         }
                     }
                     // Steal from other workers
-                    for w in &worker.scheduler().worker_group.workers_shared {
-                        if w.ordinal == worker.ordinal {
-                            continue;
-                        }
-                        if let Stolen::Data(slot) = w.deque_stealer.steal() {
+                    let workers = &self.worker().scheduler().worker_group.workers_shared;
+                    let n = workers.len();
+                    for _i in 0..n * 2 {
+                        if let Stolen::Data(slot) =
+                            Self::steal_best_of_2(worker.ordinal, &mut worker.hash_seed, workers)
+                        {
                             self.process_slot(slot);
                             continue 'outer;
                         }
                     }
+                    // for w in &worker.scheduler().worker_group.workers_shared {
+                    //     if w.ordinal == worker.ordinal {
+                    //         continue;
+                    //     }
+                    //     if let Stolen::Data(slot) = w.deque_stealer.steal() {
+                    //         self.process_slot(slot);
+                    //         continue 'outer;
+                    //     }
+                    // }
                     if self.slots.is_empty() && worker.deque.is_empty() {
                         break;
                     }
@@ -1236,7 +1247,18 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
             let Some(_) = s.load() else { return };
-            if !cfg!(feature = "no_stack") {
+            if !cfg!(feature = "no_stack") && cfg!(feature = "steal") {
+                let worker = self.worker();
+                if worker.deque.is_full() || !worker.deque.push(s) {
+                    self.slots.push(s);
+                    self.pushes += 1;
+                    if self.slots.len() >= crate::args::BUFFER_SIZE
+                        || (cfg!(feature = "push") && self.pushes >= 512)
+                    {
+                        self.flush_half();
+                    }
+                }
+            } else if !cfg!(feature = "no_stack") {
                 self.slots.push(s);
                 self.pushes += 1;
                 if self.slots.len() >= crate::args::BUFFER_SIZE
@@ -1257,6 +1279,47 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {
+    fn random_park_and_miller(seed0: &mut usize) -> usize {
+        let a = 16807;
+        let m = 2147483647;
+        let q = 127773;
+        let r = 2836;
+        let seed = *seed0;
+        let hi = seed / q;
+        let lo = seed % q;
+        let test = a * lo - r * hi;
+        *seed0 = if test > 0 { test } else { test + m };
+        *seed0
+    }
+    fn steal_best_of_2(
+        worker_id: usize,
+        hash_seed: &mut usize,
+        workers: &[Arc<GCWorkerShared<VM>>],
+    ) -> Stolen<VM::VMSlot> {
+        let n = workers.len();
+        if n > 2 {
+            let mut k1 = worker_id;
+            while k1 == worker_id {
+                k1 = Self::random_park_and_miller(hash_seed) % n;
+            }
+            let mut k2 = worker_id;
+            while k2 == worker_id || k2 == k1 {
+                k2 = Self::random_park_and_miller(hash_seed) % n;
+            }
+            let sz1 = workers[k1].deque_stealer.size();
+            let sz2 = workers[k2].deque_stealer.size();
+            if sz1 < sz2 {
+                return workers[k2].deque_stealer.steal();
+            } else {
+                return workers[k1].deque_stealer.steal();
+            }
+        } else if n == 2 {
+            let k = (worker_id + 1) % 2;
+            return workers[k].deque_stealer.steal();
+        } else {
+            return Stolen::Empty;
+        }
+    }
     fn flush_half(&mut self) {
         if !self.slots.is_empty() {
             let slots = if !cfg!(feature = "no_stack") {

@@ -115,6 +115,7 @@ pub struct GCWorker<VM: VMBinding> {
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     pub deque: ItemWorker<VM::VMSlot>,
+    pub hash_seed: usize,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -154,6 +155,9 @@ impl<VM: VMBinding> GCWorker<VM> {
         local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
         deque: ItemWorker<VM::VMSlot>,
     ) -> Self {
+        // use rand::prelude::*;
+        // let mut rng = thread_rng();
+
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,
@@ -164,6 +168,8 @@ impl<VM: VMBinding> GCWorker<VM> {
             shared,
             local_work_buffer,
             deque,
+            hash_seed: 17,
+            // hash_seed: rng.gen_range(0..102400),
         }
     }
 

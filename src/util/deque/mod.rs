@@ -174,6 +174,13 @@ impl<T: Send> Worker<T> {
         b.wrapping_sub(t) <= 0
     }
     #[inline(always)]
+    pub fn is_full(&self) -> bool {
+        let b = self.deque.bottom.load(Relaxed);
+        let t = self.deque.top.load(Relaxed);
+        let size = b.wrapping_sub(t);
+        size as usize == MIN_SIZE
+    }
+    #[inline(always)]
     pub fn pop_bulk<const N: usize>(&mut self) -> Option<([MaybeUninit<T>; N], usize)> {
         unsafe { self.deque.pop_bulk() }
     }
@@ -204,6 +211,12 @@ impl<T: Send> Stealer<T> {
         let b = self.deque.bottom.load(Relaxed);
         let t = self.deque.top.load(Relaxed);
         b.wrapping_sub(t) <= 0
+    }
+
+    pub fn size(&self) -> isize {
+        let b = self.deque.bottom.load(Relaxed);
+        let t = self.deque.top.load(Relaxed);
+        b.wrapping_sub(t)
     }
 }
 
