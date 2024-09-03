@@ -30,3 +30,4 @@ pub use gc_work::{ProcessEdgesWork, RootKind};
 
 static TOTAL_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
 static UTILIZATIONS: SegQueue<f32> = SegQueue::new();
+static TRACE_UTILIZATIONS: SegQueue<f32> = SegQueue::new();

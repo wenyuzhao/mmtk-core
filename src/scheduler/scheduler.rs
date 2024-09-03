@@ -749,8 +749,23 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
+        let closure_bucket_opened = self.work_buckets[WorkBucketStage::Closure].is_activated()
+            && self.bucket_update_progress.load(Ordering::SeqCst)
+                <= WorkBucketStage::Closure.into_usize();
         if self.update_buckets() {
             trace!("Some buckets are opened.");
+            if closure_bucket_opened
+                && self.bucket_update_progress.load(Ordering::SeqCst)
+                    > WorkBucketStage::Closure.into_usize()
+                && crate::inside_harness()
+            {
+                let stw_us =
+                    crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
+                let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
+                let utilization: f32 = busy_us as f32 / stw_us as f32;
+                assert!(utilization <= 1.0, "{busy_us:.3} {stw_us:.3}");
+                super::TRACE_UTILIZATIONS.push(utilization);
+            }
             return true;
         }
 
@@ -971,6 +986,32 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         stat.insert("utilization.min".to_owned(), format!("{:.2}", min));
         stat.insert("utilization.max".to_owned(), format!("{:.2}", max));
         stat.insert("utilization.geomean".to_owned(), format!("{:.2}", geomean));
+        // Trace utilization
+        let mut utilizations = vec![];
+        while let Some(x) = super::TRACE_UTILIZATIONS.pop() {
+            utilizations.push(x);
+        }
+        println!("TRACE Utilization: {:?}", utilizations);
+        let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
+        let min = utilizations
+            .iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let max = utilizations
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let geomean = utilizations
+            .iter()
+            .product::<f32>()
+            .powf(1.0 / utilizations.len() as f32);
+        stat.insert("trace.utilization.mean".to_owned(), format!("{:.2}", mean));
+        stat.insert("trace.utilization.min".to_owned(), format!("{:.2}", min));
+        stat.insert("trace.utilization.max".to_owned(), format!("{:.2}", max));
+        stat.insert(
+            "trace.utilization.geomean".to_owned(),
+            format!("{:.2}", geomean),
+        );
         stat
     }
 
