@@ -28,6 +28,12 @@ pub use worker::GCWorker;
 pub(crate) mod gc_work;
 pub use gc_work::{ProcessEdgesWork, RootKind};
 
+use crate::Timer;
+
 static TOTAL_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
 static UTILIZATIONS: SegQueue<f32> = SegQueue::new();
 static TRACE_UTILIZATIONS: SegQueue<f32> = SegQueue::new();
+
+static TOTAL_TRACE_TIME_US: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_TRACE_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
+static TRACE_START: Timer = Timer::new();

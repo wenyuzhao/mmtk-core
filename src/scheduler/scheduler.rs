@@ -754,17 +754,25 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 <= WorkBucketStage::Closure.into_usize();
         if self.update_buckets() {
             trace!("Some buckets are opened.");
-            if closure_bucket_opened
-                && self.bucket_update_progress.load(Ordering::SeqCst)
-                    > WorkBucketStage::Closure.into_usize()
-                && crate::inside_harness()
-            {
-                let stw_us =
-                    crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
-                let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
-                let utilization: f32 = busy_us as f32 / stw_us as f32;
-                assert!(utilization <= 1.0, "{busy_us:.3} {stw_us:.3}");
-                super::TRACE_UTILIZATIONS.push(utilization);
+            if crate::inside_harness() {
+                if !closure_bucket_opened
+                    && self.bucket_update_progress.load(Ordering::SeqCst)
+                        == WorkBucketStage::Closure.into_usize()
+                {
+                    super::TRACE_START.start();
+                }
+                if closure_bucket_opened
+                    && self.bucket_update_progress.load(Ordering::SeqCst)
+                        > WorkBucketStage::Closure.into_usize()
+                {
+                    let trace_us = super::TRACE_START.elapsed().as_micros();
+                    super::TOTAL_TRACE_TIME_US.fetch_add(trace_us as usize, Ordering::SeqCst);
+                    let total_trace_us = trace_us * self.num_workers() as u128;
+                    let busy_us = super::TOTAL_TRACE_BUSY_TIME_US.load(Ordering::SeqCst);
+                    let utilization: f32 = busy_us as f32 / total_trace_us as f32;
+                    assert!(utilization <= 1.0, "{busy_us:.3} {total_trace_us:.3}");
+                    super::TRACE_UTILIZATIONS.push(utilization);
+                }
             }
             return true;
         }
@@ -844,6 +852,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let stw_us = crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
         let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
         super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_TRACE_BUSY_TIME_US.store(0, Ordering::SeqCst);
         let utilization: f32 = busy_us as f32 / stw_us as f32;
         if crate::inside_harness() {
             // println!("Utilization: {stw_us} / {busy_us} = {utilization:.2}");
@@ -1012,6 +1021,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             "trace.utilization.geomean".to_owned(),
             format!("{:.2}", geomean),
         );
+
+        let trace_time = super::TOTAL_TRACE_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "time.trace".to_owned(),
+            format!("{:.2}", trace_time as f64 / 1000.0),
+        );
+
         stat
     }
 
