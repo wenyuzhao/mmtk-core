@@ -1,4 +1,8 @@
+use copy::CopySemantics;
 use crossbeam::deque::Steal;
+use plan::immix::Immix;
+use policy::immix::ImmixSpace;
+use policy::space::Space;
 
 use self::global_state::GcStatus;
 use self::util::address::CLDScanPolicy;
@@ -1117,7 +1121,11 @@ pub struct PlanProcessEdges<
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
     next_slots: Vec<SlotOf<Self>>,
+    next_slots_los: Vec<SlotOf<Self>>,
     pushes: usize,
+    /// 0: mixed, 1: immix, 2: los
+    category: u8,
+    ix: &'static ImmixSpace<VM>,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -1139,6 +1147,13 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             base,
             next_slots: vec![],
             pushes: 0,
+            category: 0,
+            next_slots_los: vec![],
+            ix: &mmtk
+                .get_plan()
+                .downcast_ref::<Immix<VM>>()
+                .unwrap()
+                .immix_space,
         }
     }
 
@@ -1146,12 +1161,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         unreachable!()
     }
 
+    #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
         self.plan.trace_object::<_, KIND>(self, object, worker)
     }
 
+    #[inline]
     fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
@@ -1198,15 +1215,44 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 }
             }
         } else {
-            for i in 0..self.slots.len() {
-                self.process_slot(self.slots[i]);
+            if cfg!(feature = "specialization") {
+                if self.category == 0 {
+                    for i in 0..self.slots.len() {
+                        self.process_slot_specialized::<0>(self.slots[i]);
+                    }
+                } else if self.category == 1 {
+                    for i in 0..self.slots.len() {
+                        self.process_slot_specialized::<1>(self.slots[i]);
+                    }
+                } else {
+                    for i in 0..self.slots.len() {
+                        self.process_slot_specialized::<2>(self.slots[i]);
+                    }
+                }
+            } else {
+                for i in 0..self.slots.len() {
+                    self.process_slot(self.slots[i]);
+                }
             }
             let mut slots = vec![];
-            while !self.next_slots.is_empty() {
+            let mut slots_los = vec![];
+            while !self.next_slots.is_empty() || !self.next_slots_los.is_empty() {
                 slots.clear();
+                slots_los.clear();
                 std::mem::swap(&mut slots, &mut self.next_slots);
-                for s in &slots {
-                    self.process_slot(*s);
+                std::mem::swap(&mut slots_los, &mut self.next_slots_los);
+
+                if cfg!(feature = "specialization") {
+                    for s in &slots {
+                        self.process_slot_specialized::<1>(*s);
+                    }
+                    for s in &slots_los {
+                        self.process_slot_specialized::<2>(*s);
+                    }
+                } else {
+                    for s in &slots {
+                        self.process_slot(*s);
+                    }
                 }
             }
         }
@@ -1235,7 +1281,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 {
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
-            let Some(_) = s.load() else { return };
+            let Some(t) = s.load() else { return };
             if !cfg!(feature = "no_stack") && cfg!(feature = "steal") {
                 let worker = self.worker();
                 if worker.deque.is_full() || !worker.deque.push(s) {
@@ -1256,9 +1302,23 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     self.flush_half();
                 }
             } else {
-                self.next_slots.push(s);
-                if self.next_slots.len() >= crate::args::BUFFER_SIZE {
-                    self.flush_half();
+                if cfg!(feature = "specialization") {
+                    if self.ix.address_in_space(t.to_raw_address()) {
+                        self.next_slots.push(s);
+                        if self.next_slots.len() >= crate::args::BUFFER_SIZE {
+                            self.flush_half();
+                        }
+                    } else {
+                        self.next_slots_los.push(s);
+                        if self.next_slots_los.len() >= crate::args::BUFFER_SIZE {
+                            self.flush_half_los();
+                        }
+                    }
+                } else {
+                    self.next_slots.push(s);
+                    if self.next_slots.len() >= crate::args::BUFFER_SIZE {
+                        self.flush_half();
+                    }
                 }
             }
         });
@@ -1268,6 +1328,38 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {
+    #[inline]
+    fn trace_object_specialized<const CATEGORY: u8>(
+        &mut self,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        use crate::policy::gc_work::PolicyTraceObject;
+        // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
+        let worker = self.worker();
+        match CATEGORY {
+            0 => self.plan.trace_object::<_, KIND>(self, object, worker),
+            1 => self.ix.trace_object::<_, KIND>(
+                self,
+                object,
+                Some(CopySemantics::DefaultCopy),
+                worker,
+            ),
+            2 => self.plan.common().los.trace_object(self, object),
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn process_slot_specialized<const CATEGORY: u8>(&mut self, slot: SlotOf<Self>) {
+        let Some(object) = slot.load() else {
+            // Skip slots that are not holding an object reference.
+            return;
+        };
+        let new_object = self.trace_object_specialized::<CATEGORY>(object);
+        if CATEGORY != 2 && P::may_move_objects::<KIND>() && new_object != object {
+            slot.store(Some(new_object));
+        }
+    }
     fn random_park_and_miller(seed0: &mut usize) -> usize {
         let a = 16807;
         let m = 2147483647;
@@ -1323,7 +1415,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         } else {
             if cfg!(feature = "flush_half") {
-                if self.slots.len() > 1 {
+                if self.next_slots.len() > 1 {
                     let half = self.next_slots.len() / 2;
                     self.next_slots.split_off(half)
                 } else {
@@ -1337,7 +1429,34 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         if slots.is_empty() {
             return;
         }
-        let w = Self::new(slots, false, self.mmtk, self.bucket);
+        let mut w = Self::new(slots, false, self.mmtk, self.bucket);
+        if cfg!(feature = "specialization") {
+            w.category = 1;
+        }
+        self.worker().add_work(self.bucket, w);
+    }
+
+    fn flush_half_los(&mut self) {
+        let slots = if !cfg!(feature = "no_stack") {
+            unreachable!()
+        } else {
+            if cfg!(feature = "flush_half") {
+                if self.next_slots_los.len() > 1 {
+                    let half = self.next_slots_los.len() / 2;
+                    self.next_slots_los.split_off(half)
+                } else {
+                    return;
+                }
+            } else {
+                std::mem::take(&mut self.next_slots_los)
+            }
+        };
+        self.pushes = self.slots.len();
+        if slots.is_empty() {
+            return;
+        }
+        let mut w = Self::new(slots, false, self.mmtk, self.bucket);
+        w.category = 2;
         self.worker().add_work(self.bucket, w);
     }
 }
