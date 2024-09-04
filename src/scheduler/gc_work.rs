@@ -1323,7 +1323,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         } else {
             if cfg!(feature = "flush_half") {
-                if self.slots.len() > 1 {
+                if self.next_slots.len() > 1 {
                     let half = self.next_slots.len() / 2;
                     self.next_slots.split_off(half)
                 } else {
