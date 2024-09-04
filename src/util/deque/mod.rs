@@ -203,6 +203,9 @@ impl<T: Send> Stealer<T> {
     /// Steals work off the end of the queue (opposite of the worker's end)
     #[inline(always)]
     pub fn steal(&self) -> Stolen<T> {
+        if self.is_empty() {
+            return Empty;
+        }
         unsafe { self.deque.steal() }
     }
 

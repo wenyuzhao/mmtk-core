@@ -1172,17 +1172,24 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     while let Some(slot) = self.slots.pop().or_else(|| worker.deque.pop()) {
                         self.process_slot(slot);
                     }
+                    let workers = &self.worker().scheduler().worker_group.workers_shared;
                     // Steal from other workers
                     if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
+                        || (worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
+                            .is_activated()
+                            && !worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
+                                .is_empty())
                         || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained]
                             .is_empty()
                         || !worker.local_work_buffer.is_empty()
+                        || workers
+                            .iter()
+                            .any(|w| !w.stealer.as_ref().unwrap().is_empty())
                     {
                         break;
                     }
-                    let workers = &self.worker().scheduler().worker_group.workers_shared;
                     let n = workers.len();
-                    for _i in 0..n * 2 {
+                    for _i in 0..n / 2 {
                         if let Stolen::Data(slot) =
                             Self::steal_best_of_2(worker.ordinal, &mut worker.hash_seed, workers)
                         {
