@@ -2,6 +2,7 @@ use copy::CopySemantics;
 use crossbeam::deque::Steal;
 use plan::immix::Immix;
 use policy::immix::ImmixSpace;
+use policy::largeobjectspace::LargeObjectSpace;
 use policy::space::Space;
 
 use self::global_state::GcStatus;
@@ -1120,12 +1121,12 @@ pub struct PlanProcessEdges<
 > {
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
-    next_slots: Vec<SlotOf<Self>>,
-    next_slots_los: Vec<SlotOf<Self>>,
+    next_slots: [Vec<SlotOf<Self>>; 2],
     pushes: usize,
     /// 0: mixed, 1: immix, 2: los
     category: u8,
     ix: &'static ImmixSpace<VM>,
+    los: &'static LargeObjectSpace<VM>,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -1145,15 +1146,15 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         Self {
             plan,
             base,
-            next_slots: vec![],
+            next_slots: [vec![], vec![]],
             pushes: 0,
             category: 0,
-            next_slots_los: vec![],
             ix: &mmtk
                 .get_plan()
                 .downcast_ref::<Immix<VM>>()
                 .unwrap()
                 .immix_space,
+            los: &mmtk.get_plan().common().los,
         }
     }
 
@@ -1236,11 +1237,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
             let mut slots = vec![];
             let mut slots_los = vec![];
-            while !self.next_slots.is_empty() || !self.next_slots_los.is_empty() {
+            while !self.next_slots[0].is_empty() || !self.next_slots[1].is_empty() {
                 slots.clear();
                 slots_los.clear();
-                std::mem::swap(&mut slots, &mut self.next_slots);
-                std::mem::swap(&mut slots_los, &mut self.next_slots_los);
+                std::mem::swap(&mut slots, &mut self.next_slots[0]);
+                std::mem::swap(&mut slots_los, &mut self.next_slots[1]);
 
                 if cfg!(feature = "specialization") {
                     for s in &slots {
@@ -1266,9 +1267,16 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 self.worker().add_work(self.bucket, w);
             }
         } else {
-            if !self.next_slots.is_empty() {
-                let slots = std::mem::take(&mut self.next_slots);
-                let w = Self::new(slots, false, self.mmtk, self.bucket);
+            if !self.next_slots[0].is_empty() {
+                let slots = std::mem::take(&mut self.next_slots[0]);
+                let mut w = Self::new(slots, false, self.mmtk, self.bucket);
+                w.category = 1;
+                self.worker().add_work(self.bucket, w);
+            }
+            if !self.next_slots[1].is_empty() {
+                let slots = std::mem::take(&mut self.next_slots[1]);
+                let mut w = Self::new(slots, false, self.mmtk, self.bucket);
+                w.category = 2;
                 self.worker().add_work(self.bucket, w);
             }
         }
@@ -1303,20 +1311,20 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 }
             } else {
                 if cfg!(feature = "specialization") {
-                    if self.ix.address_in_space(t.to_raw_address()) {
-                        self.next_slots.push(s);
-                        if self.next_slots.len() >= crate::args::BUFFER_SIZE {
+                    let index = self.los.address_in_space(t.to_raw_address()) as usize;
+                    let slots = unsafe { self.next_slots.get_unchecked_mut(index) };
+                    slots.push(s);
+                    if slots.len() >= crate::args::BUFFER_SIZE {
+                        if index == 0 {
                             self.flush_half();
-                        }
-                    } else {
-                        self.next_slots_los.push(s);
-                        if self.next_slots_los.len() >= crate::args::BUFFER_SIZE {
+                        } else {
                             self.flush_half_los();
                         }
                     }
                 } else {
-                    self.next_slots.push(s);
-                    if self.next_slots.len() >= crate::args::BUFFER_SIZE {
+                    let slots = unsafe { self.next_slots.get_unchecked_mut(0) };
+                    slots.push(s);
+                    if slots.len() >= crate::args::BUFFER_SIZE {
                         self.flush_half();
                     }
                 }
@@ -1344,7 +1352,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 Some(CopySemantics::DefaultCopy),
                 worker,
             ),
-            2 => self.plan.common().los.trace_object(self, object),
+            2 => self.los.trace_object(self, object),
             _ => unreachable!(),
         }
     }
@@ -1415,14 +1423,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         } else {
             if cfg!(feature = "flush_half") {
-                if self.next_slots.len() > 1 {
-                    let half = self.next_slots.len() / 2;
-                    self.next_slots.split_off(half)
+                if self.next_slots[0].len() > 1 {
+                    let half = self.next_slots[0].len() / 2;
+                    self.next_slots[0].split_off(half)
                 } else {
                     return;
                 }
             } else {
-                std::mem::take(&mut self.next_slots)
+                std::mem::take(&mut self.next_slots[0])
             }
         };
         self.pushes = self.slots.len();
@@ -1441,14 +1449,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             unreachable!()
         } else {
             if cfg!(feature = "flush_half") {
-                if self.next_slots_los.len() > 1 {
-                    let half = self.next_slots_los.len() / 2;
-                    self.next_slots_los.split_off(half)
+                if self.next_slots[1].len() > 1 {
+                    let half = self.next_slots[1].len() / 2;
+                    self.next_slots[1].split_off(half)
                 } else {
                     return;
                 }
             } else {
-                std::mem::take(&mut self.next_slots_los)
+                std::mem::take(&mut self.next_slots[1])
             }
         };
         self.pushes = self.slots.len();
