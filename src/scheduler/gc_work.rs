@@ -1182,10 +1182,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                         || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained]
                             .is_empty()
                         || !worker.local_work_buffer.is_empty()
-                        || workers
-                            .iter()
-                            .any(|w| !w.stealer.as_ref().unwrap().is_empty())
                     {
+                        break;
+                    }
+                    if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                        worker.cache = Some(w);
                         break;
                     }
                     let n = workers.len();
@@ -1275,18 +1276,6 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {
-    fn random_park_and_miller(seed0: &mut usize) -> usize {
-        let a = 16807;
-        let m = 2147483647;
-        let q = 127773;
-        let r = 2836;
-        let seed = *seed0;
-        let hi = seed / q;
-        let lo = seed % q;
-        let test = a * lo - r * hi;
-        *seed0 = if test > 0 { test } else { test + m };
-        *seed0
-    }
     fn steal_best_of_2(
         worker_id: usize,
         hash_seed: &mut usize,
@@ -1294,14 +1283,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     ) -> Stolen<VM::VMSlot> {
         let n = workers.len();
         if n > 2 {
-            let mut k1 = worker_id;
-            while k1 == worker_id {
-                k1 = Self::random_park_and_miller(hash_seed) % n;
-            }
-            let mut k2 = worker_id;
-            while k2 == worker_id || k2 == k1 {
-                k2 = Self::random_park_and_miller(hash_seed) % n;
-            }
+            let (k1, k2) = GCWorkScheduler::<VM>::get_random_steal_index(worker_id, hash_seed, n);
             let sz1 = workers[k1].deque_stealer.size();
             let sz2 = workers[k2].deque_stealer.size();
             if sz1 < sz2 {
@@ -1316,6 +1298,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             return Stolen::Empty;
         }
     }
+
     fn flush_half(&mut self) {
         let slots = if !cfg!(feature = "no_stack") {
             if cfg!(feature = "flush_half") {

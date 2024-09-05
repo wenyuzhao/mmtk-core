@@ -116,6 +116,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     pub deque: ItemWorker<VM::VMSlot>,
     pub hash_seed: usize,
+    pub cache: Option<Box<dyn GCWork<VM>>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -169,6 +170,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             local_work_buffer,
             deque,
             hash_seed: 17,
+            cache: None,
             // hash_seed: rng.gen_range(0..102400),
         }
     }
@@ -238,6 +240,9 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// 3. Poll from activated global work-buckets
     /// 4. Steal from other workers
     fn poll(&mut self) -> PollResult<VM> {
+        if let Some(work) = self.cache.take() {
+            return Ok(work);
+        }
         if let Some(work) = self.shared.designated_work.pop() {
             return Ok(work);
         }

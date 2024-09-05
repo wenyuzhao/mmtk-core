@@ -10,6 +10,7 @@ use super::*;
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
 use crate::plan::lxr::LXR;
+use crate::util::memory::result_is_mapped;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::reference_processor::PhantomRefProcessing;
@@ -24,6 +25,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use worker::GCWorkerShared;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
     /// Work buckets
@@ -604,6 +606,72 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         } else {
             Steal::Empty
         }
+    }
+
+    fn random_park_and_miller(seed0: &mut usize) -> usize {
+        let a = 16807;
+        let m = 2147483647;
+        let q = 127773;
+        let r = 2836;
+        let seed = *seed0;
+        let hi = seed / q;
+        let lo = seed % q;
+        let test = a * lo - r * hi;
+        *seed0 = if test > 0 { test } else { test + m };
+        *seed0
+    }
+
+    pub(super) fn get_random_steal_index(
+        worker_id: usize,
+        hash_seed: &mut usize,
+        n: usize,
+    ) -> (usize, usize) {
+        let mut k1 = worker_id;
+        while k1 == worker_id {
+            k1 = Self::random_park_and_miller(hash_seed) % n;
+        }
+        let mut k2 = worker_id;
+        while k2 == worker_id || k2 == k1 {
+            k2 = Self::random_park_and_miller(hash_seed) % n;
+        }
+        (k1, k2)
+    }
+
+    fn steal_best_of_2(
+        worker_id: usize,
+        hash_seed: &mut usize,
+        workers: &[Arc<GCWorkerShared<VM>>],
+    ) -> Steal<Box<dyn GCWork<VM>>> {
+        let n = workers.len();
+        if n > 2 {
+            let (k1, k2) = Self::get_random_steal_index(worker_id, hash_seed, n);
+            let sz1 = workers[k1].stealer.as_ref().unwrap().len();
+            let sz2 = workers[k2].stealer.as_ref().unwrap().len();
+            if sz1 < sz2 {
+                return workers[k2].stealer.as_ref().unwrap().steal();
+            } else {
+                return workers[k1].stealer.as_ref().unwrap().steal();
+            }
+        } else if n == 2 {
+            let k = (worker_id + 1) % 2;
+            return workers[k].stealer.as_ref().unwrap().steal();
+        } else {
+            return Steal::Empty;
+        }
+    }
+
+    /// Get a schedulable work packet without retry.
+    pub(super) fn try_steal(&self, worker: &mut GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
+        for _ in 0..self.worker_group.workers_shared.len() * 2 {
+            if let Steal::Success(slot) = Self::steal_best_of_2(
+                worker.ordinal,
+                &mut worker.hash_seed,
+                &self.worker_group.workers_shared,
+            ) {
+                return Steal::Success(slot);
+            }
+        }
+        Steal::Empty
     }
 
     /// Get a schedulable work packet.
