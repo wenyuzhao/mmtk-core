@@ -1192,7 +1192,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     let n = workers.len();
                     for _i in 0..n / 2 {
                         if let Stolen::Data(slot) =
-                            Self::steal_best_of_2(worker.ordinal, &mut worker.hash_seed, workers)
+                            Self::steal_best_of_2(worker.ordinal, &worker.hash_seed, workers)
                         {
                             self.process_slot(slot);
                             continue 'outer;
@@ -1278,7 +1278,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 {
     fn steal_best_of_2(
         worker_id: usize,
-        hash_seed: &mut usize,
+        hash_seed: &AtomicUsize,
         workers: &[Arc<GCWorkerShared<VM>>],
     ) -> Stolen<VM::VMSlot> {
         let n = workers.len();

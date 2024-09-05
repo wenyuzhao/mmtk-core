@@ -115,7 +115,7 @@ pub struct GCWorker<VM: VMBinding> {
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     pub deque: ItemWorker<VM::VMSlot>,
-    pub hash_seed: usize,
+    pub hash_seed: AtomicUsize,
     pub cache: Option<Box<dyn GCWork<VM>>>,
 }
 
@@ -169,7 +169,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             shared,
             local_work_buffer,
             deque,
-            hash_seed: 17,
+            hash_seed: AtomicUsize::new(17),
             cache: None,
             // hash_seed: rng.gen_range(0..102400),
         }
