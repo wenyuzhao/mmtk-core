@@ -1191,10 +1191,9 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     }
                     let n = workers.len();
                     for _i in 0..n / 2 {
-                        if let Stolen::Data(slot) =
-                            Self::steal_best_of_2(worker.ordinal, &worker.hash_seed, workers)
-                        {
-                            self.process_slot(slot);
+                        const BULK: bool = cfg!(feature = "steal_bulk");
+                        if let Some(s) = Self::steal_best_of_2::<BULK>(worker, workers) {
+                            self.process_slot(s);
                             continue 'outer;
                         }
                     }
@@ -1246,7 +1245,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             let Some(_) = s.load() else { return };
             if !cfg!(feature = "no_stack") && cfg!(feature = "steal") {
                 let worker = self.worker();
-                if worker.deque.is_full() || !worker.deque.push(s) {
+                if worker.deque.push(s).is_err() {
                     self.slots.push(s);
                     self.pushes += 1;
                     if self.slots.len() >= crate::args::BUFFER_SIZE
@@ -1276,26 +1275,38 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {
-    fn steal_best_of_2(
-        worker_id: usize,
-        hash_seed: &AtomicUsize,
+    fn steal_best_of_2<const BULK: bool>(
+        worker: &GCWorker<VM>,
         workers: &[Arc<GCWorkerShared<VM>>],
-    ) -> Stolen<VM::VMSlot> {
+    ) -> Option<VM::VMSlot> {
         let n = workers.len();
         if n > 2 {
-            let (k1, k2) = GCWorkScheduler::<VM>::get_random_steal_index(worker_id, hash_seed, n);
+            let (k1, k2) =
+                GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
             let sz1 = workers[k1].deque_stealer.size();
             let sz2 = workers[k2].deque_stealer.size();
             if sz1 < sz2 {
-                return workers[k2].deque_stealer.steal();
+                return workers[k2]
+                    .deque_stealer
+                    .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                    .ok()
+                    .map(|x| x.0);
             } else {
-                return workers[k1].deque_stealer.steal();
+                return workers[k1]
+                    .deque_stealer
+                    .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                    .ok()
+                    .map(|x| x.0);
             }
         } else if n == 2 {
-            let k = (worker_id + 1) % 2;
-            return workers[k].deque_stealer.steal();
+            let k = (worker.ordinal + 1) % 2;
+            return workers[k]
+                .deque_stealer
+                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
         } else {
-            return Stolen::Empty;
+            return None;
         }
     }
 

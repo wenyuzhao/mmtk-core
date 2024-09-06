@@ -57,6 +57,7 @@ strum = "0.26.2"
 strum_macros = "0.26.2"
 sysinfo = { version = "0.30.9", optional = true }
 rand = "0.8.5"
+st3 = "0.4.1"
 
 [dev-dependencies]
 paste = "1.0.8"
@@ -335,3 +336,5 @@ steal = []
 fast_fence = []
 push = []
 random_packet_stealing = []
+steal_bulk = ["steal"]
+fifo = []

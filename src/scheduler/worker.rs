@@ -15,8 +15,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub type ItemWorker<T> = crate::util::deque::Worker<T>;
-pub type ItemStealer<T> = crate::util::deque::Stealer<T>;
+#[cfg(feature = "fifo")]
+pub type ItemWorker<T> = crate::util::deque::fifo::Worker<T>;
+#[cfg(feature = "fifo")]
+pub type ItemStealer<T> = crate::util::deque::fifo::Stealer<T>;
+
+#[cfg(not(feature = "fifo"))]
+pub type ItemWorker<T> = crate::util::deque::lifo::Worker<T>;
+#[cfg(not(feature = "fifo"))]
+pub type ItemStealer<T> = crate::util::deque::lifo::Stealer<T>;
 
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
@@ -391,7 +398,7 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             .collect::<Vec<_>>();
 
         let local_item_queues = (0..num_workers)
-            .map(|_| ItemWorker::new())
+            .map(|_| ItemWorker::new(64))
             .collect::<Vec<_>>();
 
         let workers_shared = (0..num_workers)

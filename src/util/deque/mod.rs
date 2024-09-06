@@ -38,6 +38,8 @@
 //!     worker.push(1);
 //!     let stealer2 = stealer.clone();
 //!     stealer2.steal();
+pub mod fifo;
+pub mod lifo;
 
 pub use self::Stolen::*;
 
@@ -210,6 +212,14 @@ impl<T: Send> Stealer<T> {
     }
 
     #[inline(always)]
+    pub fn steal_bulk(&self, buf: &mut Vec<T>) -> Stolen<T> {
+        if self.is_empty() {
+            return Empty;
+        }
+        unsafe { self.deque.steal_bulk(buf) }
+    }
+
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         let b = self.deque.bottom.load(Relaxed);
         let t = self.deque.top.load(Relaxed);
@@ -369,12 +379,61 @@ impl<T: Send> Deque<T> {
         // Attempt to increment top.
         if self
             .top
-            .compare_exchange(t, t.wrapping_add(1), SeqCst, SeqCst)
+            .compare_exchange(t, t.wrapping_add(1), SeqCst, Relaxed)
             .is_ok()
         {
             Data(data)
         } else {
             forget(data); // Someone else stole this value
+            Abort
+        }
+    }
+
+    fn size(&self) -> isize {
+        let b = self.bottom.load(Relaxed);
+        let t = self.top.load(Relaxed);
+        b.wrapping_sub(t)
+    }
+
+    #[inline(always)]
+    unsafe fn steal_bulk(&self, buf: &mut Vec<T>) -> Stolen<T> {
+        // Make sure top is read before bottom.
+        let t = self.top.load(Acquire);
+        mfence();
+        let b = self.bottom.load(Acquire);
+        let size = b.wrapping_sub(t);
+        // steal half
+        let n = size / 2;
+
+        // Exit if the queue is empty.
+        // let size = b.wrapping_sub(t);
+        if size <= 0 || n == 0 {
+            return Empty;
+        }
+        // let n = isize::min(n, 2);
+
+        // Fetch the element from the queue.
+        let a = self.array.load(Acquire);
+        for i in 0..n - 1 {
+            let data = (*a).get(t.wrapping_add(i));
+            buf.push(data);
+        }
+        let data = (*a).get(t.wrapping_add(n - 1));
+
+        // Attempt to increment top.
+        if self
+            .top
+            .compare_exchange(t, t.wrapping_add(n), SeqCst, Relaxed)
+            .is_ok()
+        {
+            // self.bottom.store(t.wrapping_add(n), Relaxed);
+            Data(data)
+        } else {
+            forget(data); // Someone else stole this value
+                          // for _ in 0..n - 1 {
+                          //     let x = buf.pop();
+                          //     forget(x);
+                          // }
             Abort
         }
     }
