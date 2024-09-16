@@ -111,7 +111,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.new_incs_count as usize + 1 > Self::CAPACITY {
             self.flush();
         }
-        if cfg!(feature = "flush_half") {
+        if cfg!(feature = "push") {
             if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
                 self.flush_half_slots();
             }
@@ -324,7 +324,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.new_incs.is_empty() || !self.new_inc_slices.is_empty() {
-            let new_incs = if cfg!(feature = "flush_half") && self.new_incs.len() > 1 {
+            let new_incs = if cfg!(feature = "push") && self.new_incs.len() > 1 {
                 let half = self.new_incs.len() / 2;
                 self.new_incs.split_off(half)
             } else {
