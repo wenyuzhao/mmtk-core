@@ -1,6 +1,7 @@
 use crate::plan::Mutator;
 use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::GCWorker;
+use crate::scheduler::WorkBucketStage;
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::util::VMMutatorThread;
@@ -119,6 +120,10 @@ pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
 ///     it needs to be moved between threads.
 pub trait RootsWorkFactory<SL: Slot>: Clone + Send + 'static {
     const BUFFER_SIZE: usize = crate::args::BUFFER_SIZE;
+
+    fn roots_stage(&self) -> WorkBucketStage {
+        WorkBucketStage::Prepare
+    }
     // TODO:
     // 1.  Rename the functions and remove the repeating `create_process_` and `_work`.
     // 2.  Rename the functions to reflect both the form (slots / nodes) and the semantics (pinning

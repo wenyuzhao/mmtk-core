@@ -232,13 +232,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.incs.is_empty() {
             let incs = self.incs.take();
             self.lxr.rc.increase_inc_buffer_size(incs.len());
-            // self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
-            //     _,
-            //     EDGE_KIND_MATURE,
-            // >::new(
-            //     incs, self.lxr
-            // ));
-            unimplemented!()
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(ProcessIncs::<
+                _,
+                EDGE_KIND_MATURE,
+            >::new(
+                incs, self.lxr
+            ));
         }
     }
 
@@ -262,8 +261,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             if crate::args::LAZY_DECREMENTS {
                 self.mmtk.scheduler.postpone_prioritized(w);
             } else {
-                // self.mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(w);
-                unimplemented!()
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(w);
             }
         }
     }

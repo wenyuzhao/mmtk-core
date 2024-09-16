@@ -161,18 +161,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         if count != 0 {
             lxr.immix_space.pr.bulk_release_blocks(count);
         }
-        unimplemented!()
-        // if count != 0
-        //     && (lxr.current_pause().is_none()
-        //         || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
-        // {
-        //     lxr.immix_space
-        //         .num_clean_blocks_released_mature
-        //         .fetch_add(count, Ordering::Relaxed);
-        //     lxr.immix_space
-        //         .num_clean_blocks_released_lazy
-        //         .fetch_add(count, Ordering::Relaxed);
-        // }
+        if count != 0
+            && (lxr.current_pause().is_none()
+                || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
+        {
+            lxr.immix_space
+                .num_clean_blocks_released_mature
+                .fetch_add(count, Ordering::Relaxed);
+            lxr.immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(count, Ordering::Relaxed);
+        }
     }
 }
 
@@ -270,19 +269,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCyclesChunk<VM> {
             }
         }
         immix_space.pr.bulk_release_blocks(dead_blocks);
-        // if dead_blocks != 0
-        //     && (lxr.current_pause().is_none()
-        //         || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
-        // {
-        //     lxr.immix_space
-        //         .num_clean_blocks_released_mature
-        //         .fetch_add(dead_blocks, Ordering::Relaxed);
-        //     lxr.immix_space
-        //         .num_clean_blocks_released_lazy
-        //         .fetch_add(dead_blocks, Ordering::Relaxed);
-        // }
-
-        unimplemented!()
+        if dead_blocks != 0
+            && (lxr.current_pause().is_none()
+                || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
+        {
+            lxr.immix_space
+                .num_clean_blocks_released_mature
+                .fetch_add(dead_blocks, Ordering::Relaxed);
+            lxr.immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(dead_blocks, Ordering::Relaxed);
+        }
     }
 }
 

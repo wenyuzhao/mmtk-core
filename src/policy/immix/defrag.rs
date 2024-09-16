@@ -85,7 +85,7 @@ impl Defrag {
                 || (collect_whole_heap && user_triggered && full_heap_system_gc))
             && !rc_enabled
             && !concurrent_marking_enabled;
-        if cfg!(feature = "ix_always_defrag")  {
+        if cfg!(feature = "ix_always_defrag") {
             in_defrag = true;
         }
         info!("Defrag: {}", in_defrag);

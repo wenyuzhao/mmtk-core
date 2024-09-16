@@ -3,7 +3,6 @@ use crossbeam::deque::Steal;
 use self::global_state::GcStatus;
 use self::util::address::CLDScanPolicy;
 use self::util::address::RefScanPolicy;
-use self::util::deque::Stolen;
 use self::worker::GCWorkerShared;
 use super::work_bucket::WorkBucketStage;
 use super::*;
@@ -260,10 +259,16 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         );
         mmtk.scheduler.set_in_gc_pause(true);
         gc_log!([3] "Discovered {} mutators", n);
+        let is_lxr = mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_some();
         if BULK_THREAD_SCAN {
             let n_workers: usize = mmtk.scheduler.num_workers();
+            let stage = if is_lxr {
+                WorkBucketStage::RCProcessIncs
+            } else {
+                WorkBucketStage::Prepare
+            };
             for ms in mutators.chunks(std::cmp::max(mutators.len() / n_workers / 2, 1)) {
-                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                mmtk.scheduler.work_buckets[stage]
                     .add(ScanMultipleStacks::<C>(ms.to_vec(), PhantomData));
             }
         }
@@ -410,7 +415,7 @@ pub struct VMForwardWeakRefs<E: ProcessEdgesWork> {
 }
 
 impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
-    pub fn new() -> Self {
+    pub fn _new() -> Self {
         Self {
             phantom_data: PhantomData,
         }
@@ -418,7 +423,7 @@ impl<E: ProcessEdgesWork> VMForwardWeakRefs<E> {
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("VMForwardWeakRefs");
 
         // let stage = WorkBucketStage::VMRefForwarding;
@@ -858,14 +863,20 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
 impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = VM>>
     RootsWorkFactory<VM::VMSlot> for ProcessEdgesWorkRootsWorkFactory<VM, DPE, PPE>
 {
+    fn roots_stage(&self) -> WorkBucketStage {
+        if DPE::RC_ROOTS {
+            WorkBucketStage::RCProcessIncs
+        } else {
+            WorkBucketStage::Prepare
+        }
+    }
     fn create_process_roots_work(&mut self, slots: Vec<VM::VMSlot>, kind: RootKind) {
         let mut w = DPE::new(
             slots,
             true,
             self.mmtk,
             if DPE::RC_ROOTS {
-                // WorkBucketStage::RCProcessIncs
-                unimplemented!()
+                WorkBucketStage::RCProcessIncs
             } else {
                 WorkBucketStage::Closure
             },
@@ -874,8 +885,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
         crate::memory_manager::add_work_packet(
             self.mmtk,
             if DPE::RC_ROOTS {
-                // WorkBucketStage::RCProcessIncs
-                unimplemented!()
+                WorkBucketStage::RCProcessIncs
             } else {
                 WorkBucketStage::Closure
             },

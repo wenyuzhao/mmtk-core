@@ -140,9 +140,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         for w in cm_packets {
             postponed_concurrent_work.push(w)
         }
-        // self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
-
-        unimplemented!()
+        if !no_postpone.is_empty() {
+            self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
+        }
     }
 
     pub fn postpone(&self, w: impl GCWork<VM>) {

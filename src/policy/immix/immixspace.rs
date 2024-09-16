@@ -493,9 +493,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     unimplemented!("cyclic mark bits is not supported at the moment");
             // }
             // Reset block mark and object mark table.
-            // let work_packets = self.generate_lxr_full_trace_prepare_tasks();
-            // self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
-            unimplemented!()
+            let work_packets = self.generate_lxr_full_trace_prepare_tasks();
+            self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
         }
     }
 
@@ -604,11 +603,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {
-                // self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep]
-                //     .bulk_add(dead_cycle_sweep_packets);
-                // self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(sweep_los);
-
-                unimplemented!()
+                self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep]
+                    .bulk_add(dead_cycle_sweep_packets);
+                self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(sweep_los);
             }
         }
     }
@@ -1065,8 +1062,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock().unwrap());
-        // self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
-        unimplemented!()
+        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
     }
 
     pub fn trace_object_without_moving_rc(
