@@ -32,6 +32,13 @@ use crate::Timer;
 
 static TOTAL_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
 static UTILIZATIONS: SegQueue<f32> = SegQueue::new();
+
+static INC_UTILIZATIONS: SegQueue<f32> = SegQueue::new();
+
+static TOTAL_INC_TIME_US: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_INC_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
+static INC_START: Timer = Timer::new();
+
 static TRACE_UTILIZATIONS: SegQueue<f32> = SegQueue::new();
 
 static TOTAL_TRACE_TIME_US: AtomicUsize = AtomicUsize::new(0);

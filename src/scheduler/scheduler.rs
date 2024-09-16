@@ -822,22 +822,34 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
+        let inc_bucket_opened = self.work_buckets[WorkBucketStage::RCProcessIncs].is_activated()
+            && self.bucket_update_progress.load(Ordering::SeqCst)
+                <= WorkBucketStage::RCProcessIncs.into_usize();
         let closure_bucket_opened = self.work_buckets[WorkBucketStage::Closure].is_activated()
             && self.bucket_update_progress.load(Ordering::SeqCst)
                 <= WorkBucketStage::Closure.into_usize();
         if self.update_buckets() {
             trace!("Some buckets are opened.");
             if crate::inside_harness() {
-                if !closure_bucket_opened
-                    && self.bucket_update_progress.load(Ordering::SeqCst)
-                        == WorkBucketStage::Closure.into_usize()
-                {
+                let progress = self.bucket_update_progress.load(Ordering::SeqCst);
+                // if !inc_bucket_opened && progress == WorkBucketStage::RCProcessIncs.into_usize() {
+                //     super::INC_START.start();
+                // }
+                if inc_bucket_opened && progress > WorkBucketStage::RCProcessIncs.into_usize() {
+                    // let inc_us = super::INC_START.elapsed().as_micros();
+                    let inc_us = crate::GC_START_TIME.elapsed().as_micros();
+                    super::TOTAL_INC_TIME_US.fetch_add(inc_us as usize, Ordering::SeqCst);
+                    let total_inc_us = inc_us * self.num_workers() as u128;
+                    let busy_us = super::TOTAL_INC_BUSY_TIME_US.load(Ordering::SeqCst);
+                    let utilization: f32 = busy_us as f32 / total_inc_us as f32;
+                    assert!(utilization <= 1.0, "{busy_us:.3} {total_inc_us:.3}");
+                    super::INC_UTILIZATIONS.push(utilization);
+                }
+
+                if !closure_bucket_opened && progress == WorkBucketStage::Closure.into_usize() {
                     super::TRACE_START.start();
                 }
-                if closure_bucket_opened
-                    && self.bucket_update_progress.load(Ordering::SeqCst)
-                        > WorkBucketStage::Closure.into_usize()
-                {
+                if closure_bucket_opened && progress > WorkBucketStage::Closure.into_usize() {
                     let trace_us = super::TRACE_START.elapsed().as_micros();
                     super::TOTAL_TRACE_TIME_US.fetch_add(trace_us as usize, Ordering::SeqCst);
                     let total_trace_us = trace_us * self.num_workers() as u128;
@@ -926,6 +938,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
         super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
         super::TOTAL_TRACE_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_INC_BUSY_TIME_US.store(0, Ordering::SeqCst);
         let utilization: f32 = busy_us as f32 / stw_us as f32;
         if crate::inside_harness() {
             // println!("Utilization: {stw_us} / {busy_us} = {utilization:.2}");
@@ -1046,6 +1059,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
+        // Total utilization
         let mut utilizations = vec![];
         while let Some(x) = super::UTILIZATIONS.pop() {
             utilizations.push(x);
@@ -1068,6 +1082,37 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         stat.insert("utilization.min".to_owned(), format!("{:.2}", min));
         stat.insert("utilization.max".to_owned(), format!("{:.2}", max));
         stat.insert("utilization.geomean".to_owned(), format!("{:.2}", geomean));
+        // RC incs and roots utilization
+        let mut utilizations = vec![];
+        while let Some(x) = super::INC_UTILIZATIONS.pop() {
+            utilizations.push(x);
+        }
+        println!("INC Utilization: {:?}", utilizations);
+        let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
+        let min = utilizations
+            .iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let max = utilizations
+            .iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let geomean = utilizations
+            .iter()
+            .product::<f32>()
+            .powf(1.0 / utilizations.len() as f32);
+        stat.insert("rc.utilization.mean".to_owned(), format!("{:.2}", mean));
+        stat.insert("rc.utilization.min".to_owned(), format!("{:.2}", min));
+        stat.insert("rc.utilization.max".to_owned(), format!("{:.2}", max));
+        stat.insert(
+            "rc.utilization.geomean".to_owned(),
+            format!("{:.2}", geomean),
+        );
+        let inc_time = super::TOTAL_TRACE_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "rc.time.stw".to_owned(),
+            format!("{:.2}", inc_time as f64 / 1000.0),
+        );
         // Trace utilization
         let mut utilizations = vec![];
         while let Some(x) = super::TRACE_UTILIZATIONS.pop() {

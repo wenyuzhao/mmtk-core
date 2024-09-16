@@ -332,10 +332,13 @@ impl<VM: VMBinding> GCWorker<VM> {
             let us = t.elapsed().as_micros();
             if record && !self.scheduler.in_concurrent() {
                 super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
-                if self.scheduler.work_buckets[WorkBucketStage::Closure].is_activated()
-                    && !self.scheduler.work_buckets[WorkBucketStage::WeakRefClosure].is_activated()
-                {
+                use WorkBucketStage::*;
+                let buckets = &self.scheduler.work_buckets;
+                if buckets[Closure].is_activated() && !buckets[SoftRefClosure].is_activated() {
                     super::TOTAL_TRACE_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
+                if buckets[Initial].is_activated() && !buckets[Prepare].is_activated() {
+                    super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
                 }
             }
             flush_logs!();
