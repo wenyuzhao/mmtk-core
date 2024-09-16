@@ -332,6 +332,7 @@ tracing = ["probe"]
 lifo = []
 flush_half = []
 no_stack = []
+# Work-item stealing
 steal = []
 fast_fence = []
 push = []

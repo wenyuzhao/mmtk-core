@@ -626,7 +626,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         result
     }
 
-    pub(super) fn get_random_steal_index(
+    pub fn get_random_steal_index(
         worker_id: usize,
         hash_seed: &AtomicUsize,
         n: usize,
@@ -666,7 +666,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    pub(super) fn try_steal(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
+    pub fn try_steal(&self, worker: &GCWorker<VM>) -> Steal<Box<dyn GCWork<VM>>> {
         for _ in 0..self.worker_group.workers_shared.len() * 2 {
             if let Steal::Success(slot) = Self::steal_best_of_2(
                 worker.ordinal,
