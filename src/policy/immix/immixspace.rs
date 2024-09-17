@@ -748,30 +748,54 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepDeadCyclesChunk::new(
-                chunk,
-                LazySweepingJobsCounter::new_decs(),
-            ))
-        })
+        if crate::args().batched_chunk_packets {
+            self.chunk_map.generate_tasks2(|chunks| {
+                Box::new(SweepDeadCyclesChunkBulk::new(
+                    chunks,
+                    LazySweepingJobsCounter::new_decs(),
+                ))
+            })
+        } else {
+            self.chunk_map.generate_tasks(|chunk| {
+                Box::new(SweepDeadCyclesChunk::new(
+                    chunk,
+                    LazySweepingJobsCounter::new_decs(),
+                ))
+            })
+        }
     }
 
     /// Generate chunk sweep work packets.
     fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
         let rc_enabled = self.rc_enabled;
         let cm_enabled = self.cm_enabled;
-        self.chunk_map.generate_tasks(|chunk| {
-            Box::new(PrepareChunk {
-                chunk,
-                rc_enabled,
-                cm_enabled,
+        if crate::args().batched_chunk_packets {
+            self.chunk_map.generate_tasks2(|chunks| {
+                Box::new(PrepareChunkBulk {
+                    chunks,
+                    rc_enabled,
+                    cm_enabled,
+                })
             })
-        })
+        } else {
+            self.chunk_map.generate_tasks(|chunk| {
+                Box::new(PrepareChunk {
+                    chunk,
+                    rc_enabled,
+                    cm_enabled,
+                })
+            })
+        }
     }
 
     pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map
-            .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
+        if crate::args().batched_chunk_packets {
+            self.chunk_map
+                .generate_tasks2(|chunks| Box::new(ConcurrentChunkMetadataZeroingBulk { chunks }))
+        } else {
+            self.chunk_map
+                .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
+        }
     }
 
     /// Dump fragmentation distribution and heap usage
