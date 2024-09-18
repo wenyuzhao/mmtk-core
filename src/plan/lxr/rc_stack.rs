@@ -336,7 +336,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     #[cold]
     fn flush(&mut self) {
         if !self.incs.is_empty() || !self.inc_slices.is_empty() {
-            let new_incs = if cfg!(feature = "push") && self.incs.len() > 1 {
+            let new_incs = if cfg!(feature = "flush_half") && self.incs.len() > 1 {
                 let half = self.incs.len() / 2;
                 self.incs.split_off(half)
             } else {
@@ -782,8 +782,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     self.inc_slices_count -= s.len() as usize;
                     self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
                 }
-                if !self.incs.is_empty() || !self.inc_slices.is_empty() || !worker.deque.is_empty()
-                {
+                if !self.incs.is_empty() || !worker.deque.is_empty() {
                     continue;
                 }
                 let workers = &self.worker().scheduler().worker_group.workers_shared;
