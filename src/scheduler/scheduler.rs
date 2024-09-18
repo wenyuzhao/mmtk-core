@@ -1064,6 +1064,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         while let Some(x) = super::UTILIZATIONS.pop() {
             utilizations.push(x);
         }
+        if utilizations.len() == 0 {
+            utilizations.push(-1.0);
+        }
         let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
         let min = utilizations
             .iter()
@@ -1086,6 +1089,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut utilizations = vec![];
         while let Some(x) = super::INC_UTILIZATIONS.pop() {
             utilizations.push(x);
+        }
+        if utilizations.len() == 0 {
+            utilizations.push(-1.0);
         }
         println!("INC Utilization: {:?}", utilizations);
         let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
@@ -1117,6 +1123,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut utilizations = vec![];
         while let Some(x) = super::TRACE_UTILIZATIONS.pop() {
             utilizations.push(x);
+        }
+        if utilizations.len() == 0 {
+            utilizations.push(-1.0);
         }
         println!("TRACE Utilization: {:?}", utilizations);
         let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
