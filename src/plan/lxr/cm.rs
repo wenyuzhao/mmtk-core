@@ -46,8 +46,8 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     objects_arc: Option<Arc<Vec<ObjectReference>>>,
     ref_arrays: Option<Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>>,
     // recursively generated objects
-    next_objects: VectorQueue<ObjectReference>,
-    next_ref_arrays: VectorQueue<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    next_objects: Vec<ObjectReference>,
+    next_ref_arrays: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
     next_ref_arrays_size: usize,
     rc: RefCountHelper<VM>,
     #[cfg(feature = "measure_trace_rate")]
@@ -68,8 +68,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             objects: Some(objects),
             objects_arc: None,
             ref_arrays: None,
-            next_objects: VectorQueue::default(),
-            next_ref_arrays: VectorQueue::default(),
+            next_objects: Default::default(),
+            next_ref_arrays: Default::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
@@ -90,8 +90,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             objects: None,
             objects_arc: Some(objects),
             ref_arrays: None,
-            next_objects: VectorQueue::default(),
-            next_ref_arrays: VectorQueue::default(),
+            next_objects: Default::default(),
+            next_ref_arrays: Default::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
@@ -112,8 +112,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             objects: None,
             objects_arc: None,
             ref_arrays: Some(arrays),
-            next_objects: VectorQueue::default(),
-            next_ref_arrays: VectorQueue::default(),
+            next_objects: Default::default(),
+            next_ref_arrays: Default::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
@@ -132,7 +132,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     #[cold]
     fn flush_arrs(&mut self) {
         if !self.next_ref_arrays.is_empty() {
-            let next_ref_arrays = self.next_ref_arrays.take();
+            let next_ref_arrays = std::mem::take(&mut self.next_ref_arrays);
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
@@ -147,7 +147,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     #[cold]
     fn flush_objs(&mut self) {
         if !self.next_objects.is_empty() {
-            let objects = self.next_objects.take();
+            let objects = std::mem::take(&mut self.next_objects);
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new(objects, worker.mmtk);
@@ -243,6 +243,28 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             } else {
                 self.trace_slice::<false, false>(slice)
             }
+        }
+    }
+
+    #[inline]
+    fn trace_slice_entry(&mut self, entry: &(ObjectReference, Address, usize, VM::VMMemorySlice)) {
+        let (o, cls, size, slice) = entry;
+        if !(o.class_pointer::<VM>() == *cls
+            && o.get_size::<VM>() == *size
+            && !self.rc.object_or_line_is_dead(*o))
+        {
+            return;
+        }
+        let ix = self.plan.immix_space.in_space(*o);
+        if ix {
+            let src_in_defrag = self.plan.in_defrag(*o);
+            if src_in_defrag {
+                self.trace_slice::<true, true>(slice)
+            } else {
+                self.trace_slice::<false, true>(slice)
+            }
+        } else {
+            self.trace_slice::<false, false>(slice)
         }
     }
 
@@ -345,19 +367,35 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         }
         let pause_opt = self.plan.current_pause();
         if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
-            let mut next_objects = vec![];
-            let mut next_ref_arrays = vec![];
-            while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
-                let pause_opt = self.plan.current_pause();
-                if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
-                    break;
+            // Drain the stack
+            if !cfg!(feature = "no_stack") {
+                while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
+                    let pause_opt = self.plan.current_pause();
+                    if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+                        break;
+                    }
+                    while let Some(o) = self.next_objects.pop() {
+                        self.trace_object(o);
+                    }
+                    while let Some(e) = self.next_ref_arrays.pop() {
+                        self.trace_slice_entry(&e);
+                    }
                 }
-                next_objects.clear();
-                next_ref_arrays.clear();
-                self.next_objects.swap(&mut next_objects);
-                self.trace_objects(&next_objects);
-                self.next_ref_arrays.swap(&mut next_ref_arrays);
-                self.trace_arrays(&next_ref_arrays);
+            } else {
+                let mut next_objects = vec![];
+                let mut next_ref_arrays = vec![];
+                while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
+                    let pause_opt = self.plan.current_pause();
+                    if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+                        break;
+                    }
+                    next_objects.clear();
+                    next_ref_arrays.clear();
+                    std::mem::swap(&mut self.next_objects, &mut next_objects);
+                    self.trace_objects(&next_objects);
+                    std::mem::swap(&mut self.next_ref_arrays, &mut next_ref_arrays);
+                    self.trace_arrays(&next_ref_arrays);
+                }
             }
         }
         self.flush();
