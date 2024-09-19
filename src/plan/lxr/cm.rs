@@ -1,6 +1,5 @@
 use super::LXR;
 use crate::plan::immix::Pause;
-use crate::plan::VectorQueue;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
@@ -1209,6 +1208,15 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             } else {
                 while let Some(s) = self.next_slots.pop() {
                     self.process_slot(s);
+                }
+            }
+        } else {
+            let mut slots = vec![];
+            while !self.next_slots.is_empty() {
+                slots.clear();
+                std::mem::swap(&mut self.next_slots, &mut slots);
+                for s in &slots {
+                    self.process_slot(*s);
                 }
             }
         }
