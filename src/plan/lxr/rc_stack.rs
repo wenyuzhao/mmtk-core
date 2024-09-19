@@ -606,41 +606,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         }
         None
     }
-
-    fn steal_best_of_2<const BULK: bool>(
-        worker: &GCWorker<VM>,
-        workers: &[Arc<GCWorkerShared<VM>>],
-    ) -> Option<VM::VMSlot> {
-        let n = workers.len();
-        if n > 2 {
-            let (k1, k2) =
-                GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
-            let sz1 = workers[k1].deque_stealer.size();
-            let sz2 = workers[k2].deque_stealer.size();
-            if sz1 < sz2 {
-                return workers[k2]
-                    .deque_stealer
-                    .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
-                    .ok()
-                    .map(|x| x.0);
-            } else {
-                return workers[k1]
-                    .deque_stealer
-                    .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
-                    .ok()
-                    .map(|x| x.0);
-            }
-        } else if n == 2 {
-            let k = (worker.ordinal + 1) % 2;
-            return workers[k]
-                .deque_stealer
-                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
-                .ok()
-                .map(|x| x.0);
-        } else {
-            return None;
-        }
-    }
 }
 
 pub type EdgeKind = u8;
@@ -771,7 +736,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         }
         if cfg!(feature = "steal") {
             let worker = self.worker();
-            let mut depth = self.depth;
+            let depth = self.depth;
             'outer: loop {
                 // depth += 1;
                 // Drain local stack
@@ -786,20 +751,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                     continue;
                 }
                 let workers = &self.worker().scheduler().worker_group.workers_shared;
-                // Steal from other workers
-                // if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
-                //     || (worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
-                //         .is_activated()
-                //         && !worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
-                //             .is_empty())
-                //     || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].is_empty()
-                //     || !worker.local_work_buffer.is_empty()
-                // {
-                //     break;
-                // }
-                assert!(self.incs.is_empty());
-                assert!(self.inc_slices.is_empty());
-                assert!(worker.deque.is_empty());
                 if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
                     worker.cache = Some(w);
                     break;
@@ -807,16 +758,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 let n = workers.len();
                 for _i in 0..n / 2 {
                     const BULK: bool = cfg!(feature = "steal_bulk");
-                    if let Some(s) = Self::steal_best_of_2::<BULK>(worker, workers) {
+                    if let Some(s) = steal_best_of_2::<VM, BULK>(worker, workers) {
                         self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
                         continue 'outer;
                     }
                 }
                 break;
             }
-            assert!(self.incs.is_empty());
-            assert!(self.inc_slices.is_empty());
-            assert!(worker.deque.is_empty());
         } else {
             let mut depth = self.depth;
             while self.stack_size() != 0 {
@@ -898,7 +846,7 @@ pub struct ProcessDecs<VM: VMBinding> {
     decs: Option<Vec<ObjectReference>>,
     decs_arc: Option<Arc<Vec<ObjectReference>>>,
     /// Recursively generated new decrements
-    new_decs: VectorQueue<ObjectReference>,
+    stack: Vec<ObjectReference>,
     counter: LazySweepingJobsCounter,
     mark_objects: VectorQueue<ObjectReference>,
     concurrent_marking_in_progress: bool,
@@ -920,7 +868,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         Self {
             decs: Some(decs),
             decs_arc: None,
-            new_decs: VectorQueue::default(),
+            stack: Default::default(),
             counter,
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
@@ -936,7 +884,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         Self {
             decs: None,
             decs_arc: Some(decs),
-            new_decs: VectorQueue::default(),
+            stack: Default::default(),
             counter,
             mark_objects: VectorQueue::default(),
             concurrent_marking_in_progress: false,
@@ -946,8 +894,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     fn recursive_dec(&mut self, o: ObjectReference) {
-        self.new_decs.push(o);
-        if self.new_decs.is_full() {
+        self.stack.push(o);
+        if self.stack.len() >= crate::args::BUFFER_SIZE {
             self.flush()
         }
     }
@@ -963,8 +911,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn flush(&mut self) {
         let mmtk = GCWorker::<VM>::current().mmtk;
-        if !self.new_decs.is_empty() {
-            let new_decs = self.new_decs.take();
+        if !self.stack.is_empty() {
+            let new_decs = std::mem::take(&mut self.stack);
             let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
                 lxr,
@@ -1089,45 +1037,32 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         prefetch_object(o, &self.rc);
     }
 
-    fn process_decs(&mut self, decs: &[ObjectReference], lxr: &LXR<VM>) {
-        for (i, o) in decs.iter().enumerate() {
-            // println!("dec {:?}", o);
-            // if o.is_null() {
-            //     continue;
-            // }
-            if self.rc.is_dead_or_stuck(*o)
-                || (self.mature_sweeping_in_progress && !lxr.is_marked(*o))
-            {
-                continue;
+    #[inline]
+    fn process_dec(&mut self, o: ObjectReference, lxr: &LXR<VM>) {
+        if self.rc.is_dead_or_stuck(o) || (self.mature_sweeping_in_progress && !lxr.is_marked(o)) {
+            return;
+        }
+        let o = if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(o) {
+            object_forwarding::read_forwarding_pointer::<VM>(o)
+        } else {
+            o
+        };
+        let mut dead = false;
+        let mut is_los = false;
+        let result = self.rc.clone().fetch_update(o, |c| {
+            if c == 1 && !dead {
+                dead = true;
+                is_los = self.process_dead_object(o, lxr);
             }
-            let o =
-                if crate::args::RC_MATURE_EVACUATION && object_forwarding::is_forwarded::<VM>(*o) {
-                    object_forwarding::read_forwarding_pointer::<VM>(*o)
-                } else {
-                    *o
-                };
-            let mut dead = false;
-            let mut is_los = false;
-            let result = self.rc.clone().fetch_update(o, |c| {
-                if c == 1 && !dead {
-                    dead = true;
-                    is_los = self.process_dead_object(o, lxr);
-                }
-                debug_assert!(c <= MAX_REF_COUNT);
-                if c == 0 || c == MAX_REF_COUNT {
-                    None /* sticky */
-                } else {
-                    Some(c - 1)
-                }
-            });
-            if result == Ok(1) && is_los {
-                lxr.los().rc_free(o);
+            debug_assert!(c <= MAX_REF_COUNT);
+            if c == 0 || c == MAX_REF_COUNT {
+                None /* sticky */
+            } else {
+                Some(c - 1)
             }
-            if crate::args::PREFETCH {
-                if let Some(o) = decs.get(i + crate::args::PREFETCH_STEP) {
-                    self.prefetch_object(*o);
-                }
-            }
+        });
+        if result == Ok(1) && is_los {
+            lxr.los().rc_free(o);
         }
     }
 }
@@ -1155,22 +1090,16 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             0
         };
         if let Some(decs) = std::mem::take(&mut self.decs) {
-            self.process_decs(&decs, lxr);
+            for o in decs {
+                self.process_dec(o, lxr);
+            }
         } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
-            self.process_decs(&decs, lxr);
+            for o in &*decs {
+                self.process_dec(*o, lxr);
+            }
         }
-        let mut decs = vec![];
-        while !self.new_decs.is_empty() {
-            decs.clear();
-            self.new_decs.swap(&mut decs);
-            let c = decs.len();
-            if cfg!(feature = "rust_mem_counter") {
-                crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(c);
-            }
-            self.process_decs(&decs, lxr);
-            if cfg!(feature = "rust_mem_counter") {
-                crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(c);
-            }
+        while let Some(o) = self.stack.pop() {
+            self.process_dec(o, lxr);
         }
         self.flush();
         if cfg!(feature = "rust_mem_counter") {
@@ -1238,5 +1167,40 @@ impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
 impl<VM: VMBinding> DerefMut for RCImmixCollectRootEdges<VM> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
+    }
+}
+
+fn steal_best_of_2<VM: VMBinding, const BULK: bool>(
+    worker: &GCWorker<VM>,
+    workers: &[Arc<GCWorkerShared<VM>>],
+) -> Option<VM::VMSlot> {
+    let n = workers.len();
+    if n > 2 {
+        let (k1, k2) =
+            GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
+        let sz1 = workers[k1].deque_stealer.size();
+        let sz2 = workers[k2].deque_stealer.size();
+        if sz1 < sz2 {
+            return workers[k2]
+                .deque_stealer
+                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        } else {
+            return workers[k1]
+                .deque_stealer
+                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        }
+    } else if n == 2 {
+        let k = (worker.ordinal + 1) % 2;
+        return workers[k]
+            .deque_stealer
+            .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+            .ok()
+            .map(|x| x.0);
+    } else {
+        return None;
     }
 }
