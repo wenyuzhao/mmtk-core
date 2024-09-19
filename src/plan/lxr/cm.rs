@@ -588,12 +588,13 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     base: ProcessEdgesBase<VM>,
     array_slices: Vec<VM::VMMemorySlice>,
     forwarded_roots: Vec<ObjectReference>,
-    next_slots: VectorQueue<SlotOf<Self>>,
-    next_array_slices: VectorQueue<VM::VMMemorySlice>,
+    next_slots: Vec<SlotOf<Self>>,
+    next_array_slices: Vec<VM::VMMemorySlice>,
     next_slot_count: u32,
     remset_recorded_slots: bool,
     refs: Vec<ObjectReference>,
     should_record_forwarded_roots: bool,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
@@ -634,22 +635,29 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
             pause: Pause::RefCount,
             forwarded_roots: vec![],
             array_slices: vec![],
-            next_slots: VectorQueue::new(),
-            next_array_slices: VectorQueue::new(),
+            next_slots: Vec::new(),
+            next_array_slices: Vec::new(),
             next_slot_count: 0,
             remset_recorded_slots: false,
             refs: vec![],
             should_record_forwarded_roots: false,
+            pushes: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            let slots = self.next_slots.take();
-            let slices = self.next_array_slices.take();
+            let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+                let half = self.next_slots.len() / 2;
+                self.next_slots.split_off(half)
+            } else {
+                std::mem::take(&mut self.next_slots)
+            };
+            let slices = std::mem::take(&mut self.next_array_slices);
             let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
+            self.pushes = self.next_slots.len();
             self.worker()
                 .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
@@ -728,15 +736,104 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         self.remset_recorded_slots = false;
         let should_record_forwarded_roots = self.should_record_forwarded_roots;
         self.should_record_forwarded_roots = false;
-        let mut slots = vec![];
-        let mut slices = vec![];
-        while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            self.next_slot_count = 0;
-            slots.clear();
-            slices.clear();
-            self.next_slots.swap(&mut slots);
-            self.next_array_slices.swap(&mut slices);
-            self.process_slots_impl(&slots, &slices, false);
+        if !cfg!(feature = "no_stack") {
+            if cfg!(feature = "steal") {
+                let worker = GCWorker::<VM>::current();
+                if self.pause == Pause::Full {
+                    'outer: loop {
+                        while let Some(s) = self.next_slots.pop().or_else(|| worker.deque.pop()) {
+                            self.process_slot_impl::<true>(s)
+                        }
+                        while let Some(slice) = self.next_array_slices.pop() {
+                            for s in slice.iter_slots() {
+                                self.process_slot_impl::<true>(s)
+                            }
+                        }
+                        if !self.next_slots.is_empty() || !worker.deque.is_empty() {
+                            continue;
+                        }
+                        let workers = &worker.scheduler().worker_group.workers_shared;
+                        if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                            worker.cache = Some(w);
+                            break;
+                        }
+                        let n = workers.len();
+                        for _i in 0..n / 2 {
+                            if let Some(s) =
+                                worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
+                            {
+                                self.process_slot_impl::<true>(s);
+                                continue 'outer;
+                            }
+                        }
+                        break;
+                    }
+                } else {
+                    'outer: loop {
+                        while let Some(s) = self.next_slots.pop().or_else(|| worker.deque.pop()) {
+                            self.process_slot_impl::<false>(s)
+                        }
+                        while let Some(slice) = self.next_array_slices.pop() {
+                            for s in slice.iter_slots() {
+                                self.process_slot_impl::<false>(s)
+                            }
+                        }
+                        if !self.next_slots.is_empty() || !worker.deque.is_empty() {
+                            continue;
+                        }
+                        let workers = &worker.scheduler().worker_group.workers_shared;
+                        if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                            worker.cache = Some(w);
+                            break;
+                        }
+                        let n = workers.len();
+                        for _i in 0..n / 2 {
+                            if let Some(s) =
+                                worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
+                            {
+                                self.process_slot_impl::<false>(s);
+                                continue 'outer;
+                            }
+                        }
+                        break;
+                    }
+                }
+            } else {
+                if self.pause == Pause::Full {
+                    while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+                        while let Some(s) = self.next_slots.pop() {
+                            self.process_slot_impl::<true>(s)
+                        }
+                        while let Some(slice) = self.next_array_slices.pop() {
+                            for s in slice.iter_slots() {
+                                self.process_slot_impl::<true>(s)
+                            }
+                        }
+                    }
+                } else {
+                    while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+                        while let Some(s) = self.next_slots.pop() {
+                            self.process_slot_impl::<false>(s)
+                        }
+                        while let Some(slice) = self.next_array_slices.pop() {
+                            for s in slice.iter_slots() {
+                                self.process_slot_impl::<false>(s)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let mut slots = vec![];
+            let mut slices = vec![];
+            while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+                self.next_slot_count = 0;
+                slots.clear();
+                slices.clear();
+                std::mem::swap(&mut self.next_slots, &mut slots);
+                std::mem::swap(&mut self.next_array_slices, &mut slices);
+                self.process_slots_impl(&slots, &slices, false);
+            }
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
@@ -748,6 +845,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         }
     }
 
+    #[inline(always)]
     fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             return;
@@ -805,6 +903,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         x
     }
 
+    #[inline(always)]
     fn process_remset_slot(&mut self, slot: SlotOf<Self>, i: usize) {
         let Some(object) = slot.load() else {
             return;
@@ -830,6 +929,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         super::record_slot_for_validation(slot, Some(new_object));
     }
 
+    #[inline(always)]
     fn process_mark_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             return;
@@ -838,6 +938,15 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
         super::record_slot_for_validation(slot, Some(new_object));
         if Self::OVERWRITE_REFERENCE && new_object != object {
             slot.store(Some(new_object));
+        }
+    }
+
+    #[inline(always)]
+    fn process_slot_impl<const FULL: bool>(&mut self, slot: SlotOf<Self>) {
+        if FULL {
+            self.process_mark_slot(slot)
+        } else {
+            self.process_slot(slot)
         }
     }
 
@@ -951,9 +1060,17 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                         if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                             return;
                         }
+                        if cfg!(feature = "steal") {
+                            if self.worker().deque.push(s).is_ok() {
+                                return;
+                            }
+                        }
                         self.next_slots.push(s);
                         self.next_slot_count += 1;
-                        if self.next_slot_count as usize >= Self::CAPACITY {
+                        self.pushes += 1;
+                        if self.next_slot_count as usize >= Self::CAPACITY
+                            || (cfg!(feature = "push") && self.pushes >= 512)
+                        {
                             self.flush();
                         }
                     },
@@ -980,7 +1097,8 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
-    next_slots: VectorQueue<SlotOf<Self>>,
+    next_slots: Vec<SlotOf<Self>>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
@@ -1003,14 +1121,20 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             lxr,
             base,
             pause: Pause::RefCount,
-            next_slots: VectorQueue::new(),
+            next_slots: Vec::new(),
+            pushes: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
-            let slots = self.next_slots.take();
+            let slots = if cfg!(feature = "flush_half") && self.next_slots.len() > 1 {
+                let half = self.next_slots.len() / 2;
+                self.next_slots.split_off(half)
+            } else {
+                std::mem::take(&mut self.next_slots)
+            };
             self.worker().add_boxed_work(
                 WorkBucketStage::Unconstrained,
                 Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
@@ -1059,6 +1183,35 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                 }
             }
         }
+        if !cfg!(feature = "no_stack") {
+            if cfg!(feature = "steal") {
+                let worker = GCWorker::<VM>::current();
+                'outer: loop {
+                    while let Some(s) = self.next_slots.pop().or_else(|| worker.deque.pop()) {
+                        self.process_slot(s);
+                    }
+                    let workers = &worker.scheduler().worker_group.workers_shared;
+                    if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                        worker.cache = Some(w);
+                        break;
+                    }
+                    let n = workers.len();
+                    for _i in 0..n / 2 {
+                        if let Some(s) =
+                            worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
+                        {
+                            self.process_slot(s);
+                            continue 'outer;
+                        }
+                    }
+                    break;
+                }
+            } else {
+                while let Some(s) = self.next_slots.pop() {
+                    self.process_slot(s);
+                }
+            }
+        }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
         }
@@ -1079,8 +1232,16 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
             crate::record_live_bytes(object.get_size::<VM>());
         }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |s, _| {
+            if cfg!(feature = "steal") {
+                if self.worker().deque.push(s).is_ok() {
+                    return;
+                }
+            }
             self.next_slots.push(s);
-            if self.next_slots.is_full() {
+            self.pushes += 1;
+            if self.next_slots.len() > crate::args::BUFFER_SIZE
+                || (cfg!(feature = "push") && self.pushes >= 512)
+            {
                 self.flush();
             }
         })
