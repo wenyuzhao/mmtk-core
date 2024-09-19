@@ -32,7 +32,6 @@ pub(crate) struct RuntimeArgs {
     pub(crate) min_reuse_lines: usize,
     pub(crate) chunk_defarg_percent: usize,
     pub(crate) transparent_hugepage: bool,
-    pub(crate) batched_chunk_packets: bool,
 }
 
 impl Default for RuntimeArgs {
@@ -98,7 +97,6 @@ impl Default for RuntimeArgs {
             transparent_hugepage: env_bool_arg("TRANSPARENT_HUGEPAGE")
                 .or(env_bool_arg("HUGEPAGE"))
                 .unwrap_or(true),
-            batched_chunk_packets: env_bool_arg("BATCHED_CHUNK_PACKETS").unwrap_or(false),
         }
     }
 }

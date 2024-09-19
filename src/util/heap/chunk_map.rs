@@ -115,7 +115,7 @@ impl ChunkMap {
         work_packets
     }
 
-    pub fn generate_tasks2<VM: VMBinding>(
+    pub fn generate_tasks_batched<VM: VMBinding>(
         &self,
         func: impl Fn(Range<Chunk>) -> Box<dyn GCWork<VM>>,
     ) -> Vec<Box<dyn GCWork<VM>>> {
