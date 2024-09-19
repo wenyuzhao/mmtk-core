@@ -852,6 +852,7 @@ pub struct ProcessDecs<VM: VMBinding> {
     concurrent_marking_in_progress: bool,
     mature_sweeping_in_progress: bool,
     rc: RefCountHelper<VM>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> ProcessDecs<VM> {
@@ -874,6 +875,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             concurrent_marking_in_progress: false,
             mature_sweeping_in_progress: false,
             rc: RefCountHelper::NEW,
+            pushes: 0,
         }
     }
 
@@ -890,12 +892,16 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             concurrent_marking_in_progress: false,
             mature_sweeping_in_progress: false,
             rc: RefCountHelper::NEW,
+            pushes: 0,
         }
     }
 
     fn recursive_dec(&mut self, o: ObjectReference) {
         self.stack.push(o);
-        if self.stack.len() >= crate::args::BUFFER_SIZE {
+        self.pushes += 1;
+        if self.stack.len() >= crate::args::BUFFER_SIZE
+            || (cfg!(feature = "push") && self.pushes >= 512)
+        {
             self.flush()
         }
     }
@@ -912,12 +918,18 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     fn flush(&mut self) {
         let mmtk = GCWorker::<VM>::current().mmtk;
         if !self.stack.is_empty() {
-            let new_decs = std::mem::take(&mut self.stack);
+            let new_decs = if cfg!(feature = "flush_half") && self.stack.len() > 1 {
+                let half = self.stack.len() / 2;
+                self.stack.split_off(half)
+            } else {
+                std::mem::take(&mut self.stack)
+            };
             let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
             self.new_work(
                 lxr,
                 ProcessDecs::new(new_decs, self.counter.clone_with_decs()),
             );
+            self.pushes = self.stack.len();
         }
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
