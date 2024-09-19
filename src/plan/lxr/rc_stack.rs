@@ -356,7 +356,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
 
     #[cold]
     fn flush_half_slots(&mut self) {
-        let new_incs = if self.incs.len() > 1 {
+        let new_incs = if cfg!(feature = "flush_half") && self.incs.len() > 1 {
             let half = self.incs.len() / 2;
             self.incs.split_off(half)
         } else {

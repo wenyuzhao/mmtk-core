@@ -56,6 +56,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     #[cfg(feature = "measure_trace_rate")]
     enqueued_objs: usize,
     worker: *mut GCWorker<VM>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -86,6 +87,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
+            pushes: 0,
         }
     }
 
@@ -109,6 +111,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
+            pushes: 0,
         }
     }
 
@@ -132,13 +135,14 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
+            pushes: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
         self.flush_arrs();
-        self.flush_objs();
+        self.flush_objs(true);
     }
 
     #[cold]
@@ -157,12 +161,18 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     #[cold]
-    fn flush_objs(&mut self) {
+    fn flush_objs(&mut self, all: bool) {
         if !self.next_objects.is_empty() {
-            let objects = std::mem::take(&mut self.next_objects);
+            let objects = if cfg!(feature = "flush_half") && self.next_objects.len() > 1 && !all {
+                let half = self.next_objects.len() / 2;
+                self.next_objects.split_off(half)
+            } else {
+                std::mem::take(&mut self.next_objects)
+            };
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new(objects, worker.mmtk);
+            self.pushes = self.next_objects.len();
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
@@ -304,8 +314,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     }
                 }
                 self.next_objects.push(t);
-                if self.next_objects.len() > Self::SATB_BUFFER_SIZE {
-                    self.flush_objs();
+                self.pushes += 1;
+                if self.next_objects.len() > Self::SATB_BUFFER_SIZE
+                    || (cfg!(feature = "push") && self.pushes >= 8192)
+                {
+                    self.flush_objs(false);
                 }
             },
         );
