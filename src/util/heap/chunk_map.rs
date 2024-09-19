@@ -122,7 +122,7 @@ impl ChunkMap {
         let mut work_packets: Vec<Box<dyn GCWork<VM>>> = vec![];
         let chunk_range = self.chunk_range.lock();
         let chunks = (chunk_range.end.start() - chunk_range.start.start()) >> Chunk::LOG_BYTES;
-        let num_bins = GCWorker::<VM>::current().mmtk.scheduler.num_workers() * 2;
+        let num_bins = GCWorker::<VM>::current().mmtk.scheduler.num_workers() * 4;
         let bin_size = (chunks + num_bins - 1) / num_bins;
         for i in (0..chunks).step_by(bin_size) {
             let start = chunk_range.start.next_nth(i);
