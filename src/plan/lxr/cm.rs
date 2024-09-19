@@ -19,6 +19,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use crossbeam::deque::Steal;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_trace_rate")]
 use std::sync::atomic::AtomicUsize;
@@ -54,9 +55,17 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     scanned_non_null_slots: usize,
     #[cfg(feature = "measure_trace_rate")]
     enqueued_objs: usize,
+    worker: *mut GCWorker<VM>,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
+    const SATB_BUFFER_SIZE: usize = 8192;
+
+    #[inline(always)]
+    fn worker(&self) -> &GCWorker<VM> {
+        unsafe { &*self.worker }
+    }
+
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
@@ -76,6 +85,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -98,6 +108,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -120,6 +131,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -286,8 +298,13 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
+                if cfg!(feature = "steal") {
+                    if self.worker().satb_deque.push(t).is_ok() {
+                        return;
+                    }
+                }
                 self.next_objects.push(t);
-                if self.next_objects.len() > 8192 {
+                if self.next_objects.len() > Self::SATB_BUFFER_SIZE {
                     self.flush_objs();
                 }
             },
@@ -313,7 +330,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 for chunk in data.chunks(1024) {
                     self.next_ref_arrays_size += chunk.len();
                     self.next_ref_arrays.push((object, cls, len, chunk));
-                    if self.next_ref_arrays_size > 8192 {
+                    if self.next_ref_arrays_size > Self::SATB_BUFFER_SIZE {
                         self.flush_arrs();
                     }
                 }
@@ -339,6 +356,8 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
     }
 }
 
+unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
+
 impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn should_defer(&self) -> bool {
         crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
@@ -346,7 +365,8 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
@@ -369,16 +389,56 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
             // Drain the stack
             if !cfg!(feature = "no_stack") {
-                while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
-                    let pause_opt = self.plan.current_pause();
-                    if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+                if cfg!(feature = "steal") {
+                    let worker = GCWorker::<VM>::current();
+                    'outer: loop {
+                        let pause_opt = self.plan.current_pause();
+                        if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+                            break;
+                        }
+                        // depth += 1;
+                        // Drain local stack
+                        while let Some(o) =
+                            self.next_objects.pop().or_else(|| worker.satb_deque.pop())
+                        {
+                            self.trace_object(o);
+                        }
+                        while let Some(e) = self.next_ref_arrays.pop() {
+                            self.trace_slice_entry(&e);
+                        }
+                        if !self.next_objects.is_empty() || !worker.satb_deque.is_empty() {
+                            continue;
+                        }
+                        let workers = &worker.scheduler().worker_group.workers_shared;
+                        if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                            worker.cache = Some(w);
+                            break;
+                        }
+                        let n = workers.len();
+                        for _i in 0..n / 2 {
+                            if let Some(o) =
+                                worker.steal_best_of_2(&worker.satb_deque, workers, |x| {
+                                    &x.satb_deque_stealer
+                                })
+                            {
+                                self.trace_object(o);
+                                continue 'outer;
+                            }
+                        }
                         break;
                     }
-                    while let Some(o) = self.next_objects.pop() {
-                        self.trace_object(o);
-                    }
-                    while let Some(e) = self.next_ref_arrays.pop() {
-                        self.trace_slice_entry(&e);
+                } else {
+                    while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
+                        let pause_opt = self.plan.current_pause();
+                        if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+                            break;
+                        }
+                        while let Some(o) = self.next_objects.pop() {
+                            self.trace_object(o);
+                        }
+                        while let Some(e) = self.next_ref_arrays.pop() {
+                            self.trace_slice_entry(&e);
+                        }
                     }
                 }
             } else {

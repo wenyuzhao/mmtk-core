@@ -853,13 +853,17 @@ pub struct ProcessDecs<VM: VMBinding> {
     mature_sweeping_in_progress: bool,
     rc: RefCountHelper<VM>,
     pushes: usize,
+    worker: *mut GCWorker<VM>,
 }
+
+unsafe impl<VM: VMBinding> Send for ProcessDecs<VM> {}
 
 impl<VM: VMBinding> ProcessDecs<VM> {
     pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
 
+    #[inline(always)]
     fn worker(&self) -> &mut GCWorker<VM> {
-        GCWorker::<VM>::current()
+        unsafe { &mut *self.worker }
     }
 
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
@@ -876,6 +880,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             mature_sweeping_in_progress: false,
             rc: RefCountHelper::NEW,
             pushes: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -893,10 +898,16 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             mature_sweeping_in_progress: false,
             rc: RefCountHelper::NEW,
             pushes: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
     fn recursive_dec(&mut self, o: ObjectReference) {
+        if cfg!(feature = "steal") {
+            if self.worker().obj_deque.push(o).is_ok() {
+                return;
+            }
+        }
         self.stack.push(o);
         self.pushes += 1;
         if self.stack.len() >= crate::args::BUFFER_SIZE
@@ -1080,10 +1091,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if cfg!(feature = "lxr_no_decs") {
             return;
         }
+        self.worker = worker;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress()
             || (!crate::args::LAZY_DECREMENTS && lxr.current_pause() == Some(Pause::InitialMark));
