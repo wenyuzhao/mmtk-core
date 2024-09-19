@@ -637,7 +637,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
             // # Safety: ImmixSpace reference is always valid within this collection cycle.
             let space = unsafe { &*(self as *const Self) };
-            let work_packets = self.chunk_map.generate_tasks2(|chunks| {
+            let work_packets = self.chunk_map.generate_tasks_batched(|chunks| {
                 Box::new(PrepareBlockState {
                     space,
                     chunks,
@@ -736,7 +736,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space,
             counter: AtomicUsize::new(0),
         });
-        let tasks = self.chunk_map.generate_tasks2(|chunks| {
+        let tasks = self.chunk_map.generate_tasks_batched(|chunks| {
             Box::new(SweepChunk {
                 space,
                 chunks,
@@ -749,9 +749,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map.generate_tasks(|chunk| {
-            Box::new(SweepDeadCyclesChunk::new(
-                chunk,
+        self.chunk_map.generate_tasks_batched(|chunks| {
+            Box::new(SweepDeadCycles::new(
+                chunks,
                 LazySweepingJobsCounter::new_decs(),
             ))
         })
@@ -759,20 +759,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        let rc_enabled = self.rc_enabled;
-        let cm_enabled = self.cm_enabled;
-        self.chunk_map.generate_tasks(|chunk| {
-            Box::new(PrepareChunk {
-                chunk,
-                rc_enabled,
-                cm_enabled,
-            })
-        })
+        assert!(self.rc_enabled && self.cm_enabled);
+        self.chunk_map
+            .generate_tasks_batched(|chunks| Box::new(PrepareChunksForFullGC { chunks }))
     }
 
     pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
         self.chunk_map
-            .generate_tasks(|chunk| Box::new(ConcurrentChunkMetadataZeroing { chunk }))
+            .generate_tasks_batched(|chunks| Box::new(ConcurrentChunkMetadataZeroing { chunks }))
     }
 
     /// Dump fragmentation distribution and heap usage
