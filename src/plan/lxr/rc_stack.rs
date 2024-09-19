@@ -1110,8 +1110,35 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                 self.process_dec(*o, lxr);
             }
         }
-        while let Some(o) = self.stack.pop() {
-            self.process_dec(o, lxr);
+        if cfg!(feature = "steal") {
+            let worker = GCWorker::<VM>::current();
+            'outer: loop {
+                // Drain local stack
+                while let Some(o) = self.stack.pop().or_else(|| worker.obj_deque.pop()) {
+                    self.process_dec(o, lxr);
+                }
+                if !self.stack.is_empty() || !worker.obj_deque.is_empty() {
+                    continue;
+                }
+                let workers = &self.worker().scheduler().worker_group.workers_shared;
+                if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                    worker.cache = Some(w);
+                    break;
+                }
+                let n = workers.len();
+                for _i in 0..n / 2 {
+                    const BULK: bool = cfg!(feature = "steal_bulk");
+                    if let Some(o) = steal_best_of_2_obj::<VM, BULK>(worker, workers) {
+                        self.process_dec(o, lxr);
+                        continue 'outer;
+                    }
+                }
+                break;
+            }
+        } else {
+            while let Some(o) = self.stack.pop() {
+                self.process_dec(o, lxr);
+            }
         }
         self.flush();
         if cfg!(feature = "rust_mem_counter") {
@@ -1210,6 +1237,41 @@ fn steal_best_of_2<VM: VMBinding, const BULK: bool>(
         return workers[k]
             .deque_stealer
             .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+            .ok()
+            .map(|x| x.0);
+    } else {
+        return None;
+    }
+}
+
+fn steal_best_of_2_obj<VM: VMBinding, const BULK: bool>(
+    worker: &GCWorker<VM>,
+    workers: &[Arc<GCWorkerShared<VM>>],
+) -> Option<ObjectReference> {
+    let n = workers.len();
+    if n > 2 {
+        let (k1, k2) =
+            GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
+        let sz1 = workers[k1].obj_deque_stealer.size();
+        let sz2 = workers[k2].obj_deque_stealer.size();
+        if sz1 < sz2 {
+            return workers[k2]
+                .obj_deque_stealer
+                .steal_and_pop(&worker.obj_deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        } else {
+            return workers[k1]
+                .obj_deque_stealer
+                .steal_and_pop(&worker.obj_deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        }
+    } else if n == 2 {
+        let k = (worker.ordinal + 1) % 2;
+        return workers[k]
+            .obj_deque_stealer
+            .steal_and_pop(&worker.obj_deque, |n| if BULK { n / 2 } else { 1 })
             .ok()
             .map(|x| x.0);
     } else {
