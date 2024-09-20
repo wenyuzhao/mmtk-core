@@ -674,13 +674,13 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             .root_kind
             .map(|r| r.should_record_remset())
             .unwrap_or_default();
+        if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
+            assert!(!add_root_to_remset);
+        }
         let roots = {
             let incs = std::mem::take(&mut self.incs);
             self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, false)
         };
-        if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
-            assert!(!add_root_to_remset);
-        }
         for s in std::mem::take(&mut self.inc_slices) {
             self.process_incs_for_obj_array::<KIND>(s, self.depth);
         }

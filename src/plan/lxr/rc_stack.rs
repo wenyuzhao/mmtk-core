@@ -688,15 +688,15 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             .root_kind
             .map(|r| r.should_record_remset())
             .unwrap_or_default();
+        if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
+            assert!(!add_root_to_remset);
+        }
         let roots = if KIND != EDGE_KIND_NURSERY {
             let incs = std::mem::take(&mut self.incs);
             self.process_incs::<KIND>(AddressBuffer::Owned(incs), self.depth, false)
         } else {
             None
         };
-        if cfg!(debug_assertions) && !self.inc_slices.is_empty() {
-            assert!(!add_root_to_remset);
-        }
         if let Some(roots) = roots {
             if self.lxr.concurrent_marking_enabled()
                 && self.pause == Pause::InitialMark

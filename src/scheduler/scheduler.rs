@@ -613,17 +613,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     fn random_park_and_miller(seed0: &AtomicUsize) -> usize {
-        let a = 16807;
-        let m = 2147483647;
-        let q = 127773;
-        let r = 2836;
-        let seed = seed0.load(Ordering::Relaxed);
+        let a = 16807isize;
+        let m = 2147483647isize;
+        let q = 127773isize;
+        let r = 2836isize;
+        let seed = seed0.load(Ordering::Relaxed) as isize;
         let hi = seed / q;
         let lo = seed % q;
         let test = a * lo - r * hi;
         let result = if test > 0 { test } else { test + m };
-        seed0.store(result, Ordering::Relaxed);
-        result
+        seed0.store(result as usize, Ordering::Relaxed);
+        result as usize
     }
 
     pub fn get_random_steal_index(

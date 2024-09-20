@@ -1031,18 +1031,23 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
+        let limit: usize = if self.pause == Pause::Full {
+            8192
+        } else {
+            1024
+        };
         // Skip primitive array
         match VM::VMScanning::get_obj_kind(object) {
             ObjectKind::ObjArray(len) if len >= 1024 => {
                 let data = VM::VMScanning::obj_array_data(object);
-                for chunk in data.chunks(Self::CAPACITY) {
+                for chunk in data.chunks(limit) {
                     let len: usize = chunk.len();
-                    if self.next_slot_count as usize + len >= Self::CAPACITY {
+                    if self.next_slot_count as usize + len >= limit {
                         self.flush();
                     }
                     self.next_slot_count += len as u32;
                     self.next_array_slices.push(chunk);
-                    if self.next_slot_count as usize >= Self::CAPACITY {
+                    if self.next_slot_count as usize >= limit {
                         self.flush();
                     }
                 }
@@ -1067,8 +1072,8 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                         self.next_slots.push(s);
                         self.next_slot_count += 1;
                         self.pushes += 1;
-                        if self.next_slot_count as usize >= Self::CAPACITY
-                            || (cfg!(feature = "push") && self.pushes >= 512)
+                        if self.next_slot_count as usize >= limit
+                            || (cfg!(feature = "push") && self.pushes >= limit / 2)
                         {
                             self.flush();
                         }
@@ -1138,6 +1143,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                 WorkBucketStage::Unconstrained,
                 Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
             );
+            self.pushes = self.next_slots.len();
         }
         assert!(self.nodes.is_empty());
     }
