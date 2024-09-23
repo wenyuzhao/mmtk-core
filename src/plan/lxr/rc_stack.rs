@@ -316,6 +316,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 // );
                 let rc = self.rc.count(target);
                 if rc == 0 {
+                    self.prefetch_object(target);
                     // println!(" -- rec inc {:?}.{:?} -> {:?}", o, slot, target);
                     self.add_new_slot(slot);
                 } else {
@@ -1004,6 +1005,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                         if !out_of_heap {
                             let rc = self.rc.count(x);
                             if rc != MAX_REF_COUNT && rc != 0 {
+                                self.prefetch_object(x);
                                 self.recursive_dec(x);
                             }
                         } else {

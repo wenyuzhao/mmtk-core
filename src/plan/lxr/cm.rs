@@ -25,18 +25,18 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[inline]
-fn prefetch_object<VM: VMBinding>(o: ObjectReference, ix: &ImmixSpace<VM>) {
+fn prefetch_object<VM: VMBinding>(o: ObjectReference, _ix: &ImmixSpace<VM>) {
     if crate::args::PREFETCH_HEADER {
         o.prefetch_read();
     }
-    if crate::args::PREFETCH_MARK {
-        if ix.in_space(o) {
-            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .as_spec()
-                .extract_side_spec()
-                .prefetch_read(o.to_raw_address())
-        }
-    }
+    // if crate::args::PREFETCH_MARK {
+    //     if ix.in_space(o) {
+    //         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+    //             .as_spec()
+    //             .extract_side_spec()
+    //             .prefetch_read(o.to_raw_address())
+    //     }
+    // }
 }
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
@@ -307,6 +307,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
+                prefetch_object(t, &self.plan.immix_space);
                 if cfg!(feature = "steal") {
                     if self.worker().satb_deque.push(t).is_ok() {
                         return;
@@ -1064,6 +1065,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                         if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                             return;
                         }
+                        prefetch_object(o, &self.lxr.immix_space);
                         if cfg!(feature = "steal") {
                             if self.worker().deque.push(s).is_ok() {
                                 return;
@@ -1246,6 +1248,10 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
             crate::record_live_bytes(object.get_size::<VM>());
         }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |s, _| {
+            let Some(o) = s.load() else {
+                return;
+            };
+            prefetch_object(o, &self.lxr.immix_space);
             if cfg!(feature = "steal") {
                 if self.worker().deque.push(s).is_ok() {
                     return;
