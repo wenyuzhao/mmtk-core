@@ -560,9 +560,7 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
             let slices = self.next_array_slices.take();
             let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
-            // self.worker()
-            //     .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
-            unimplemented!()
+            self.worker().scheduler().spawn(BucketId::Closure, w);
         }
         assert!(self.nodes.is_empty());
         self.next_slot_count = 0;
@@ -891,11 +889,10 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
             let slots = self.next_slots.take();
-            // self.worker().add_boxed_work(
-            //     WorkBucketStage::Unconstrained,
-            //     Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
-            // );
-            unimplemented!()
+            self.worker().scheduler().spawn(
+                self.bucket,
+                Self::new(slots, false, self.mmtk(), self.bucket),
+            );
         }
         assert!(self.nodes.is_empty());
     }

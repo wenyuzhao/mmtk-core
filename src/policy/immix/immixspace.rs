@@ -494,16 +494,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     unimplemented!("cyclic mark bits is not supported at the moment");
             // }
             // Reset block mark and object mark table.
-            // let work_packets = self.generate_lxr_full_trace_prepare_tasks();
-            // self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
-            unimplemented!()
+            let work_packets = self.generate_lxr_full_trace_prepare_tasks();
+            self.scheduler().spawn_bulk(BucketId::Incs, work_packets);
         }
     }
 
-    pub fn schedule_mark_table_zeroing_tasks(&self, _stage: BucketId) {
-        // let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
-        // self.scheduler().work_buckets[stage].bulk_add(work_packets);
-        unimplemented!()
+    pub fn schedule_mark_table_zeroing_tasks(&self, id: BucketId) {
+        let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
+        self.scheduler().spawn_bulk(id, work_packets);
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
@@ -607,10 +605,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler().postpone_all(dead_cycle_sweep_packets);
                 self.scheduler().postpone(sweep_los);
             } else {
-                // self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep]
-                //     .bulk_add(dead_cycle_sweep_packets);
-                // self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(sweep_los);
-                unimplemented!()
+                self.scheduler()
+                    .spawn_bulk(BucketId::Decs, dead_cycle_sweep_packets);
+                self.scheduler().spawn(BucketId::Decs, sweep_los);
             }
         }
     }
@@ -765,7 +762,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Generate chunk sweep work packets.
     #[allow(unused)]
     fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork>> {
-        assert!(self.rc_enabled && self.cm_enabled);
+        assert!(self.rc_enabled);
         self.chunk_map.generate_tasks_batched::<VM>(|chunks| {
             Box::new(PrepareChunksForFullGC::<VM> {
                 chunks,
@@ -1003,14 +1000,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         owner: VMThread,
     ) -> bool {
         debug_assert!(!owner.0.to_address().is_zero());
-        // let mature_evac = copy
-        //     && self.rc_enabled
-        //     && self.scheduler().work_buckets[WorkBucketStage::Closure].is_activated();
-        let mature_evac = if copy && self.rc_enabled {
-            unimplemented!()
-        } else {
-            false
-        };
+        let mature_evac =
+            copy && self.rc_enabled && self.scheduler.schedule().bucket_is_open(BucketId::Closure);
         self.pr.acquire_blocks(
             alloc_count,
             steal_count,
@@ -1075,8 +1066,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn process_mature_evacuation_remset(&self) {
         let mut remsets = vec![];
         mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock().unwrap());
-        // self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
-        unimplemented!();
+        self.scheduler.spawn_bulk(BucketId::Closure, remsets);
     }
 
     pub fn trace_object_without_moving_rc(
@@ -1610,14 +1600,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
-        // let packets = bins
-        //     .into_iter()
-        //     .map::<Box<dyn GCWork>, _>(|blocks| {
-        //         Box::new(SweepBlocksAfterDecs::<VM>::new(blocks, counter.clone()))
-        //     })
-        //     .collect();
-        // self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
-        unimplemented!();
+        let packets = bins
+            .into_iter()
+            .map::<Box<dyn GCWork>, _>(|blocks| {
+                Box::new(SweepBlocksAfterDecs::<VM>::new(blocks, counter.clone()))
+            })
+            .collect();
+        self.scheduler().spawn_bulk(BucketId::Decs, packets);
     }
 
     pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {

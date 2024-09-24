@@ -6,6 +6,7 @@ mod mature_evac;
 pub(super) mod mutator;
 pub mod rc;
 mod remset;
+mod schedule;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;

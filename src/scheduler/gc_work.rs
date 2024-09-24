@@ -23,8 +23,8 @@ pub struct ScheduleCollection<VM: VMBinding>(PhantomData<VM>);
 
 impl<VM: VMBinding> GCWork for ScheduleCollection<VM> {
     fn do_work(&mut self) {
+        println!("ScheduleCollection");
         let mmtk = GCWorker::<VM>::mmtk();
-        crate::GC_TRIGGER_TIME.start();
         crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         // Tell GC trigger that GC started.
         mmtk.gc_trigger.policy.on_gc_start(mmtk);
@@ -891,8 +891,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
             true,
             self.mmtk,
             if DPE::RC_ROOTS {
-                // BucketId::RCProcessIncs
-                unimplemented!()
+                BucketId::Incs
             } else {
                 BucketId::Closure
             },
@@ -901,8 +900,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
         crate::memory_manager::add_work_packet(
             self.mmtk,
             if DPE::RC_ROOTS {
-                // BucketId::RCProcessIncs
-                unimplemented!()
+                BucketId::Incs
             } else {
                 BucketId::Closure
             },

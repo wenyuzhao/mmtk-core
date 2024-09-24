@@ -214,6 +214,7 @@ impl ActiveWorkBucket {
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum BucketId {
     Start,
+    Incs,
     Prepare,
     Roots,
     Closure,
@@ -222,10 +223,12 @@ pub enum BucketId {
     PhantomRefClosure,
     Release,
     Finish,
+    Decs,
 }
 
 static START: WorkBucket = WorkBucket::new("start");
 static ROOTS: WorkBucket = WorkBucket::new("roots");
+static INCS: WorkBucket = WorkBucket::new("incs");
 static PREPARE: WorkBucket = WorkBucket::new("prepare");
 static CLOSURE: WorkBucket = WorkBucket::new("closure");
 static RELEASE: WorkBucket = WorkBucket::new("release");
@@ -233,19 +236,23 @@ static REF_WEAK: WorkBucket = WorkBucket::new("ref.weak");
 static REF_FINAL: WorkBucket = WorkBucket::new("ref.final");
 static REF_PHANTOM: WorkBucket = WorkBucket::new("ref.phantom");
 static FINISH: WorkBucket = WorkBucket::new("finish");
+static DECS: WorkBucket = WorkBucket::new("decs");
 
 impl BucketId {
+    #[inline(always)]
     pub fn get_bucket(&self) -> &'static WorkBucket {
         match self {
             BucketId::Start => &START,
             BucketId::Prepare => &PREPARE,
             BucketId::Roots => &ROOTS,
+            BucketId::Incs => &INCS,
             BucketId::Closure => &CLOSURE,
             BucketId::WeakRefClosure => &REF_WEAK,
             BucketId::FinalRefClosure => &REF_FINAL,
             BucketId::PhantomRefClosure => &REF_PHANTOM,
             BucketId::Release => &RELEASE,
             BucketId::Finish => &FINISH,
+            BucketId::Decs => &DECS,
         }
     }
 }

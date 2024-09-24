@@ -321,8 +321,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(new_incs, self.lxr);
             w.depth += 1;
             w.inc_slices = new_inc_slices;
-            // self.worker().add_work(WorkBucketStage::Unconstrained, w);
-            unimplemented!()
+            self.worker().scheduler().spawn(BucketId::Incs, w);
         }
         self.new_incs_count = 0;
     }
@@ -685,7 +684,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                             BucketId::Closure,
                         );
                         w.root_kind = self.root_kind;
-                        // worker.add_work(WorkBucketStage::Closure, w)
+                        worker.scheduler().spawn(BucketId::Closure, w);
                         unimplemented!()
                     } else {
                         let mut w = LXRStopTheWorldProcessEdges::<_, true>::new(
@@ -695,8 +694,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                             BucketId::Closure,
                         );
                         w.root_kind = self.root_kind;
-                        // worker.add_work(WorkBucketStage::Closure, w)
-                        unimplemented!()
+                        worker.scheduler().spawn(BucketId::Closure, w);
                     };
                 }
             } else if !self.root_kind.unwrap().should_skip_decs() {
@@ -719,8 +717,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                 let (a, b) = incs.split_at(incs.len() / 2);
                 let mut w = ProcessIncs::<VM, EDGE_KIND_NURSERY>::new(b.to_vec(), self.lxr);
                 w.depth = depth;
-                // self.worker().add_work(WorkBucketStage::Unconstrained, w);
-                unimplemented!();
+                worker.scheduler().spawn(BucketId::Incs, w);
                 incs = a.to_vec();
             }
             if !incs.is_empty() {
@@ -856,12 +853,10 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
         if lxr.current_pause().is_none() {
-            // self.worker()
-            //     .add_work_prioritized(WorkBucketStage::Unconstrained, w);
-            unimplemented!()
+            println!("WARN: prioritize decs!");
+            self.worker().scheduler().spawn(BucketId::Decs, w);
         } else {
-            // self.worker().add_work(WorkBucketStage::Unconstrained, w);
-            unimplemented!()
+            self.worker().scheduler().spawn(BucketId::Decs, w);
         }
     }
 

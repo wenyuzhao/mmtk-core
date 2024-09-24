@@ -313,6 +313,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         {
             scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
         }
+        scheduler.notify_bucket_empty(None);
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -333,18 +334,18 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if pause == Pause::FinalMark || pause == Pause::Full {
             self.common.los.is_end_of_satb_or_full_gc = true;
             // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
-            // self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            //     .add(ReleaseLOSNursery::<VM>::default());
-            unimplemented!();
+            self.immix_space
+                .scheduler()
+                .spawn(BucketId::Prepare, ReleaseLOSNursery::<VM>::default());
         }
         self.common
             .prepare(tls, pause == Pause::Full || pause == Pause::InitialMark);
         if crate::args::RC_MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full)
         {
             self.immix_space.process_mature_evacuation_remset();
-            // self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-            //     .add(FlushMatureEvacRemsets::<VM>::default());
-            unimplemented!();
+            self.immix_space
+                .scheduler()
+                .spawn(BucketId::Closure, FlushMatureEvacRemsets::<VM>::default());
         }
         self.immix_space.prepare_rc(pause);
         // if pause == Pause::FinalMark {
@@ -885,13 +886,6 @@ impl<VM: VMBinding> LXR<VM> {
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
         let pause = {
             let pause = self.select_lxr_collection_kind(emergency_collection);
-            if (pause == Pause::InitialMark || pause == Pause::Full)
-                && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
-            {
-                // self.immix_space
-                //     .schedule_mark_table_zeroing_tasks(WorkBucketStage::RCProcessIncs);
-                unimplemented!()
-            }
             self.zeroing_packets_scheduled
                 .store(false, Ordering::SeqCst);
             if emergency_collection {
@@ -918,40 +912,11 @@ impl<VM: VMBinding> LXR<VM> {
         pause
     }
 
-    fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        // if pause == Pause::RefCount {
-        //     scheduler.work_buckets[WorkBucketStage::Prepare].set_as_disabled();
-        // }
-        // if pause == Pause::RefCount || pause == Pause::InitialMark {
-        //     scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
-        //     scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
-        //     scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
-        //     scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
-        // }
-        // scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
-        // scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
-        // if crate::args::LAZY_DECREMENTS
-        //     && pause != Pause::Full
-        //     && !cfg!(feature = "fragmentation_analysis")
-        // {
-        //     scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
-        // }
-        unimplemented!();
-    }
-
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        scheduler.execute(&*super::schedule::RC_SCHEDULE);
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.fetch_add(1, Ordering::Relaxed);
         }
-        self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
         if self.concurrent_marking_in_progress() {
             scheduler.pause_concurrent_marking_work_packets_during_gc();
         }
@@ -959,13 +924,17 @@ impl<VM: VMBinding> LXR<VM> {
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
-        // scheduler.work_buckets[WorkBucketStage::Unconstrained]
-        //     .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E<VM>>>::new()));
-        // // Prepare global/collectors/mutators
-        // scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare::<VM>::default());
-        // // Release global/collectors/mutators
-        // scheduler.work_buckets[WorkBucketStage::Release]
-        //     .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
+        scheduler.spawn(
+            BucketId::Start,
+            StopMutators::<LXRGCWorkContext<E<VM>>>::new(),
+        );
+        // Prepare global/collectors/mutators
+        scheduler.spawn(BucketId::Prepare, FastRCPrepare::<VM>::default());
+        // Release global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Release,
+            Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
         unimplemented!();
     }
 
@@ -986,7 +955,10 @@ impl<VM: VMBinding> LXR<VM> {
         if cfg!(feature = "lxr_abort_on_trace") {
             panic!("ERROR: OutOfMemory");
         }
-        self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
+        if !self.zeroing_packets_scheduled.load(Ordering::SeqCst) {
+            self.immix_space
+                .schedule_mark_table_zeroing_tasks(BucketId::Incs);
+        }
         self.process_prev_roots(scheduler);
         // scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
         //     StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
@@ -1005,7 +977,6 @@ impl<VM: VMBinding> LXR<VM> {
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
-        self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
         if self.concurrent_marking_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
@@ -1026,6 +997,11 @@ impl<VM: VMBinding> LXR<VM> {
         &'static self,
         scheduler: &GCWorkScheduler<VM>,
     ) {
+        scheduler.execute(&*super::schedule::FULL_GC_SCHEDULE);
+        if !self.zeroing_packets_scheduled.load(Ordering::SeqCst) {
+            self.immix_space
+                .schedule_mark_table_zeroing_tasks(BucketId::Incs);
+        }
         if cfg!(feature = "lxr_abort_on_trace") {
             panic!("ERROR: OutOfMemory");
         }
@@ -1033,19 +1009,20 @@ impl<VM: VMBinding> LXR<VM> {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
         crate::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
-        self.disable_unnecessary_buckets(scheduler, Pause::Full);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
-        // scheduler.work_buckets[WorkBucketStage::Unconstrained]
-        //     .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E>>::new()));
-        // // Prepare global/collectors/mutators
-        // scheduler.work_buckets[WorkBucketStage::Prepare]
-        //     .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
-        // // Release global/collectors/mutators
-        // scheduler.work_buckets[WorkBucketStage::Release]
-        //     .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
-        unimplemented!();
+        scheduler.spawn(BucketId::Start, StopMutators::<LXRGCWorkContext<E>>::new());
+        // Prepare global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Prepare,
+            Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
+        // Release global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Release,
+            Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
@@ -1070,8 +1047,7 @@ impl<VM: VMBinding> LXR<VM> {
             debug_assert!(!crate::args::BARRIER_MEASUREMENT);
             scheduler.postpone_all_prioritized(work_packets);
         } else {
-            // scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(work_packets);
-            unimplemented!();
+            scheduler.spawn_bulk(BucketId::Decs, work_packets);
         }
         if cfg!(feature = "decs_counter") {
             gc_log!([3] "POSTPONED {} ROOTS FOR DECREMENT", count);

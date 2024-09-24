@@ -9,7 +9,7 @@ use crossbeam::queue::SegQueue;
 
 use crate::{
     plan::{immix::Pause, lxr::LXR},
-    scheduler::{GCWork, GCWorker},
+    scheduler::{BucketId, GCWork, GCWorker},
     util::{
         constants::LOG_BYTES_IN_PAGE,
         heap::{
@@ -314,19 +314,17 @@ impl<VM: VMBinding> GCWork for SweepDeadCycles<VM> {
                 immix_space.pr.bulk_release_blocks(db);
             }
         }
-        // if dead_blocks != 0
-        //     && (lxr.current_pause().is_none()
-        //         || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
-        // {
-        //     lxr.immix_space
-        //         .num_clean_blocks_released_mature
-        //         .fetch_add(dead_blocks, Ordering::Relaxed);
-        //     lxr.immix_space
-        //         .num_clean_blocks_released_lazy
-        //         .fetch_add(dead_blocks, Ordering::Relaxed);
-        // }
-
-        unimplemented!()
+        if dead_blocks != 0
+            && (lxr.current_pause().is_none()
+                || mmtk.scheduler.schedule().bucket_is_open(BucketId::Decs))
+        {
+            lxr.immix_space
+                .num_clean_blocks_released_mature
+                .fetch_add(dead_blocks, Ordering::Relaxed);
+            lxr.immix_space
+                .num_clean_blocks_released_lazy
+                .fetch_add(dead_blocks, Ordering::Relaxed);
+        }
     }
 }
 
@@ -479,8 +477,7 @@ impl MatureEvacuationSet {
         });
         self.fragmented_blocks_size.store(0, Ordering::SeqCst);
         SELECT_DEFRAG_BLOCK_JOB_COUNTER.store(tasks.len(), Ordering::SeqCst);
-        // space.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(tasks);
-        unimplemented!()
+        space.scheduler().spawn_bulk(BucketId::Prepare, tasks);
     }
 
     fn skip_block(b: Block) -> bool {

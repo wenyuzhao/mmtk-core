@@ -63,11 +63,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn spawn_boxed(&self, bucket: BucketId, w: Box<dyn GCWork>) {
-        let _guard = self.schedule().lock.read().unwrap();
         // Increment counter
         bucket.get_bucket().inc();
         // Add to the corresponding bucket/queue
-        if self.schedule().is_open[bucket].load(Ordering::SeqCst) {
+        if !self.current_schedule.load(Ordering::SeqCst).is_null()
+            && self.schedule().is_open[bucket].load(Ordering::SeqCst)
+        {
+            // let _guard = self.schedule().lock.read().unwrap();
             // The bucket is open. Either add to the global pool, or the thread local queue
             if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
                 self.active_bucket.add_boxed(bucket, w);
@@ -121,34 +123,32 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn process_lazy_decrement_packets(&self) {
-        // let mut no_postpone = vec![];
-        // let mut cm_packets = vec![];
-        // // Buggy
-        // let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
-        // loop {
-        //     if postponed_concurrent_work.is_empty() {
-        //         break;
-        //     }
-        //     match postponed_concurrent_work.steal() {
-        //         Steal::Success(w) => {
-        //             if !w.is_concurrent_marking_work() {
-        //                 no_postpone.push(w)
-        //             } else {
-        //                 cm_packets.push(w)
-        //             }
-        //         }
-        //         Steal::Empty => break,
-        //         Steal::Retry => {}
-        //     }
-        // }
-        // for w in cm_packets {
-        //     postponed_concurrent_work.push(w)
-        // }
-        // if !no_postpone.is_empty() {
-        //     self.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(no_postpone);
-        // }
-
-        unimplemented!()
+        let mut no_postpone = vec![];
+        let mut cm_packets = vec![];
+        // Buggy
+        let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
+        loop {
+            if postponed_concurrent_work.is_empty() {
+                break;
+            }
+            match postponed_concurrent_work.steal() {
+                Steal::Success(w) => {
+                    if !w.is_concurrent_marking_work() {
+                        no_postpone.push(w)
+                    } else {
+                        cm_packets.push(w)
+                    }
+                }
+                Steal::Empty => break,
+                Steal::Retry => {}
+            }
+        }
+        for w in cm_packets {
+            postponed_concurrent_work.push(w)
+        }
+        if !no_postpone.is_empty() {
+            self.spawn_bulk(BucketId::Decs, no_postpone);
+        }
     }
 
     pub fn postpone(&self, w: impl GCWork) {
@@ -328,80 +328,30 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// Schedule all the common work packets
     pub fn schedule_ref_proc_work<C: GCWorkContext<VM = VM> + 'static>(
         &self,
-        _plan: &'static C::PlanType,
+        plan: &'static C::PlanType,
     ) {
-
+        use crate::scheduler::gc_work::*;
         // Reference processing
-        // if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
-        //     // use crate::util::reference_processor::{
-        //     //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-        //     // };
-        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
-        //     //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
-        //     // self.work_buckets[WorkBucketStage::WeakRefClosure]
-        //     //     .add(WeakRefProcessing::<C::DefaultProcessEdges>::new());
+        if !*plan.base().options.no_reference_types || !*plan.base().options.no_finalizer {
+            self.spawn(
+                BucketId::PhantomRefClosure,
+                PhantomRefProcessing::<C::DefaultProcessEdges>::new(),
+            );
+            // VM-specific weak ref processing
+            self.spawn(
+                BucketId::WeakRefClosure,
+                VMProcessWeakRefs::<C::DefaultProcessEdges>::new(),
+            );
+        }
 
-        //     // VM-specific weak ref processing
-        //     self.work_buckets[WorkBucketStage::WeakRefClosure]
-        //         .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
-        //     self.work_buckets[WorkBucketStage::PhantomRefClosure]
-        //         .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
-
-        //     // use crate::util::reference_processor::RefForwarding;
-        //     // if plan.constraints().needs_forward_after_liveness {
-        //     //     self.work_buckets[WorkBucketStage::RefForwarding]
-        //     //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
-        //     // }
-
-        //     // use crate::util::reference_processor::RefEnqueue;
-        //     // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
-        // }
-
-        // // Finalization
-        // if !*plan.base().options.no_finalizer {
-        //     use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-        //     // finalization
-        //     self.work_buckets[WorkBucketStage::FinalRefClosure]
-        //         .add(Finalization::<C::DefaultProcessEdges>::new());
-        //     // forward refs
-        //     if plan.constraints().needs_forward_after_liveness {
-        //         self.work_buckets[WorkBucketStage::FinalizableForwarding]
-        //             .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
-        //         unimplemented!()
-        //     }
-        // }
-
-        // We add the VM-specific weak ref processing work regardless of MMTK-side options,
-        // including Options::no_finalizer and Options::no_reference_types.
-        //
-        // VMs need weak reference handling to function properly.  The VM may treat weak references
-        // as strong references, but it is not appropriate to simply disable weak reference
-        // handling from MMTk's side.  The VM, however, may choose to do nothing in
-        // `Collection::process_weak_refs` if appropriate.
-        //
-        // It is also not sound for MMTk core to turn off weak
-        // reference processing or finalization alone, because (1) not all VMs have the notion of
-        // weak references or finalizers, so it may not make sence, and (2) the VM may
-        // processing them together.
-
-        // VM-specific weak ref processing
-        // The `VMProcessWeakRefs` work packet is set as the sentinel so that it is executed when
-        // the `VMRefClosure` bucket is drained.  The VM binding may spawn new work packets into
-        // the `VMRefClosure` bucket, and request another `VMProcessWeakRefs` work packet to be
-        // executed again after this bucket is drained again.  Strictly speaking, the first
-        // `VMProcessWeakRefs` packet can be an ordinary packet (doesn't have to be a sentinel)
-        // because there are no other packets in the bucket.  We set it as sentinel for
-        // consistency.
-        // self.work_buckets[WorkBucketStage::VMRefClosure]
-        //     .set_sentinel(Box::new(VMProcessWeakRefs::<C::DefaultProcessEdges>::new()));
-
-        // if plan.constraints().needs_forward_after_liveness {
-        //     // VM-specific weak ref forwarding
-        //     self.work_buckets[WorkBucketStage::VMRefForwarding]
-        //         .add(VMForwardWeakRefs::<C::DefaultProcessEdges>::new());
-        // }
-
-        // self.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());
+        // Finalization
+        if !*plan.base().options.no_finalizer {
+            use crate::util::finalizable_processor::Finalization;
+            self.spawn(
+                BucketId::FinalRefClosure,
+                Finalization::<C::DefaultProcessEdges>::new(),
+            );
+        }
     }
 
     // fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
@@ -476,6 +426,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ///
     /// Return true if there're any non-empty buckets updated.
     pub(crate) fn notify_bucket_empty(&self, bucket: Option<BucketId>) -> bool {
+        println!("notify_bucket_empty, bucket: {:?}", bucket);
         let mut new_buckets = false;
         let mut new_work = false;
         self.schedule().update(bucket, |b| {
@@ -490,6 +441,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if new_buckets && new_work {
             self.worker_monitor.notify_work_available(true)
         }
+        println!("notify_bucket_empty END");
         new_buckets && new_work
 
         // let mut buckets_updated = false;
@@ -751,6 +703,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     *gc_start_time = Some(Instant::now());
                 }
 
+                crate::GC_TRIGGER_TIME.start();
                 GCWorker::<VM>::mmtk().get_plan().schedule_collection(self);
                 self.add_schedule_collection_packet();
                 LastParkedResult::WakeSelf
@@ -1053,6 +1006,10 @@ impl BucketGraph {
         }
     }
 
+    pub fn bucket_is_open(&self, b: BucketId) -> bool {
+        self.is_open[b].load(Ordering::SeqCst)
+    }
+
     pub fn dep(&mut self, parent: BucketId, children: Vec<BucketId>) {
         self.all_buckets.insert(parent);
         for c in &children {
@@ -1139,6 +1096,7 @@ impl BucketGraph {
                     b
                 );
             }
+            println!("Bucket {:?} opened", b);
         }
     }
 }

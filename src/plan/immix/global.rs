@@ -239,6 +239,4 @@ impl<VM: VMBinding> Immix<VM> {
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
     }
-
-    fn disable_unnecessary_buckets(&self, _scheduler: &GCWorkScheduler<VM>) {}
 }
