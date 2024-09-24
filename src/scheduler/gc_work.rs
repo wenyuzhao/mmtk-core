@@ -1,6 +1,7 @@
 use address::CLDScanPolicy;
 use address::RefScanPolicy;
 use crossbeam::deque::Steal;
+use policy::immix::block::Block;
 
 use self::global_state::GcStatus;
 use self::worker::GCWorkerShared;
@@ -1157,12 +1158,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         unreachable!()
     }
 
+    #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
         self.plan.trace_object::<_, KIND>(self, object, worker)
     }
 
+    #[inline]
     fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
@@ -1175,58 +1178,15 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn process_slots(&mut self) {
-        if !cfg!(feature = "no_stack") {
-            if cfg!(feature = "steal") {
-                let worker = self.worker();
-                'outer: loop {
-                    // Drain local stack
-                    while let Some(slot) = self.slots.pop().or_else(|| worker.deque.pop()) {
-                        self.process_slot(slot);
-                    }
-                    let workers = &self.worker().scheduler().worker_group.workers_shared;
-                    // Steal from other workers
-                    if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
-                        || (worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
-                            .is_activated()
-                            && !worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
-                                .is_empty())
-                        || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-                            .is_empty()
-                        || !worker.local_work_buffer.is_empty()
-                    {
-                        break;
-                    }
-                    if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
-                        worker.cache = Some(w);
-                        break;
-                    }
-                    let n = workers.len();
-                    for _i in 0..n / 2 {
-                        const BULK: bool = cfg!(feature = "steal_bulk");
-                        if let Some(s) = Self::steal_best_of_2::<BULK>(worker, workers) {
-                            self.process_slot(s);
-                            continue 'outer;
-                        }
-                    }
-                    break;
-                }
-            } else {
-                while let Some(slot) = self.slots.pop() {
-                    self.process_slot(slot);
-                }
-            }
+        let is_immix = self
+            .plan
+            .as_any()
+            .downcast_ref::<crate::plan::immix::Immix<VM>>()
+            .is_some();
+        if is_immix {
+            self.__process_slots::<true>();
         } else {
-            for i in 0..self.slots.len() {
-                self.process_slot(self.slots[i]);
-            }
-            let mut slots = vec![];
-            while !self.next_slots.is_empty() {
-                slots.clear();
-                std::mem::swap(&mut slots, &mut self.next_slots);
-                for s in &slots {
-                    self.process_slot(*s);
-                }
-            }
+            self.__process_slots::<false>();
         }
     }
 
@@ -1352,6 +1312,82 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         }
         let w = Self::new(slots, false, self.mmtk, self.bucket);
         self.worker().add_work(self.bucket, w);
+    }
+
+    #[inline]
+    fn __process_slot<const IX: bool, const WEAK_ROOT: bool>(&mut self, slot: SlotOf<Self>) {
+        let Some(object) = slot.load() else { return };
+        if IX && WEAK_ROOT && !Block::containing::<VM>(object).is_defrag_source() {
+            return;
+        }
+        let new_object = self.trace_object(object);
+        if P::may_move_objects::<KIND>() && new_object != object {
+            slot.store(Some(new_object));
+        }
+    }
+
+    fn __process_slots<const IX: bool>(&mut self) {
+        let mut slots = std::mem::take(&mut self.slots);
+        if self.roots && self.root_kind == Some(RootKind::Weak) {
+            for s in slots {
+                self.__process_slot::<IX, true>(s);
+            }
+        } else {
+            for s in slots {
+                self.__process_slot::<IX, false>(s);
+            }
+        }
+        self.roots = false;
+        if !cfg!(feature = "no_stack") {
+            if cfg!(feature = "steal") {
+                let worker = self.worker();
+                'outer: loop {
+                    // Drain local stack
+                    while let Some(slot) = self.slots.pop().or_else(|| worker.deque.pop()) {
+                        self.__process_slot::<IX, false>(slot);
+                    }
+                    let workers = &self.worker().scheduler().worker_group.workers_shared;
+                    // Steal from other workers
+                    if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
+                        || (worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
+                            .is_activated()
+                            && !worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
+                                .is_empty())
+                        || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                            .is_empty()
+                        || !worker.local_work_buffer.is_empty()
+                    {
+                        break;
+                    }
+                    if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                        worker.cache = Some(w);
+                        break;
+                    }
+                    let n = workers.len();
+                    for _i in 0..n / 2 {
+                        const BULK: bool = cfg!(feature = "steal_bulk");
+                        if let Some(s) = Self::steal_best_of_2::<BULK>(worker, workers) {
+                            self.__process_slot::<IX, false>(s);
+                            continue 'outer;
+                        }
+                    }
+                    break;
+                }
+            } else {
+                while let Some(slot) = self.slots.pop() {
+                    self.__process_slot::<IX, false>(slot);
+                }
+            }
+        } else {
+            let mut slots = vec![];
+            while !self.next_slots.is_empty() {
+                slots.clear();
+                std::mem::swap(&mut slots, &mut self.next_slots);
+                for s in &slots {
+                    self.__process_slot::<IX, false>(*s);
+                }
+            }
+        }
     }
 }
 
