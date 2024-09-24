@@ -184,10 +184,10 @@ impl Stats {
     }
 
     pub fn print_stats<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
+        let scheduler_stat = mmtk.scheduler.statistics();
         println!(
             "============================ MMTk Statistics Totals ============================"
         );
-        let scheduler_stat = mmtk.scheduler.statistics();
         self.print_column_names(&scheduler_stat);
         print!("{}\t", self.get_phase() / 2);
         let counter = self.counters.lock().unwrap();

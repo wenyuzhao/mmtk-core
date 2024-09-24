@@ -85,6 +85,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        self.disable_unnecessary_buckets(scheduler);
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
@@ -103,6 +104,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             false,
             crate::policy::immix::defrag::StatsForDefrag::new(self),
         );
+    }
+
+    fn no_worker_prepare(&self) -> bool {
+        true
+    }
+
+    fn fast_worker_release(&self) -> bool {
+        true
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -227,5 +236,21 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
+    }
+
+    fn disable_unnecessary_buckets(&self, scheduler: &GCWorkScheduler<VM>) {
+        scheduler.work_buckets[WorkBucketStage::FinishConcurrentWork].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::Initial].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_as_disabled();
     }
 }
