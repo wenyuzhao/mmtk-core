@@ -432,7 +432,7 @@ impl<B: Region> BlockPool<B> {
         let free_blocks = self.global_freed_blocks.read();
         #[cfg(not(feature = "bpr_spin_lock"))]
         let free_blocks = self.global_freed_blocks.read().unwrap();
-        for array in &free_blocks.0 {
+        if let Some(array) = &free_blocks.0 {
             array.iterate_blocks(f)
         }
         for array in &free_blocks.1 {
