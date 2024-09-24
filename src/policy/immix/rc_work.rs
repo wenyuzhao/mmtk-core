@@ -1,5 +1,6 @@
 use std::{
     marker::PhantomData,
+    ops::Range,
     sync::{atomic::AtomicUsize, Mutex},
 };
 
@@ -11,7 +12,11 @@ use crate::{
     scheduler::{GCWork, GCWorker},
     util::{
         constants::LOG_BYTES_IN_PAGE,
-        heap::{chunk_map::Chunk, layout::vm_layout::LOG_BYTES_IN_CHUNK, PageResource},
+        heap::{
+            chunk_map::{Chunk, ChunkState},
+            layout::vm_layout::LOG_BYTES_IN_CHUNK,
+            PageResource,
+        },
         linear_scan::Region,
         rc::{self, RefCountHelper},
         ObjectReference,
@@ -28,17 +33,16 @@ use super::{
 
 static SELECT_DEFRAG_BLOCK_JOB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-struct SelectDefragBlocksInChunk<VM: VMBinding> {
-    pub chunk: Chunk,
+struct SelectDefragBlocks<VM: VMBinding> {
+    pub chunks: Range<Chunk>,
     #[allow(unused)]
     pub defrag_threshold: usize,
     pub p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> GCWork for SelectDefragBlocksInChunk<VM> {
+impl<VM: VMBinding> GCWork for SelectDefragBlocks<VM> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
-        let worker = GCWorker::<VM>::current();
         let mut fragmented_blocks = vec![];
         let mut blocks_in_fragmented_chunks = vec![];
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
@@ -57,41 +61,54 @@ impl<VM: VMBinding> GCWork for SelectDefragBlocksInChunk<VM> {
         };
         // Iterate over all blocks in this chunk
         let has_chunk_frag_info = lxr.immix_space.pr.has_chunk_fragmentation_info();
-        for block in self.chunk.iter_region::<Block>() {
-            // Skip unallocated blocks.
-            if MatureEvacuationSet::skip_block(block) {
+
+        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
+        let ix_space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
+        for i in 0..num_chunks {
+            let chunk = self.chunks.start.next_nth(i);
+            if ix_space.chunk_map.get(chunk) != ChunkState::Allocated {
                 continue;
             }
-            // This is a block in a fragmented chunk?
-            if has_chunk_frag_info {
-                let live_blocks_in_chunk = lxr
-                    .immix_space
-                    .pr
-                    .get_live_pages_in_chunk(Chunk::from_unaligned_address(block.start()))
-                    >> Block::LOG_PAGES;
-                if live_blocks_in_chunk < threshold {
-                    let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
-                    blocks_in_fragmented_chunks.push((block, dead_blocks));
+            for block in chunk.iter_region::<Block>() {
+                // Skip unallocated blocks.
+                if MatureEvacuationSet::skip_block(block) {
                     continue;
                 }
-            }
-            // This is a fragmented block?
-            let score = if crate::args::HOLE_COUNTING {
-                unreachable!();
-                // match state {
-                //     BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
-                //     _ => block.calc_holes(),
-                // }
-            } else {
-                // block.dead_bytes()
-                // block.calc_dead_bytes::<VM>()
-                block.calc_dead_lines() << Line::LOG_BYTES
-            };
-            if lxr.current_pause().unwrap() == Pause::Full
-                || cfg!(feature = "aggressive_mature_evac")
-                || score >= (Block::BYTES >> 1)
-            {
-                fragmented_blocks.push((block, score));
+                // This is a block in a fragmented chunk?
+                if has_chunk_frag_info {
+                    let live_blocks_in_chunk = lxr
+                        .immix_space
+                        .pr
+                        .get_live_pages_in_chunk(Chunk::from_unaligned_address(block.start()))
+                        >> Block::LOG_PAGES;
+                    if live_blocks_in_chunk < threshold {
+                        let dead_blocks = BLOCKS_IN_CHUNK - live_blocks_in_chunk;
+                        blocks_in_fragmented_chunks.push((block, dead_blocks));
+                        continue;
+                    }
+                }
+                // This is a fragmented block?
+                let score = if crate::args::HOLE_COUNTING {
+                    unreachable!();
+                    // match state {
+                    //     BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
+                    //     _ => block.calc_holes(),
+                    // }
+                } else {
+                    // block.dead_bytes()
+                    // block.calc_dead_bytes::<VM>()
+                    block.calc_dead_lines() << Line::LOG_BYTES
+                };
+                if lxr.current_pause().unwrap() == Pause::Full
+                    || cfg!(feature = "aggressive_mature_evac")
+                    || score >= (Block::BYTES >> 1)
+                {
+                    fragmented_blocks.push((block, score));
+                }
             }
         }
         // Flush to global fragmented_blocks
@@ -188,19 +205,19 @@ impl<VM: VMBinding> GCWork for SweepBlocksAfterDecs<VM> {
 }
 
 /// Chunk sweeping work packet.
-pub(super) struct SweepDeadCyclesChunk<VM: VMBinding> {
-    chunk: Chunk,
+pub(super) struct SweepDeadCycles<VM: VMBinding> {
+    chunks: Range<Chunk>,
     _counter: LazySweepingJobsCounter,
     rc: RefCountHelper<VM>,
 }
 
 #[allow(unused)]
-impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
+impl<VM: VMBinding> SweepDeadCycles<VM> {
     const CAPACITY: usize = 1024;
 
-    pub fn new(chunk: Chunk, counter: LazySweepingJobsCounter) -> Self {
+    pub fn new(chunks: Range<Chunk>, counter: LazySweepingJobsCounter) -> Self {
         Self {
-            chunk,
+            chunks,
             _counter: counter,
             rc: RefCountHelper::NEW,
         }
@@ -261,27 +278,42 @@ impl<VM: VMBinding> SweepDeadCyclesChunk<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork for SweepDeadCyclesChunk<VM> {
+impl<VM: VMBinding> GCWork for SweepDeadCycles<VM> {
     fn do_work(&mut self) {
         let mmtk = GCWorker::<VM>::mmtk();
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let immix_space = &lxr.immix_space;
         let mut dead_blocks = 0;
-        for block in self
-            .chunk
-            .iter_region::<Block>()
-            .filter(|block| block.get_state() != BlockState::Unallocated)
-        {
-            if block.is_defrag_source() {
+        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
+        let ix_space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
+        for i in 0..num_chunks {
+            let mut db = 0;
+            let chunk = self.chunks.start.next_nth(i);
+            if ix_space.chunk_map.get(chunk) != ChunkState::Allocated {
                 continue;
-            } else {
-                let dead = self.process_block(block, immix_space);
-                if dead && block.rc_sweep_mature(immix_space, false, true) {
-                    dead_blocks += 1;
+            }
+            for block in chunk
+                .iter_region::<Block>()
+                .filter(|block| block.get_state() != BlockState::Unallocated)
+            {
+                if block.is_defrag_source() {
+                    continue;
+                } else {
+                    let dead = self.process_block(block, immix_space);
+                    if dead && block.rc_sweep_mature(immix_space, false, true) {
+                        dead_blocks += 1;
+                        db += 1;
+                    }
                 }
             }
+            if db != 0 {
+                immix_space.pr.bulk_release_blocks(db);
+            }
         }
-        immix_space.pr.bulk_release_blocks(dead_blocks);
         // if dead_blocks != 0
         //     && (lxr.current_pause().is_none()
         //         || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_activated())
@@ -293,12 +325,13 @@ impl<VM: VMBinding> GCWork for SweepDeadCyclesChunk<VM> {
         //         .num_clean_blocks_released_lazy
         //         .fetch_add(dead_blocks, Ordering::Relaxed);
         // }
+
         unimplemented!()
     }
 }
 
-pub(super) struct ConcurrentChunkMetadataZeroing<VM: VMBinding> {
-    pub chunk: Chunk,
+pub(super) struct ConcurrentChunkMetadataZeroing<VM> {
+    pub chunks: Range<Chunk>,
     pub p: PhantomData<VM>,
 }
 
@@ -314,20 +347,31 @@ impl<VM: VMBinding> ConcurrentChunkMetadataZeroing<VM> {
 
 impl<VM: VMBinding> GCWork for ConcurrentChunkMetadataZeroing<VM> {
     fn do_work(&mut self) {
-        Self::reset_object_mark(self.chunk);
+        let mmtk = GCWorker::<VM>::mmtk();
+        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
+        let ix_space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
+        for i in 0..num_chunks {
+            let chunk = self.chunks.start.next_nth(i);
+            if ix_space.chunk_map.get(chunk) != ChunkState::Allocated {
+                continue;
+            }
+            Self::reset_object_mark(chunk);
+        }
     }
 }
 
 /// A work packet to prepare each block for GC.
 /// Performs the action on a range of chunks.
-pub(super) struct PrepareChunk<VM: VMBinding> {
-    pub chunk: Chunk,
-    pub cm_enabled: bool,
-    pub rc_enabled: bool,
+pub(super) struct PrepareChunksForFullGC<VM: VMBinding> {
+    pub chunks: Range<Chunk>,
     pub p: PhantomData<VM>,
 }
 
-impl<VM: VMBinding> PrepareChunk<VM> {
+impl<VM: VMBinding> PrepareChunksForFullGC<VM> {
     /// Clear object mark table
     #[allow(unused)]
     fn reset_object_mark(chunk: Chunk) {
@@ -337,30 +381,40 @@ impl<VM: VMBinding> PrepareChunk<VM> {
     }
 }
 
-impl<VM: VMBinding> GCWork for PrepareChunk<VM> {
+impl<VM: VMBinding> GCWork for PrepareChunksForFullGC<VM> {
     fn do_work(&mut self) {
-        if !self.rc_enabled {
-            Self::reset_object_mark(self.chunk);
-        }
-        // Iterate over all blocks in this chunk
-        for block in self.chunk.iter_region::<Block>() {
-            let state = block.get_state();
-            // Skip unallocated blocks.
-            if state == BlockState::Unallocated {
+        let mmtk = GCWorker::<VM>::mmtk();
+        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
+        let ix_space = &mmtk
+            .get_plan()
+            .downcast_ref::<LXR<VM>>()
+            .unwrap()
+            .immix_space;
+        for i in 0..num_chunks {
+            let chunk = self.chunks.start.next_nth(i);
+            if ix_space.chunk_map.get(chunk) != ChunkState::Allocated {
                 continue;
             }
-            // Clear unlog table on CM
-            if crate::args::BARRIER_MEASUREMENT || (self.cm_enabled && !self.rc_enabled) {
-                block.initialize_field_unlog_table_as_unlogged::<VM>();
-                unreachable!();
+            // Iterate over all blocks in this chunk
+            for block in chunk.iter_region::<Block>() {
+                let state = block.get_state();
+                // Skip unallocated blocks.
+                if state == BlockState::Unallocated {
+                    continue;
+                }
+                // Clear unlog table on CM
+                if crate::args::BARRIER_MEASUREMENT {
+                    block.initialize_field_unlog_table_as_unlogged::<VM>();
+                    unreachable!();
+                }
+                // Clear defrag state
+                assert!(!block.is_defrag_source());
+                // Clear block mark data.
+                block.set_state(BlockState::Unmarked);
+                debug_assert!(!block.get_state().is_reusable());
+                // debug_assert_ne!(block.get_state(), BlockState::Marked);
+                // debug_assert_ne!(block.get_state(), BlockState::Nursery);
             }
-            // Clear defrag state
-            assert!(!block.is_defrag_source());
-            // Clear block mark data.
-            block.set_state(BlockState::Unmarked);
-            debug_assert!(!block.get_state().is_reusable());
-            // debug_assert_ne!(block.get_state(), BlockState::Marked);
-            // debug_assert_ne!(block.get_state(), BlockState::Nursery);
         }
     }
 }
@@ -416,9 +470,9 @@ impl MatureEvacuationSet {
     }
 
     pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        let tasks = space.chunk_map.generate_tasks::<VM>(|chunk| {
-            Box::new(SelectDefragBlocksInChunk {
-                chunk,
+        let tasks = space.chunk_map.generate_tasks_batched::<VM>(|chunks| {
+            Box::new(SelectDefragBlocks::<VM> {
+                chunks,
                 defrag_threshold: 1,
                 p: PhantomData::<VM>,
             })

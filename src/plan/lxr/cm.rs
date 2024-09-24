@@ -26,18 +26,18 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[inline]
-fn prefetch_object<VM: VMBinding>(o: ObjectReference, ix: &ImmixSpace<VM>) {
+fn prefetch_object<VM: VMBinding>(o: ObjectReference, _ix: &ImmixSpace<VM>) {
     if crate::args::PREFETCH_HEADER {
         o.prefetch_read();
     }
-    if crate::args::PREFETCH_MARK {
-        if ix.in_space(o) {
-            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-                .as_spec()
-                .extract_side_spec()
-                .prefetch_read(o.to_raw_address())
-        }
-    }
+    // if crate::args::PREFETCH_MARK {
+    //     if ix.in_space(o) {
+    //         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+    //             .as_spec()
+    //             .extract_side_spec()
+    //             .prefetch_read(o.to_raw_address())
+    //     }
+    // }
 }
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
@@ -55,9 +55,12 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     scanned_non_null_slots: usize,
     #[cfg(feature = "measure_trace_rate")]
     enqueued_objs: usize,
+    worker: *mut GCWorker<VM>,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
+    const SATB_BUFFER_SIZE: usize = 8192;
+
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
@@ -77,6 +80,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -99,6 +103,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -121,6 +126,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
+            worker: std::ptr::null_mut(),
         }
     }
 
@@ -268,7 +274,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
                 self.next_objects.push(t);
-                if self.next_objects.len() > 8192 {
+                if self.next_objects.len() > Self::SATB_BUFFER_SIZE {
                     self.flush_objs();
                 }
             },
@@ -294,7 +300,7 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                 for chunk in data.chunks(1024) {
                     self.next_ref_arrays_size += chunk.len();
                     self.next_ref_arrays.push((object, cls, len, chunk));
-                    if self.next_ref_arrays_size > 8192 {
+                    if self.next_ref_arrays_size > Self::SATB_BUFFER_SIZE {
                         self.flush_arrs();
                     }
                 }
@@ -319,6 +325,8 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
         }
     }
 }
+
+unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
 
 impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
     fn should_defer(&self) -> bool {
@@ -824,18 +832,23 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
+        let limit: usize = if self.pause == Pause::Full {
+            8192
+        } else {
+            1024
+        };
         // Skip primitive array
         match VM::VMScanning::get_obj_kind(object) {
             ObjectKind::ObjArray(len) if len >= 1024 => {
                 let data = VM::VMScanning::obj_array_data(object);
-                for chunk in data.chunks(Self::CAPACITY) {
+                for chunk in data.chunks(limit) {
                     let len: usize = chunk.len();
-                    if self.next_slot_count as usize + len >= Self::CAPACITY {
+                    if self.next_slot_count as usize + len >= limit {
                         self.flush();
                     }
                     self.next_slot_count += len as u32;
                     self.next_array_slices.push(chunk);
-                    if self.next_slot_count as usize >= Self::CAPACITY {
+                    if self.next_slot_count as usize >= limit {
                         self.flush();
                     }
                 }
@@ -854,7 +867,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
                         }
                         self.next_slots.push(s);
                         self.next_slot_count += 1;
-                        if self.next_slot_count as usize >= Self::CAPACITY {
+                        if self.next_slot_count as usize >= limit {
                             self.flush();
                         }
                     },
@@ -960,6 +973,14 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                         prefetch_object(o, &self.lxr.immix_space);
                     }
                 }
+            }
+        }
+        let mut slots = vec![];
+        while !self.next_slots.is_empty() {
+            slots.clear();
+            self.next_slots.swap(&mut slots);
+            for s in &slots {
+                self.process_slot(*s);
             }
         }
         if cfg!(feature = "rust_mem_counter") {

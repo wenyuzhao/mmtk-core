@@ -63,7 +63,8 @@ pub trait GCWork: 'static + Send + Any {
 
     /// Get the compile-time static type name for the work packet.
     fn get_type_name(&self) -> &'static str {
-        std::any::type_name::<Self>()
+        let x = std::any::type_name::<Self>();
+        x.split("<").next().unwrap().split("::").last().unwrap()
     }
 }
 
