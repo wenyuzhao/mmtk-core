@@ -682,7 +682,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                             root_slots,
                             true,
                             mmtk,
-                            WorkBucketStage::Closure,
+                            BucketId::Closure,
                         );
                         w.root_kind = self.root_kind;
                         // worker.add_work(WorkBucketStage::Closure, w)
@@ -692,7 +692,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                             root_slots,
                             true,
                             mmtk,
-                            WorkBucketStage::Closure,
+                            BucketId::Closure,
                         );
                         w.root_kind = self.root_kind;
                         // worker.add_work(WorkBucketStage::Closure, w)
