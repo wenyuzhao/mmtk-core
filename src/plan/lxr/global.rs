@@ -153,42 +153,34 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 return true;
             }
         }
-        if crate::args::LXR_RC_ONLY {
-            unimplemented!()
-        }
         // inc limits
-        if !crate::args::LXR_RC_ONLY
-            && crate::args()
-                .incs_limit
-                .map(|x| self.rc.inc_buffer_size() >= x)
-                .unwrap_or(false)
+        if crate::args()
+            .incs_limit
+            .map(|x| self.rc.inc_buffer_size() >= x)
+            .unwrap_or(false)
         {
             self.gc_cause.store(GCCause::Increments, Ordering::Relaxed);
             return true;
         }
         // clean young blocks limits
-        if !crate::args::LXR_RC_ONLY
-            && self.immix_space.block_allocation.clean_nursery_blocks() >= self.nursery_blocks
-        {
+        if self.immix_space.block_allocation.clean_nursery_blocks() >= self.nursery_blocks {
             self.gc_cause
                 .store(GCCause::FixedNursery, Ordering::Relaxed);
             return true;
         }
         // total young alloc limits (including clean and recycled allocation)
-        if !crate::args::LXR_RC_ONLY
-            && self
-                .immix_space
-                .block_allocation
-                .total_young_allocation_in_bytes()
-                >= self.young_alloc_trigger
+        if self
+            .immix_space
+            .block_allocation
+            .total_young_allocation_in_bytes()
+            >= self.young_alloc_trigger
         {
             self.gc_cause
                 .store(GCCause::FixedNursery, Ordering::Relaxed);
             return true;
         }
         // Concurrent tracing finished
-        // if !crate::args::LXR_RC_ONLY
-        //     && self.concurrent_marking_in_progress()
+        // if self.concurrent_marking_in_progress()
         //     && crate::concurrent_marking_packets_drained()
         // {
         //     return true;
@@ -211,9 +203,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
-        if crate::args::LXR_RC_ONLY {
-            return true;
-        }
         let x = self.previous_pause.load(Ordering::SeqCst);
         x == Some(Pause::Full) || x == Some(Pause::FullDefrag)
     }
@@ -894,9 +883,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
 
         let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        let pause = if crate::args::LXR_RC_ONLY {
-            Pause::RefCount
-        } else {
+        let pause = {
             let pause = self.select_lxr_collection_kind(emergency_collection);
             if (pause == Pause::InitialMark || pause == Pause::Full)
                 && !self.zeroing_packets_scheduled.load(Ordering::SeqCst)
