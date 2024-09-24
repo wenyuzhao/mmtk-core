@@ -1,8 +1,8 @@
+use address::CLDScanPolicy;
+use address::RefScanPolicy;
 use crossbeam::deque::Steal;
 
 use self::global_state::GcStatus;
-use self::util::address::CLDScanPolicy;
-use self::util::address::RefScanPolicy;
 use self::worker::GCWorkerShared;
 use super::work_bucket::WorkBucketStage;
 use super::*;
@@ -863,6 +863,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
 impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = VM>>
     RootsWorkFactory<VM::VMSlot> for ProcessEdgesWorkRootsWorkFactory<VM, DPE, PPE>
 {
+    #[inline(always)]
     fn roots_stage(&self) -> WorkBucketStage {
         if DPE::RC_ROOTS {
             WorkBucketStage::RCProcessIncs
@@ -1282,6 +1283,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         self.plan.post_scan_object(object);
     }
 }
+
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {

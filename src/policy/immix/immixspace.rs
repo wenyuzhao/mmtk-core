@@ -1711,17 +1711,14 @@ struct SweepChunk<VM: VMBinding> {
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
         let mut freed_blocks = 0;
         let mut histogram = self.space.defrag.new_histogram();
+        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
         for i in 0..num_chunks {
             let chunk = self.chunks.start.next_nth(i);
             if self.space.chunk_map.get(chunk) != ChunkState::Allocated {
                 continue;
             }
-
-            assert_eq!(self.space.chunk_map.get(chunk), ChunkState::Allocated);
-
             let line_mark_state = if super::BLOCK_ONLY {
                 None
             } else {
