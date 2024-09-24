@@ -1709,7 +1709,7 @@ impl<VM: VMBinding> GCWork for PrepareBlockState<VM> {
                     true
                 } else if let Some(defrag_threshold) = self.defrag_threshold {
                     // This GC is a defrag GC.
-                    block.get_holes() > defrag_threshold
+                    block.get_holes() >= defrag_threshold
                 } else {
                     // Not a defrag GC.
                     false

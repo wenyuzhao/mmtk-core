@@ -677,11 +677,27 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
             }
             if self.pause == Pause::FinalMark || self.pause == Pause::Full {
                 if !root_slots.is_empty() {
-                    let mut w =
-                        LXRStopTheWorldProcessEdges::new(root_slots, true, mmtk, BucketId::Closure);
-                    w.root_kind = self.root_kind;
-                    // worker.add_work(WorkBucketStage::Closure, w)
-                    unimplemented!()
+                    if self.pause == Pause::FinalMark {
+                        let mut w = LXRStopTheWorldProcessEdges::<_, false>::new(
+                            root_slots,
+                            true,
+                            mmtk,
+                            WorkBucketStage::Closure,
+                        );
+                        w.root_kind = self.root_kind;
+                        // worker.add_work(WorkBucketStage::Closure, w)
+                        unimplemented!()
+                    } else {
+                        let mut w = LXRStopTheWorldProcessEdges::<_, true>::new(
+                            root_slots,
+                            true,
+                            mmtk,
+                            WorkBucketStage::Closure,
+                        );
+                        w.root_kind = self.root_kind;
+                        // worker.add_work(WorkBucketStage::Closure, w)
+                        unimplemented!()
+                    };
                 }
             } else if !self.root_kind.unwrap().should_skip_decs() {
                 self.lxr.curr_roots.read().unwrap().push(roots);

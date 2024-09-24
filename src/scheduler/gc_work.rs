@@ -1,5 +1,6 @@
 use address::CLDScanPolicy;
 use address::RefScanPolicy;
+use policy::immix::block::Block;
 
 use self::global_state::GcStatus;
 use super::work_bucket::BucketId;
@@ -1160,12 +1161,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         unreachable!()
     }
 
+    #[inline]
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
         self.plan.trace_object::<_, KIND>(self, object, worker)
     }
 
+    #[inline]
     fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
@@ -1178,16 +1181,15 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn process_slots(&mut self) {
-        for i in 0..self.slots.len() {
-            self.process_slot(self.slots[i]);
-        }
-        let mut slots = vec![];
-        while !self.next_slots.is_empty() {
-            slots.clear();
-            std::mem::swap(&mut slots, &mut self.next_slots);
-            for s in &slots {
-                self.process_slot(*s);
-            }
+        let is_immix = self
+            .plan
+            .as_any()
+            .downcast_ref::<crate::plan::immix::Immix<VM>>()
+            .is_some();
+        if is_immix {
+            self.__process_slots::<true>();
+        } else {
+            self.__process_slots::<false>();
         }
     }
 
@@ -1212,6 +1214,46 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         });
         self.plan.post_scan_object(object);
+    }
+}
+
+impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
+    PlanProcessEdges<VM, P, KIND>
+{
+    #[inline]
+    fn __process_slot<const IX: bool, const WEAK_ROOT: bool>(&mut self, slot: SlotOf<Self>) {
+        let Some(object) = slot.load() else { return };
+        if IX && WEAK_ROOT && !Block::containing::<VM>(object).is_defrag_source() {
+            return;
+        }
+        let new_object = self.trace_object(object);
+        if P::may_move_objects::<KIND>() && new_object != object {
+            slot.store(Some(new_object));
+        }
+    }
+
+    fn __process_slots<const IX: bool>(&mut self) {
+        if self.roots && self.root_kind == Some(RootKind::Weak) {
+            for i in 0..self.slots.len() {
+                self.__process_slot::<IX, true>(self.slots[i]);
+            }
+        } else {
+            for i in 0..self.slots.len() {
+                self.__process_slot::<IX, false>(self.slots[i]);
+            }
+        }
+        self.roots = false;
+        for i in 0..self.slots.len() {
+            self.__process_slot::<IX, false>(self.slots[i]);
+        }
+        let mut slots = vec![];
+        while !self.next_slots.is_empty() {
+            slots.clear();
+            std::mem::swap(&mut slots, &mut self.next_slots);
+            for s in &slots {
+                self.__process_slot::<IX, false>(*s);
+            }
+        }
     }
 }
 

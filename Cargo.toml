@@ -76,6 +76,7 @@ default = [
     "dep:sysinfo",
     "dep:regex",
     "dep:env_logger",
+    "ix_always_defrag",
     # "no_meta_counting",
 ]
 # default = []
