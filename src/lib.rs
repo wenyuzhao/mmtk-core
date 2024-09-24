@@ -33,7 +33,7 @@ extern crate strum_macros;
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-#[cfg(target = "x86_64-unknown-linux-gnu")]
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 extern crate atomic;
 extern crate atomic_traits;
 extern crate crossbeam;

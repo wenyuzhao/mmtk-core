@@ -79,6 +79,7 @@ default = [
     # "no_meta_counting",
 ]
 # default = []
+nightly = []
 nontemporal = []
 satb_timer = []
 yield_and_roots_timer = []
@@ -195,6 +196,11 @@ remset_counter = []
 lxr_no_decs = []
 lxr_no_recursive_dec = []
 lxr_no_prefetch = []
+lxr_fixed_clean_rc_trigger = []
+lxr_fixed_rc_trigger = []
+fixed_clean_alloc_trigger_based_on_system_time = []
+enable_sysinfo = []
+regex = ["dep:regex"]
 
 fixed_alloc_trigger_based_on_system_time = []
 
