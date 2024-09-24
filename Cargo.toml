@@ -80,6 +80,7 @@ default = [
 ]
 # default = []
 nightly = []
+asan = []
 nontemporal = []
 satb_timer = []
 yield_and_roots_timer = []
