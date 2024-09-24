@@ -86,10 +86,7 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
 
     fn process_slots(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        debug_assert!(
-            lxr.current_pause() == Some(Pause::FinalMark)
-                || lxr.current_pause() == Some(Pause::Full)
-        );
+        assert_eq!(lxr.current_pause(), Some(Pause::FinalMark));
         let remset = std::mem::take(&mut self.remset);
         let mut slots = vec![];
         let mut refs = vec![];
@@ -101,9 +98,9 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             }
         }
         if !slots.is_empty() {
-            Some(Box::new(LXRStopTheWorldProcessEdges::new_remset(
-                slots, refs, mmtk,
-            )))
+            Some(Box::new(
+                LXRStopTheWorldProcessEdges::<_, false>::new_remset(slots, refs, mmtk),
+            ))
         } else {
             None
         }

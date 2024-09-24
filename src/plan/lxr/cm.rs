@@ -480,7 +480,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     }
 }
 
-pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
+pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const FULL_GC: bool> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
@@ -494,7 +494,7 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding> {
     should_record_forwarded_roots: bool,
 }
 
-impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC> {
     pub(super) fn new_remset(
         slots: Vec<SlotOf<Self>>,
         refs: Vec<ObjectReference>,
@@ -510,7 +510,9 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
+    for LXRStopTheWorldProcessEdges<VM, FULL_GC>
+{
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = crate::args::RC_MATURE_EVACUATION;
@@ -556,10 +558,113 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
     }
 
     /// Trace  and evacuate objects.
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
+        unreachable!()
+    }
+
+    fn process_slots(&mut self) {
+        self.should_record_forwarded_roots = self.roots
+            && !self
+                .root_kind
+                .map(|r| r.should_skip_decs())
+                .unwrap_or_default();
+        self.pause = self.lxr.current_pause().unwrap();
+        if self.should_record_forwarded_roots {
+            self.forwarded_roots.reserve(self.slots.len());
+        }
+        let slots = std::mem::take(&mut self.slots);
+        let slices = std::mem::take(&mut self.array_slices);
+        if self.roots && self.root_kind == Some(RootKind::Weak) {
+            self.process_slots_impl::<true, false>(&slots, &slices);
+        } else if self.remset_recorded_slots {
+            self.process_slots_impl::<false, true>(&slots, &slices);
+        } else {
+            self.process_slots_impl::<false, false>(&slots, &slices);
+        }
+        self.roots = false;
+        self.remset_recorded_slots = false;
+        let should_record_forwarded_roots = self.should_record_forwarded_roots;
+        self.should_record_forwarded_roots = false;
+        let mut slots = vec![];
+        let mut slices = vec![];
+        while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
+            self.next_slot_count = 0;
+            slots.clear();
+            slices.clear();
+            self.next_slots.swap(&mut slots);
+            self.next_array_slices.swap(&mut slices);
+            self.process_slots_impl::<false, false>(&slots, &slices);
+        }
+        if cfg!(feature = "rust_mem_counter") {
+            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
+        }
+        self.flush();
+        if should_record_forwarded_roots {
+            let roots = std::mem::take(&mut self.forwarded_roots);
+            self.lxr.curr_roots.read().unwrap().push(roots);
+        }
+    }
+
+    fn process_slot(&mut self, _slot: SlotOf<Self>) {
+        unreachable!()
+    }
+
+    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
+        unreachable!()
+    }
+}
+
+impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC> {
+    #[inline]
+    fn full_gc_trace_object<const WEAK_ROOT: bool>(
+        &mut self,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        debug_assert!(FULL_GC);
+        debug_assert!(object.is_in_any_space::<VM>());
+        debug_assert!(object.to_address::<VM>().is_aligned_to(8));
+        // debug_assert!(object.class_is_valid::<VM>());
+        if WEAK_ROOT && !Block::containing::<VM>(object).is_defrag_source() {
+            return object;
+        }
+        let x = if self.lxr.immix_space.in_space(object) {
+            let pause = self.pause;
+            let worker = self.worker();
+            self.lxr.immix_space.rc_trace_object(
+                self,
+                object,
+                CopySemantics::DefaultCopy,
+                pause,
+                true,
+                worker,
+            )
+        } else {
+            let x = self.lxr.los().trace_object_rc(self, object);
+            debug_assert_ne!(
+                self.lxr.rc.count(x),
+                0,
+                "ERROR Invalid {:?} los={} rc={}",
+                x,
+                self.lxr.los().in_space(x),
+                self.lxr.rc.count(x)
+            );
+            x
+        };
+        if self.should_record_forwarded_roots {
+            self.forwarded_roots.push(x)
+        }
+        x
+    }
+
+    #[inline]
+    fn mature_evac_trace_object<const WEAK_ROOT: bool, const REMSET: bool>(
+        &mut self,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        debug_assert!(!FULL_GC);
         // The memory (lines) of these slots can be reused at any time during mature evacuation.
         // Filter out invalid target objects.
-        if self.remset_recorded_slots
+        if REMSET
             && (!object.is_in_any_space::<VM>() || !object.to_address::<VM>().is_aligned_to(8))
         {
             return object;
@@ -567,10 +672,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         if self.lxr.rc.count(object) == 0 {
             return object;
         }
-        if self.roots
-            && self.root_kind == Some(RootKind::Weak)
-            && !Block::containing::<VM>(object).is_defrag_source()
-        {
+        if WEAK_ROOT && !Block::containing::<VM>(object).is_defrag_source() {
             return object;
         }
         debug_assert!(object.is_in_any_space::<VM>(), "Invalid {:?}", object);
@@ -609,202 +711,69 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRStopTheWorldProcessEdges<VM> {
         new_object
     }
 
-    fn process_slots(&mut self) {
-        self.should_record_forwarded_roots = self.roots
-            && !self
-                .root_kind
-                .map(|r| r.should_skip_decs())
-                .unwrap_or_default();
-        self.pause = self.lxr.current_pause().unwrap();
-        if self.should_record_forwarded_roots {
-            self.forwarded_roots.reserve(self.slots.len());
-        }
-        let slots = std::mem::take(&mut self.slots);
-        let slices = std::mem::take(&mut self.array_slices);
-        self.process_slots_impl(&slots, &slices, self.remset_recorded_slots);
-        self.roots = false;
-        self.remset_recorded_slots = false;
-        let should_record_forwarded_roots = self.should_record_forwarded_roots;
-        self.should_record_forwarded_roots = false;
-        let mut slots = vec![];
-        let mut slices = vec![];
-        while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            self.next_slot_count = 0;
-            slots.clear();
-            slices.clear();
-            self.next_slots.swap(&mut slots);
-            self.next_array_slices.swap(&mut slices);
-            self.process_slots_impl(&slots, &slices, false);
-        }
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
-        }
-        self.flush();
-        if should_record_forwarded_roots {
-            let roots = std::mem::take(&mut self.forwarded_roots);
-            self.lxr.curr_roots.read().unwrap().push(roots);
-        }
-    }
-
-    fn process_slot(&mut self, slot: SlotOf<Self>) {
+    #[inline]
+    fn __process_slot<const WEAK_ROOT: bool, const REMSET: bool>(
+        &mut self,
+        slot: SlotOf<Self>,
+        i: usize,
+    ) {
         let Some(object) = slot.load() else {
             return;
         };
-        let new_object = self.trace_object(object);
-        if Self::OVERWRITE_REFERENCE && new_object != object {
-            debug_assert!(!self.remset_recorded_slots);
-            slot.store(Some(new_object));
+        if !FULL_GC && REMSET && object != self.refs[i] {
+            return;
         }
-        super::record_slot_for_validation(slot, Some(new_object));
-    }
-
-    fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
-        unreachable!()
-    }
-}
-
-impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
-    fn trace_and_mark_object(&mut self, object: ObjectReference) -> ObjectReference {
-        debug_assert!(object.is_in_any_space::<VM>());
-        debug_assert!(object.to_address::<VM>().is_aligned_to(8));
-        // debug_assert!(object.class_is_valid::<VM>());
-        if self.roots
-            && self.root_kind == Some(RootKind::Weak)
-            && !Block::containing::<VM>(object).is_defrag_source()
-        {
-            return object;
-        }
-        let x = if self.lxr.immix_space.in_space(object) {
-            let pause = self.pause;
-            let worker = self.worker();
-            self.lxr.immix_space.rc_trace_object(
-                self,
-                object,
-                CopySemantics::DefaultCopy,
-                pause,
-                true,
-                worker,
-            )
+        let new_object = if !FULL_GC {
+            self.mature_evac_trace_object::<WEAK_ROOT, REMSET>(object)
         } else {
-            let x = self.lxr.los().trace_object_rc(self, object);
-            debug_assert_ne!(
-                self.lxr.rc.count(x),
-                0,
-                "ERROR Invalid {:?} los={} rc={}",
-                x,
-                self.lxr.los().in_space(x),
-                self.lxr.rc.count(x)
-            );
-            x
+            self.full_gc_trace_object::<WEAK_ROOT>(object)
         };
-        if self.should_record_forwarded_roots {
-            self.forwarded_roots.push(x)
-        }
-        x
-    }
-
-    fn process_remset_slot(&mut self, slot: SlotOf<Self>, i: usize) {
-        let Some(object) = slot.load() else {
-            return;
-        };
-        if object != self.refs[i] {
-            return;
-        }
-        let new_object = self.trace_object(object);
         if Self::OVERWRITE_REFERENCE && new_object != object {
-            if slot.to_address().is_in_mmtk_heap() {
-                debug_assert!(self.remset_recorded_slots);
-                // Don't do the store if the original is already overwritten
-                let _ = slot.compare_exchange(
-                    Some(object),
-                    Some(new_object),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+            if !FULL_GC && REMSET {
+                if slot.to_address().is_in_mmtk_heap() {
+                    debug_assert!(self.remset_recorded_slots);
+                    // Don't do the store if the original is already overwritten
+                    let _ = slot.compare_exchange(
+                        Some(object),
+                        Some(new_object),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    );
+                } else {
+                    slot.store(Some(new_object));
+                }
             } else {
+                debug_assert!(!self.remset_recorded_slots);
                 slot.store(Some(new_object));
             }
         }
         super::record_slot_for_validation(slot, Some(new_object));
     }
 
-    fn process_mark_slot(&mut self, slot: SlotOf<Self>) {
-        let Some(object) = slot.load() else {
-            return;
-        };
-        let new_object = self.trace_and_mark_object(object);
-        super::record_slot_for_validation(slot, Some(new_object));
-        if Self::OVERWRITE_REFERENCE && new_object != object {
-            slot.store(Some(new_object));
-        }
-    }
-
-    fn process_slots_impl(
+    fn process_slots_impl<const WEAK_ROOT: bool, const REMSET: bool>(
         &mut self,
         slots: &[VM::VMSlot],
         slices: &[VM::VMMemorySlice],
-        remset_slots: bool,
     ) {
-        if self.pause == Pause::Full {
-            for (i, s) in slots.iter().enumerate() {
-                self.process_mark_slot(*s);
-                if crate::args::PREFETCH {
-                    if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = s.load() {
-                            prefetch_object(o, &self.lxr.immix_space);
-                        }
-                    }
-                }
-            }
-        } else if remset_slots {
-            for (i, s) in slots.iter().enumerate() {
-                self.process_remset_slot(*s, i);
-                if crate::args::PREFETCH {
-                    if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = s.load() {
-                            prefetch_object(o, &self.lxr.immix_space);
-                        }
-                    }
-                }
-            }
-        } else {
-            for (i, s) in slots.iter().enumerate() {
-                self.process_slot(*s);
-                if crate::args::PREFETCH {
-                    if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
-                        if let Some(o) = s.load() {
-                            prefetch_object(o, &self.lxr.immix_space);
-                        }
+        for (i, s) in slots.iter().enumerate() {
+            self.__process_slot::<WEAK_ROOT, REMSET>(*s, i);
+            if crate::args::PREFETCH {
+                if let Some(s) = slots.get(i + crate::args::PREFETCH_STEP) {
+                    if let Some(o) = s.load() {
+                        prefetch_object(o, &self.lxr.immix_space);
                     }
                 }
             }
         }
-        if self.pause == Pause::Full {
-            for slice in slices {
-                let n = slice.len();
-                for (i, s) in slice.iter_slots().enumerate() {
-                    self.process_mark_slot(s);
-                    if crate::args::PREFETCH {
-                        if i + crate::args::PREFETCH_STEP < n {
-                            let s = slice.get(i + crate::args::PREFETCH_STEP);
-                            if let Some(o) = s.load() {
-                                prefetch_object(o, &self.lxr.immix_space);
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            for slice in slices {
-                let n = slice.len();
-                for (i, s) in slice.iter_slots().enumerate() {
-                    self.process_slot(s);
-                    if crate::args::PREFETCH {
-                        if i + crate::args::PREFETCH_STEP < n {
-                            let s = slice.get(i + crate::args::PREFETCH_STEP);
-                            if let Some(o) = s.load() {
-                                prefetch_object(o, &self.lxr.immix_space);
-                            }
+        for slice in slices {
+            let n = slice.len();
+            for (i, s) in slice.iter_slots().enumerate() {
+                self.__process_slot::<false, false>(s, i);
+                if crate::args::PREFETCH {
+                    if i + crate::args::PREFETCH_STEP < n {
+                        let s = slice.get(i + crate::args::PREFETCH_STEP);
+                        if let Some(o) = s.load() {
+                            prefetch_object(o, &self.lxr.immix_space);
                         }
                     }
                 }
@@ -813,7 +782,7 @@ impl<VM: VMBinding> LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const FULL_GC: bool> ObjectQueue for LXRStopTheWorldProcessEdges<VM, FULL_GC> {
     fn enqueue(&mut self, object: ObjectReference) {
         if cfg!(feature = "object_size_distribution") {
             crate::record_obj(object.get_size::<VM>());
@@ -821,11 +790,7 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
         if cfg!(feature = "lxr_satb_live_bytes_counter") {
             crate::record_live_bytes(object.get_size::<VM>());
         }
-        let limit: usize = if self.pause == Pause::Full {
-            8192
-        } else {
-            1024
-        };
+        let limit: usize = if FULL_GC { 8192 } else { 1024 };
         // Skip primitive array
         match VM::VMScanning::get_obj_kind(object) {
             ObjectKind::ObjArray(len) if len >= 1024 => {
@@ -866,14 +831,14 @@ impl<VM: VMBinding> ObjectQueue for LXRStopTheWorldProcessEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> Deref for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const FULL_GC: bool> Deref for LXRStopTheWorldProcessEdges<VM, FULL_GC> {
     type Target = ProcessEdgesBase<VM>;
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
-impl<VM: VMBinding> DerefMut for LXRStopTheWorldProcessEdges<VM> {
+impl<VM: VMBinding, const FULL_GC: bool> DerefMut for LXRStopTheWorldProcessEdges<VM, FULL_GC> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
