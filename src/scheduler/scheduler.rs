@@ -95,7 +95,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn execute(&self, graph: &'static BucketGraph) {
         // reset all buckets
-        graph.reset();
         self.current_schedule.store(
             graph as *const BucketGraph as *mut BucketGraph,
             Ordering::SeqCst,
@@ -880,6 +879,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // Reset the triggering information.
         mmtk.state.reset_collection_trigger();
+
+        if !self.current_schedule.load(Ordering::SeqCst).is_null() {
+            self.schedule().reset();
+        }
+        self.current_schedule
+            .store(std::ptr::null_mut(), Ordering::SeqCst);
 
         // Set to NotInGC after everything, and right before resuming mutators.
         mmtk.set_gc_status(GcStatus::NotInGC);

@@ -935,7 +935,6 @@ impl<VM: VMBinding> LXR<VM> {
             BucketId::Release,
             Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
         );
-        unimplemented!();
     }
 
     fn dump_memory(&self, pause: Pause) {
