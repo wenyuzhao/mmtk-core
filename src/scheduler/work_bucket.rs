@@ -64,14 +64,14 @@ impl WorkBucket {
         std::mem::replace(&mut self.queue.write().unwrap(), SegQueue::new())
     }
 
-    // pub fn swap_queue(
-    //     &self,
-    //     mut new_queue: Injector<Box<dyn GCWork>>,
-    // ) -> Injector<Box<dyn GCWork>> {
-    //     let mut queue = self.queue.queue.write().unwrap();
-    //     std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
-    //     new_queue
-    // }
+    pub fn set_queue(&self, new_queue: SegQueue<Box<dyn GCWork>>) {
+        let count = new_queue.len();
+        let mut queue = self.queue.write().unwrap();
+        assert!(queue.is_empty());
+        *queue = new_queue;
+        assert!(self.count.load(Ordering::SeqCst) == 0);
+        self.count.store(count, Ordering::SeqCst);
+    }
 
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {

@@ -25,6 +25,14 @@ pub static RC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     g
 });
 
+pub static RC_CONC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
+    let mut g = BucketGraph::new();
+
+    g.dep(BucketId::Decs, vec![]);
+
+    g
+});
+
 pub static INITIAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 

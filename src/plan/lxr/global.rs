@@ -528,6 +528,12 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
         }
+
+        if pause == Pause::RefCount && crate::args::LAZY_DECREMENTS {
+            self.immix_space
+                .scheduler()
+                .execute(&super::schedule::RC_CONC_SCHEDULE);
+        }
     }
 
     #[cfg(feature = "nogc_no_zeroing")]

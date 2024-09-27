@@ -145,11 +145,13 @@ impl Drop for LazySweepingJobsCounter {
         if let Some(decs) = self.decs_counter.as_ref() {
             if decs.fetch_sub(1, Ordering::SeqCst) == 1 {
                 let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
+                println!("END OF DECS");
                 f(self.clone())
             }
         }
         if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
             if let Some(f) = lazy_sweeping_jobs.end_of_lazy.as_ref() {
+                println!("END OF LAZY");
                 f()
             }
         }

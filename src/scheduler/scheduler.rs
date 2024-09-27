@@ -17,7 +17,7 @@ use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::Pause;
 use crate::Plan;
-use crossbeam::deque::{Injector, Steal};
+use crossbeam::deque::Steal;
 use enum_map::EnumMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -32,8 +32,8 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(crate) worker_monitor: Arc<WorkerMonitor>,
     /// How to assign the affinity of each GC thread. Specified by the user.
     affinity: AffinityKind,
-    pub(super) postponed_concurrent_work: spin::RwLock<Injector<Box<dyn GCWork>>>,
-    pub(super) postponed_concurrent_work_prioritized: spin::RwLock<Injector<Box<dyn GCWork>>>,
+    pub(super) postponed_concurrent_work: spin::RwLock<SegQueue<Box<dyn GCWork>>>,
+    pub(super) postponed_concurrent_work_prioritized: spin::RwLock<SegQueue<Box<dyn GCWork>>>,
     in_gc_pause: AtomicBool,
     current_schedule: AtomicPtr<BucketGraph>,
 }
@@ -55,8 +55,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             worker_group,
             worker_monitor,
             affinity,
-            postponed_concurrent_work: spin::RwLock::new(Injector::new()),
-            postponed_concurrent_work_prioritized: spin::RwLock::new(Injector::new()),
+            postponed_concurrent_work: spin::RwLock::new(SegQueue::new()),
+            postponed_concurrent_work_prioritized: spin::RwLock::new(SegQueue::new()),
             in_gc_pause: AtomicBool::new(false),
             current_schedule: AtomicPtr::new(std::ptr::null_mut()),
         })
@@ -94,6 +94,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn execute(&self, graph: &'static BucketGraph) {
+        println!("current_schedule = {:?}", graph as *const BucketGraph);
         // reset all buckets
         self.current_schedule.store(
             graph as *const BucketGraph as *mut BucketGraph,
@@ -122,32 +123,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn process_lazy_decrement_packets(&self) {
-        let mut no_postpone = vec![];
-        let mut cm_packets = vec![];
-        // Buggy
-        let postponed_concurrent_work = self.postponed_concurrent_work_prioritized.read();
-        loop {
-            if postponed_concurrent_work.is_empty() {
-                break;
-            }
-            match postponed_concurrent_work.steal() {
-                Steal::Success(w) => {
-                    if !w.is_concurrent_marking_work() {
-                        no_postpone.push(w)
-                    } else {
-                        cm_packets.push(w)
-                    }
-                }
-                Steal::Empty => break,
-                Steal::Retry => {}
-            }
-        }
-        for w in cm_packets {
-            postponed_concurrent_work.push(w)
-        }
-        if !no_postpone.is_empty() {
-            self.spawn_bulk(BucketId::Decs, no_postpone);
-        }
+        let mut postponed_concurrent_work = self.postponed_concurrent_work_prioritized.write();
+        let mut new_queue = SegQueue::new();
+        std::mem::swap(&mut *postponed_concurrent_work, &mut new_queue);
+        BucketId::Decs.get_bucket().set_queue(new_queue);
     }
 
     pub fn postpone(&self, w: impl GCWork) {
@@ -373,27 +352,22 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     #[allow(unused)]
     pub(super) fn schedule_concurrent_packets(
         &self,
-        queue: Injector<Box<dyn GCWork>>,
-        pqueue: Injector<Box<dyn GCWork>>,
+        queue: SegQueue<Box<dyn GCWork>>,
+        pqueue: SegQueue<Box<dyn GCWork>>,
     ) {
-        // crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
-        // crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
-        // let mut notify = false;
-        // if !queue.is_empty() {
-        //     let old_queue = self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(queue);
-        //     debug_assert!(old_queue.is_empty());
-        //     notify = true;
-        // }
-        // if !pqueue.is_empty() {
-        //     let old_queue =
-        //         self.work_buckets[WorkBucketStage::Unconstrained].swap_queue_prioritized(pqueue);
-        //     debug_assert!(old_queue.is_empty());
-        //     notify = true;
-        // }
-        // if notify {
-        //     self.wakeup_all_conc_workers();
-        // }
-        // unimplemented!()
+        crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
+        crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
+        let mut notify = !queue.is_empty() || !pqueue.is_empty();
+        println!(
+            "schedule_concurrent_packets: count={},{}",
+            queue.len(),
+            pqueue.len()
+        );
+        assert!(queue.is_empty());
+        BucketId::Decs.get_bucket().set_queue(pqueue);
+        if notify {
+            self.notify_bucket_empty(None);
+        }
     }
 
     /// Schedule "sentinel" work packets for all activated buckets.
@@ -438,6 +412,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             new_buckets = true;
         });
         if new_buckets && new_work {
+            println!("notify_work_available");
             self.worker_monitor.notify_work_available(true)
         }
         println!("notify_bucket_empty END");
@@ -512,7 +487,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn reset_state(&self) {
-        self.schedule().reset();
         self.current_schedule
             .store(std::ptr::null_mut(), Ordering::SeqCst);
     }
@@ -630,6 +604,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// current goal.
     fn on_last_parked(&self, worker: &GCWorker<VM>, goals: &mut WorkerGoals) -> LastParkedResult {
         let Some(ref current_goal) = goals.current() else {
+            if !self.current_schedule.load(Ordering::SeqCst).is_null() {
+                self.schedule().reset();
+                self.current_schedule
+                    .store(std::ptr::null_mut(), Ordering::SeqCst);
+            }
             // There is no goal.  Find a request to respond to.
             return self.respond_to_requests(worker, goals);
         };
@@ -781,14 +760,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
-    fn schedule_postponed_concurrent_packets(
+    fn take_postponed_concurrent_packets(
         &self,
-    ) -> (Injector<Box<dyn GCWork>>, Injector<Box<dyn GCWork>>) {
-        let mut queue = Injector::new();
-        type Q = Injector<Box<dyn GCWork>>;
+    ) -> (SegQueue<Box<dyn GCWork>>, SegQueue<Box<dyn GCWork>>) {
+        let mut queue = SegQueue::new();
+        type Q = SegQueue<Box<dyn GCWork>>;
         std::mem::swap::<Q>(&mut queue, &mut self.postponed_concurrent_work.write());
 
-        let mut pqueue = Injector::new();
+        let mut pqueue = SegQueue::new();
         std::mem::swap::<Q>(
             &mut pqueue,
             &mut self.postponed_concurrent_work_prioritized.write(),
@@ -820,7 +799,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         let mmtk = worker.mmtk;
 
-        let (queue, pqueue) = self.schedule_postponed_concurrent_packets();
+        let (queue, pqueue) = self.take_postponed_concurrent_packets();
 
         // Tell GC trigger that GC ended - this happens before we resume mutators.
         mmtk.gc_trigger.policy.on_gc_end(mmtk);
@@ -874,17 +853,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             // reset the logging info at the end of each GC
             mmtk.slot_logger.reset();
         }
+        if !self.current_schedule.load(Ordering::SeqCst).is_null() {
+            self.schedule().reset();
+        }
+
+        self.current_schedule
+            .store(std::ptr::null_mut(), Ordering::SeqCst);
 
         mmtk.get_plan().gc_pause_end();
 
         // Reset the triggering information.
         mmtk.state.reset_collection_trigger();
-
-        if !self.current_schedule.load(Ordering::SeqCst).is_null() {
-            self.schedule().reset();
-        }
-        self.current_schedule
-            .store(std::ptr::null_mut(), Ordering::SeqCst);
 
         // Set to NotInGC after everything, and right before resuming mutators.
         mmtk.set_gc_status(GcStatus::NotInGC);
@@ -1031,6 +1010,7 @@ impl BucketGraph {
         for b in &self.all_buckets {
             self.is_open[*b].store(false, Ordering::SeqCst);
             // self.counts[*b].store(0, Ordering::SeqCst);
+            println!("RESET BUCKET {:?}", b);
             b.get_bucket().reset()
         }
     }
@@ -1051,6 +1031,7 @@ impl BucketGraph {
     }
 
     fn update(&self, bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
+        println!("UPDATE BUCKET {:?}", bucket);
         let _lock = self.lock.write().unwrap();
         let mut open_buckets = vec![];
         if let Some(b) = bucket {
