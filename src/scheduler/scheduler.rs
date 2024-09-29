@@ -67,7 +67,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         bucket.get_bucket().inc();
         // Add to the corresponding bucket/queue
         if !self.current_schedule.load(Ordering::SeqCst).is_null()
-            && self.schedule().is_open[bucket].load(Ordering::SeqCst)
+            && self.schedule().bucket_is_open(bucket)
         {
             // let _guard = self.schedule().lock.read().unwrap();
             // The bucket is open. Either add to the global pool, or the thread local queue
@@ -481,20 +481,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn deactivate_all(&self) {
-        self.schedule().reset();
-        self.current_schedule
-            .store(std::ptr::null_mut(), Ordering::SeqCst);
+        if !self.current_schedule.load(Ordering::SeqCst).is_null() {
+            self.schedule().reset();
+            self.current_schedule
+                .store(std::ptr::null_mut(), Ordering::SeqCst);
+        }
     }
 
     pub fn reset_state(&self) {
-        self.current_schedule
-            .store(std::ptr::null_mut(), Ordering::SeqCst);
+        unreachable!()
     }
 
     pub fn debug_assert_all_buckets_deactivated(&self) {
         if cfg!(debug_assertions) {
             for b in self.schedule().all_buckets.iter() {
-                assert!(!self.schedule().is_open[*b].load(Ordering::SeqCst));
+                assert!(!self.schedule().bucket_is_open(*b));
             }
         }
     }
@@ -604,11 +605,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// current goal.
     fn on_last_parked(&self, worker: &GCWorker<VM>, goals: &mut WorkerGoals) -> LastParkedResult {
         let Some(ref current_goal) = goals.current() else {
-            if !self.current_schedule.load(Ordering::SeqCst).is_null() {
-                self.schedule().reset();
-                self.current_schedule
-                    .store(std::ptr::null_mut(), Ordering::SeqCst);
-            }
+            self.deactivate_all();
             // There is no goal.  Find a request to respond to.
             return self.respond_to_requests(worker, goals);
         };
@@ -853,12 +850,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             // reset the logging info at the end of each GC
             mmtk.slot_logger.reset();
         }
-        if !self.current_schedule.load(Ordering::SeqCst).is_null() {
-            self.schedule().reset();
-        }
-
-        self.current_schedule
-            .store(std::ptr::null_mut(), Ordering::SeqCst);
 
         mmtk.get_plan().gc_pause_end();
 
@@ -972,10 +963,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 pub struct BucketGraph {
     pub(crate) preds: EnumMap<BucketId, Vec<BucketId>>,
     pub(crate) succs: EnumMap<BucketId, Vec<BucketId>>,
-    pub(crate) is_open: EnumMap<BucketId, AtomicBool>,
-    // pub(crate) counts: EnumMap<BucketId, AtomicUsize>,
     pub(crate) all_buckets: HashSet<BucketId>,
     lock: RwLock<()>,
+}
+
+impl Clone for BucketGraph {
+    fn clone(&self) -> Self {
+        Self {
+            preds: self.preds.clone(),
+            succs: self.succs.clone(),
+            all_buckets: self.all_buckets.clone(),
+            lock: RwLock::new(()),
+        }
+    }
 }
 
 impl BucketGraph {
@@ -983,15 +983,13 @@ impl BucketGraph {
         Self {
             preds: EnumMap::default(),
             succs: EnumMap::default(),
-            is_open: EnumMap::default(),
-            // counts: EnumMap::default(),
             all_buckets: HashSet::new(),
             lock: RwLock::new(()),
         }
     }
 
     pub fn bucket_is_open(&self, b: BucketId) -> bool {
-        self.is_open[b].load(Ordering::SeqCst)
+        b.get_bucket().is_open()
     }
 
     pub fn dep(&mut self, parent: BucketId, children: Vec<BucketId>) {
@@ -1008,19 +1006,17 @@ impl BucketGraph {
 
     fn reset(&self) {
         for b in &self.all_buckets {
-            self.is_open[*b].store(false, Ordering::SeqCst);
-            // self.counts[*b].store(0, Ordering::SeqCst);
             println!("RESET BUCKET {:?}", b);
             b.get_bucket().reset()
         }
     }
 
     fn bucket_can_open(&self, b: BucketId) -> bool {
-        if self.is_open[b].load(Ordering::SeqCst) {
+        if self.bucket_is_open(b) {
             return false;
         }
         for pred in &self.preds[b] {
-            if !self.is_open[*pred].load(Ordering::SeqCst) {
+            if !self.bucket_is_open(*pred) {
                 return false;
             }
             if !pred.get_bucket().is_empty() {
@@ -1057,23 +1053,8 @@ impl BucketGraph {
             }
         }
         // If the newly opened bucket is empty, we can open its successors.
-        // loop {
-        //     let mut new_bucket = false;
-        //     for b in &self.all_buckets {
-        //         if open_buckets.contains(b) {
-        //             continue;
-        //         }
-        //         if self.bucket_can_open(*b) {
-        //             new_bucket = true;
-        //             open_buckets.push(*b);
-        //         }
-        //     }
-        //     if !new_bucket {
-        //         break;
-        //     }
-        // }
         for b in open_buckets {
-            self.is_open[b].store(true, Ordering::SeqCst);
+            b.get_bucket().open();
             on_bucket_open(b);
             if crate::GC_START_TIME.ready() {
                 gc_log!([3]

@@ -3,7 +3,7 @@ use super::*;
 use crossbeam::deque::{Injector, Steal, Worker};
 use crossbeam::queue::SegQueue;
 use enum_map::Enum;
-use portable_atomic::AtomicUsize;
+use portable_atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
@@ -40,6 +40,7 @@ pub struct WorkBucket {
     name: &'static str,
     count: AtomicUsize,
     queue: RwLock<SegQueue<Box<dyn GCWork>>>,
+    is_open: AtomicBool,
 }
 
 impl WorkBucket {
@@ -48,7 +49,20 @@ impl WorkBucket {
             name,
             count: AtomicUsize::new(0),
             queue: RwLock::new(SegQueue::new()),
+            is_open: AtomicBool::new(false),
         }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.is_open.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn close(&self) {
+        self.is_open.store(false, Ordering::Relaxed);
+    }
+
+    pub(super) fn open(&self) {
+        self.is_open.store(true, Ordering::Relaxed);
     }
 
     pub fn reset(&self) {
@@ -58,6 +72,7 @@ impl WorkBucket {
             self.name
         );
         assert!(self.queue.read().unwrap().is_empty());
+        self.is_open.store(false, Ordering::SeqCst);
     }
 
     pub fn take_queue(&self) -> SegQueue<Box<dyn GCWork>> {
