@@ -239,6 +239,9 @@ pub enum BucketId {
     Release,
     Finish,
     Decs,
+    ConcClosure,
+    FinishMark,
+    PostSATBSWeep,
 }
 
 static START: WorkBucket = WorkBucket::new("start");
@@ -252,6 +255,9 @@ static REF_FINAL: WorkBucket = WorkBucket::new("ref.final");
 static REF_PHANTOM: WorkBucket = WorkBucket::new("ref.phantom");
 static FINISH: WorkBucket = WorkBucket::new("finish");
 static DECS: WorkBucket = WorkBucket::new("decs");
+static CONC_CLOSURE: WorkBucket = WorkBucket::new("conc.closure");
+static FINISH_MARK: WorkBucket = WorkBucket::new("finish.mark");
+static POST_SATB_SWEEP: WorkBucket = WorkBucket::new("post-satb-sweep");
 
 impl BucketId {
     #[inline(always)]
@@ -268,6 +274,9 @@ impl BucketId {
             BucketId::Release => &RELEASE,
             BucketId::Finish => &FINISH,
             BucketId::Decs => &DECS,
+            BucketId::ConcClosure => &CONC_CLOSURE,
+            BucketId::FinishMark => &FINISH_MARK,
+            BucketId::PostSATBSWeep => &POST_SATB_SWEEP,
         }
     }
 }

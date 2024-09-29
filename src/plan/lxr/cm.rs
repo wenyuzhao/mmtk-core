@@ -146,8 +146,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
-                // worker.add_work(WorkBucketStage::Unconstrained, w);
-                unimplemented!()
+                worker.scheduler().spawn(BucketId::ConcClosure, w);
             }
         }
     }
@@ -162,8 +161,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
-                // worker.add_work(WorkBucketStage::Unconstrained, w);
-                unimplemented!()
+                worker.scheduler().spawn(BucketId::ConcClosure, w);
             }
         }
     }
@@ -337,8 +335,7 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
     }
     fn do_work(&mut self) {
         let mmtk = crate::scheduler::GCWorker::<VM>::current().mmtk;
-        // debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
-        unimplemented!();
+        debug_assert!(!BucketId::Incs.get_bucket().is_open());
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
         #[cfg(feature = "measure_trace_rate")]
@@ -375,9 +372,12 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
         }
         self.flush();
         // CM: Decrease counter
-        crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
+        let old = crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
+        if old == 1 {
+            println!("CM: All packets are processed");
+        }
         // debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
-        unimplemented!();
+        debug_assert!(!BucketId::Incs.get_bucket().is_open());
         #[cfg(feature = "measure_trace_rate")]
         if record {
             let us = t.elapsed().unwrap().as_micros() as usize;

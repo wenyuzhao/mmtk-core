@@ -685,7 +685,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                         );
                         w.root_kind = self.root_kind;
                         worker.scheduler().spawn(BucketId::Closure, w);
-                        unimplemented!()
                     } else {
                         let mut w = LXRStopTheWorldProcessEdges::<_, true>::new(
                             root_slots,
@@ -874,8 +873,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             let objects = self.mark_objects.take();
             let w = LXRConcurrentTraceObjects::new(objects, mmtk);
             if crate::args::LAZY_DECREMENTS {
-                // self.worker().add_work(WorkBucketStage::Unconstrained, w);
-                unimplemented!()
+                self.worker().scheduler().spawn(BucketId::ConcClosure, w);
             } else {
                 self.worker().scheduler().postpone(w);
             }

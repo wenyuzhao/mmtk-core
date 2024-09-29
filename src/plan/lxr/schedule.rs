@@ -33,6 +33,26 @@ pub static RC_CONC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     g
 });
 
+pub static CONC_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
+    let mut g = BucketGraph::new();
+
+    g.dep(BucketId::Decs, vec![BucketId::ConcClosure]);
+    g.dep(BucketId::ConcClosure, vec![]);
+
+    // g.dep(BucketId::ConcClosure, vec![]);
+
+    g
+});
+
+pub static POST_SATB_SWEEPING_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
+    let mut g = BucketGraph::new();
+
+    g.dep(BucketId::Decs, vec![]);
+    g.dep(BucketId::ConcClosure, vec![]);
+
+    g
+});
+
 pub static INITIAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
@@ -43,6 +63,11 @@ pub static INITIAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 
     g.dep(BucketId::Prepare, vec![BucketId::Release]);
 
+    if !crate::args::LAZY_DECREMENTS {
+        g.dep(BucketId::Release, vec![BucketId::Decs]);
+        g.dep(BucketId::Decs, vec![BucketId::Finish]);
+    }
+
     g.dep(BucketId::Release, vec![BucketId::Finish]);
 
     g
@@ -51,7 +76,9 @@ pub static INITIAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 pub static FINAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
-    g.dep(BucketId::Start, vec![BucketId::Incs, BucketId::Roots]);
+    g.dep(BucketId::Start, vec![BucketId::FinishMark]);
+
+    g.dep(BucketId::FinishMark, vec![BucketId::Incs, BucketId::Roots]);
 
     g.dep(BucketId::Incs, vec![BucketId::Prepare]);
     g.dep(BucketId::Roots, vec![BucketId::Prepare]);
@@ -63,6 +90,8 @@ pub static FINAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     g.dep(BucketId::WeakRefClosure, vec![BucketId::FinalRefClosure]);
 
     g.dep(BucketId::FinalRefClosure, vec![BucketId::PhantomRefClosure]);
+
+    g.dep(BucketId::PhantomRefClosure, vec![BucketId::Release]);
 
     g.dep(BucketId::Release, vec![BucketId::Finish]);
 

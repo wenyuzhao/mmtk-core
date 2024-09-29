@@ -249,9 +249,14 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             }
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
-                // self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                //     .add(ProcessModBufSATB::<VM>::new_arc(decs.clone()));
-                unimplemented!();
+                let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark) {
+                    BucketId::FinishMark
+                } else {
+                    BucketId::ConcClosure
+                };
+                self.mmtk
+                    .scheduler
+                    .spawn(bucket, ProcessModBufSATB::<VM>::new_arc(decs.clone()));
                 ProcessDecs::<VM>::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
@@ -270,9 +275,14 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            // self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            //     .add(ProcessModBufSATB::<VM>::new(nodes));
-            unimplemented!();
+            let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark) {
+                BucketId::FinishMark
+            } else {
+                BucketId::ConcClosure
+            };
+            self.mmtk
+                .scheduler
+                .spawn(bucket, ProcessModBufSATB::<VM>::new(nodes));
         }
     }
 }

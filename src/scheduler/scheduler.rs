@@ -74,6 +74,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         } else {
             // The bucket is closed. Add to the bucket's queue
+            if bucket == BucketId::ConcClosure {
+                println!("ConcClosure: {:?}", bucket.get_bucket().count());
+            }
             bucket.get_bucket().add(w);
         }
     }
@@ -101,6 +104,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
+        // Take everything left in the active bucket, and put them back to the postponed queue
         // let mut unconstrained_queue = Injector::new();
         // unconstrained_queue =
         //     self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
@@ -359,8 +363,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             queue.len(),
             pqueue.len()
         );
-        assert!(queue.is_empty());
-        BucketId::Decs.get_bucket().set_queue(pqueue);
+        if !queue.is_empty() {
+            BucketId::ConcClosure.get_bucket().set_queue(queue);
+        }
+        if !pqueue.is_empty() {
+            BucketId::Decs.get_bucket().set_queue(pqueue);
+        }
         if notify {
             self.notify_bucket_empty(None);
         }
@@ -393,12 +401,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     ///
     /// Return true if there're any non-empty buckets updated.
     pub(crate) fn notify_bucket_empty(&self, bucket: Option<BucketId>) -> bool {
-        println!("notify_bucket_empty, bucket: {:?}", bucket);
         let mut new_buckets = false;
         let mut new_work = false;
         self.schedule().update(bucket, |b| {
             // dump everything to the active bucket
             let q = b.get_bucket().take_queue();
+            if b == BucketId::ConcClosure {
+                println!("ConcClosure: {:?}", q.len());
+            }
             while let Some(q) = q.pop() {
                 self.active_bucket.add_boxed_no_notify(b, q);
                 new_work = true;
@@ -406,72 +416,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             new_buckets = true;
         });
         if new_buckets && new_work {
-            println!("notify_work_available");
             self.worker_monitor.notify_work_available(true)
         }
-        println!("notify_bucket_empty END");
         new_buckets && new_work
-
-        // let mut buckets_updated = false;
-        // let mut new_packets = false;
-        // let start_index = self.bucket_update_progress.load(Ordering::SeqCst) + 1;
-        // let mut new_progress = WorkBucketStage::LENGTH;
-        // for i in start_index..WorkBucketStage::LENGTH {
-        //     let id = WorkBucketStage::from_usize(i);
-        //     if id == WorkBucketStage::Unconstrained {
-        //         continue;
-        //     }
-
-        //     let bucket = &self.work_buckets[id];
-        //     if bucket.disabled() || bucket.is_activated() {
-        //         continue;
-        //     }
-        //     let bucket_opened = bucket.update(self);
-        //     #[cfg(feature = "tracing")]
-        //     if bucket_opened {
-        //         probe!(mmtk, bucket_opened, id);
-        //     }
-        //     let verbose = crate::verbose(3);
-        //     if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
-        //         if verbose {
-        //             gc_log!([3]
-        //                 " - ({:.3}ms) Start GC Stage: {:?}",
-        //                 crate::GC_START_TIME
-        //                     .elapsed()
-        //                     .as_nanos() as f64
-        //                     / 1000000f64,
-        //                 id
-        //             );
-        //         }
-        //     }
-        //     if cfg!(feature = "yield_and_roots_timer")
-        //         && bucket_opened
-        //         && id == WorkBucketStage::Prepare
-        //     {
-        //         let t = crate::GC_START_TIME.elapsed().as_nanos();
-        //         crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
-        //     }
-        //     buckets_updated = buckets_updated || bucket_opened;
-        //     if bucket_opened {
-        //         #[cfg(feature = "tracing")]
-        //         probe!(mmtk, bucket_opened, id);
-        //         new_packets = new_packets || !bucket.is_drained();
-        //         new_packets = new_packets || bucket.maybe_schedule_sentinel();
-        //         if new_packets {
-        //             new_progress = i;
-        //             // Quit the loop. A sentinel packet is added to the newly opened buckets.
-        //             trace!("Sentinel is scheduled at stage {:?}.  Break.", id);
-        //             break;
-        //         }
-        //     }
-        // }
-        // if buckets_updated && new_packets {
-        //     self.bucket_update_progress
-        //         .store(new_progress, Ordering::SeqCst);
-        // } else {
-        //     self.bucket_update_progress.store(0, Ordering::SeqCst);
-        // }
-        // buckets_updated && new_packets
     }
 
     pub fn deactivate_all(&self) {
@@ -597,6 +544,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// current goal.
     fn on_last_parked(&self, worker: &GCWorker<VM>, goals: &mut WorkerGoals) -> LastParkedResult {
         let Some(ref current_goal) = goals.current() else {
+            println!("deactivate_all: on_last_parked no goal");
             self.deactivate_all();
             // There is no goal.  Find a request to respond to.
             return self.respond_to_requests(worker, goals);
@@ -780,6 +728,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         debug_assert!(self.all_buckets_empty());
 
         // Deactivate all work buckets to prepare for the next GC.
+        println!("deactivate_all: on_gc_finished");
         self.deactivate_all();
         // self.debug_assert_all_buckets_deactivated();
 
@@ -1039,7 +988,7 @@ impl BucketGraph {
     }
 
     fn update(&self, bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
-        println!("UPDATE BUCKET {:?}", bucket);
+        println!("UPDATE BUCKET: {:?} is empty", bucket);
         let _lock = self.lock.write().unwrap();
         let mut open_buckets = vec![];
         if let Some(b) = bucket {

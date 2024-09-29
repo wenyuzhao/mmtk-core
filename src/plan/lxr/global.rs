@@ -529,10 +529,26 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.dump_memory(pause);
         }
 
-        if pause == Pause::RefCount && crate::args::LAZY_DECREMENTS {
+        if crate::args::LAZY_DECREMENTS
+            && pause == Pause::RefCount
+            && !self.in_concurrent_marking.load(Ordering::SeqCst)
+        {
             self.immix_space
                 .scheduler()
                 .execute(&super::schedule::RC_CONC_SCHEDULE);
+        }
+
+        if self.in_concurrent_marking.load(Ordering::SeqCst) {
+            println!("Set concurrent marking schedule");
+            // Lazy decs + Marking
+            self.immix_space
+                .scheduler()
+                .execute(&super::schedule::CONC_MARK_SCHEDULE);
+        }
+        if pause == Pause::FinalMark {
+            self.immix_space
+                .scheduler()
+                .execute(&super::schedule::POST_SATB_SWEEPING_SCHEDULE);
         }
     }
 
@@ -748,10 +764,9 @@ impl<VM: VMBinding> LXR<VM> {
             .store(should_do_emergency_collection, Ordering::SeqCst);
         // Eager mark-table zeroing
         if !cfg!(feature = "sanity") && should_do_cycle_collection {
-            self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
-            // self.immix_space
-            //     .schedule_mark_table_zeroing_tasks(WorkBucketStage::Unconstrained);
-            unimplemented!()
+            println!("WARNING: Eager mark-table zeroing is not implemented");
+            // self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
+            // self.immix_space.schedule_mark_table_zeroing_tasks();
         }
         notify();
     }
@@ -960,25 +975,33 @@ impl<VM: VMBinding> LXR<VM> {
         if cfg!(feature = "lxr_abort_on_trace") {
             panic!("ERROR: OutOfMemory");
         }
+        scheduler.execute(&*super::schedule::INITIAL_MARK_SCHEDULE);
         if !self.zeroing_packets_scheduled.load(Ordering::SeqCst) {
             self.immix_space
                 .schedule_mark_table_zeroing_tasks(BucketId::Incs);
         }
         self.process_prev_roots(scheduler);
-        // scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
-        //     StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
-        // ));
-        // scheduler.work_buckets[WorkBucketStage::Prepare]
-        //     .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
-        // scheduler.work_buckets[WorkBucketStage::Release]
-        //     .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
-        unimplemented!();
+        scheduler.spawn(
+            BucketId::Start,
+            StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
+        );
+        // Prepare global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Prepare,
+            Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
+        // Release global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Release,
+            Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
     }
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         if cfg!(feature = "lxr_abort_on_trace") {
             panic!("ERROR: OutOfMemory");
         }
+        scheduler.execute(&*super::schedule::FINAL_MARK_SCHEDULE);
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
@@ -986,15 +1009,21 @@ impl<VM: VMBinding> LXR<VM> {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
         self.process_prev_roots(scheduler);
-        // scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
-        //     StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
-        // ));
-
-        // scheduler.work_buckets[WorkBucketStage::Prepare]
-        //     .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
-        // scheduler.work_buckets[WorkBucketStage::Release]
-        //     .add(Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
-        unimplemented!();
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.spawn(
+            BucketId::Start,
+            StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
+        );
+        // Prepare global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Prepare,
+            Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
+        // Release global/collectors/mutators
+        scheduler.spawn(
+            BucketId::Release,
+            Release::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self),
+        );
         scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
     }
 
