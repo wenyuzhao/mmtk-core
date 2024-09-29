@@ -19,9 +19,10 @@ use crate::Pause;
 use crate::Plan;
 use crossbeam::deque::Steal;
 use enum_map::EnumMap;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Instant;
 
 pub struct GCWorkScheduler<VM: VMBinding> {
@@ -35,7 +36,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(super) postponed_concurrent_work: spin::RwLock<SegQueue<Box<dyn GCWork>>>,
     pub(super) postponed_concurrent_work_prioritized: spin::RwLock<SegQueue<Box<dyn GCWork>>>,
     in_gc_pause: AtomicBool,
-    current_schedule: AtomicPtr<BucketGraph>,
+    current_schedule: RwLock<Cow<'static, BucketGraph>>,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -58,7 +59,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             postponed_concurrent_work: spin::RwLock::new(SegQueue::new()),
             postponed_concurrent_work_prioritized: spin::RwLock::new(SegQueue::new()),
             in_gc_pause: AtomicBool::new(false),
-            current_schedule: AtomicPtr::new(std::ptr::null_mut()),
+            current_schedule: RwLock::new(Cow::Borrowed(&*EMPTY_SCHEDULE)),
         })
     }
 
@@ -66,17 +67,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Increment counter
         bucket.get_bucket().inc();
         // Add to the corresponding bucket/queue
-        if !self.current_schedule.load(Ordering::SeqCst).is_null()
-            && self.schedule().bucket_is_open(bucket)
-        {
-            // let _guard = self.schedule().lock.read().unwrap();
+        if bucket.get_bucket().is_open() {
             // The bucket is open. Either add to the global pool, or the thread local queue
             if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
                 self.active_bucket.add_boxed(bucket, w);
             }
-            // if bucket == BucketId::Closure {
-            //     assert!(!self.schedule().is_open[BucketId::WeakRefClosure].load(Ordering::SeqCst));
-            // }
         } else {
             // The bucket is closed. Add to the bucket's queue
             bucket.get_bucket().add(w);
@@ -96,12 +91,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn execute(&self, graph: &'static BucketGraph) {
         println!("current_schedule = {:?}", graph as *const BucketGraph);
         // reset all buckets
-        self.current_schedule.store(
-            graph as *const BucketGraph as *mut BucketGraph,
-            Ordering::SeqCst,
-        );
-        // open the first bucket(s)
-        // self.notify_bucket_empty();
+        let mut schedule = self.current_schedule.write().unwrap();
+        *schedule = Cow::Borrowed(graph);
+    }
+
+    pub fn merge_schedule(&self, graph: &'static BucketGraph) {
+        let mut schedule = self.current_schedule.write().unwrap();
+        schedule.to_mut().merge(graph);
     }
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
@@ -384,12 +380,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         false
     }
 
-    pub(crate) fn schedule(&self) -> &'static BucketGraph {
-        let ptr = self.current_schedule.load(Ordering::SeqCst);
-        if ptr.is_null() {
-            panic!("Schedule is not set yet.");
-        }
-        unsafe { &*ptr }
+    pub(crate) fn schedule(&self) -> RwLockReadGuard<Cow<BucketGraph>> {
+        let guard = self.current_schedule.read().unwrap();
+        assert!(!guard.is_empty());
+        guard
     }
 
     /// Open buckets if their conditions are met.
@@ -481,11 +475,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn deactivate_all(&self) {
-        if !self.current_schedule.load(Ordering::SeqCst).is_null() {
-            self.schedule().reset();
-            self.current_schedule
-                .store(std::ptr::null_mut(), Ordering::SeqCst);
-        }
+        let mut schedule = self.current_schedule.write().unwrap();
+        schedule.reset();
+        *schedule = Cow::Borrowed(&*EMPTY_SCHEDULE);
     }
 
     pub fn reset_state(&self) {
@@ -967,6 +959,8 @@ pub struct BucketGraph {
     lock: RwLock<()>,
 }
 
+pub static EMPTY_SCHEDULE: spin::Lazy<BucketGraph> = spin::Lazy::new(|| BucketGraph::new());
+
 impl Clone for BucketGraph {
     fn clone(&self) -> Self {
         Self {
@@ -986,6 +980,24 @@ impl BucketGraph {
             all_buckets: HashSet::new(),
             lock: RwLock::new(()),
         }
+    }
+
+    pub fn merge(&mut self, other: &Self) {
+        for (b, preds) in &other.preds {
+            self.preds[b].extend(preds.iter().cloned());
+        }
+        for (b, succs) in &other.succs {
+            self.succs[b].extend(succs.iter().cloned());
+        }
+        // dedup
+        for (_, preds) in &mut self.preds {
+            preds.dedup();
+        }
+        self.all_buckets.extend(&other.all_buckets);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.all_buckets.is_empty()
     }
 
     pub fn bucket_is_open(&self, b: BucketId) -> bool {
