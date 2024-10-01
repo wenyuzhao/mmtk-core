@@ -81,7 +81,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         })
     }
 
-    pub fn spawn_no_inc(&self, bucket: BucketId, w: impl IntoBoxedPacket) {
+    fn spawn_no_inc(&self, bucket: BucketId, w: impl IntoBoxedPacket) {
         let w = w.into_boxed_packet();
         // Add to the corresponding bucket/queue
         if bucket.get_bucket().is_open() {
@@ -156,6 +156,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn no_cm_packets(&self) -> bool {
         let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        // if !(postponed_concurrent_work.is_empty() && crate::concurrent_marking_packets_drained()) {
+        //     println!(
+        //         "no_cm_packets: {:?},{},{},{},{}",
+        //         postponed_concurrent_work.len(),
+        //         crate::concurrent_marking_packets_drained(),
+        //         crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
+        //         BucketId::ConcClosure.get_bucket().count(),
+        //         BucketId::ConcClosure.get_bucket().queue_count()
+        //     );
+        //     false
+        // }
         postponed_concurrent_work.is_empty() && crate::concurrent_marking_packets_drained()
     }
 

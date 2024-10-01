@@ -38,9 +38,13 @@ pub static RC_CONC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 pub static CONC_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
-    g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
-    g.dep(BucketId::LazySweep, vec![]);
-    g.dep(BucketId::ConcClosure, vec![]);
+    if crate::args::LAZY_DECREMENTS {
+        g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+        g.dep(BucketId::LazySweep, vec![]);
+        g.dep(BucketId::ConcClosure, vec![]);
+    } else {
+        g.dep(BucketId::ConcClosure, vec![]);
+    }
 
     g
 });

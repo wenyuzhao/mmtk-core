@@ -338,6 +338,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.immix_space
                 .scheduler()
                 .spawn(BucketId::Prepare, ReleaseLOSNursery::<VM>::default());
+            assert!(self.immix_space.scheduler().no_cm_packets())
         }
         self.common
             .prepare(tls, pause == Pause::Full || pause == Pause::InitialMark);
@@ -489,6 +490,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             if cfg!(feature = "satb_timer") {
                 crate::SATB_START.start();
             }
+            assert!(BucketId::Decs.get_bucket().is_empty());
         } else if cfg!(feature = "satb_timer")
             && pause == Pause::RefCount
             && self.concurrent_marking_in_progress()

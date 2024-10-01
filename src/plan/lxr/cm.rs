@@ -146,7 +146,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
-                worker.scheduler().spawn(BucketId::ConcClosure, w);
+                let bkt = if self.plan.current_pause() == Some(Pause::FinalMark) {
+                    BucketId::FinishMark
+                } else {
+                    BucketId::ConcClosure
+                };
+                worker.scheduler().spawn(bkt, w);
             }
         }
     }
@@ -161,7 +166,12 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
-                worker.scheduler().spawn(BucketId::ConcClosure, w);
+                let bkt = if self.plan.current_pause() == Some(Pause::FinalMark) {
+                    BucketId::FinishMark
+                } else {
+                    BucketId::ConcClosure
+                };
+                worker.scheduler().spawn(bkt, w);
             }
         }
     }
@@ -334,6 +344,7 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
         true
     }
     fn do_work(&mut self) {
+        #[cfg(feature = "measure_trace_rate")]
         let mmtk = crate::scheduler::GCWorker::<VM>::current().mmtk;
         debug_assert!(!BucketId::Incs.get_bucket().is_open());
         #[cfg(feature = "measure_trace_rate")]
