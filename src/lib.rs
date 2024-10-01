@@ -49,6 +49,7 @@ pub mod gc_log;
 mod mmtk;
 mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
+use scheduler::BucketId;
 use std::{
     cell::UnsafeCell,
     collections::HashMap,
@@ -144,7 +145,7 @@ impl Drop for LazySweepingJobsCounter {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         if let Some(decs) = self.decs_counter.as_ref() {
             let x = decs.fetch_sub(1, Ordering::SeqCst);
-            println!("DECS: {}", x);
+            // println!("DECS: {} {}", x, BucketId::Decs.get_bucket().count());
             if x == 1 {
                 let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
                 println!("END OF DECS");
@@ -152,7 +153,7 @@ impl Drop for LazySweepingJobsCounter {
             }
         }
         let x = self.counter.fetch_sub(1, Ordering::SeqCst);
-        println!("LAZY: {}", x);
+        // println!("LAZY: {} {}", x, BucketId::Decs.get_bucket().count());
         if x == 1 {
             if let Some(f) = lazy_sweeping_jobs.end_of_lazy.as_ref() {
                 println!("END OF LAZY");

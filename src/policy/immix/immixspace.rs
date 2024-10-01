@@ -602,8 +602,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 && !cfg!(feature = "fragmentation_analysis")
             {
                 debug_assert_ne!(pause, Pause::Full);
-                self.scheduler().postpone_all(dead_cycle_sweep_packets);
-                self.scheduler().postpone(sweep_los);
+                self.scheduler()
+                    .postpone_all_prioritized(dead_cycle_sweep_packets);
+                self.scheduler().postpone_prioritized(sweep_los);
             } else {
                 self.scheduler()
                     .spawn_bulk(BucketId::Decs, dead_cycle_sweep_packets);

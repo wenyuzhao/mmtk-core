@@ -853,10 +853,8 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
         if lxr.current_pause().is_none() {
             println!("WARN: prioritize decs!");
-            self.worker().scheduler().spawn(BucketId::Decs, w);
-        } else {
-            self.worker().scheduler().spawn(BucketId::Decs, w);
         }
+        self.worker().scheduler().spawn(BucketId::Decs, w);
     }
 
     fn flush(&mut self) {
