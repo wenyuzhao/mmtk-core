@@ -98,8 +98,6 @@ pub struct LXR<VM: VMBinding> {
     pub(super) barrier_decs: AtomicUsize,
     pub rc: RefCountHelper<VM>,
     gc_cause: Atomic<GCCause>,
-    lazy_finished: (Mutex<bool>, Condvar),
-    satb_finished: (Mutex<bool>, Condvar),
 }
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -656,8 +654,6 @@ impl<VM: VMBinding> LXR<VM> {
             rc: RefCountHelper::NEW,
             gc_cause: Atomic::new(GCCause::Unknown),
             barrier_decs: AtomicUsize::default(),
-            lazy_finished: (Mutex::new(true), Condvar::new()),
-            satb_finished: (Mutex::new(true), Condvar::new()),
         });
 
         lxr.update_fixed_alloc_trigger();
@@ -940,19 +936,8 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn wait_for_concurrent_packets_to_finish(&self) {
         println!("wait_for_concurrent_packets_to_finish start");
-        let (lock, cvar) = &self.lazy_finished;
-        let mut finished = lock.lock().unwrap();
-        while !*finished {
-            finished = cvar.wait(finished).unwrap();
-        }
-        *finished = false;
+        self.immix_space.scheduler().wait_for_schedule_finished();
         println!("wait_for_concurrent_packets_to_finish end");
-        // let (lock, cvar) = &self.satb_finished;
-        // let mut finished = lock.lock().unwrap();
-        // while !*finished {
-        //     finished = cvar.wait(finished).unwrap();
-        // }
-        // *finished = false;
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
@@ -1269,10 +1254,6 @@ impl<VM: VMBinding> LXR<VM> {
                 lxr.current_pause().unwrap()
             };
             lxr.decide_next_gc_may_perform_cycle_collection(pause);
-            let mut lazy_finished = lxr.lazy_finished.0.lock().unwrap();
-            *lazy_finished = true;
-            println!("lazy_finished = true");
-            lxr.lazy_finished.1.notify_all();
         }));
 
         if let Some(nursery_ratio) = crate::args().nursery_ratio {

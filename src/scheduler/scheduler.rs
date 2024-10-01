@@ -22,7 +22,7 @@ use enum_map::EnumMap;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockReadGuard};
 use std::time::Instant;
 
 pub trait IntoBoxedPacket {
@@ -53,6 +53,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     pub(super) postponed_concurrent_work_prioritized: spin::RwLock<SegQueue<Box<dyn GCWork>>>,
     in_gc_pause: AtomicBool,
     current_schedule: RwLock<Cow<'static, BucketGraph>>,
+    schedule_finished: (Mutex<bool>, Condvar),
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -76,6 +77,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             postponed_concurrent_work_prioritized: spin::RwLock::new(SegQueue::new()),
             in_gc_pause: AtomicBool::new(false),
             current_schedule: RwLock::new(Cow::Borrowed(&*EMPTY_SCHEDULE)),
+            schedule_finished: (Mutex::new(true), Condvar::new()),
         })
     }
 
@@ -93,12 +95,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         } else {
             // The bucket is closed. Add to the bucket's queue
-            assert!(
-                !bucket.get_bucket().is_finished(),
-                "Cannot add work to a finished bucket: {:?} {:?}",
-                bucket,
-                w.get_type_name()
-            );
             if bucket == BucketId::ConcClosure {
                 println!("ConcClosure: {:?}", bucket.get_bucket().count());
             }
@@ -123,6 +119,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // reset all buckets
         let mut schedule = self.current_schedule.write().unwrap();
         *schedule = Cow::Borrowed(graph);
+        let mut schedule_finished = self.schedule_finished.0.lock().unwrap();
+        *schedule_finished = false;
     }
 
     pub fn merge_schedule(&self, graph: &'static BucketGraph) {
@@ -449,6 +447,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut schedule = self.current_schedule.write().unwrap();
         schedule.reset();
         *schedule = Cow::Borrowed(&*EMPTY_SCHEDULE);
+        self.notify_schedule_finished();
     }
 
     pub fn reset_state(&self) {
@@ -736,6 +735,22 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         (queue, pqueue)
     }
 
+    fn notify_schedule_finished(&self) {
+        let (lock, cvar) = &self.schedule_finished;
+        println!("SCHEDULE FINISHED");
+        let mut finished = lock.lock().unwrap();
+        *finished = true;
+        cvar.notify_all();
+    }
+
+    pub fn wait_for_schedule_finished(&self) {
+        let (lock, cvar) = &self.schedule_finished;
+        let mut finished = lock.lock().unwrap();
+        while !*finished {
+            finished = cvar.wait(finished).unwrap();
+        }
+    }
+
     /// Called when GC has finished, i.e. when all work packets have been executed.
     fn on_gc_finished(&self, worker: &GCWorker<VM>) {
         let stw_us = crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
@@ -816,6 +831,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             mmtk.slot_logger.reset();
         }
 
+        self.notify_schedule_finished();
         mmtk.get_plan().gc_pause_end();
 
         // Reset the triggering information.
@@ -990,8 +1006,8 @@ impl BucketGraph {
     }
 
     fn reset(&self) {
+        println!("RESET BUCKETS {:?}", self.all_buckets);
         for b in &self.all_buckets {
-            println!("RESET BUCKET {:?}", b);
             b.get_bucket().reset()
         }
     }

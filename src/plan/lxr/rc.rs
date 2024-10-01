@@ -861,14 +861,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         let mmtk = GCWorker::<VM>::current().mmtk;
         let sched = &mmtk.scheduler;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        if lxr.current_pause() == Some(Pause::FinalMark) {
-            sched.spawn(BucketId::FinishMark, w);
-        } else if BucketId::ConcClosure.get_bucket().try_inc() {
-            sched.spawn_no_inc(BucketId::ConcClosure, w);
-        } else {
-            // SATB is finished. We need to spawn the packet to the finish mark bucket.
-            sched.spawn(BucketId::FinishMark, w);
-        }
+        // TODO: Add to BucketId::FinishMark if SATB is finished.
+        // if lxr.current_pause() == Some(Pause::FinalMark) {
+        //     sched.spawn(BucketId::FinishMark, w);
+        // } else {
+        sched.spawn(BucketId::ConcClosure, w);
     }
 
     fn flush(&mut self) {
