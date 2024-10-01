@@ -98,6 +98,8 @@ pub struct LXR<VM: VMBinding> {
     pub(super) barrier_decs: AtomicUsize,
     pub rc: RefCountHelper<VM>,
     gc_cause: Atomic<GCCause>,
+    lazy_finished: (Mutex<bool>, Condvar),
+    satb_finished: (Mutex<bool>, Condvar),
 }
 
 pub static LXR_CONSTRAINTS: Lazy<PlanConstraints> = Lazy::new(|| PlanConstraints {
@@ -240,6 +242,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
+        self.wait_for_concurrent_packets_to_finish();
         let pause = self.select_collection_kind();
         if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
             crate::counters()
@@ -653,6 +656,8 @@ impl<VM: VMBinding> LXR<VM> {
             rc: RefCountHelper::NEW,
             gc_cause: Atomic::new(GCCause::Unknown),
             barrier_decs: AtomicUsize::default(),
+            lazy_finished: (Mutex::new(true), Condvar::new()),
+            satb_finished: (Mutex::new(true), Condvar::new()),
         });
 
         lxr.update_fixed_alloc_trigger();
@@ -933,13 +938,30 @@ impl<VM: VMBinding> LXR<VM> {
         pause
     }
 
+    fn wait_for_concurrent_packets_to_finish(&self) {
+        println!("wait_for_concurrent_packets_to_finish start");
+        let (lock, cvar) = &self.lazy_finished;
+        let mut finished = lock.lock().unwrap();
+        while !*finished {
+            finished = cvar.wait(finished).unwrap();
+        }
+        *finished = false;
+        println!("wait_for_concurrent_packets_to_finish end");
+        // let (lock, cvar) = &self.satb_finished;
+        // let mut finished = lock.lock().unwrap();
+        // while !*finished {
+        //     finished = cvar.wait(finished).unwrap();
+        // }
+        // *finished = false;
+    }
+
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if self.concurrent_marking_in_progress() {
+            scheduler.pause_concurrent_marking_work_packets_during_gc();
+        }
         scheduler.execute(&*super::schedule::RC_SCHEDULE);
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.fetch_add(1, Ordering::Relaxed);
-        }
-        if self.concurrent_marking_in_progress() {
-            scheduler.pause_concurrent_marking_work_packets_during_gc();
         }
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
@@ -1247,6 +1269,10 @@ impl<VM: VMBinding> LXR<VM> {
                 lxr.current_pause().unwrap()
             };
             lxr.decide_next_gc_may_perform_cycle_collection(pause);
+            let mut lazy_finished = lxr.lazy_finished.0.lock().unwrap();
+            *lazy_finished = true;
+            println!("lazy_finished = true");
+            lxr.lazy_finished.1.notify_all();
         }));
 
         if let Some(nursery_ratio) = crate::args().nursery_ratio {

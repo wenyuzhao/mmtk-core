@@ -28,7 +28,8 @@ pub static RC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 pub static RC_CONC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
-    g.dep(BucketId::Decs, vec![]);
+    g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+    g.dep(BucketId::LazySweep, vec![]);
 
     g
 });
@@ -36,7 +37,8 @@ pub static RC_CONC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 pub static CONC_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
-    g.dep(BucketId::Decs, vec![]);
+    g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+    g.dep(BucketId::LazySweep, vec![]);
     g.dep(BucketId::ConcClosure, vec![]);
 
     g
@@ -45,7 +47,8 @@ pub static CONC_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 pub static POST_SATB_SWEEPING_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     let mut g = BucketGraph::new();
 
-    g.dep(BucketId::Decs, vec![]);
+    g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+    g.dep(BucketId::LazySweep, vec![]);
 
     g
 });
@@ -115,7 +118,9 @@ pub static FULL_GC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 
     g.dep(BucketId::Release, vec![BucketId::Decs]);
 
-    g.dep(BucketId::Decs, vec![BucketId::Finish]);
+    g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+
+    g.dep(BucketId::LazySweep, vec![BucketId::Finish]);
 
     g
 });

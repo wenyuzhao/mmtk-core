@@ -1607,7 +1607,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Box::new(SweepBlocksAfterDecs::<VM>::new(blocks, counter.clone()))
             })
             .collect();
-        self.scheduler().spawn_bulk(BucketId::Decs, packets);
+        self.scheduler().spawn_bulk(BucketId::LazySweep, packets);
     }
 
     pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {
