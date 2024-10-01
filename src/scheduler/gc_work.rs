@@ -25,7 +25,6 @@ impl<VM: VMBinding> GCWork for ScheduleCollection<VM> {
     fn do_work(&mut self) {
         println!("ScheduleCollection");
         let mmtk = GCWorker::<VM>::mmtk();
-        crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
         // Tell GC trigger that GC started.
         mmtk.gc_trigger.policy.on_gc_start(mmtk);
 

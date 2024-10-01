@@ -154,6 +154,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         BucketId::Decs.get_bucket().merge_queue(new_queue);
     }
 
+    pub fn no_cm_packets(&self) -> bool {
+        let postponed_concurrent_work = self.postponed_concurrent_work.read();
+        postponed_concurrent_work.is_empty() && crate::concurrent_marking_packets_drained()
+    }
+
     pub fn postpone(&self, w: impl GCWork) {
         debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(Box::new(w))
@@ -642,6 +647,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 }
 
                 crate::GC_TRIGGER_TIME.start();
+                crate::GC_EPOCH.fetch_add(1, Ordering::SeqCst);
                 GCWorker::<VM>::mmtk().get_plan().schedule_collection(self);
                 self.add_schedule_collection_packet();
                 LastParkedResult::WakeSelf
