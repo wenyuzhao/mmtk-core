@@ -244,7 +244,7 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if self.lxr.current_pause() == Some(Pause::FinalMark) {
             sched.spawn(BucketId::FinishMark, w);
         } else if BucketId::ConcClosure.get_bucket().try_inc() {
-            sched.spawn_boxed_no_inc(BucketId::ConcClosure, Box::new(w));
+            sched.spawn_no_inc(BucketId::ConcClosure, w);
         } else {
             // SATB is finished. We need to spawn the packet to the finish mark bucket.
             sched.spawn(BucketId::FinishMark, w);

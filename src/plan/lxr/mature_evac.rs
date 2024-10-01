@@ -115,6 +115,6 @@ impl<VM: VMBinding> GCWork for EvacuateMatureObjects<VM> {
             return;
         };
         // transitive closure
-        worker.scheduler().spawn_boxed(BucketId::Closure, work);
+        worker.scheduler().spawn(BucketId::Closure, work);
     }
 }

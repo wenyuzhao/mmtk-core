@@ -25,6 +25,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Instant;
 
+pub trait IntoBoxedPacket {
+    fn into_boxed_packet(self) -> Box<dyn GCWork>;
+}
+
+impl<W: GCWork> IntoBoxedPacket for W {
+    fn into_boxed_packet(self) -> Box<dyn GCWork> {
+        Box::new(self)
+    }
+}
+
+impl IntoBoxedPacket for Box<dyn GCWork> {
+    fn into_boxed_packet(self) -> Box<dyn GCWork> {
+        self
+    }
+}
+
 pub struct GCWorkScheduler<VM: VMBinding> {
     active_bucket: ActiveWorkBucket,
     /// Workers
@@ -63,7 +79,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         })
     }
 
-    pub fn spawn_boxed_no_inc(&self, bucket: BucketId, w: Box<dyn GCWork>) {
+    pub fn spawn_no_inc(&self, bucket: BucketId, w: impl IntoBoxedPacket) {
+        let w = w.into_boxed_packet();
         // Add to the corresponding bucket/queue
         if bucket.get_bucket().is_open() {
             if super::worker::current_worker_ordinal().is_none() {
@@ -76,6 +93,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         } else {
             // The bucket is closed. Add to the bucket's queue
+            assert!(
+                !bucket.get_bucket().is_finished(),
+                "Cannot add work to a finished bucket: {:?} {:?}",
+                bucket,
+                w.get_type_name()
+            );
             if bucket == BucketId::ConcClosure {
                 println!("ConcClosure: {:?}", bucket.get_bucket().count());
             }
@@ -83,19 +106,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
-    pub fn spawn_boxed(&self, bucket: BucketId, w: Box<dyn GCWork>) {
+    pub fn spawn(&self, bucket: BucketId, w: impl IntoBoxedPacket) {
         // Increment counter
         bucket.get_bucket().inc();
-        self.spawn_boxed_no_inc(bucket, w)
-    }
-
-    pub fn spawn(&self, bucket: BucketId, w: impl GCWork) {
-        self.spawn_boxed(bucket, Box::new(w))
+        self.spawn_no_inc(bucket, w)
     }
 
     pub fn spawn_bulk(&self, bucket: BucketId, ws: Vec<Box<dyn GCWork>>) {
         for w in ws {
-            self.spawn_boxed(bucket, w);
+            self.spawn(bucket, w);
         }
     }
 

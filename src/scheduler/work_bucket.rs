@@ -93,7 +93,7 @@ impl WorkBucket {
     pub fn set_queue(&self, new_queue: SegQueue<Box<dyn GCWork>>) {
         let count = new_queue.len();
         let mut queue = self.queue.write().unwrap();
-        assert!(queue.is_empty());
+        assert!(queue.is_empty(), "Queue is not empty: {}", queue.len());
         *queue = new_queue;
         assert!(self.count.load(Ordering::SeqCst) == 0);
         self.count.store(count, Ordering::SeqCst);
@@ -132,6 +132,7 @@ impl WorkBucket {
         self.count
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
                 if x == 1 {
+                    println!("Decrementing {:?} to 0", self.name);
                     self.is_finished.store(true, Ordering::SeqCst);
                 }
                 Some(x - 1)
@@ -274,6 +275,7 @@ pub enum BucketId {
     ConcClosure,
     FinishMark,
     PostSATBSWeep,
+    LazySweep,
 }
 
 static START: WorkBucket = WorkBucket::new("start");
@@ -290,6 +292,7 @@ static DECS: WorkBucket = WorkBucket::new("decs");
 static CONC_CLOSURE: WorkBucket = WorkBucket::new("conc.closure");
 static FINISH_MARK: WorkBucket = WorkBucket::new("finish.mark");
 static POST_SATB_SWEEP: WorkBucket = WorkBucket::new("post-satb-sweep");
+static LAZY_SWEEP: WorkBucket = WorkBucket::new("lazy.sweep");
 
 impl BucketId {
     #[inline(always)]
@@ -309,6 +312,7 @@ impl BucketId {
             BucketId::ConcClosure => &CONC_CLOSURE,
             BucketId::FinishMark => &FINISH_MARK,
             BucketId::PostSATBSWeep => &POST_SATB_SWEEP,
+            BucketId::LazySweep => &LAZY_SWEEP,
         }
     }
 }
