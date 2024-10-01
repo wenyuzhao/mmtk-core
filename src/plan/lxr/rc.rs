@@ -852,9 +852,23 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
     fn new_work(&self, lxr: &LXR<VM>, w: ProcessDecs<VM>) {
         if lxr.current_pause().is_none() {
-            println!("WARN: prioritize decs!");
+            // println!("WARN: prioritize decs!");
         }
         self.worker().scheduler().spawn(BucketId::Decs, w);
+    }
+
+    fn spawn_satb_packet(&mut self, w: LXRConcurrentTraceObjects<VM>) {
+        let mmtk = GCWorker::<VM>::current().mmtk;
+        let sched = &mmtk.scheduler;
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        if lxr.current_pause() == Some(Pause::FinalMark) {
+            sched.spawn(BucketId::FinishMark, w);
+        } else if BucketId::ConcClosure.get_bucket().try_inc() {
+            sched.spawn_no_inc(BucketId::ConcClosure, w);
+        } else {
+            // SATB is finished. We need to spawn the packet to the finish mark bucket.
+            sched.spawn(BucketId::FinishMark, w);
+        }
     }
 
     fn flush(&mut self) {
@@ -870,11 +884,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         if !self.mark_objects.is_empty() {
             let objects = self.mark_objects.take();
             let w = LXRConcurrentTraceObjects::new(objects, mmtk);
-            if crate::args::LAZY_DECREMENTS {
-                self.worker().scheduler().spawn(BucketId::ConcClosure, w);
-            } else {
-                self.worker().scheduler().postpone(w);
-            }
+            self.spawn_satb_packet(w);
         }
     }
 
