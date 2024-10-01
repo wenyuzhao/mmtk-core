@@ -249,7 +249,9 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             }
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
-                let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark) {
+                let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark)
+                    || crate::concurrent_marking_packets_drained()
+                {
                     BucketId::FinishMark
                 } else {
                     BucketId::ConcClosure
@@ -275,7 +277,9 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark) {
+            let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark)
+                || crate::concurrent_marking_packets_drained()
+            {
                 BucketId::FinishMark
             } else {
                 BucketId::ConcClosure

@@ -57,15 +57,18 @@ impl WorkBucket {
         self.is_open.load(Ordering::Relaxed)
     }
 
-    pub(super) fn close(&self) {
-        self.is_open.store(false, Ordering::Relaxed);
-    }
-
     pub(super) fn open(&self) {
         self.is_open.store(true, Ordering::Relaxed);
     }
 
     pub fn reset(&self) {
+        if self.count.load(Ordering::SeqCst) != 0 {
+            println!(
+                "Error: {:?} is not empty: {}",
+                self.name,
+                self.count.load(Ordering::SeqCst)
+            );
+        }
         assert!(
             self.count.load(Ordering::SeqCst) == 0,
             "{:?} is not empty",
@@ -90,20 +93,24 @@ impl WorkBucket {
 
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {
-        self.queue.read().unwrap().is_empty() && self.count.load(Ordering::Relaxed) == 0
+        self.queue.read().unwrap().is_empty() && self.count.load(Ordering::SeqCst) == 0
     }
 
     pub fn count(&self) -> usize {
-        self.count.load(Ordering::Relaxed)
+        self.count.load(Ordering::SeqCst)
+    }
+
+    pub fn queue_count(&self) -> usize {
+        self.queue.read().unwrap().len()
     }
 
     pub(super) fn inc(&self) {
-        self.count.fetch_add(1, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Returns true if the count is zero
-    pub(super) fn dec(&self, _name: &str) -> bool {
-        let x = self.count.fetch_sub(1, Ordering::Relaxed);
+    pub(super) fn dec(&self) -> bool {
+        let x = self.count.fetch_sub(1, Ordering::SeqCst);
         x == 1
     }
 

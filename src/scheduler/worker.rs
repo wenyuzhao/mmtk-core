@@ -313,7 +313,10 @@ impl<VM: VMBinding> GCWorker<VM> {
             if record && !self.scheduler.in_concurrent() {
                 super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
             }
-            if bucket.get_bucket().dec(typename) {
+            if bucket.get_bucket().dec() {
+                if bucket == BucketId::ConcClosure {
+                    println!("ConcClosure bucket is empty");
+                }
                 self.mmtk.scheduler.notify_bucket_empty(Some(bucket));
             }
             flush_logs!();

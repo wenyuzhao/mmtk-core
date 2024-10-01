@@ -68,9 +68,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         bucket.get_bucket().inc();
         // Add to the corresponding bucket/queue
         if bucket.get_bucket().is_open() {
-            // The bucket is open. Either add to the global pool, or the thread local queue
-            if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
+            if super::worker::current_worker_ordinal().is_none() {
                 self.active_bucket.add_boxed(bucket, w);
+            } else {
+                // The bucket is open. Either add to the global pool, or the thread local queue
+                if let Err(w) = GCWorker::<VM>::current().add_local_packet(bucket, w) {
+                    self.active_bucket.add_boxed(bucket, w);
+                }
             }
         } else {
             // The bucket is closed. Add to the bucket's queue
@@ -406,9 +410,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.schedule().update(bucket, |b| {
             // dump everything to the active bucket
             let q = b.get_bucket().take_queue();
-            if b == BucketId::ConcClosure {
-                println!("ConcClosure: {:?}", q.len());
-            }
             while let Some(q) = q.pop() {
                 self.active_bucket.add_boxed_no_notify(b, q);
                 new_work = true;
@@ -1015,6 +1016,7 @@ impl BucketGraph {
         }
         // If the newly opened bucket is empty, we can open its successors.
         for b in open_buckets {
+            assert_ne!(Some(b), bucket);
             b.get_bucket().open();
             on_bucket_open(b);
             if crate::GC_START_TIME.ready() {
