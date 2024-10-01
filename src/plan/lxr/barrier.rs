@@ -239,6 +239,18 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
+    fn spawn_satb_modbuf_packet(&mut self, w: ProcessModBufSATB<VM>) {
+        let sched = &self.mmtk.scheduler;
+        if self.lxr.current_pause() == Some(Pause::FinalMark) {
+            sched.spawn(BucketId::FinishMark, w);
+        } else if BucketId::ConcClosure.get_bucket().try_inc() {
+            sched.spawn_boxed_no_inc(BucketId::ConcClosure, Box::new(w));
+        } else {
+            // SATB is finished. We need to spawn the packet to the finish mark bucket.
+            sched.spawn(BucketId::FinishMark, w);
+        }
+    }
+
     #[cold]
     fn flush_decs_and_satb(&mut self) {
         if !self.decs.is_empty() {
@@ -249,16 +261,8 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
             }
             let w = if self.should_create_satb_packets() {
                 let decs = Arc::new(self.decs.take());
-                let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark)
-                    || crate::concurrent_marking_packets_drained()
-                {
-                    BucketId::FinishMark
-                } else {
-                    BucketId::ConcClosure
-                };
-                self.mmtk
-                    .scheduler
-                    .spawn(bucket, ProcessModBufSATB::<VM>::new_arc(decs.clone()));
+                let w = ProcessModBufSATB::<VM>::new_arc(decs.clone());
+                self.spawn_satb_modbuf_packet(w);
                 ProcessDecs::<VM>::new_arc(decs, LazySweepingJobsCounter::new_decs())
             } else {
                 let decs = self.decs.take();
@@ -277,16 +281,8 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            let bucket = if self.lxr.current_pause() == Some(Pause::FinalMark)
-                || crate::concurrent_marking_packets_drained()
-            {
-                BucketId::FinishMark
-            } else {
-                BucketId::ConcClosure
-            };
-            self.mmtk
-                .scheduler
-                .spawn(bucket, ProcessModBufSATB::<VM>::new(nodes));
+            let w = ProcessModBufSATB::<VM>::new(nodes);
+            self.spawn_satb_modbuf_packet(w);
         }
     }
 }

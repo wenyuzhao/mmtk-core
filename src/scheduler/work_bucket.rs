@@ -41,6 +41,7 @@ pub struct WorkBucket {
     count: AtomicUsize,
     queue: RwLock<SegQueue<Box<dyn GCWork>>>,
     is_open: AtomicBool,
+    is_finished: AtomicBool,
 }
 
 impl WorkBucket {
@@ -50,6 +51,7 @@ impl WorkBucket {
             count: AtomicUsize::new(0),
             queue: RwLock::new(SegQueue::new()),
             is_open: AtomicBool::new(false),
+            is_finished: AtomicBool::new(false),
         }
     }
 
@@ -57,7 +59,12 @@ impl WorkBucket {
         self.is_open.load(Ordering::Relaxed)
     }
 
+    pub fn is_finished(&self) -> bool {
+        self.is_finished.load(Ordering::SeqCst)
+    }
+
     pub(super) fn open(&self) {
+        assert!(!self.is_finished());
         self.is_open.store(true, Ordering::Relaxed);
     }
 
@@ -76,6 +83,7 @@ impl WorkBucket {
         );
         assert!(self.queue.read().unwrap().is_empty());
         self.is_open.store(false, Ordering::SeqCst);
+        self.is_finished.store(false, Ordering::SeqCst);
     }
 
     pub fn take_queue(&self) -> SegQueue<Box<dyn GCWork>> {
@@ -108,10 +116,27 @@ impl WorkBucket {
         self.count.fetch_add(1, Ordering::SeqCst);
     }
 
+    pub fn try_inc(&self) -> bool {
+        self.count
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                if x == 0 && self.is_finished() {
+                    return None;
+                }
+                Some(x + 1)
+            })
+            .is_ok()
+    }
+
     /// Returns true if the count is zero
     pub(super) fn dec(&self) -> bool {
-        let x = self.count.fetch_sub(1, Ordering::SeqCst);
-        x == 1
+        self.count
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                if x == 1 {
+                    self.is_finished.store(true, Ordering::SeqCst);
+                }
+                Some(x - 1)
+            })
+            == Ok(1)
     }
 
     /// Add a work packet to this bucket

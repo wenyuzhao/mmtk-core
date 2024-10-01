@@ -63,9 +63,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         })
     }
 
-    pub fn spawn_boxed(&self, bucket: BucketId, w: Box<dyn GCWork>) {
-        // Increment counter
-        bucket.get_bucket().inc();
+    pub fn spawn_boxed_no_inc(&self, bucket: BucketId, w: Box<dyn GCWork>) {
         // Add to the corresponding bucket/queue
         if bucket.get_bucket().is_open() {
             if super::worker::current_worker_ordinal().is_none() {
@@ -83,6 +81,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             bucket.get_bucket().add(w);
         }
+    }
+
+    pub fn spawn_boxed(&self, bucket: BucketId, w: Box<dyn GCWork>) {
+        // Increment counter
+        bucket.get_bucket().inc();
+        self.spawn_boxed_no_inc(bucket, w)
     }
 
     pub fn spawn(&self, bucket: BucketId, w: impl GCWork) {
