@@ -91,6 +91,15 @@ impl WorkBucket {
         self.count.store(count, Ordering::SeqCst);
     }
 
+    pub fn merge_queue(&self, new_queue: SegQueue<Box<dyn GCWork>>) {
+        let count = new_queue.len();
+        let queue = self.queue.write().unwrap();
+        while let Some(work) = new_queue.pop() {
+            queue.push(work);
+        }
+        self.count.fetch_add(count, Ordering::SeqCst);
+    }
+
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {
         self.queue.read().unwrap().is_empty() && self.count.load(Ordering::SeqCst) == 0

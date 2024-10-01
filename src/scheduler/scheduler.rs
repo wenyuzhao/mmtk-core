@@ -147,11 +147,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         unimplemented!()
     }
 
-    pub fn process_lazy_decrement_packets(&self) {
+    pub fn process_lazy_decrement_packets_in_pause(&self) {
         let mut postponed_concurrent_work = self.postponed_concurrent_work_prioritized.write();
         let mut new_queue = SegQueue::new();
         std::mem::swap(&mut *postponed_concurrent_work, &mut new_queue);
-        BucketId::Decs.get_bucket().set_queue(new_queue);
+        BucketId::Decs.get_bucket().merge_queue(new_queue);
     }
 
     pub fn postpone(&self, w: impl GCWork) {
@@ -831,7 +831,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             mmtk.slot_logger.reset();
         }
 
-        self.notify_schedule_finished();
         mmtk.get_plan().gc_pause_end();
 
         // Reset the triggering information.

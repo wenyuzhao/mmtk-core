@@ -530,26 +530,20 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             self.dump_memory(pause);
         }
 
-        if crate::args::LAZY_DECREMENTS
-            && pause == Pause::RefCount
-            && !self.in_concurrent_marking.load(Ordering::SeqCst)
-        {
-            self.immix_space
-                .scheduler()
-                .execute(&super::schedule::RC_CONC_SCHEDULE);
-        }
-
         if self.in_concurrent_marking.load(Ordering::SeqCst) {
             println!("Set concurrent marking schedule");
             // Lazy decs + Marking
             self.immix_space
                 .scheduler()
                 .execute(&super::schedule::CONC_MARK_SCHEDULE);
-        }
-        if pause == Pause::FinalMark {
+        } else if pause == Pause::FinalMark && crate::args::LAZY_DECREMENTS {
             self.immix_space
                 .scheduler()
                 .execute(&super::schedule::POST_SATB_SWEEPING_SCHEDULE);
+        } else if pause == Pause::RefCount && crate::args::LAZY_DECREMENTS {
+            self.immix_space
+                .scheduler()
+                .execute(&super::schedule::RC_CONC_SCHEDULE);
         }
     }
 

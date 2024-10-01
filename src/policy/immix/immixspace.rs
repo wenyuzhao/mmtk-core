@@ -579,7 +579,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
-            self.scheduler().process_lazy_decrement_packets();
+            self.scheduler().process_lazy_decrement_packets_in_pause();
         } else {
             debug_assert_ne!(pause, Pause::Full);
         }

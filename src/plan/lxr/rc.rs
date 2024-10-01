@@ -861,11 +861,15 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         let mmtk = GCWorker::<VM>::current().mmtk;
         let sched = &mmtk.scheduler;
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        // TODO: Add to BucketId::FinishMark if SATB is finished.
-        // if lxr.current_pause() == Some(Pause::FinalMark) {
-        //     sched.spawn(BucketId::FinishMark, w);
-        // } else {
-        sched.spawn(BucketId::ConcClosure, w);
+        if lxr.current_pause().is_some() {
+            sched.postpone(w);
+        } else {
+            // TODO: Add to BucketId::FinishMark if SATB is finished.
+            // if lxr.current_pause() == Some(Pause::FinalMark) {
+            //     sched.spawn(BucketId::FinishMark, w);
+            // } else {
+            sched.spawn(BucketId::ConcClosure, w);
+        }
     }
 
     fn flush(&mut self) {

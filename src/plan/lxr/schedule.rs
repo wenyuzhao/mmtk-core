@@ -17,7 +17,8 @@ pub static RC_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 
     if !crate::args::LAZY_DECREMENTS {
         g.dep(BucketId::Release, vec![BucketId::Decs]);
-        g.dep(BucketId::Decs, vec![BucketId::Finish]);
+        g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+        g.dep(BucketId::LazySweep, vec![BucketId::Finish]);
     }
 
     g.dep(BucketId::Release, vec![BucketId::Finish]);
@@ -65,7 +66,8 @@ pub static INITIAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
 
     if !crate::args::LAZY_DECREMENTS {
         g.dep(BucketId::Release, vec![BucketId::Decs]);
-        g.dep(BucketId::Decs, vec![BucketId::Finish]);
+        g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+        g.dep(BucketId::LazySweep, vec![BucketId::Finish]);
     }
 
     g.dep(BucketId::Release, vec![BucketId::Finish]);
@@ -92,6 +94,12 @@ pub static FINAL_MARK_SCHEDULE: Lazy<BucketGraph> = Lazy::new(|| {
     g.dep(BucketId::FinalRefClosure, vec![BucketId::PhantomRefClosure]);
 
     g.dep(BucketId::PhantomRefClosure, vec![BucketId::Release]);
+
+    if !crate::args::LAZY_DECREMENTS {
+        g.dep(BucketId::Release, vec![BucketId::Decs]);
+        g.dep(BucketId::Decs, vec![BucketId::LazySweep]);
+        g.dep(BucketId::LazySweep, vec![BucketId::Finish]);
+    }
 
     g.dep(BucketId::Release, vec![BucketId::Finish]);
 
