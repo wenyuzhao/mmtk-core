@@ -95,10 +95,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         } else {
             // The bucket is closed. Add to the bucket's queue
-            if bucket == BucketId::ConcClosure {
-                println!("ConcClosure: {:?}", bucket.get_bucket().count());
-            }
             bucket.get_bucket().add(w);
+            if bucket.get_bucket().is_open() {
+                let queue = bucket.get_bucket().take_queue();
+                self.active_bucket.merge(bucket, queue);
+            }
         }
     }
 

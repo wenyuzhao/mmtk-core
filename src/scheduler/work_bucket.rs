@@ -61,12 +61,23 @@ impl WorkBucket {
         self.is_open.store(true, Ordering::Relaxed);
     }
 
+    pub fn dump(&self) {
+        println!(
+            "{:?}: count={}, queue={}, open={}",
+            self.id,
+            self.count.load(Ordering::SeqCst),
+            self.queue.read().unwrap().len(),
+            self.is_open.load(Ordering::SeqCst)
+        );
+    }
+
     pub fn reset(&self) {
         if self.count.load(Ordering::SeqCst) != 0 {
             println!(
-                "Error: {:?} is not empty: {}",
+                "Error: {:?} is not empty: {},{}",
                 self.id,
-                self.count.load(Ordering::SeqCst)
+                self.count.load(Ordering::SeqCst),
+                self.queue.read().unwrap().len()
             );
         }
         assert!(
@@ -150,11 +161,19 @@ impl ActiveWorkBucket {
         }
     }
 
+    pub fn dump(&self) {
+        println!(
+            "ActiveWorkBucket: {},{}",
+            self.queue.queue.read().unwrap().len(),
+            self.prioritized_queue.queue.read().unwrap().len()
+        );
+    }
+
     pub(super) fn merge(&self, bucket: BucketId, queue: SegQueue<Box<dyn GCWork>>) {
         let global = if bucket.is_prioritized() {
-            self.prioritized_queue.queue.read().unwrap()
+            self.prioritized_queue.queue.write().unwrap()
         } else {
-            self.queue.queue.read().unwrap()
+            self.queue.queue.write().unwrap()
         };
         while let Some(work) = queue.pop() {
             global.push((bucket, work));
