@@ -114,6 +114,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
+    pub fn notify_work_available(&self) {
+        self.worker_monitor.notify_work_available(true);
+    }
+
     pub fn execute(&self, graph: &'static BucketGraph) {
         println!("current_schedule = {:?}", graph as *const BucketGraph);
         // reset all buckets

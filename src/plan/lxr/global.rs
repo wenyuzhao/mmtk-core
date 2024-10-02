@@ -234,8 +234,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
         self.wait_for_concurrent_packets_to_finish();
         // Set current pause kind
-        self.zeroing_packets_scheduled
-            .store(false, Ordering::SeqCst);
         self.current_pause.store(Some(pause), Ordering::SeqCst);
         self.perform_cycle_collection
             .store(pause != Pause::RefCount, Ordering::SeqCst);
@@ -697,9 +695,8 @@ impl<VM: VMBinding> LXR<VM> {
             .store(hint_emergency_gc, Ordering::SeqCst);
         // Eager mark-table zeroing
         if !cfg!(feature = "sanity") && hint_cycle_gc {
-            // println!("WARNING: Eager mark-table zeroing is not implemented");
-            // self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
-            // self.immix_space.schedule_mark_table_zeroing_tasks();
+            self.schedule_mark_table_zeroing_tasks(None, BucketId::LazySweep);
+            self.immix_space.scheduler().notify_work_available();
         }
         notify();
     }
