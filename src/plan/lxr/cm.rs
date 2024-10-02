@@ -141,7 +141,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if !self.next_ref_arrays.is_empty() {
             let next_ref_arrays = self.next_ref_arrays.take();
             let worker = GCWorker::<VM>::current();
-            debug_assert!(self.plan.concurrent_marking_enabled());
+            debug_assert!(self.plan.cm_enabled());
             let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
             if self.should_defer() {
                 worker.scheduler().postpone(w);
@@ -161,7 +161,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if !self.next_objects.is_empty() {
             let objects = self.next_objects.take();
             let worker = GCWorker::<VM>::current();
-            debug_assert!(self.plan.concurrent_marking_enabled());
+            debug_assert!(self.plan.cm_enabled());
             let w = Self::new(objects, worker.mmtk);
             if self.should_defer() {
                 worker.scheduler().postpone(w);

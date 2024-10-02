@@ -1495,10 +1495,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
             .reused_alloc_vol
             .fetch_add(num_lines << Line::LOG_BYTES, Ordering::SeqCst);
-        if self
-            .block_allocation
-            .concurrent_marking_in_progress_or_final_mark()
-        {
+        if self.block_allocation.cm_in_progress_or_final_mark() {
             Line::initialize_mark_table_as_marked::<VM>(start..end);
         } else {
             // Line::clear_mark_table::<VM>(start..end);

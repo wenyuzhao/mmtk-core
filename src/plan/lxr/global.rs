@@ -122,7 +122,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // SATB is finished
-        if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
+        if self.cm_in_progress() && crate::concurrent_marking_packets_drained() {
             self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
             return true;
         }
@@ -179,7 +179,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Concurrent tracing finished
-        // if self.concurrent_marking_in_progress()
+        // if self.cm_in_progress()
         //     && crate::concurrent_marking_packets_drained()
         // {
         //     return true;
@@ -189,16 +189,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn concurrent_collection_required(&self) -> bool {
         return false;
-        // Don't do a GC until we finished the lazy reclaimation.
-        // if !LazySweepingJobs::all_finished() {
-        //     return false;
-        // }
-        // self.concurrent_marking_enabled()
-        //     && !crate::plan::barriers::BARRIER_MEASUREMENT
-        //     && !self.concurrent_marking_in_progress()
-        //     && self.base().gc_status() == GcStatus::NotInGC
-        //     && self.get_reserved_pages()
-        //         >= self.get_total_pages() * crate::args().concurrent_marking_threshold / 100
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -236,7 +226,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let pause = self.select_collection_kind();
         self.update_stats_after_gc_decided(pause);
         // Wait for concurrent packets
-        if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
+        if self.cm_in_progress() && pause == Pause::RefCount {
             scheduler.pause_concurrent_marking_work_packets_during_gc();
             crate::counters()
                 .rc_during_satb
@@ -260,6 +250,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
         }
+        self.zeroing_packets_scheduled
+            .store(false, Ordering::SeqCst);
         // Analysis routine that is ran. It is generally recommended to take advantage
         // of the scheduling system we have in place for more performance
         #[cfg(feature = "analysis")]
@@ -419,9 +411,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 let t = crate::SATB_START.elapsed().as_nanos();
                 crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
             }
-        } else if cfg!(feature = "satb_timer")
-            && pause == Pause::RefCount
-            && self.concurrent_marking_in_progress()
+        } else if cfg!(feature = "satb_timer") && pause == Pause::RefCount && self.cm_in_progress()
         {
             let t = crate::SATB_START.elapsed().as_nanos();
             crate::counters().satb_nanos.fetch_add(t, Ordering::SeqCst);
@@ -444,9 +434,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 crate::SATB_START.start();
             }
             assert!(BucketId::Decs.get_bucket().is_empty());
-        } else if cfg!(feature = "satb_timer")
-            && pause == Pause::RefCount
-            && self.concurrent_marking_in_progress()
+        } else if cfg!(feature = "satb_timer") && pause == Pause::RefCount && self.cm_in_progress()
         {
             crate::SATB_START.start();
         }
@@ -612,12 +600,12 @@ impl<VM: VMBinding> LXR<VM> {
         lxr
     }
 
-    pub fn concurrent_marking_enabled(&self) -> bool {
+    pub fn cm_enabled(&self) -> bool {
         self.immix_space.cm_enabled
     }
 
-    pub fn concurrent_marking_in_progress(&self) -> bool {
-        self.concurrent_marking_enabled() && self.in_concurrent_marking.load(Ordering::Relaxed)
+    pub fn cm_in_progress(&self) -> bool {
+        self.in_concurrent_marking.load(Ordering::Relaxed)
     }
 
     fn next_gc_is_emergency_gc(
@@ -639,8 +627,8 @@ impl<VM: VMBinding> LXR<VM> {
     ) -> bool {
         if cfg!(feature = "lxr_simple_satb_trigger") {
             // Do cycle collection if mature space is over 60% of the heap
-            return if !self.concurrent_marking_in_progress() {
-                if self.concurrent_marking_enabled() {
+            return if !self.cm_in_progress() {
+                if self.cm_enabled() {
                     mature_space_pages * 100 >= cm_threshold * total_pages
                 } else {
                     false
@@ -666,8 +654,8 @@ impl<VM: VMBinding> LXR<VM> {
             available_pages
         );
         !cfg!(feature = "lxr_fixed_satb_trigger")
-            && !self.concurrent_marking_in_progress()
-            && (self.concurrent_marking_enabled()
+            && !self.cm_in_progress()
+            && (self.cm_enabled()
                 && garbage * 100 >= crate::args().trace_threshold as usize * total_pages)
     }
 
@@ -709,11 +697,22 @@ impl<VM: VMBinding> LXR<VM> {
             .store(hint_emergency_gc, Ordering::SeqCst);
         // Eager mark-table zeroing
         if !cfg!(feature = "sanity") && hint_cycle_gc {
-            println!("WARNING: Eager mark-table zeroing is not implemented");
+            // println!("WARNING: Eager mark-table zeroing is not implemented");
             // self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
             // self.immix_space.schedule_mark_table_zeroing_tasks();
         }
         notify();
+    }
+
+    fn schedule_mark_table_zeroing_tasks(&self, pause: Option<Pause>, bucket: BucketId) {
+        if let Some(pause) = pause {
+            assert!(pause == Pause::InitialMark || pause == Pause::Full);
+            if self.zeroing_packets_scheduled.load(Ordering::SeqCst) {
+                return;
+            }
+        }
+        self.immix_space.schedule_mark_table_zeroing_tasks(bucket);
+        self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
     }
 
     fn wait_for_decide_cycle_collection(&self) {
@@ -776,13 +775,13 @@ impl<VM: VMBinding> LXR<VM> {
 
         let emergency = self.base().global_state.is_emergency_collection();
         let user_triggered = self.base().global_state.is_user_triggered_collection();
-        let cm_in_progress = self.concurrent_marking_in_progress();
+        let cm_in_progress = self.cm_in_progress();
         let cm_packets_drained = crate::concurrent_marking_packets_drained();
         let hint_cycle_gc = self.hint_cycle_gc.load(Ordering::SeqCst);
         let hint_emergency_gc = self.hint_emergency_gc.load(Ordering::SeqCst);
         // Dump stats
         if crate::verbose(3) {
-            if self.concurrent_marking_enabled() && cm_in_progress {
+            if self.cm_enabled() && cm_in_progress {
                 if cm_packets_drained {
                     gc_log!([3] "SATB: Concurrent marking is done");
                 } else {
@@ -794,7 +793,7 @@ impl<VM: VMBinding> LXR<VM> {
                 "Stat: emergency = {}, user_triggered = {}, cm_in_progress = {}, cm_packets = {}, cm_enabled = {}",
                 emergency, user_triggered, cm_in_progress,
                 crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
-                self.concurrent_marking_enabled(),
+                self.cm_enabled(),
             );
         }
 
@@ -815,7 +814,6 @@ impl<VM: VMBinding> LXR<VM> {
             return if cm_in_progress {
                 Pause::FinalMark
             } else {
-                println!("FULL1");
                 Pause::Full
             };
         }
@@ -826,7 +824,7 @@ impl<VM: VMBinding> LXR<VM> {
                 >= MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed)
                 && !cm_in_progress
             {
-                return if self.concurrent_marking_enabled() {
+                return if self.cm_enabled() {
                     Pause::InitialMark
                 } else {
                     Pause::Full
@@ -836,7 +834,7 @@ impl<VM: VMBinding> LXR<VM> {
             }
         }
         if hint_cycle_gc && !cm_in_progress {
-            return if self.concurrent_marking_enabled() {
+            return if self.cm_enabled() {
                 Pause::InitialMark
             } else {
                 println!("FULL2");
@@ -924,10 +922,7 @@ impl<VM: VMBinding> LXR<VM> {
             panic!("ERROR: OutOfMemory");
         }
         scheduler.execute(&*super::schedule::INITIAL_MARK_SCHEDULE);
-        if !self.zeroing_packets_scheduled.load(Ordering::SeqCst) {
-            self.immix_space
-                .schedule_mark_table_zeroing_tasks(BucketId::Incs);
-        }
+        self.schedule_mark_table_zeroing_tasks(Some(Pause::InitialMark), BucketId::Incs);
         self.process_prev_roots(scheduler);
         scheduler.spawn(
             BucketId::Start,
@@ -953,7 +948,7 @@ impl<VM: VMBinding> LXR<VM> {
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.store(0, Ordering::Relaxed);
         }
-        if self.concurrent_marking_in_progress() {
+        if self.cm_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
         self.process_prev_roots(scheduler);
@@ -980,10 +975,7 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler: &GCWorkScheduler<VM>,
     ) {
         scheduler.execute(&*super::schedule::FULL_GC_SCHEDULE);
-        if !self.zeroing_packets_scheduled.load(Ordering::SeqCst) {
-            self.immix_space
-                .schedule_mark_table_zeroing_tasks(BucketId::Incs);
-        }
+        self.schedule_mark_table_zeroing_tasks(Some(Pause::Full), BucketId::Incs);
         if cfg!(feature = "lxr_abort_on_trace") {
             panic!("ERROR: OutOfMemory");
         }
@@ -1084,6 +1076,75 @@ impl<VM: VMBinding> LXR<VM> {
         &self.common.los
     }
 
+    fn on_lazy_decs_finished(&self, c: LazySweepingJobsCounter) {
+        gc_log!([2]
+            " - lazy decs finished since-gc-start={:.3}ms",
+            crate::gc_start_time_ms(),
+        );
+        self.immix_space.schedule_rc_block_sweeping_tasks(c);
+    }
+
+    fn on_lazy_sweeping_finished(&self) {
+        let ix = &self.immix_space;
+        self.immix_space.flush_page_resource();
+        let released_blocks = ix.num_clean_blocks_released_lazy.load(Ordering::SeqCst);
+        let released_los_pages = self.los().num_pages_released_lazy.load(Ordering::SeqCst);
+        let total_released_bytes =
+            (released_blocks << Block::LOG_BYTES) + (released_los_pages << LOG_BYTES_IN_PAGE);
+        gc_log!([2]
+            " - lazy jobs finished since-gc-start={:.3}ms, current-reserved-heap={}M({}M), released-blocks={}, released-los-pages={}, total-released={}",
+            crate::gc_start_time_ms(),
+            self.get_reserved_pages() / 256,
+            self.get_total_pages() / 256,
+            released_blocks,
+            released_los_pages,
+            if total_released_bytes < BYTES_IN_KBYTE {
+                format!("{}B", total_released_bytes)
+            } else if total_released_bytes < BYTES_IN_MBYTE {
+                format!("{}K", total_released_bytes >> LOG_BYTES_IN_KBYTE)
+            } else if total_released_bytes < (1 << 30) {
+                format!("{}M", total_released_bytes >> LOG_BYTES_IN_MBYTE)
+            } else {
+                format!("{}G", total_released_bytes >> 30)
+            }
+        );
+        gc_log!([3] " - released young blocks since gc start {}({}M)", ix.num_clean_blocks_released_young.load(Ordering::Relaxed), ix.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+        gc_log!([3] " - released mature blocks {}({}M)", ix.num_clean_blocks_released_mature.load(Ordering::Relaxed), ix.num_clean_blocks_released_mature.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
+        if cfg!(feature = "lxr_log_reclaim") {
+            let rc_killed_ix = ix.rc_killed_bytes.load(Ordering::SeqCst);
+            let rc_killed_los = self.los().rc_killed_bytes.load(Ordering::SeqCst);
+            gc_log!([2]
+                " - rc-killed={}({}M) rc-killed-ix={}({}M) rc-killed-los={}({}M)",
+                (rc_killed_ix + rc_killed_los),
+                (rc_killed_ix + rc_killed_los) / 1024 / 1024,
+                rc_killed_ix,
+                rc_killed_ix / 1024 / 1024,
+                rc_killed_los,
+                rc_killed_los / 1024 / 1024,
+            );
+        }
+        gc_log!([2] " - num_clean_blocks_released_lazy = {}", ix.num_clean_blocks_released_lazy.load(Ordering::SeqCst));
+        // Update counters
+        if !crate::args::LAZY_DECREMENTS {
+            HEAP_AFTER_GC.store(self.get_used_pages(), Ordering::SeqCst);
+        }
+        {
+            let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::Relaxed);
+            let lazy_released_pages =
+                ix.num_clean_blocks_released_lazy.load(Ordering::Relaxed) << Block::LOG_PAGES;
+            let x = used_pages_after_gc.saturating_sub(lazy_released_pages);
+            let c = crate::counters();
+            c.total_used_pages.fetch_add(x, Ordering::Relaxed);
+            c.min_used_pages.fetch_min(x, Ordering::Relaxed);
+            c.max_used_pages.fetch_max(x, Ordering::Relaxed);
+        }
+        let pause = match self.current_pause() {
+            Some(p) => p,
+            None => self.previous_pause().unwrap(),
+        };
+        self.decide_next_gc_may_perform_cycle_collection(pause);
+    }
+
     fn gc_init(&mut self, options: &Options) {
         crate::args::validate_features(BarrierSelector::FieldBarrier, options);
         self.immix_space.cm_enabled = !cfg!(feature = "lxr_no_cm");
@@ -1095,106 +1156,14 @@ impl<VM: VMBinding> LXR<VM> {
         }
         let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();
         lazy_sweeping_jobs.swap();
+        let lxr_ptr = self as *const Self as usize;
         lazy_sweeping_jobs.end_of_decs = Some(Box::new(move |c| {
-            gc_log!([2]
-                " - lazy decs finished since-gc-start={:.3}ms",
-                crate::gc_start_time_ms(),
-            );
-            let lxr = GCWorker::<VM>::current()
-                .mmtk
-                .get_plan()
-                .downcast_ref::<Self>()
-                .unwrap();
-            lxr.immix_space.schedule_rc_block_sweeping_tasks(c);
+            let lxr = unsafe { &*(lxr_ptr as *const Self) };
+            lxr.on_lazy_decs_finished(c);
         }));
         lazy_sweeping_jobs.end_of_lazy = Some(Box::new(move || {
-            let lxr = GCWorker::<VM>::current()
-                .mmtk
-                .get_plan()
-                .downcast_ref::<Self>()
-                .unwrap();
-            lxr.immix_space.flush_page_resource();
-            let released_blocks = lxr
-                .immix_space
-                .num_clean_blocks_released_lazy
-                .load(Ordering::SeqCst);
-            let released_los_pages = lxr.los().num_pages_released_lazy.load(Ordering::SeqCst);
-            let total_released_bytes =
-                (released_blocks << Block::LOG_BYTES) + (released_los_pages << LOG_BYTES_IN_PAGE);
-            gc_log!([2]
-                " - lazy jobs finished since-gc-start={:.3}ms, current-reserved-heap={}M({}M), released-blocks={}, released-los-pages={}, total-released={}",
-                crate::gc_start_time_ms(),
-                lxr.get_reserved_pages() / 256,
-                lxr.get_total_pages() / 256,
-                released_blocks,
-                released_los_pages,
-                if total_released_bytes < BYTES_IN_KBYTE {
-                    format!("{}B", total_released_bytes)
-                } else if total_released_bytes < BYTES_IN_MBYTE {
-                    format!("{}K", total_released_bytes >> LOG_BYTES_IN_KBYTE)
-                } else if total_released_bytes < (1 << 30) {
-                    format!("{}M", total_released_bytes >> LOG_BYTES_IN_MBYTE)
-                } else {
-                    format!("{}G", total_released_bytes >> 30)
-                }
-            );
-            gc_log!([3] " - released young blocks since gc start {}({}M)", lxr.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed), lxr.immix_space.num_clean_blocks_released_young.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
-            gc_log!([3] " - released mature blocks {}({}M)", lxr.immix_space.num_clean_blocks_released_mature.load(Ordering::Relaxed), lxr.immix_space.num_clean_blocks_released_mature.load(Ordering::Relaxed) >> (LOG_BYTES_IN_MBYTE as usize - Block::LOG_BYTES));
-            if cfg!(feature = "lxr_log_reclaim") {
-                let rc_killed_ix = lxr.immix_space.rc_killed_bytes.load(Ordering::SeqCst);
-                let rc_killed_los = lxr.los().rc_killed_bytes.load(Ordering::SeqCst);
-                gc_log!([2]
-                    " - rc-killed={}({}M) rc-killed-ix={}({}M) rc-killed-los={}({}M)",
-                    (rc_killed_ix + rc_killed_los),
-                    (rc_killed_ix + rc_killed_los) / 1024 / 1024,
-                    rc_killed_ix,
-                    rc_killed_ix / 1024 / 1024,
-                    rc_killed_los,
-                    rc_killed_los / 1024 / 1024,
-                );
-            }
-            gc_log!([2]
-                " - num_clean_blocks_released_lazy = {}",
-                lxr.immix_space
-                .num_clean_blocks_released_lazy
-                .load(Ordering::SeqCst)
-            );
-            // Update counters
-            if !crate::args::LAZY_DECREMENTS {
-                HEAP_AFTER_GC.store(lxr.get_used_pages(), Ordering::SeqCst);
-            }
-            {
-                let o = Ordering::Relaxed;
-                let used_pages_after_gc = HEAP_AFTER_GC.load(Ordering::SeqCst);
-                let lazy_released_pages = lxr
-                    .immix_space
-                    .num_clean_blocks_released_lazy
-                    .load(Ordering::SeqCst)
-                    << Block::LOG_PAGES;
-                let x = if used_pages_after_gc >= lazy_released_pages {
-                    used_pages_after_gc - lazy_released_pages
-                } else {
-                    0
-                };
-                crate::counters().total_used_pages.store(
-                    crate::counters().total_used_pages.load(o) + x,
-                    Ordering::Relaxed,
-                );
-                let min = crate::counters().min_used_pages.load(o);
-                crate::counters()
-                    .min_used_pages
-                    .store(usize::min(x, min), o);
-                let max = crate::counters().max_used_pages.load(o);
-                crate::counters()
-                    .max_used_pages
-                    .store(usize::max(x, max), o);
-            }
-            let pause = if lxr.current_pause().is_none() {
-                lxr.previous_pause().unwrap()
-            } else {
-                lxr.current_pause().unwrap()
-            };
-            lxr.decide_next_gc_may_perform_cycle_collection(pause);
+            let lxr = unsafe { &*(lxr_ptr as *const Self) };
+            lxr.on_lazy_sweeping_finished();
         }));
 
         if let Some(nursery_ratio) = crate::args().nursery_ratio {
