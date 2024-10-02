@@ -62,9 +62,9 @@ impl<VM: VMBinding> BlockAllocation<VM> {
     /// Notify a GC pahse has started
     pub fn notify_mutator_phase_end(&self) {}
 
-    pub fn concurrent_marking_in_progress_or_final_mark(&self) -> bool {
+    pub fn cm_in_progress_or_final_mark(&self) -> bool {
         let lxr = self.lxr.unwrap();
-        lxr.concurrent_marking_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
+        lxr.cm_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
     }
 
     pub(super) fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
@@ -86,7 +86,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
         // Initialize mark table
         if self.space().rc_enabled {
-            if self.concurrent_marking_in_progress_or_final_mark() {
+            if self.cm_in_progress_or_final_mark() {
                 block.initialize_mark_table_as_marked::<VM>();
             } else {
                 // TODO: Performance? Is this necessary?

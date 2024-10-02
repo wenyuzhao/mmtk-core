@@ -149,7 +149,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         if !self.next_ref_arrays.is_empty() {
             let next_ref_arrays = std::mem::take(&mut self.next_ref_arrays);
             let worker = GCWorker::<VM>::current();
-            debug_assert!(self.plan.concurrent_marking_enabled());
+            debug_assert!(self.plan.cm_enabled());
             let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
@@ -169,7 +169,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 std::mem::take(&mut self.next_objects)
             };
             let worker = GCWorker::<VM>::current();
-            debug_assert!(self.plan.concurrent_marking_enabled());
+            debug_assert!(self.plan.cm_enabled());
             let w = Self::new(objects, worker.mmtk);
             self.pushes = self.next_objects.len();
             if self.plan.current_pause() == Some(Pause::RefCount) {
