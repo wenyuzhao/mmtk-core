@@ -37,16 +37,16 @@ impl BucketQueue {
 
 pub struct WorkBucket {
     #[allow(unused)]
-    name: &'static str,
+    id: BucketId,
     count: AtomicUsize,
     queue: RwLock<SegQueue<Box<dyn GCWork>>>,
     is_open: AtomicBool,
 }
 
 impl WorkBucket {
-    pub const fn new(name: &'static str) -> Self {
+    pub const fn new(id: BucketId) -> Self {
         Self {
-            name,
+            id,
             count: AtomicUsize::new(0),
             queue: RwLock::new(SegQueue::new()),
             is_open: AtomicBool::new(false),
@@ -65,14 +65,14 @@ impl WorkBucket {
         if self.count.load(Ordering::SeqCst) != 0 {
             println!(
                 "Error: {:?} is not empty: {}",
-                self.name,
+                self.id,
                 self.count.load(Ordering::SeqCst)
             );
         }
         assert!(
             self.count.load(Ordering::SeqCst) == 0,
             "{:?} is not empty",
-            self.name
+            self.id
         );
         assert!(self.queue.read().unwrap().is_empty());
         self.is_open.store(false, Ordering::SeqCst);
@@ -144,23 +144,16 @@ impl ActiveWorkBucket {
         }
     }
 
-    // pub fn swap_queue(
-    //     &self,
-    //     mut new_queue: Injector<Box<dyn GCWork>>,
-    // ) -> Injector<Box<dyn GCWork>> {
-    //     let mut queue = self.queue.queue.write().unwrap();
-    //     std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
-    //     new_queue
-    // }
-
-    // pub fn swap_queue_prioritized(
-    //     &self,
-    //     mut new_queue: Injector<Box<dyn GCWork>>,
-    // ) -> Injector<Box<dyn GCWork>> {
-    //     let mut queue = self.prioritized_queue.queue.write().unwrap();
-    //     std::mem::swap::<Injector<Box<dyn GCWork>>>(&mut queue, &mut new_queue);
-    //     new_queue
-    // }
+    pub(super) fn merge(&self, bucket: BucketId, queue: SegQueue<Box<dyn GCWork>>) {
+        let global = if bucket.is_prioritized() {
+            self.prioritized_queue.queue.read().unwrap()
+        } else {
+            self.queue.queue.read().unwrap()
+        };
+        while let Some(work) = queue.pop() {
+            global.push((bucket, work));
+        }
+    }
 
     fn notify_one_worker(&self) {
         // Notify one if there're any parked workers.
@@ -173,57 +166,15 @@ impl ActiveWorkBucket {
     }
 
     /// Add a work packet to this bucket
-    /// Panic if this bucket cannot receive prioritized packets.
-    // pub fn add_prioritized(&self, work: Box<dyn GCWork>) {
-    //     self.prioritized_queue.push(work);
-    //     self.notify_one_worker();
-    // }
-
-    /// Add a work packet to this bucket
-    // pub fn add<W: GCWork>(&self, work: W) {
-    //     self.queue.push(Box::new(work));
-    //     self.notify_one_worker();
-    // }
-
-    /// Add a work packet to this bucket
     pub fn add_boxed(&self, b: BucketId, work: Box<dyn GCWork>) {
         self.queue.push(b, work);
         self.notify_one_worker();
     }
 
-    /// Add a work packet to this bucket, but do not notify any workers.
-    /// This is useful when the current thread is holding the mutex of `WorkerMonitor` which is
-    /// used for notifying workers.  This usually happens if the current thread is the last worker
-    /// parked.
-    // pub(crate) fn add_no_notify<W: GCWork>(&self, work: W) {
-    //     self.queue.push(Box::new(work));
-    // }
-
     /// Like [`WorkBucket::add_no_notify`], but the work is boxed.
     pub(crate) fn add_boxed_no_notify(&self, b: BucketId, work: Box<dyn GCWork>) {
         self.queue.push(b, work);
     }
-
-    /// Add multiple packets with a higher priority.
-    /// Panic if this bucket cannot receive prioritized packets.
-    // pub fn bulk_add_prioritized(&self, work_vec: Vec<Box<dyn GCWork>>) {
-    //     self.prioritized_queue.push_all(work_vec);
-    //     self.notify_all_workers();
-    // }
-
-    /// Add multiple packets
-    // pub fn bulk_add(&self, work_vec: Vec<Box<dyn GCWork>>) {
-    //     if work_vec.is_empty() {
-    //         return;
-    //     }
-    //     let len = work_vec.len();
-    //     self.queue.push_all(work_vec);
-    //     if len == 1 {
-    //         self.notify_one_worker();
-    //     } else {
-    //         self.notify_all_workers();
-    //     }
-    // }
 
     /// Get a work packet from this bucket
     pub fn poll(
@@ -242,6 +193,7 @@ impl ActiveWorkBucket {
 /// This enum defines all the work bucket types. The scheduler
 /// will instantiate a work bucket for each stage defined here.
 #[derive(Debug, Enum, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(u8)]
 pub enum BucketId {
     Start,
     Incs,
@@ -260,21 +212,21 @@ pub enum BucketId {
     LazySweep,
 }
 
-static START: WorkBucket = WorkBucket::new("start");
-static ROOTS: WorkBucket = WorkBucket::new("roots");
-static INCS: WorkBucket = WorkBucket::new("incs");
-static PREPARE: WorkBucket = WorkBucket::new("prepare");
-static CLOSURE: WorkBucket = WorkBucket::new("closure");
-static RELEASE: WorkBucket = WorkBucket::new("release");
-static REF_WEAK: WorkBucket = WorkBucket::new("ref.weak");
-static REF_FINAL: WorkBucket = WorkBucket::new("ref.final");
-static REF_PHANTOM: WorkBucket = WorkBucket::new("ref.phantom");
-static FINISH: WorkBucket = WorkBucket::new("finish");
-static DECS: WorkBucket = WorkBucket::new("decs");
-static CONC_CLOSURE: WorkBucket = WorkBucket::new("conc.closure");
-static FINISH_MARK: WorkBucket = WorkBucket::new("finish.mark");
-static POST_SATB_SWEEP: WorkBucket = WorkBucket::new("post-satb-sweep");
-static LAZY_SWEEP: WorkBucket = WorkBucket::new("lazy.sweep");
+static START: WorkBucket = WorkBucket::new(BucketId::Start);
+static ROOTS: WorkBucket = WorkBucket::new(BucketId::Roots);
+static INCS: WorkBucket = WorkBucket::new(BucketId::Incs);
+static PREPARE: WorkBucket = WorkBucket::new(BucketId::Prepare);
+static CLOSURE: WorkBucket = WorkBucket::new(BucketId::Closure);
+static RELEASE: WorkBucket = WorkBucket::new(BucketId::Release);
+static REF_WEAK: WorkBucket = WorkBucket::new(BucketId::WeakRefClosure);
+static REF_FINAL: WorkBucket = WorkBucket::new(BucketId::FinalRefClosure);
+static REF_PHANTOM: WorkBucket = WorkBucket::new(BucketId::PhantomRefClosure);
+static FINISH: WorkBucket = WorkBucket::new(BucketId::Finish);
+static DECS: WorkBucket = WorkBucket::new(BucketId::Decs);
+static CONC_CLOSURE: WorkBucket = WorkBucket::new(BucketId::ConcClosure);
+static FINISH_MARK: WorkBucket = WorkBucket::new(BucketId::FinishMark);
+static POST_SATB_SWEEP: WorkBucket = WorkBucket::new(BucketId::PostSATBSWeep);
+static LAZY_SWEEP: WorkBucket = WorkBucket::new(BucketId::LazySweep);
 
 impl BucketId {
     #[inline(always)]
@@ -295,6 +247,15 @@ impl BucketId {
             BucketId::FinishMark => &FINISH_MARK,
             BucketId::PostSATBSWeep => &POST_SATB_SWEEP,
             BucketId::LazySweep => &LAZY_SWEEP,
+        }
+    }
+
+    pub const fn is_prioritized(&self) -> bool {
+        match self {
+            BucketId::Decs | BucketId::PostSATBSWeep | BucketId::LazySweep | BucketId::Roots => {
+                true
+            }
+            _ => false,
         }
     }
 }

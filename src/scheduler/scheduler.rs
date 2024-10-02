@@ -447,8 +447,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.schedule().update(bucket, |b| {
             // dump everything to the active bucket
             let q = b.get_bucket().take_queue();
-            while let Some(q) = q.pop() {
-                self.active_bucket.add_boxed_no_notify(b, q);
+            if !q.is_empty() {
+                self.active_bucket.merge(b, q);
                 new_work = true;
             }
             new_buckets = true;
@@ -583,7 +583,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// current goal.
     fn on_last_parked(&self, worker: &GCWorker<VM>, goals: &mut WorkerGoals) -> LastParkedResult {
         let Some(ref current_goal) = goals.current() else {
-            println!("deactivate_all: on_last_parked no goal");
             self.deactivate_all();
             // There is no goal.  Find a request to respond to.
             return self.respond_to_requests(worker, goals);
@@ -754,7 +753,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     fn notify_schedule_finished(&self) {
         let (lock, cvar) = &self.schedule_finished;
-        println!("SCHEDULE FINISHED");
         let mut finished = lock.lock().unwrap();
         *finished = true;
         cvar.notify_all();
@@ -784,7 +782,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         debug_assert!(self.all_buckets_empty());
 
         // Deactivate all work buckets to prepare for the next GC.
-        println!("deactivate_all: on_gc_finished");
         self.deactivate_all();
         // self.debug_assert_all_buckets_deactivated();
 
@@ -1022,6 +1019,9 @@ impl BucketGraph {
     }
 
     fn reset(&self) {
+        if self.all_buckets.is_empty() {
+            return;
+        }
         println!("RESET BUCKETS {:?}", self.all_buckets);
         for b in &self.all_buckets {
             b.get_bucket().reset()
