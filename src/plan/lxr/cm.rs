@@ -143,7 +143,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
-            if self.plan.current_pause() == Some(Pause::RefCount) {
+            if self.should_defer() {
                 worker.scheduler().postpone(w);
             } else {
                 let bkt = if self.plan.current_pause() == Some(Pause::FinalMark) {
@@ -163,7 +163,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new(objects, worker.mmtk);
-            if self.plan.current_pause() == Some(Pause::RefCount) {
+            if self.should_defer() {
                 worker.scheduler().postpone(w);
             } else {
                 let bkt = if self.plan.current_pause() == Some(Pause::FinalMark) {
@@ -344,18 +344,23 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
         true
     }
     fn do_work(&mut self) {
-        #[cfg(feature = "measure_trace_rate")]
-        let mmtk = crate::scheduler::GCWorker::<VM>::current().mmtk;
+        let worker = GCWorker::<VM>::current();
         debug_assert!(!BucketId::Incs.get_bucket().is_open());
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
         #[cfg(feature = "measure_trace_rate")]
-        let record = if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
+        let record = if crate::verbose(3) && !worker.mmtk.scheduler.in_concurrent() {
             STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
             true
         } else {
             false
         };
+        if self.should_defer() {
+            let w = std::mem::replace(self, Self::new(vec![], &worker.mmtk));
+            worker.scheduler().postpone(w);
+            crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
+            return;
+        }
         // mark objects
         if let Some(objects) = self.objects.take() {
             self.trace_objects(&objects)
@@ -365,7 +370,7 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
             self.trace_arrays(&arrays)
         }
         let pause_opt = self.plan.current_pause();
-        if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
+        if !self.should_defer() && (pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
             let mut next_objects = vec![];
             let mut next_ref_arrays = vec![];
             while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
@@ -379,6 +384,9 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
                 self.trace_objects(&next_objects);
                 self.next_ref_arrays.swap(&mut next_ref_arrays);
                 self.trace_arrays(&next_ref_arrays);
+                if self.should_defer() {
+                    break;
+                }
             }
         }
         self.flush();

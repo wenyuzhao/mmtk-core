@@ -93,11 +93,17 @@ impl WorkBucket {
 
     pub fn merge_queue(&self, new_queue: SegQueue<Box<dyn GCWork>>) {
         let count = new_queue.len();
-        let queue = self.queue.write().unwrap();
-        while let Some(work) = new_queue.pop() {
-            queue.push(work);
+        let mut queue = self.queue.write().unwrap();
+        if queue.is_empty() {
+            *queue = new_queue;
+            assert!(self.count.load(Ordering::SeqCst) == 0);
+            self.count.store(count, Ordering::SeqCst);
+        } else {
+            while let Some(work) = new_queue.pop() {
+                queue.push(work);
+            }
+            self.count.fetch_add(count, Ordering::SeqCst);
         }
-        self.count.fetch_add(count, Ordering::SeqCst);
     }
 
     /// Test if the bucket is drained
@@ -153,6 +159,10 @@ impl ActiveWorkBucket {
         while let Some(work) = queue.pop() {
             global.push((bucket, work));
         }
+    }
+
+    pub(super) fn take_unprioritized_queue(&self) -> Injector<(BucketId, Box<dyn GCWork>)> {
+        std::mem::replace(&mut self.queue.queue.write().unwrap(), Injector::new())
     }
 
     fn notify_one_worker(&self) {

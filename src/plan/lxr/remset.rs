@@ -7,7 +7,6 @@ use crate::{
     scheduler::{GCWork, GCWorker},
     util::Address,
     vm::{slot::Slot, VMBinding},
-    MMTK,
 };
 
 use super::mature_evac::EvacuateMatureObjects;

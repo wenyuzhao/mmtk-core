@@ -243,6 +243,10 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         let sched = &self.mmtk.scheduler;
         if self.lxr.current_pause() == Some(Pause::FinalMark) {
             sched.spawn(BucketId::FinishMark, w);
+        } else if self.lxr.current_pause() == Some(Pause::RefCount)
+            || crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
+        {
+            sched.postpone(w);
         } else {
             sched.spawn(BucketId::ConcClosure, w);
         }

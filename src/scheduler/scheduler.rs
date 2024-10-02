@@ -130,21 +130,18 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn pause_concurrent_marking_work_packets_during_gc(&self) {
         // Take everything left in the active bucket, and put them back to the postponed queue
-        // let mut unconstrained_queue = Injector::new();
-        // unconstrained_queue =
-        //     self.work_buckets[WorkBucketStage::Unconstrained].swap_queue(unconstrained_queue);
-        // let postponed_queue = self.postponed_concurrent_work.read();
-        // if !unconstrained_queue.is_empty() {
-        //     loop {
-        //         match unconstrained_queue.steal() {
-        //             Steal::Empty => break,
-        //             Steal::Success(x) => postponed_queue.push(x),
-        //             Steal::Retry => continue,
-        //         }
-        //     }
-        // }
-        // crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
-        unimplemented!()
+        crate::PAUSE_CONCURRENT_MARKING.store(true, Ordering::SeqCst);
+        let satb_queue = self.active_bucket.take_unprioritized_queue();
+        let postponed_queue = self.postponed_concurrent_work.read();
+        if !satb_queue.is_empty() {
+            loop {
+                match satb_queue.steal() {
+                    Steal::Empty => break,
+                    Steal::Success((_, x)) => postponed_queue.push(x),
+                    Steal::Retry => continue,
+                }
+            }
+        }
     }
 
     pub fn process_lazy_decrement_packets_in_pause(&self) {
@@ -405,7 +402,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             pqueue.len()
         );
         if !queue.is_empty() {
-            BucketId::ConcClosure.get_bucket().set_queue(queue);
+            BucketId::ConcClosure.get_bucket().merge_queue(queue);
         }
         if !pqueue.is_empty() {
             BucketId::Decs.get_bucket().set_queue(pqueue);

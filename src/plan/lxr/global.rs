@@ -45,7 +45,6 @@ use std::time::SystemTime;
 
 const LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER: usize = 1;
 
-static INITIAL_GC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static INCS_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static ALLOC_TRIGGERED: AtomicBool = AtomicBool::new(false);
 static SURVIVAL_TRIGGERED: AtomicBool = AtomicBool::new(false);
@@ -84,14 +83,14 @@ pub struct LXR<VM: VMBinding> {
     perform_cycle_collection: AtomicBool,
     current_pause: Atomic<Option<Pause>>,
     previous_pause: Atomic<Option<Pause>>,
-    next_gc_may_perform_cycle_collection: AtomicBool,
-    next_gc_may_perform_emergency_collection: AtomicBool,
+    hint_cycle_gc: AtomicBool,
+    hint_emergency_gc: AtomicBool,
     last_gc_was_defrag: AtomicBool,
     nursery_blocks: usize,
     young_alloc_trigger: usize,
     avail_pages_at_end_of_last_gc: AtomicUsize,
     zeroing_packets_scheduled: AtomicBool,
-    next_gc_selected: (Mutex<bool>, Condvar),
+    decide_cycle_collection: (Mutex<bool>, Condvar),
     in_concurrent_marking: AtomicBool,
     pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
@@ -229,49 +228,30 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             unreachable!();
         }
         if !crate::LazySweepingJobs::all_finished() {
-            if crate::verbose(1) {
-                let s = format!(
-                    "[{:.3}s][info][gc] @WARNING: LXR Lazy Sweeping Not Finished",
-                    crate::boot_time_secs()
-                );
-                eprintln!("{}", s);
-            }
+            gc_log!([1] "WARNING: LXR Lazy Sweeping Not Finished");
             crate::counters()
                 .gc_with_unfinished_lazy_jobs
                 .fetch_add(1, Ordering::Relaxed);
         }
-        self.wait_for_concurrent_packets_to_finish();
         let pause = self.select_collection_kind();
+        self.update_stats_after_gc_decided(pause);
+        // Wait for concurrent packets
         if self.concurrent_marking_in_progress() && pause == Pause::RefCount {
+            scheduler.pause_concurrent_marking_work_packets_during_gc();
             crate::counters()
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
         }
-        let gc_cause = if self.base().global_state.is_emergency_collection() {
-            GCCause::Emergency
-        } else if self.base().global_state.is_user_triggered_collection() {
-            GCCause::UserTriggered
-        } else {
-            self.gc_cause.load(Ordering::SeqCst)
-        };
-        gc_log!([3] "GC({}) GC Cause {:?}", crate::GC_EPOCH.load(Ordering::SeqCst), gc_cause);
-        let alloc_ix = self
-            .immix_space
-            .block_allocation
-            .total_young_allocation_in_bytes();
-        let alloc_los = self.los().young_alloc_size.load(Ordering::Relaxed);
-        let alloc_total = alloc_los + alloc_ix;
-        gc_log!([2]
-            "GC({}) {:?} start. incs={} young-alloc={}M young-alloc-ix={}M young-clean-blocks={}({}M)  young-alloc-los={}M",
-            crate::GC_EPOCH.load(Ordering::SeqCst),
-            pause,
-            self.rc.inc_buffer_size(),
-            alloc_total >> LOG_BYTES_IN_MBYTE,
-            alloc_ix >> LOG_BYTES_IN_MBYTE,
-            self.immix_space.block_allocation.clean_nursery_blocks(),
-            self.immix_space.block_allocation.clean_nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
-            alloc_los >> LOG_BYTES_IN_MBYTE,
-        );
+        self.wait_for_concurrent_packets_to_finish();
+        // Set current pause kind
+        self.zeroing_packets_scheduled
+            .store(false, Ordering::SeqCst);
+        self.current_pause.store(Some(pause), Ordering::SeqCst);
+        self.perform_cycle_collection
+            .store(pause != Pause::RefCount, Ordering::SeqCst);
+        // Dump stats
+        self.log_gc_start(pause);
+        // Schedule work
         match pause {
             Pause::Full => self
                 .schedule_emergency_full_heap_collection::<RCImmixCollectRootEdges<VM>>(scheduler),
@@ -280,40 +260,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
         }
-        if cfg!(feature = "lxr_fixed_satb_trigger") {
-            let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
-            let date230505 = std::time::SystemTime::UNIX_EPOCH + hours(467575);
-            let d = SystemTime::now().duration_since(date230505).unwrap();
-            let hrs = (d.as_secs() / 3600) % 24;
-            let new_value: usize = match hrs {
-                _ if hrs < 12 => 32,
-                _ => 16,
-            };
-            if new_value != MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) {
-                gc_log!([1] "===>>> Update SATB Trigger: {:?} <<<===", new_value);
-                MAX_RC_PAUSES_BEFORE_SATB.store(new_value, Ordering::Relaxed);
-            }
-        }
-
         // Analysis routine that is ran. It is generally recommended to take advantage
         // of the scheduling system we have in place for more performance
         #[cfg(feature = "analysis")]
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
-        // Resume mutators
-        if cfg!(not(feature = "fragmentation_analysis"))
-            && (pause == Pause::Full || pause == Pause::FinalMark)
-        {
-            #[cfg(feature = "sanity")]
-            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
-        }
-
+        unimplemented!("Analysis is not supported in LXR");
         #[cfg(feature = "sanity")]
-        if cfg!(feature = "fragmentation_analysis")
-            && pause == Pause::RefCount
-            && crate::frag_exp_enabled()
-        {
-            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(self));
-        }
+        unimplemented!("Sanity is not supported in LXR");
+        // Start GC workers
         scheduler.notify_bucket_empty(None);
     }
 
@@ -506,10 +459,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if crate::args::LAZY_DECREMENTS {
             let perform_cycle_collection =
                 self.get_available_pages() < super::CYCLE_TRIGGER_THRESHOLD;
-            self.next_gc_may_perform_cycle_collection
+            self.hint_cycle_gc
                 .store(perform_cycle_collection, Ordering::SeqCst);
-            self.next_gc_may_perform_emergency_collection
-                .store(false, Ordering::SeqCst);
+            self.hint_emergency_gc.store(false, Ordering::SeqCst);
             self.perform_cycle_collection.store(false, Ordering::SeqCst);
         }
         self.avail_pages_at_end_of_last_gc
@@ -619,20 +571,19 @@ impl<VM: VMBinding> LXR<VM> {
             constraints: &LXR_CONSTRAINTS,
             global_side_metadata_specs,
         };
-        let mut immix_space = ImmixSpace::new(
+        let immix_space = ImmixSpace::new(
             plan_args.get_space_args("immix", true, VMRequest::discontiguous()),
             ImmixSpaceArgs {
                 unlog_object_when_traced: false,
                 reset_log_bit_in_major_gc: false,
             },
         );
-        immix_space.cm_enabled = true;
         let mut lxr = Box::new(LXR {
             immix_space,
             common: CommonPlan::new(plan_args),
             perform_cycle_collection: AtomicBool::new(false),
-            next_gc_may_perform_cycle_collection: AtomicBool::new(false),
-            next_gc_may_perform_emergency_collection: AtomicBool::new(false),
+            hint_cycle_gc: AtomicBool::new(false),
+            hint_emergency_gc: AtomicBool::new(false),
             current_pause: Atomic::new(None),
             previous_pause: Atomic::new(None),
             last_gc_was_defrag: AtomicBool::new(false),
@@ -643,7 +594,7 @@ impl<VM: VMBinding> LXR<VM> {
                 .unwrap_or(usize::MAX),
             avail_pages_at_end_of_last_gc: AtomicUsize::new(0),
             zeroing_packets_scheduled: AtomicBool::new(false),
-            next_gc_selected: (Mutex::new(true), Condvar::new()),
+            decide_cycle_collection: (Mutex::new(true), Condvar::new()),
             in_concurrent_marking: AtomicBool::new(false),
             prev_roots: Default::default(),
             curr_roots: Default::default(),
@@ -721,17 +672,15 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn decide_next_gc_may_perform_cycle_collection(&self, pause: Pause) {
-        let (lock, cvar) = &self.next_gc_selected;
+        let (lock, cvar) = &self.decide_cycle_collection;
         let notify = || {
-            let mut gc_selection_done = lock.lock().unwrap();
-            *gc_selection_done = true;
+            let mut decide_cycle_collection = lock.lock().unwrap();
+            *decide_cycle_collection = true;
             cvar.notify_one();
         };
         // Reset states
-        self.next_gc_may_perform_cycle_collection
-            .store(false, Ordering::SeqCst);
-        self.next_gc_may_perform_emergency_collection
-            .store(false, Ordering::SeqCst);
+        self.hint_cycle_gc.store(false, Ordering::SeqCst);
+        self.hint_emergency_gc.store(false, Ordering::SeqCst);
         let cm_threshold = crate::args().trace_threshold;
         let emergency_threshold = crate::args().rc_stop_percent;
         // Calculate mature space size
@@ -750,17 +699,16 @@ impl<VM: VMBinding> LXR<VM> {
             pages_after_gc
         };
         // Decide next GC kind
-        let should_do_emergency_collection =
-            self.next_gc_is_emergency_gc(total_pages, mature_space_pages, emergency_threshold);
-        let should_do_cycle_collection =
+        let hint_cycle_gc =
             self.next_gc_is_cycle_gc(total_pages, mature_space_pages, cm_threshold, pause);
+        let hint_emergency_gc =
+            self.next_gc_is_emergency_gc(total_pages, mature_space_pages, emergency_threshold);
         // Update states
-        self.next_gc_may_perform_cycle_collection
-            .store(should_do_cycle_collection, Ordering::SeqCst);
-        self.next_gc_may_perform_emergency_collection
-            .store(should_do_emergency_collection, Ordering::SeqCst);
+        self.hint_cycle_gc.store(hint_cycle_gc, Ordering::SeqCst);
+        self.hint_emergency_gc
+            .store(hint_emergency_gc, Ordering::SeqCst);
         // Eager mark-table zeroing
-        if !cfg!(feature = "sanity") && should_do_cycle_collection {
+        if !cfg!(feature = "sanity") && hint_cycle_gc {
             println!("WARNING: Eager mark-table zeroing is not implemented");
             // self.zeroing_packets_scheduled.store(true, Ordering::SeqCst);
             // self.immix_space.schedule_mark_table_zeroing_tasks();
@@ -768,87 +716,115 @@ impl<VM: VMBinding> LXR<VM> {
         notify();
     }
 
-    fn select_lxr_collection_kind(&self, emergency: bool) -> Pause {
-        {
-            // Wait for the kind of next GC pause is decided
-            let (lock, cvar) = &self.next_gc_selected;
-            let mut gc_selection_done = lock.lock().unwrap();
-            while !*gc_selection_done {
-                gc_selection_done = cvar.wait(gc_selection_done).unwrap();
-            }
-            *gc_selection_done = false;
+    fn wait_for_decide_cycle_collection(&self) {
+        let (lock, cvar) = &self.decide_cycle_collection;
+        let mut decide_cycle_collection = lock.lock().unwrap();
+        while !*decide_cycle_collection {
+            decide_cycle_collection = cvar.wait(decide_cycle_collection).unwrap();
         }
-        let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
-        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
+        *decide_cycle_collection = false;
+    }
+
+    fn log_gc_start(&self, pause: Pause) {
+        let gc_cause = if self.base().global_state.is_emergency_collection() {
+            GCCause::Emergency
+        } else if self.base().global_state.is_user_triggered_collection() {
+            GCCause::UserTriggered
+        } else {
+            self.gc_cause.load(Ordering::SeqCst)
+        };
+        let epoch = crate::GC_EPOCH.load(Ordering::SeqCst);
+        let alloc_ix = self
+            .immix_space
+            .block_allocation
+            .total_young_allocation_in_bytes();
+        let alloc_los = self.los().young_alloc_size.load(Ordering::Relaxed);
+        let alloc_total = alloc_los + alloc_ix;
         gc_log!([2]
-            " - next gc may perform: cycle_collection = {}, emergency_collection = {}",
-            self.next_gc_may_perform_cycle_collection.load(Ordering::Relaxed),
-            self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
+            "GC({}) {:?} start. cause={:?} incs={} young-alloc={}M young-alloc-ix={}M young-clean-blocks={}({}M)  young-alloc-los={}M",
+            epoch,
+            pause,
+            gc_cause,
+            self.rc.inc_buffer_size(),
+            alloc_total >> LOG_BYTES_IN_MBYTE,
+            alloc_ix >> LOG_BYTES_IN_MBYTE,
+            self.immix_space.block_allocation.clean_nursery_blocks(),
+            self.immix_space.block_allocation.clean_nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
+            alloc_los >> LOG_BYTES_IN_MBYTE,
         );
 
-        // If CM is finished, do a final mark pause
+        // Counters and logs for special GC triggers
+
+        if cfg!(feature = "lxr_fixed_satb_trigger") {
+            let hours = |hrs: usize| std::time::Duration::from_secs((60 * 60 * hrs) as u64);
+            let date230505 = std::time::SystemTime::UNIX_EPOCH + hours(467575);
+            let d = SystemTime::now().duration_since(date230505).unwrap();
+            let hrs = (d.as_secs() / 3600) % 24;
+            let new_value: usize = match hrs {
+                _ if hrs < 12 => 32,
+                _ => 16,
+            };
+            if new_value != MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) {
+                gc_log!([1] "===>>> Update SATB Trigger: {:?} <<<===", new_value);
+                MAX_RC_PAUSES_BEFORE_SATB.store(new_value, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn select_collection_kind(&self) -> Pause {
+        self.wait_for_decide_cycle_collection();
+
+        let emergency = self.base().global_state.is_emergency_collection();
+        let user_triggered = self.base().global_state.is_user_triggered_collection();
+        let cm_in_progress = self.concurrent_marking_in_progress();
+        let cm_packets_drained = crate::concurrent_marking_packets_drained();
+        let hint_cycle_gc = self.hint_cycle_gc.load(Ordering::SeqCst);
+        let hint_emergency_gc = self.hint_emergency_gc.load(Ordering::SeqCst);
+        // Dump stats
         if crate::verbose(3) {
-            if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
-                if concurrent_marking_packets_drained {
+            if self.concurrent_marking_enabled() && cm_in_progress {
+                if cm_packets_drained {
                     gc_log!([3] "SATB: Concurrent marking is done");
                 } else {
                     gc_log!([3] "SATB: Concurrent marking is NOT done. {} packets remaining", crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst));
                 }
             }
+            gc_log!([3] "Hint: cycle = {}, emergency = {}", hint_cycle_gc, hint_emergency_gc);
+            gc_log!([3]
+                "Stat: emergency = {}, user_triggered = {}, cm_in_progress = {}, cm_packets = {}, cm_enabled = {}",
+                emergency, user_triggered, cm_in_progress,
+                crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
+                self.concurrent_marking_enabled(),
+            );
         }
-        #[cfg(feature = "measure_trace_rate")]
-        if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
-            if !concurrent_marking_packets_drained {
-                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={} cm_packets={}",
-                    emergency,
-                    self.base().is_user_triggered_collection(),
-                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
-                    crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
-                );
-            }
+
+        // If CM is finished, do a final mark pause
+        if cm_in_progress
+            && (cfg!(feature = "measure_trace_rate")
+                || crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING
+                || cm_packets_drained)
+        {
             return Pause::FinalMark;
         }
 
-        #[cfg(not(feature = "measure_trace_rate"))]
-        if self.concurrent_marking_enabled()
-            && concurrent_marking_in_progress
-            && concurrent_marking_packets_drained
-        {
-            return Pause::FinalMark;
-        }
-        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING && concurrent_marking_in_progress {
-            return Pause::FinalMark;
-        }
         // Either final mark pause or full pause for emergency GC
         if emergency
-            || (self.base().global_state.is_user_triggered_collection()
-                && !cfg!(feature = "lxr_abort_on_trace"))
-            || self
-                .next_gc_may_perform_emergency_collection
-                .load(Ordering::Relaxed)
+            || (user_triggered && !cfg!(feature = "lxr_abort_on_trace"))
+            || hint_emergency_gc
         {
-            return if self.concurrent_marking_enabled() && concurrent_marking_in_progress {
-                gc_log!([3] "Early terminate SATB: emergency={} user={} next_gc_may_perform_emergency_collection={} cm_packets={}",
-                    emergency,
-                    self.base().global_state.is_user_triggered_collection(),
-                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
-                    crate::NUM_CONCURRENT_TRACING_PACKETS.load(Ordering::SeqCst),
-                );
+            return if cm_in_progress {
                 Pause::FinalMark
             } else {
-                gc_log!([3] "Full GC: emergency={} user={} next_gc_may_perform_emergency_collection={}",
-                    emergency,
-                    self.base().global_state.is_user_triggered_collection(),
-                    self.next_gc_may_perform_emergency_collection.load(Ordering::Relaxed),
-                );
+                println!("FULL1");
                 Pause::Full
             };
         }
+
         // Should trigger CM?
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             if RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed) + 1
                 >= MAX_RC_PAUSES_BEFORE_SATB.load(Ordering::Relaxed)
-                && !concurrent_marking_in_progress
+                && !cm_in_progress
             {
                 return if self.concurrent_marking_enabled() {
                     Pause::InitialMark
@@ -859,14 +835,11 @@ impl<VM: VMBinding> LXR<VM> {
                 return Pause::RefCount;
             }
         }
-        if self
-            .next_gc_may_perform_cycle_collection
-            .load(Ordering::Relaxed)
-            && !concurrent_marking_in_progress
-        {
+        if hint_cycle_gc && !cm_in_progress {
             return if self.concurrent_marking_enabled() {
                 Pause::InitialMark
             } else {
+                println!("FULL2");
                 Pause::Full
             };
         } else {
@@ -874,72 +847,44 @@ impl<VM: VMBinding> LXR<VM> {
         }
     }
 
-    #[allow(clippy::collapsible_else_if)]
-    fn select_collection_kind(&self) -> Pause {
-        if crate::args::ENABLE_INITIAL_ALLOC_LIMIT {
-            INITIAL_GC_TRIGGERED.store(true, Ordering::SeqCst);
+    fn update_stats_after_gc_decided(&self, pause: Pause) {
+        let emergency = self.base().global_state.is_emergency_collection();
+        let cm_drained = crate::concurrent_marking_packets_drained();
+        let counters = crate::counters();
+        // cm state counters
+        if pause == Pause::FinalMark && !cm_drained {
+            counters.cm_early_quit.fetch_add(1, Ordering::Relaxed);
         }
-        {
-            let o = Ordering::SeqCst;
-            if SURVIVAL_TRIGGERED.load(o) {
-                crate::counters().survival_triggerd.fetch_add(1, o);
-            } else if INCS_TRIGGERED.load(o) {
-                crate::counters().incs_triggerd.fetch_add(1, o);
-            } else if ALLOC_TRIGGERED.load(o) {
-                crate::counters().alloc_triggerd.fetch_add(1, o);
-            } else {
-                crate::counters().overflow_triggerd.fetch_add(1, o);
-            }
-        }
-        // self.base().global_state.set_collection_kind(
-        //     self.last_collection_was_exhaustive(),
-        //     self.base().gc_trigger.policy.can_heap_size_grow(),
-        // );
-        // self.base().global_state.set_gc_status(GcStatus::GcPrepare);
-        let emergency_collection = self.base().global_state.is_emergency_collection();
-        if emergency_collection {
-            gc_log!([3] "EMERGENCY COLLECTION: out_of_virtual_space={}", VM_MAP.out_of_virtual_space());
-        }
-
-        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
-        let pause = {
-            let pause = self.select_lxr_collection_kind(emergency_collection);
-            self.zeroing_packets_scheduled
-                .store(false, Ordering::SeqCst);
-            if emergency_collection {
-                crate::counters().emergency.fetch_add(1, Ordering::Relaxed);
-            }
-            pause
-        };
-        if pause == Pause::FinalMark && !concurrent_marking_packets_drained {
-            crate::counters()
-                .cm_early_quit
-                .fetch_add(1, Ordering::Relaxed);
+        // gc type counters
+        if emergency {
+            counters.emergency.fetch_add(1, Ordering::Relaxed);
         }
         match pause {
-            Pause::RefCount => crate::counters().rc.fetch_add(1, Ordering::Relaxed),
-            Pause::InitialMark => crate::counters()
-                .initial_mark
-                .fetch_add(1, Ordering::Relaxed),
-            Pause::FinalMark => crate::counters().final_mark.fetch_add(1, Ordering::Relaxed),
-            _ => crate::counters().full.fetch_add(1, Ordering::Relaxed),
+            Pause::RefCount => counters.rc.fetch_add(1, Ordering::Relaxed),
+            Pause::InitialMark => counters.initial_mark.fetch_add(1, Ordering::Relaxed),
+            Pause::FinalMark => counters.final_mark.fetch_add(1, Ordering::Relaxed),
+            _ => counters.full.fetch_add(1, Ordering::Relaxed),
         };
-        self.current_pause.store(Some(pause), Ordering::SeqCst);
-        self.perform_cycle_collection
-            .store(pause != Pause::RefCount, Ordering::SeqCst);
-        pause
+        // gc trigger counters
+        if SURVIVAL_TRIGGERED.load(Ordering::Relaxed) {
+            counters.survival_triggerd.fetch_add(1, Ordering::Relaxed);
+        } else if INCS_TRIGGERED.load(Ordering::Relaxed) {
+            counters.incs_triggerd.fetch_add(1, Ordering::Relaxed);
+        } else if ALLOC_TRIGGERED.load(Ordering::Relaxed) {
+            counters.alloc_triggerd.fetch_add(1, Ordering::Relaxed);
+        } else {
+            counters.overflow_triggerd.fetch_add(1, Ordering::Relaxed);
+        }
+        SURVIVAL_TRIGGERED.store(false, Ordering::Relaxed);
+        INCS_TRIGGERED.store(false, Ordering::Relaxed);
+        ALLOC_TRIGGERED.store(false, Ordering::Relaxed);
     }
 
     fn wait_for_concurrent_packets_to_finish(&self) {
-        println!("wait_for_concurrent_packets_to_finish start");
         self.immix_space.scheduler().wait_for_schedule_finished();
-        println!("wait_for_concurrent_packets_to_finish end");
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if self.concurrent_marking_in_progress() {
-            scheduler.pause_concurrent_marking_work_packets_during_gc();
-        }
         scheduler.execute(&*super::schedule::RC_SCHEDULE);
         if cfg!(feature = "lxr_fixed_satb_trigger") {
             RC_PAUSES_BEFORE_SATB.fetch_add(1, Ordering::Relaxed);
