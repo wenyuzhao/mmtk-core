@@ -119,7 +119,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn execute(&self, graph: &'static BucketGraph) {
-        println!("current_schedule = {:?}", graph as *const BucketGraph);
         // reset all buckets
         let mut schedule = self.current_schedule.write().unwrap();
         *schedule = Cow::Borrowed(graph);
@@ -400,11 +399,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         crate::MOVE_CONCURRENT_MARKING_TO_STW.store(false, Ordering::SeqCst);
         crate::PAUSE_CONCURRENT_MARKING.store(false, Ordering::SeqCst);
         let mut notify = !queue.is_empty() || !pqueue.is_empty();
-        println!(
-            "schedule_concurrent_packets: count={},{}",
-            queue.len(),
-            pqueue.len()
-        );
         if !queue.is_empty() {
             BucketId::ConcClosure.get_bucket().merge_queue(queue);
         }
@@ -1023,7 +1017,6 @@ impl BucketGraph {
         if self.all_buckets.is_empty() {
             return;
         }
-        println!("RESET BUCKETS {:?}", self.all_buckets);
         for b in &self.all_buckets {
             b.get_bucket().reset()
         }
@@ -1045,7 +1038,6 @@ impl BucketGraph {
     }
 
     fn update(&self, bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
-        println!("UPDATE BUCKET: {:?} is empty", bucket);
         let _lock = self.lock.write().unwrap();
         let mut open_buckets = vec![];
         if let Some(b) = bucket {
@@ -1082,7 +1074,6 @@ impl BucketGraph {
                     b
                 );
             }
-            println!("Bucket {:?} opened", b);
         }
     }
 }

@@ -23,7 +23,6 @@ pub struct ScheduleCollection<VM: VMBinding>(PhantomData<VM>);
 
 impl<VM: VMBinding> GCWork for ScheduleCollection<VM> {
     fn do_work(&mut self) {
-        println!("ScheduleCollection");
         let mmtk = GCWorker::<VM>::mmtk();
         // Tell GC trigger that GC started.
         mmtk.gc_trigger.policy.on_gc_start(mmtk);

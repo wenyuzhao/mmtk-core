@@ -148,7 +148,6 @@ impl Drop for LazySweepingJobsCounter {
             // println!("DECS: {} {}", x, BucketId::Decs.get_bucket().count());
             if x == 1 {
                 let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
-                println!("END OF DECS");
                 f(self.clone())
             }
         }
@@ -156,7 +155,6 @@ impl Drop for LazySweepingJobsCounter {
         // println!("LAZY: {} {}", x, BucketId::Decs.get_bucket().count());
         if x == 1 {
             if let Some(f) = lazy_sweeping_jobs.end_of_lazy.as_ref() {
-                println!("END OF LAZY");
                 f()
             }
         }

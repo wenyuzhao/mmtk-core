@@ -314,7 +314,6 @@ impl<VM: VMBinding> GCWorker<VM> {
                 super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
             }
             if bucket.get_bucket().dec() {
-                println!("{:?} is empty", bucket);
                 self.mmtk.scheduler.notify_bucket_empty(Some(bucket));
             }
             flush_logs!();
