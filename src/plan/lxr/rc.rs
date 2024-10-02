@@ -601,7 +601,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.pause = self.lxr.current_pause().unwrap();
-        self.in_cm = self.lxr.concurrent_marking_in_progress();
+        self.in_cm = self.lxr.cm_in_progress();
         self.copy_context = self.worker().get_copy_context_mut() as *mut GCWorkerCopyContext<VM>;
         let count = if cfg!(feature = "rust_mem_counter") {
             self.incs.len()
@@ -655,7 +655,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             self.process_incs_for_obj_array::<KIND>(s, self.depth);
         }
         if let Some(roots) = roots {
-            if self.lxr.concurrent_marking_enabled()
+            if self.lxr.cm_enabled()
                 && self.pause == Pause::InitialMark
                 && !self.root_kind.unwrap().should_skip_mark_and_decs()
             {
@@ -797,7 +797,7 @@ pub struct ProcessDecs<VM: VMBinding> {
     new_decs: VectorQueue<ObjectReference>,
     counter: LazySweepingJobsCounter,
     mark_objects: VectorQueue<ObjectReference>,
-    concurrent_marking_in_progress: bool,
+    cm_in_progress: bool,
     mature_sweeping_in_progress: bool,
     rc: RefCountHelper<VM>,
 }
@@ -819,7 +819,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             new_decs: VectorQueue::default(),
             counter,
             mark_objects: VectorQueue::default(),
-            concurrent_marking_in_progress: false,
+            cm_in_progress: false,
             mature_sweeping_in_progress: false,
             rc: RefCountHelper::NEW,
         }
@@ -835,7 +835,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             new_decs: VectorQueue::default(),
             counter,
             mark_objects: VectorQueue::default(),
-            concurrent_marking_in_progress: false,
+            cm_in_progress: false,
             mature_sweeping_in_progress: false,
             rc: RefCountHelper::NEW,
         }
@@ -879,7 +879,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     fn record_mature_evac_remset(&mut self, lxr: &LXR<VM>, s: VM::VMSlot, o: ObjectReference) {
-        if !(crate::args::RC_MATURE_EVACUATION && self.concurrent_marking_in_progress) {
+        if !(crate::args::RC_MATURE_EVACUATION && self.cm_in_progress) {
             return;
         }
         if !lxr.address_in_defrag(s.to_address()) && lxr.in_defrag(o) {
@@ -904,7 +904,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                 s.dead_mature_rc_los_volume += o.get_size::<VM>();
             }
         });
-        if self.concurrent_marking_in_progress {
+        if self.cm_in_progress {
             let marked = lxr.mark(o);
             if cfg!(feature = "lxr_satb_live_bytes_counter") && marked {
                 crate::record_live_bytes(o.get_size::<VM>());
@@ -934,7 +934,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                         } else {
                             self.record_mature_evac_remset(lxr, slot, x);
                         }
-                        if self.concurrent_marking_in_progress && !lxr.is_marked(x) {
+                        if self.cm_in_progress && !lxr.is_marked(x) {
                             if cfg!(any(feature = "sanity", debug_assertions)) {
                                 assert!(
                                     x.to_address::<VM>().is_mapped(),
@@ -1034,7 +1034,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             return;
         }
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
-        self.concurrent_marking_in_progress = lxr.concurrent_marking_in_progress()
+        self.cm_in_progress = lxr.cm_in_progress()
             || (!crate::args::LAZY_DECREMENTS && lxr.current_pause() == Some(Pause::InitialMark));
         self.mature_sweeping_in_progress = if crate::args::LAZY_DECREMENTS {
             lxr.previous_pause() == Some(Pause::FinalMark)
