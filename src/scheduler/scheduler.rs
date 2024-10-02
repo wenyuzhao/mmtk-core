@@ -841,6 +841,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         mmtk.get_plan().gc_pause_end();
+        if mmtk.get_plan().downcast_ref::<LXR<VM>>().is_none() {
+            self.execute(&*EMPTY_SCHEDULE);
+        }
 
         // Reset the triggering information.
         mmtk.state.reset_collection_trigger();
