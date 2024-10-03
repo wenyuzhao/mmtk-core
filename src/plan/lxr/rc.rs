@@ -110,10 +110,8 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.stack_size() + 1 > Self::CAPACITY {
             self.flush();
         }
-        if cfg!(feature = "push") {
-            if self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
-                self.flush_half_slots();
-            }
+        if cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
+            self.flush_half_slots();
         }
         assert!(self.incs.len() <= Self::CAPACITY);
         self.incs.push(s);
