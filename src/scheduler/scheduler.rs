@@ -780,7 +780,10 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             super::RELEASE_START.start();
         }
         // Release finished
-        if old == Some(WorkBucketStage::Release) && new == None {
+        if old == Some(WorkBucketStage::Release)
+            && (new == Some(WorkBucketStage::Final)
+                || new == Some(WorkBucketStage::STWRCDecsAndSweep))
+        {
             let release_us = super::RELEASE_START.elapsed().as_micros();
             super::TOTAL_RELEASE_TIME_US.fetch_add(release_us as usize, Ordering::SeqCst);
         }
