@@ -1117,7 +1117,7 @@ pub struct PlanProcessEdges<
 > {
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
-    next_slots: Vec<SlotOf<Self>>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -1137,7 +1137,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         Self {
             plan,
             base,
-            next_slots: vec![],
+            pushes: 0,
         }
     }
 
@@ -1178,11 +1178,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn flush(&mut self) {
-        if !self.next_slots.is_empty() {
-            let slots = std::mem::take(&mut self.next_slots);
+        if !self.slots.is_empty() {
+            let slots = std::mem::take(&mut self.slots);
             let w = Self::new(slots, false, self.mmtk, self.bucket);
             self.worker().add_work(self.bucket, w);
         }
+        self.pushes = 0;
     }
 }
 
@@ -1192,9 +1193,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
             let Some(_) = s.load() else { return };
-            self.next_slots.push(s);
-            if self.next_slots.len() >= crate::args::BUFFER_SIZE {
-                self.flush();
+            self.slots.push(s);
+            self.pushes += 1;
+            if self.slots.len() >= crate::args::BUFFER_SIZE
+                || (cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD)
+            {
+                self.flush_half();
             }
         });
         self.plan.post_scan_object(object);
@@ -1204,6 +1208,25 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {
+    fn flush_half(&mut self) {
+        let slots = if cfg!(feature = "flush_half") {
+            if self.slots.len() > 1 {
+                let half = self.slots.len() / 2;
+                self.slots.split_off(half)
+            } else {
+                return;
+            }
+        } else {
+            std::mem::take(&mut self.slots)
+        };
+        self.pushes = self.slots.len();
+        if slots.is_empty() {
+            return;
+        }
+        let w = Self::new(slots, false, self.mmtk, self.bucket);
+        self.worker().add_work(self.bucket, w);
+    }
+
     #[inline]
     fn __process_slot<const IX: bool, const WEAK_ROOT: bool>(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else { return };
@@ -1217,26 +1240,19 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     fn __process_slots<const IX: bool>(&mut self) {
+        let slots = std::mem::take(&mut self.slots);
         if self.roots && self.root_kind == Some(RootKind::Weak) {
-            for i in 0..self.slots.len() {
-                self.__process_slot::<IX, true>(self.slots[i]);
+            for s in slots {
+                self.__process_slot::<IX, true>(s);
             }
         } else {
-            for i in 0..self.slots.len() {
-                self.__process_slot::<IX, false>(self.slots[i]);
+            for s in slots {
+                self.__process_slot::<IX, false>(s);
             }
         }
         self.roots = false;
-        for i in 0..self.slots.len() {
-            self.__process_slot::<IX, false>(self.slots[i]);
-        }
-        let mut slots = vec![];
-        while !self.next_slots.is_empty() {
-            slots.clear();
-            std::mem::swap(&mut slots, &mut self.next_slots);
-            for s in &slots {
-                self.__process_slot::<IX, false>(*s);
-            }
+        while let Some(slot) = self.slots.pop() {
+            self.__process_slot::<IX, false>(slot);
         }
     }
 }

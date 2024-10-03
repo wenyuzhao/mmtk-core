@@ -749,13 +749,68 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
-        if self.update_buckets() {
-            trace!("Some buckets are opened.");
-            return true;
+        let bkts = &self.work_buckets;
+        let progress = self.bucket_update_progress.load(Ordering::SeqCst);
+        const ENABLE: bool = cfg!(feature = "utilization");
+        use WorkBucketStage::*;
+        let inc_bucket_opened =
+            ENABLE && bkts[Initial].is_activated() && progress <= Initial.into_usize();
+        let closure_bucket_opened =
+            ENABLE && bkts[Closure].is_activated() && progress <= Closure.into_usize();
+        let release_bucket_opened =
+            ENABLE && bkts[Release].is_activated() && progress <= Release.into_usize();
+        let final_opened = ENABLE && bkts[Final].is_activated() && progress <= Final.into_usize();
+        let result = self.update_buckets();
+
+        trace!("Some buckets are opened.");
+        if cfg!(feature = "utilization") && crate::inside_harness() {
+            let progress = self.bucket_update_progress.load(Ordering::SeqCst);
+            // RC increment finished
+            if inc_bucket_opened && progress > WorkBucketStage::RCProcessIncs.into_usize() {
+                let inc_us = crate::GC_START_TIME.elapsed().as_micros();
+                super::TOTAL_INC_TIME_US.fetch_add(inc_us as usize, Ordering::SeqCst);
+                let total_inc_us = inc_us * self.num_workers() as u128;
+                let busy_us = super::TOTAL_INC_BUSY_TIME_US.load(Ordering::SeqCst);
+                let utilization: f32 = busy_us as f32 / total_inc_us as f32;
+                assert!(utilization <= 1.0, "{busy_us:.3} {total_inc_us:.3}");
+                super::INC_UTILIZATIONS.push(utilization);
+            }
+            // Closure started
+            if !closure_bucket_opened && progress == WorkBucketStage::Closure.into_usize() {
+                super::TRACE_START.start();
+            }
+            // Closure finished
+            if closure_bucket_opened && progress > WorkBucketStage::Closure.into_usize() {
+                let trace_us = super::TRACE_START.elapsed().as_micros();
+                super::TOTAL_TRACE_TIME_US.fetch_add(trace_us as usize, Ordering::SeqCst);
+                let total_trace_us = trace_us * self.num_workers() as u128;
+                let busy_us = super::TOTAL_TRACE_BUSY_TIME_US.load(Ordering::SeqCst);
+                let utilization: f32 = busy_us as f32 / total_trace_us as f32;
+                assert!(utilization <= 1.0, "{busy_us:.3} {total_trace_us:.3}");
+                super::TRACE_UTILIZATIONS.push(utilization);
+            }
+            // Release started
+            if !release_bucket_opened && progress == WorkBucketStage::Release.into_usize() {
+                super::RELEASE_START.start();
+            }
+            // Release finished
+            if release_bucket_opened && progress > WorkBucketStage::Release.into_usize() {
+                let release_us = super::RELEASE_START.elapsed().as_micros();
+                super::TOTAL_RELEASE_TIME_US.fetch_add(release_us as usize, Ordering::SeqCst);
+            }
+            // Final started
+            if !final_opened && progress == WorkBucketStage::Final.into_usize() {
+                super::FINAL_START.start();
+            }
+            // Final finished
+            if final_opened && progress > WorkBucketStage::Final.into_usize() {
+                let final_us = super::FINAL_START.elapsed().as_micros();
+                super::TOTAL_RELEASE_TIME_US.fetch_add(final_us as usize, Ordering::SeqCst);
+            }
         }
 
         // If all of the above failed, it means GC has finished.
-        false
+        result
     }
 
     fn do_class_unloading(&self, mmtk: &MMTK<VM>) {
@@ -826,6 +881,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called when GC has finished, i.e. when all work packets have been executed.
     fn on_gc_finished(&self, worker: &GCWorker<VM>) {
+        let stw_us0 = crate::GC_START_TIME.elapsed().as_micros()
+            - super::TOTAL_RELEASE_TIME_US.load(Ordering::SeqCst) as u128;
+        let stw_us = stw_us0 * self.num_workers() as u128;
+        let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
+        super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_TRACE_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_INC_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_RELEASE_TIME_US.store(0, Ordering::SeqCst);
+        let utilization: f32 = busy_us as f32 / stw_us as f32;
+        if crate::inside_harness() {
+            super::TOTAL_TIME_US.fetch_add(stw_us0 as usize, Ordering::SeqCst);
+            super::UTILIZATIONS.push(utilization);
+        }
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         debug_assert!(self.all_buckets_empty());
@@ -938,6 +1006,58 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     slow,
                     slow as f64 / fast as f64
                 );
+            }
+        }
+        let mut calc_dist = |name: &str, key: &str, q: &SegQueue<f32>| {
+            let mut vs = vec![];
+            while let Some(x) = q.pop() {
+                vs.push(x);
+            }
+            if vs.len() == 0 {
+                vs.push(-1.0);
+            }
+            println!("{}: {:?}", name, vs);
+            let mean = vs.iter().sum::<f32>() / vs.len() as f32;
+            let min = vs.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let max = vs.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let geomean = vs.iter().product::<f32>().powf(1.0 / vs.len() as f32);
+            stat.insert(format!("{key}.mean"), format!("{:.2}", mean));
+            stat.insert(format!("{key}.min"), format!("{:.2}", min));
+            stat.insert(format!("{key}.max"), format!("{:.2}", max));
+            stat.insert(format!("{key}.geomean"), format!("{:.2}", geomean));
+        };
+        // Total utilization
+        calc_dist("Utilization", "util", &super::UTILIZATIONS);
+        // RC incs and roots utilization
+        calc_dist("INC Utilization", "rc.util", &super::INC_UTILIZATIONS);
+        // Trace utilization
+        calc_dist(
+            "TRACE Utilization",
+            "trace.util",
+            &super::TRACE_UTILIZATIONS,
+        );
+        // RC incs time
+        let inc_time = super::TOTAL_INC_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "rc.time.stw".to_owned(),
+            format!("{:.2}", inc_time as f64 / 1000.0),
+        );
+        // Trace time
+        let trace_time = super::TOTAL_TRACE_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "time.trace".to_owned(),
+            format!("{:.2}", trace_time as f64 / 1000.0),
+        );
+        // Total time (excluding release)
+        let time = super::TOTAL_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "time.stw.norelease".to_owned(),
+            format!("{:.2}", time as f64 / 1000.0),
+        );
+        const PRETTY: bool = true;
+        if PRETTY {
+            for (k, v) in stat.iter() {
+                println!("{}: {}", k, v);
             }
         }
         stat

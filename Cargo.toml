@@ -76,8 +76,10 @@ default = [
     "dep:sysinfo",
     "dep:regex",
     "dep:env_logger",
+    "no_meta_counting",
+    "tracing",
+    "flush_half",
     "ix_always_defrag",
-    # "no_meta_counting",
 ]
 # default = []
 nightly = []
@@ -203,6 +205,7 @@ lxr_fixed_rc_trigger = []
 fixed_clean_alloc_trigger_based_on_system_time = []
 enable_sysinfo = []
 regex = ["dep:regex"]
+utilization = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
@@ -331,3 +334,5 @@ malloc_mark_sweep = []
 # Group:end
 
 tracing = ["probe"]
+flush_half = []
+push = []

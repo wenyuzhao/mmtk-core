@@ -1,6 +1,5 @@
 use super::LXR;
 use crate::plan::immix::Pause;
-use crate::plan::VectorQueue;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
@@ -46,8 +45,8 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     objects_arc: Option<Arc<Vec<ObjectReference>>>,
     ref_arrays: Option<Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>>,
     // recursively generated objects
-    next_objects: VectorQueue<ObjectReference>,
-    next_ref_arrays: VectorQueue<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
+    next_objects: Vec<ObjectReference>,
+    next_ref_arrays: Vec<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
     next_ref_arrays_size: usize,
     rc: RefCountHelper<VM>,
     #[cfg(feature = "measure_trace_rate")]
@@ -55,6 +54,7 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     #[cfg(feature = "measure_trace_rate")]
     enqueued_objs: usize,
     worker: *mut GCWorker<VM>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
@@ -71,8 +71,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             objects: Some(objects),
             objects_arc: None,
             ref_arrays: None,
-            next_objects: VectorQueue::default(),
-            next_ref_arrays: VectorQueue::default(),
+            next_objects: Default::default(),
+            next_ref_arrays: Default::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
@@ -80,6 +80,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
+            pushes: 0,
         }
     }
 
@@ -94,8 +95,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             objects: None,
             objects_arc: Some(objects),
             ref_arrays: None,
-            next_objects: VectorQueue::default(),
-            next_ref_arrays: VectorQueue::default(),
+            next_objects: Default::default(),
+            next_ref_arrays: Default::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
@@ -103,6 +104,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
+            pushes: 0,
         }
     }
 
@@ -117,8 +119,8 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             objects: None,
             objects_arc: None,
             ref_arrays: Some(arrays),
-            next_objects: VectorQueue::default(),
-            next_ref_arrays: VectorQueue::default(),
+            next_objects: Default::default(),
+            next_ref_arrays: Default::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
             #[cfg(feature = "measure_trace_rate")]
@@ -126,19 +128,20 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
+            pushes: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
         self.flush_arrs();
-        self.flush_objs();
+        self.flush_objs(true);
     }
 
     #[cold]
     fn flush_arrs(&mut self) {
         if !self.next_ref_arrays.is_empty() {
-            let next_ref_arrays = self.next_ref_arrays.take();
+            let next_ref_arrays = std::mem::take(&mut self.next_ref_arrays);
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.cm_enabled());
             let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
@@ -151,12 +154,18 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     }
 
     #[cold]
-    fn flush_objs(&mut self) {
+    fn flush_objs(&mut self, all: bool) {
         if !self.next_objects.is_empty() {
-            let objects = self.next_objects.take();
+            let objects = if cfg!(feature = "flush_half") && self.next_objects.len() > 1 && !all {
+                let half = self.next_objects.len() / 2;
+                self.next_objects.split_off(half)
+            } else {
+                std::mem::take(&mut self.next_objects)
+            };
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.cm_enabled());
             let w = Self::new(objects, worker.mmtk);
+            self.pushes = self.next_objects.len();
             if self.plan.current_pause() == Some(Pause::RefCount) {
                 worker.scheduler().postpone(w);
             } else {
@@ -252,6 +261,28 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
         }
     }
 
+    #[inline]
+    fn trace_slice_entry(&mut self, entry: &(ObjectReference, Address, usize, VM::VMMemorySlice)) {
+        let (o, cls, size, slice) = entry;
+        if !(o.class_pointer::<VM>() == *cls
+            && o.get_size::<VM>() == *size
+            && !self.rc.object_or_line_is_dead(*o))
+        {
+            return;
+        }
+        let ix = self.plan.immix_space.in_space(*o);
+        if ix {
+            let src_in_defrag = self.plan.in_defrag(*o);
+            if src_in_defrag {
+                self.trace_slice::<true, true>(slice)
+            } else {
+                self.trace_slice::<false, true>(slice)
+            }
+        } else {
+            self.trace_slice::<false, false>(slice)
+        }
+    }
+
     fn scan_and_enqueue<const CHECK_REMSET: bool>(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(
             CLDScanPolicy::Claim,
@@ -270,9 +301,13 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
+                prefetch_object(t, &self.plan.immix_space);
                 self.next_objects.push(t);
-                if self.next_objects.len() > Self::SATB_BUFFER_SIZE {
-                    self.flush_objs();
+                self.pushes += 1;
+                if self.next_objects.len() > Self::SATB_BUFFER_SIZE
+                    || (cfg!(feature = "push") && self.pushes >= 8192)
+                {
+                    self.flush_objs(false);
                 }
             },
         );
@@ -354,19 +389,17 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         }
         let pause_opt = self.plan.current_pause();
         if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
-            let mut next_objects = vec![];
-            let mut next_ref_arrays = vec![];
             while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
                 let pause_opt = self.plan.current_pause();
                 if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
                     break;
                 }
-                next_objects.clear();
-                next_ref_arrays.clear();
-                self.next_objects.swap(&mut next_objects);
-                self.trace_objects(&next_objects);
-                self.next_ref_arrays.swap(&mut next_ref_arrays);
-                self.trace_arrays(&next_ref_arrays);
+                while let Some(o) = self.next_objects.pop() {
+                    self.trace_object(o);
+                }
+                while let Some(e) = self.next_ref_arrays.pop() {
+                    self.trace_slice_entry(&e);
+                }
             }
         }
         self.flush();
@@ -486,12 +519,11 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const FULL_GC: bool> {
     base: ProcessEdgesBase<VM>,
     array_slices: Vec<VM::VMMemorySlice>,
     forwarded_roots: Vec<ObjectReference>,
-    next_slots: VectorQueue<SlotOf<Self>>,
-    next_array_slices: VectorQueue<VM::VMMemorySlice>,
-    next_slot_count: u32,
+    stack_size: u32,
     remset_recorded_slots: bool,
     refs: Vec<ObjectReference>,
     should_record_forwarded_roots: bool,
+    pushes: usize,
 }
 
 impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC> {
@@ -534,27 +566,32 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
             pause: Pause::RefCount,
             forwarded_roots: vec![],
             array_slices: vec![],
-            next_slots: VectorQueue::new(),
-            next_array_slices: VectorQueue::new(),
-            next_slot_count: 0,
+            stack_size: 0,
             remset_recorded_slots: false,
             refs: vec![],
             should_record_forwarded_roots: false,
+            pushes: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            let slots = self.next_slots.take();
-            let slices = self.next_array_slices.take();
+        if !self.slots.is_empty() || !self.array_slices.is_empty() {
+            let slots = if cfg!(feature = "flush_half") && self.slots.len() > 1 {
+                let half = self.slots.len() / 2;
+                self.slots.split_off(half)
+            } else {
+                std::mem::take(&mut self.slots)
+            };
+            let slices = std::mem::take(&mut self.array_slices);
             let mut w = Self::new(slots, false, self.mmtk(), self.bucket);
             w.array_slices = slices;
+            self.pushes = self.slots.len();
             self.worker()
                 .add_boxed_work(WorkBucketStage::Unconstrained, Box::new(w));
         }
         assert!(self.nodes.is_empty());
-        self.next_slot_count = 0;
+        self.stack_size = self.slots.len() as u32;
     }
 
     /// Trace  and evacuate objects.
@@ -585,15 +622,15 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
         self.remset_recorded_slots = false;
         let should_record_forwarded_roots = self.should_record_forwarded_roots;
         self.should_record_forwarded_roots = false;
-        let mut slots = vec![];
-        let mut slices = vec![];
-        while !self.next_slots.is_empty() || !self.next_array_slices.is_empty() {
-            self.next_slot_count = 0;
-            slots.clear();
-            slices.clear();
-            self.next_slots.swap(&mut slots);
-            self.next_array_slices.swap(&mut slices);
-            self.process_slots_impl::<false, false>(&slots, &slices);
+        while !self.slots.is_empty() || !self.array_slices.is_empty() {
+            while let Some(s) = self.slots.pop() {
+                self.__process_slot::<false, false>(s, 0)
+            }
+            while let Some(slice) = self.array_slices.pop() {
+                for s in slice.iter_slots() {
+                    self.__process_slot::<false, false>(s, 0)
+                }
+            }
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
@@ -797,12 +834,12 @@ impl<VM: VMBinding, const FULL_GC: bool> ObjectQueue for LXRStopTheWorldProcessE
                 let data = VM::VMScanning::obj_array_data(object);
                 for chunk in data.chunks(limit) {
                     let len: usize = chunk.len();
-                    if self.next_slot_count as usize + len >= limit {
+                    if self.stack_size as usize + len >= limit {
                         self.flush();
                     }
-                    self.next_slot_count += len as u32;
-                    self.next_array_slices.push(chunk);
-                    if self.next_slot_count as usize >= limit {
+                    self.stack_size += len as u32;
+                    self.array_slices.push(chunk);
+                    if self.stack_size as usize >= limit {
                         self.flush();
                     }
                 }
@@ -819,9 +856,13 @@ impl<VM: VMBinding, const FULL_GC: bool> ObjectQueue for LXRStopTheWorldProcessE
                         if self.lxr.is_marked(o) && !self.lxr.in_defrag(o) {
                             return;
                         }
-                        self.next_slots.push(s);
-                        self.next_slot_count += 1;
-                        if self.next_slot_count as usize >= limit {
+                        prefetch_object(o, &self.lxr.immix_space);
+                        self.slots.push(s);
+                        self.stack_size += 1;
+                        self.pushes += 1;
+                        if self.stack_size as usize >= limit
+                            || (cfg!(feature = "push") && self.pushes >= limit / 2)
+                        {
                             self.flush();
                         }
                     },
@@ -848,7 +889,7 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     lxr: &'static LXR<VM>,
     pause: Pause,
     base: ProcessEdgesBase<VM>,
-    next_slots: VectorQueue<SlotOf<Self>>,
+    pushes: usize,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
@@ -871,18 +912,24 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             lxr,
             base,
             pause: Pause::RefCount,
-            next_slots: VectorQueue::new(),
+            pushes: 0,
         }
     }
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_slots.is_empty() {
-            let slots = self.next_slots.take();
+        if !self.slots.is_empty() {
+            let slots = if cfg!(feature = "flush_half") && self.slots.len() > 1 {
+                let half = self.slots.len() / 2;
+                self.slots.split_off(half)
+            } else {
+                std::mem::take(&mut self.slots)
+            };
             self.worker().add_boxed_work(
                 WorkBucketStage::Unconstrained,
                 Box::new(Self::new(slots, false, self.mmtk(), self.bucket)),
             );
+            self.pushes = self.slots.len();
         }
         assert!(self.nodes.is_empty());
     }
@@ -917,23 +964,8 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
     fn process_slots(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
-        for i in 0..self.slots.len() {
-            self.process_slot(self.slots[i]);
-            if crate::args::PREFETCH {
-                if let Some(s) = self.slots.get(i + crate::args::PREFETCH_STEP) {
-                    if let Some(o) = s.load() {
-                        prefetch_object(o, &self.lxr.immix_space);
-                    }
-                }
-            }
-        }
-        let mut slots = vec![];
-        while !self.next_slots.is_empty() {
-            slots.clear();
-            self.next_slots.swap(&mut slots);
-            for s in &slots {
-                self.process_slot(*s);
-            }
+        while let Some(s) = self.slots.pop() {
+            self.process_slot(s);
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
@@ -955,8 +987,15 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
             crate::record_live_bytes(object.get_size::<VM>());
         }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |s, _| {
-            self.next_slots.push(s);
-            if self.next_slots.is_full() {
+            let Some(o) = s.load() else {
+                return;
+            };
+            prefetch_object(o, &self.lxr.immix_space);
+            self.slots.push(s);
+            self.pushes += 1;
+            if self.slots.len() > crate::args::BUFFER_SIZE
+                || (cfg!(feature = "push") && self.pushes >= 512)
+            {
                 self.flush();
             }
         })
