@@ -435,7 +435,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
             phantom_data: PhantomData,
         };
         <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory);
-
         unimplemented!()
     }
 }
@@ -1526,7 +1525,6 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
 
         trace!("ProcessRootNode End");
-
         unimplemented!();
     }
 }

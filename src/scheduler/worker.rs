@@ -2,6 +2,8 @@ use super::stat::WorkerLocalStat;
 use super::work_bucket::*;
 use super::*;
 use crate::mmtk::MMTK;
+#[cfg(feature = "utilization")]
+use crate::plan::lxr::LXR;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::{opaque_pointer::*, ObjectReference};
 use crate::vm::{Collection, GCThreadContext, VMBinding};
@@ -13,6 +15,7 @@ use crossbeam::queue::ArrayQueue;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "utilization")]
 use std::time::Instant;
 
 #[cfg(feature = "fifo")]
@@ -337,20 +340,31 @@ impl<VM: VMBinding> GCWorker<VM> {
 
             #[cfg(feature = "tracing")]
             probe!(mmtk, work, typename.as_ptr(), typename.len());
+            #[cfg(feature = "utilization")]
             let t = Instant::now();
+            #[cfg(feature = "utilization")]
             let record = crate::inside_harness() && !self.scheduler.in_concurrent();
             work.do_work_with_stat(&mut self, mmtk);
             std::mem::drop(work);
-            let us = t.elapsed().as_micros();
+            #[cfg(feature = "utilization")]
             if record && !self.scheduler.in_concurrent() {
-                super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                let us = t.elapsed().as_micros();
+                let lxr = self.mmtk.get_plan().downcast_ref::<LXR<VM>>().is_some();
                 use WorkBucketStage::*;
                 let buckets = &self.scheduler.work_buckets;
+                // Transitive closure
                 if buckets[Closure].is_activated() && !buckets[SoftRefClosure].is_activated() {
                     super::TOTAL_TRACE_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
                 }
+                // RC increments
                 if buckets[Initial].is_activated() && !buckets[Prepare].is_activated() {
                     super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
+                // Whole GC except Release bucket
+                if !buckets[Release].is_activated()
+                    && (!lxr || !buckets[STWRCDecsAndSweep].is_activated())
+                {
+                    super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
                 }
             }
             flush_logs!();
