@@ -455,6 +455,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut new_packets = false;
         let start_index = self.bucket_update_progress.load(Ordering::SeqCst) + 1;
         let mut new_progress = WorkBucketStage::LENGTH;
+        let last_bucket = if start_index == 1 {
+            None
+        } else {
+            Some(WorkBucketStage::from_usize(start_index - 1))
+        };
         for i in start_index..WorkBucketStage::LENGTH {
             let id = WorkBucketStage::from_usize(i);
             if id == WorkBucketStage::Unconstrained {
@@ -469,6 +474,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             #[cfg(feature = "tracing")]
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);
+            }
+            if cfg!(feature = "utilization") && bucket_opened {
+                self.on_new_bucket(last_bucket, Some(id))
             }
             let verbose = crate::verbose(3);
             if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
@@ -508,6 +516,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             self.bucket_update_progress
                 .store(new_progress, Ordering::SeqCst);
         } else {
+            self.on_new_bucket(last_bucket, None);
             self.bucket_update_progress.store(0, Ordering::SeqCst);
         }
         buckets_updated && new_packets
@@ -806,6 +815,48 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
     }
+    fn on_new_bucket(&self, old: Option<WorkBucketStage>, new: Option<WorkBucketStage>) {
+        if !cfg!(feature = "utilization") || !crate::inside_harness() {
+            return;
+        }
+        // RC increment started
+        if new == Some(WorkBucketStage::Initial) {
+            super::INCS_START.start();
+        }
+        // RC increment finished
+        if old == Some(WorkBucketStage::Initial) {
+            let inc_us = super::INCS_START.elapsed().as_micros();
+            super::TOTAL_INC_TIME_US.fetch_add(inc_us as usize, Ordering::SeqCst);
+            let total_inc_us = inc_us * self.num_workers() as u128;
+            let busy_us = super::TOTAL_INC_BUSY_TIME_US.load(Ordering::SeqCst);
+            let utilization: f32 = busy_us as f32 / total_inc_us as f32;
+            assert!(utilization <= 1.0, "{busy_us:.3} {total_inc_us:.3}");
+            super::INC_UTILIZATIONS.push(utilization);
+        }
+        // Closure started
+        if new == Some(WorkBucketStage::Closure) {
+            super::TRACE_START.start();
+        }
+        // Closure finished
+        if old == Some(WorkBucketStage::Closure) {
+            let trace_us = super::TRACE_START.elapsed().as_micros();
+            super::TOTAL_TRACE_TIME_US.fetch_add(trace_us as usize, Ordering::SeqCst);
+            let total_trace_us = trace_us * self.num_workers() as u128;
+            let busy_us = super::TOTAL_TRACE_BUSY_TIME_US.load(Ordering::SeqCst);
+            let utilization: f32 = busy_us as f32 / total_trace_us as f32;
+            assert!(utilization <= 1.0, "{busy_us:.3} {total_trace_us:.3}");
+            super::TRACE_UTILIZATIONS.push(utilization);
+        }
+        // Release started
+        if new == Some(WorkBucketStage::Release) {
+            super::RELEASE_START.start();
+        }
+        // Release finished
+        if old == Some(WorkBucketStage::Release) && new == None {
+            let release_us = super::RELEASE_START.elapsed().as_micros();
+            super::TOTAL_RELEASE_TIME_US.fetch_add(release_us as usize, Ordering::SeqCst);
+        }
+    }
 
     /// Find more work for workers to do.  Return true if more work is available.
     fn find_more_work_for_workers(&self) -> bool {
@@ -821,68 +872,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
-        let bkts = &self.work_buckets;
-        let progress = self.bucket_update_progress.load(Ordering::SeqCst);
-        const ENABLE: bool = cfg!(feature = "utilization");
-        use WorkBucketStage::*;
-        let inc_bucket_opened =
-            ENABLE && bkts[Initial].is_activated() && progress <= Initial.into_usize();
-        let closure_bucket_opened =
-            ENABLE && bkts[Closure].is_activated() && progress <= Closure.into_usize();
-        let release_bucket_opened =
-            ENABLE && bkts[Release].is_activated() && progress <= Release.into_usize();
-        let final_opened = ENABLE && bkts[Final].is_activated() && progress <= Final.into_usize();
-        let result = self.update_buckets();
-
-        trace!("Some buckets are opened.");
-        if cfg!(feature = "utilization") && crate::inside_harness() {
-            let progress = self.bucket_update_progress.load(Ordering::SeqCst);
-            // RC increment finished
-            if inc_bucket_opened && progress > WorkBucketStage::RCProcessIncs.into_usize() {
-                let inc_us = crate::GC_START_TIME.elapsed().as_micros();
-                super::TOTAL_INC_TIME_US.fetch_add(inc_us as usize, Ordering::SeqCst);
-                let total_inc_us = inc_us * self.num_workers() as u128;
-                let busy_us = super::TOTAL_INC_BUSY_TIME_US.load(Ordering::SeqCst);
-                let utilization: f32 = busy_us as f32 / total_inc_us as f32;
-                assert!(utilization <= 1.0, "{busy_us:.3} {total_inc_us:.3}");
-                super::INC_UTILIZATIONS.push(utilization);
-            }
-            // Closure started
-            if !closure_bucket_opened && progress == WorkBucketStage::Closure.into_usize() {
-                super::TRACE_START.start();
-            }
-            // Closure finished
-            if closure_bucket_opened && progress > WorkBucketStage::Closure.into_usize() {
-                let trace_us = super::TRACE_START.elapsed().as_micros();
-                super::TOTAL_TRACE_TIME_US.fetch_add(trace_us as usize, Ordering::SeqCst);
-                let total_trace_us = trace_us * self.num_workers() as u128;
-                let busy_us = super::TOTAL_TRACE_BUSY_TIME_US.load(Ordering::SeqCst);
-                let utilization: f32 = busy_us as f32 / total_trace_us as f32;
-                assert!(utilization <= 1.0, "{busy_us:.3} {total_trace_us:.3}");
-                super::TRACE_UTILIZATIONS.push(utilization);
-            }
-            // Release started
-            if !release_bucket_opened && progress == WorkBucketStage::Release.into_usize() {
-                super::RELEASE_START.start();
-            }
-            // Release finished
-            if release_bucket_opened && progress > WorkBucketStage::Release.into_usize() {
-                let release_us = super::RELEASE_START.elapsed().as_micros();
-                super::TOTAL_RELEASE_TIME_US.fetch_add(release_us as usize, Ordering::SeqCst);
-            }
-            // Final started
-            if !final_opened && progress == WorkBucketStage::Final.into_usize() {
-                super::FINAL_START.start();
-            }
-            // Final finished
-            if final_opened && progress > WorkBucketStage::Final.into_usize() {
-                let final_us = super::FINAL_START.elapsed().as_micros();
-                super::TOTAL_RELEASE_TIME_US.fetch_add(final_us as usize, Ordering::SeqCst);
-            }
+        if self.update_buckets() {
+            trace!("Some buckets are opened.");
+            return true;
         }
 
         // If all of the above failed, it means GC has finished.
-        result
+        false
     }
 
     fn do_class_unloading(&self, mmtk: &MMTK<VM>) {
@@ -1146,6 +1142,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // cannot execute work packets out of order.  This is not generally true if we are not
         // opening the first STW bucket.  In the future, we should redesign the opening condition
         // of work buckets to make the synchronization more robust,
+        self.bucket_update_progress.store(1, Ordering::SeqCst);
+        self.on_new_bucket(None, Some(WorkBucketStage::first_stw_stage()));
         first_stw_bucket.activate();
         gc_log!([3]
             " - ({:.3}ms) Start GC Stage: {:?}",
@@ -1157,7 +1155,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             && crate::concurrent_marking_packets_drained()
             && crate::LazySweepingJobs::all_finished()
         {
+            self.bucket_update_progress.store(2, Ordering::SeqCst);
             let second_stw_bucket = &self.work_buckets[WorkBucketStage::from_usize(2)];
+            self.on_new_bucket(None, Some(WorkBucketStage::from_usize(2)));
             second_stw_bucket.activate();
             gc_log!([3]
                 " - ({:.3}ms) Start GC Stage: {:?}",
