@@ -56,10 +56,6 @@ impl<T> VectorQueue<T> {
         std::mem::take(&mut self.buffer)
     }
 
-    pub fn split_off(&mut self, index: usize) -> Vec<T> {
-        self.buffer.split_off(index)
-    }
-
     /// Consume this `VectorObjectQueue` and return its underlying vector.
     pub fn into_vec(self) -> Vec<T> {
         self.buffer

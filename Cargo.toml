@@ -72,6 +72,7 @@ name = "main"
 harness = false
 
 [features]
+# default = ["sanity"]
 default = [
     "perf_counter",
     "dep:sysinfo",
@@ -82,7 +83,7 @@ default = [
     "flush_half",
     "ix_always_defrag",
     "fast_fence",
-] # default = ["sanity"]
+]
 # default = []
 nightly = []
 asan = []
@@ -336,13 +337,12 @@ malloc_mark_sweep = []
 # Group:end
 
 tracing = ["probe"]
-lifo = []
 flush_half = []
-no_stack = []
+push = []
+lifo = []
 # Work-item stealing
 steal = []
 fast_fence = []
-push = []
 random_packet_stealing = []
 steal_bulk = ["steal"]
 fifo = []
