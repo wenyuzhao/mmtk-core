@@ -19,7 +19,6 @@ pub mod constants;
 pub mod conversions;
 /// The copy allocators for a GC worker.
 pub mod copy;
-pub mod deque;
 /// Linear scan through a heap range
 pub mod linear_scan;
 /// Wrapper functions for memory syscalls such as mmap, mprotect, etc.

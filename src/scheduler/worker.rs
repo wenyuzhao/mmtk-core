@@ -2,6 +2,10 @@ use super::stat::WorkerLocalStat;
 use super::work_bucket::*;
 use super::*;
 use crate::mmtk::MMTK;
+#[cfg(feature = "utilization")]
+use crate::plan::immix::Pause;
+#[cfg(feature = "utilization")]
+use crate::plan::lxr::LXR;
 use crate::util::copy::GCWorkerCopyContext;
 use crate::util::opaque_pointer::*;
 use crate::vm::{Collection, GCThreadContext, VMBinding};
@@ -13,6 +17,7 @@ use crossbeam::queue::ArrayQueue;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "utilization")]
 use std::time::Instant;
 
 /// Represents the ID of a GC worker thread.
@@ -294,7 +299,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             };
             // probe! expands to an empty block on unsupported platforms
             #[allow(unused_variables)]
-            // #[cfg(feature = "tracing")]
+            #[cfg(feature = "tracing")]
             let typename = work.get_type_name();
 
             #[cfg(feature = "bpftrace_workaround")]
@@ -305,13 +310,33 @@ impl<VM: VMBinding> GCWorker<VM> {
 
             #[cfg(feature = "tracing")]
             probe!(mmtk, work, typename.as_ptr(), typename.len());
+            #[cfg(feature = "utilization")]
             let t = Instant::now();
+            #[cfg(feature = "utilization")]
             let record = crate::inside_harness() && !self.scheduler.in_concurrent();
             work.do_work_with_stat();
             std::mem::drop(work);
-            let us = t.elapsed().as_micros();
+            #[cfg(feature = "utilization")]
             if record && !self.scheduler.in_concurrent() {
-                super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                let us = t.elapsed().as_micros();
+                let lxr = self.mmtk.get_plan().downcast_ref::<LXR<VM>>();
+                let pause = lxr.map(|x| x.current_pause()).flatten();
+                use BucketId::*;
+                // Transitive closure
+                if BucketId::Closure.is_open() && !BucketId::WeakRefClosure.is_open() {
+                    super::TOTAL_TRACE_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
+                // RC increments
+                if pause == Some(Pause::RefCount) && Incs.is_open() && !Release.is_open() {
+                    super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
+                if pause != Some(Pause::RefCount) && Incs.is_open() && !Prepare.is_open() {
+                    super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
+                // Whole GC except Release bucket
+                if !Release.is_open() && (lxr.is_none() || (!Decs.is_open() && !Finish.is_open())) {
+                    super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
             }
             if bucket.get_bucket().dec() {
                 self.mmtk.scheduler.notify_bucket_empty(Some(bucket));

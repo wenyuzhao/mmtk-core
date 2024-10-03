@@ -471,7 +471,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         }
 
         if self.in_concurrent_marking.load(Ordering::SeqCst) {
-            println!("Set concurrent marking schedule");
             // Lazy decs + Marking
             self.immix_space
                 .scheduler()

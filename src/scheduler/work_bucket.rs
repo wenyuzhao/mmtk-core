@@ -279,6 +279,11 @@ impl BucketId {
         }
     }
 
+    #[inline(always)]
+    pub fn is_open(&self) -> bool {
+        self.get_bucket().is_open()
+    }
+
     pub const fn is_prioritized(&self) -> bool {
         match self {
             BucketId::Decs | BucketId::PostSATBSWeep | BucketId::LazySweep | BucketId::Roots => {

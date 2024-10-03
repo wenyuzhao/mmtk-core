@@ -448,6 +448,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 new_work = true;
             }
             new_buckets = true;
+            if cfg!(feature = "utilization") {
+                self.on_new_bucket(bucket, b);
+            }
         });
         if new_buckets && new_work {
             self.worker_monitor.notify_work_available(true)
@@ -665,6 +668,49 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
+    fn on_new_bucket(&self, old: Option<BucketId>, new: BucketId) {
+        if !cfg!(feature = "utilization") || !crate::inside_harness() {
+            return;
+        }
+        // RC increment started
+        if new == BucketId::Incs {
+            super::INCS_START.start();
+        }
+        // RC increment finished
+        if old == Some(BucketId::Incs) {
+            let inc_us = super::INCS_START.elapsed().as_micros();
+            super::TOTAL_INC_TIME_US.fetch_add(inc_us as usize, Ordering::SeqCst);
+            let total_inc_us = inc_us * self.num_workers() as u128;
+            let busy_us = super::TOTAL_INC_BUSY_TIME_US.load(Ordering::SeqCst);
+            let utilization: f32 = busy_us as f32 / total_inc_us as f32;
+            assert!(utilization <= 1.0, "{busy_us:.3} {total_inc_us:.3}");
+            super::INC_UTILIZATIONS.push(utilization);
+        }
+        // Closure started
+        if new == BucketId::Closure {
+            super::TRACE_START.start();
+        }
+        // Closure finished
+        if old == Some(BucketId::Closure) {
+            let trace_us = super::TRACE_START.elapsed().as_micros();
+            super::TOTAL_TRACE_TIME_US.fetch_add(trace_us as usize, Ordering::SeqCst);
+            let total_trace_us = trace_us * self.num_workers() as u128;
+            let busy_us = super::TOTAL_TRACE_BUSY_TIME_US.load(Ordering::SeqCst);
+            let utilization: f32 = busy_us as f32 / total_trace_us as f32;
+            assert!(utilization <= 1.0, "{busy_us:.3} {total_trace_us:.3}");
+            super::TRACE_UTILIZATIONS.push(utilization);
+        }
+        // Release started
+        if new == BucketId::Release {
+            super::RELEASE_START.start();
+        }
+        // Release finished
+        if old == Some(BucketId::Release) {
+            let release_us = super::RELEASE_START.elapsed().as_micros();
+            super::TOTAL_RELEASE_TIME_US.fetch_add(release_us as usize, Ordering::SeqCst);
+        }
+    }
+
     /// Find more work for workers to do.  Return true if more work is available.
     fn find_more_work_for_workers(&self) -> bool {
         if self.worker_group.has_designated_work() {
@@ -764,15 +810,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     /// Called when GC has finished, i.e. when all work packets have been executed.
     fn on_gc_finished(&self, worker: &GCWorker<VM>) {
-        let stw_us = crate::GC_START_TIME.elapsed().as_micros() * self.num_workers() as u128;
+        let stw_us0 = crate::GC_START_TIME.elapsed().as_micros()
+            - super::TOTAL_RELEASE_TIME_US.load(Ordering::SeqCst) as u128;
+        let stw_us = stw_us0 * self.num_workers() as u128;
         let busy_us = super::TOTAL_BUSY_TIME_US.load(Ordering::SeqCst);
         super::TOTAL_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_TRACE_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_INC_BUSY_TIME_US.store(0, Ordering::SeqCst);
+        super::TOTAL_RELEASE_TIME_US.store(0, Ordering::SeqCst);
         let utilization: f32 = busy_us as f32 / stw_us as f32;
         if crate::inside_harness() {
-            // println!("Utilization: {stw_us} / {busy_us} = {utilization:.2}");
+            super::TOTAL_TIME_US.fetch_add(stw_us0 as usize, Ordering::SeqCst);
             super::UTILIZATIONS.push(utilization);
         }
-        // println!("Utilization: {:.2}%", utilization * 100.0);
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         debug_assert!(self.all_buckets_empty());
@@ -890,42 +940,72 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
-        let mut utilizations = vec![];
-        while let Some(x) = super::UTILIZATIONS.pop() {
-            utilizations.push(x);
+        let mut calc_dist = |name: &str, key: &str, q: &SegQueue<f32>| {
+            let mut vs = vec![];
+            while let Some(x) = q.pop() {
+                vs.push(x);
+            }
+            if vs.len() == 0 {
+                vs.push(-1.0);
+            }
+            println!("{}: {:?}", name, vs);
+            let mean = vs.iter().sum::<f32>() / vs.len() as f32;
+            let min = vs.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let max = vs.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            let geomean = vs.iter().product::<f32>().powf(1.0 / vs.len() as f32);
+            stat.insert(format!("{key}.mean"), format!("{:.2}", mean));
+            stat.insert(format!("{key}.min"), format!("{:.2}", min));
+            stat.insert(format!("{key}.max"), format!("{:.2}", max));
+            stat.insert(format!("{key}.geomean"), format!("{:.2}", geomean));
+        };
+        // Total utilization
+        calc_dist("Utilization", "util", &super::UTILIZATIONS);
+        // RC incs and roots utilization
+        calc_dist("INC Utilization", "rc.util", &super::INC_UTILIZATIONS);
+        // Trace utilization
+        calc_dist(
+            "TRACE Utilization",
+            "trace.util",
+            &super::TRACE_UTILIZATIONS,
+        );
+        // RC incs time
+        let inc_time = super::TOTAL_INC_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "rc.time.stw".to_owned(),
+            format!("{:.2}", inc_time as f64 / 1000.0),
+        );
+        // Trace time
+        let trace_time = super::TOTAL_TRACE_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "time.trace".to_owned(),
+            format!("{:.2}", trace_time as f64 / 1000.0),
+        );
+        // Total time (excluding release)
+        let time = super::TOTAL_TIME_US.load(Ordering::SeqCst);
+        stat.insert(
+            "time.stw.norelease".to_owned(),
+            format!("{:.2}", time as f64 / 1000.0),
+        );
+        const PRETTY: bool = true;
+        if PRETTY {
+            for (k, v) in stat.iter() {
+                println!("{}: {}", k, v);
+            }
         }
-        let mean = utilizations.iter().sum::<f32>() / utilizations.len() as f32;
-        let min = utilizations
-            .iter()
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap();
-        let max = utilizations
-            .iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap();
-        let geomean = utilizations
-            .iter()
-            .product::<f32>()
-            .powf(1.0 / utilizations.len() as f32);
-        println!("Utilization: {:?}", utilizations);
-        stat.insert("utilization.mean".to_owned(), format!("{:.2}", mean));
-        stat.insert("utilization.min".to_owned(), format!("{:.2}", min));
-        stat.insert("utilization.max".to_owned(), format!("{:.2}", max));
-        stat.insert("utilization.geomean".to_owned(), format!("{:.2}", geomean));
         stat
     }
 
     pub fn notify_mutators_paused(&self, mmtk: &'static MMTK<VM>) {
         mmtk.gc_requester.clear_request();
         // let first_stw_bucket = &self.work_buckets[WorkBucketStage::first_stw_stage()];
-        // // debug_assert!(!first_stw_bucket.is_activated());
-        // // Note: This is the only place where a bucket is opened without having all workers parked.
-        // // We usually require all workers to park before opening new buckets because otherwise
-        // // packets will be executed out of order.  However, since `Prepare` is the first STW
-        // // bucket, and all subsequent buckets require all workers to park before opening, workers
-        // // cannot execute work packets out of order.  This is not generally true if we are not
-        // // opening the first STW bucket.  In the future, we should redesign the opening condition
-        // // of work buckets to make the synchronization more robust,
+        // debug_assert!(!first_stw_bucket.is_activated());
+        // Note: This is the only place where a bucket is opened without having all workers parked.
+        // We usually require all workers to park before opening new buckets because otherwise
+        // packets will be executed out of order.  However, since `Prepare` is the first STW
+        // bucket, and all subsequent buckets require all workers to park before opening, workers
+        // cannot execute work packets out of order.  This is not generally true if we are not
+        // opening the first STW bucket.  In the future, we should redesign the opening condition
+        // of work buckets to make the synchronization more robust,
         // first_stw_bucket.activate();
         // gc_log!([3]
         //     " - ({:.3}ms) Start GC Stage: {:?}",
