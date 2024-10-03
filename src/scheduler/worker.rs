@@ -313,8 +313,13 @@ impl<VM: VMBinding> GCWorker<VM> {
                     super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
                 }
                 // Whole GC except Release bucket
-                if !buckets[Release].is_activated()
-                    && (!lxr || !buckets[STWRCDecsAndSweep].is_activated())
+                if !lxr && !buckets[Release].is_activated() {
+                    super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                }
+                if lxr
+                    && !(buckets[Release].is_activated()
+                        && !buckets[Final].is_activated()
+                        && !buckets[STWRCDecsAndSweep].is_activated())
                 {
                     super::TOTAL_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
                 }
