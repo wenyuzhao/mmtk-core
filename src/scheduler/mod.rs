@@ -37,7 +37,7 @@ static INC_UTILIZATIONS: SegQueue<f32> = SegQueue::new();
 
 static TOTAL_INC_TIME_US: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_INC_BUSY_TIME_US: AtomicUsize = AtomicUsize::new(0);
-static INC_START: Timer = Timer::new();
+// static INC_START: Timer = Timer::new();
 
 static TRACE_UTILIZATIONS: SegQueue<f32> = SegQueue::new();
 

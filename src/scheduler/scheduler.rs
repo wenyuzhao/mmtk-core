@@ -10,7 +10,6 @@ use super::*;
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
 use crate::plan::lxr::LXR;
-use crate::util::memory::result_is_mapped;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::reference_processor::PhantomRefProcessing;
@@ -308,8 +307,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 .add(Finalization::<C::DefaultProcessEdges>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                // self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                //     .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+                self.work_buckets[WorkBucketStage::FinalizableForwarding]
+                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
                 unimplemented!()
             }
         }
@@ -356,8 +355,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 .add(Finalization::<C::DefaultProcessEdges>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                // self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                //     .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
+                self.work_buckets[WorkBucketStage::FinalizableForwarding]
+                    .add(ForwardFinalization::<C::DefaultProcessEdges>::new());
                 unimplemented!()
             }
         }
@@ -832,11 +831,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             trace!("Some buckets are opened.");
             if crate::inside_harness() {
                 let progress = self.bucket_update_progress.load(Ordering::SeqCst);
-                // if !inc_bucket_opened && progress == WorkBucketStage::RCProcessIncs.into_usize() {
-                //     super::INC_START.start();
-                // }
                 if inc_bucket_opened && progress > WorkBucketStage::RCProcessIncs.into_usize() {
-                    // let inc_us = super::INC_START.elapsed().as_micros();
                     let inc_us = crate::GC_START_TIME.elapsed().as_micros();
                     super::TOTAL_INC_TIME_US.fetch_add(inc_us as usize, Ordering::SeqCst);
                     let total_inc_us = inc_us * self.num_workers() as u128;
@@ -941,10 +936,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         super::TOTAL_INC_BUSY_TIME_US.store(0, Ordering::SeqCst);
         let utilization: f32 = busy_us as f32 / stw_us as f32;
         if crate::inside_harness() {
-            // println!("Utilization: {stw_us} / {busy_us} = {utilization:.2}");
             super::UTILIZATIONS.push(utilization);
         }
-        // println!("Utilization: {:.2}%", utilization * 100.0);
         // All GC workers must have parked by now.
         debug_assert!(!self.worker_group.has_designated_work());
         debug_assert!(self.all_buckets_empty());

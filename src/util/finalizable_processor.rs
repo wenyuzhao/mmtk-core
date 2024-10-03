@@ -1,6 +1,5 @@
-use crate::plan::is_nursery_gc;
 use crate::scheduler::gc_work::ProcessEdgesWork;
-use crate::scheduler::{GCWork, GCWorker, WorkBucketStage};
+use crate::scheduler::{GCWork, GCWorker};
 #[allow(unused)]
 use crate::util::reference_processor::RescanReferences;
 use crate::util::ObjectReference;
@@ -155,7 +154,7 @@ impl<E: ProcessEdgesWork> Finalization<E> {
 pub struct ForwardFinalization<E: ProcessEdgesWork>(PhantomData<E>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         // trace!("Forward finalization");
         // let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
         // let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);

@@ -94,12 +94,11 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<MarkCompactGCWorkContext<VM>>::new(self));
 
-        // scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
-        //     .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
-        // // do another trace to update references
-        // scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new(self));
-        // scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.mc_space));
-        unimplemented!();
+        scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
+            .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
+        // do another trace to update references
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new(self));
+        scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.mc_space));
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
@@ -107,23 +106,22 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Reference processing
         if !*self.base().options.no_reference_types {
-            unimplemented!();
-            // use crate::util::reference_processor::{
-            //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            // };
-            // scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
-            //     .add(SoftRefProcessing::<MarkingProcessEdges<VM>>::new());
-            // scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
-            //     .add(WeakRefProcessing::<VM>::new());
-            // scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
-            //     .add(PhantomRefProcessing::<MarkingProcessEdges<VM>>::new());
+            use crate::util::reference_processor::{
+                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            };
+            scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
+                .add(SoftRefProcessing::<MarkingProcessEdges<VM>>::new());
+            scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add(WeakRefProcessing::<VM>::new());
+            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
+                .add(PhantomRefProcessing::<MarkingProcessEdges<VM>>::new());
 
-            // use crate::util::reference_processor::RefForwarding;
-            // scheduler.work_buckets[WorkBucketStage::RefForwarding]
-            //     .add(RefForwarding::<ForwardingProcessEdges<VM>>::new());
+            use crate::util::reference_processor::RefForwarding;
+            scheduler.work_buckets[WorkBucketStage::RefForwarding]
+                .add(RefForwarding::<ForwardingProcessEdges<VM>>::new());
 
-            // use crate::util::reference_processor::RefEnqueue;
-            // scheduler.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+            use crate::util::reference_processor::RefEnqueue;
+            scheduler.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
         }
 
         // Finalization
@@ -142,13 +140,12 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         }
 
         // VM-specific weak ref processing
-        // scheduler.work_buckets[WorkBucketStage::VMRefClosure]
-        //     .set_sentinel(Box::new(VMProcessWeakRefs::<MarkingProcessEdges<VM>>::new()));
+        scheduler.work_buckets[WorkBucketStage::VMRefClosure]
+            .set_sentinel(Box::new(VMProcessWeakRefs::<MarkingProcessEdges<VM>>::new()));
 
-        // // VM-specific weak ref forwarding
-        // scheduler.work_buckets[WorkBucketStage::VMRefForwarding]
-        //     .add(VMForwardWeakRefs::<ForwardingProcessEdges<VM>>::new());
-        unimplemented!();
+        // VM-specific weak ref forwarding
+        scheduler.work_buckets[WorkBucketStage::VMRefForwarding]
+            .add(VMForwardWeakRefs::<ForwardingProcessEdges<VM>>::new());
 
         // VM-specific work after forwarding, possible to implement ref enququing.
         scheduler.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());

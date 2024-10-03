@@ -552,10 +552,10 @@ impl<E: ProcessEdgesWork> PhantomRefProcessing<E> {
 pub(crate) struct RefForwarding<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        // let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
-        // w.set_worker(worker);
-        // mmtk.reference_processors.forward_refs(&mut w, mmtk);
-        // w.flush();
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
+        w.set_worker(worker);
+        mmtk.reference_processors.forward_refs(&mut w, mmtk);
+        w.flush();
         unimplemented!()
     }
 }
