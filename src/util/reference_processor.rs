@@ -556,6 +556,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
         w.set_worker(worker);
         mmtk.reference_processors.forward_refs(&mut w, mmtk);
         w.flush();
+        unimplemented!()
     }
 }
 impl<E: ProcessEdgesWork> RefForwarding<E> {

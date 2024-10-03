@@ -244,6 +244,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                     // Should we push to Unconstrained instead?
                     mmtk.scheduler.work_buckets[WorkBucketStage::RCProcessIncs]
                         .add(ScanMutatorRoots::<C>(mutator));
+                    unimplemented!()
                 }
                 n += 1;
             },
@@ -425,7 +426,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMForwardWeakRefs<E> {
             stage,
             phantom_data: PhantomData,
         };
-        <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory)
+        <E::VM as VMBinding>::VMScanning::forward_weak_refs(worker, tracer_factory);
+        unimplemented!()
     }
 }
 
@@ -894,6 +896,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
             WorkBucketStage::PinningRootsTrace,
             ProcessRootNode::<VM, PPE, DPE>::new(nodes, WorkBucketStage::Closure),
         );
+        unimplemented!()
     }
 
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>) {
@@ -902,6 +905,7 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
             WorkBucketStage::TPinningClosure,
             ProcessRootNode::<VM, PPE, PPE>::new(nodes, WorkBucketStage::TPinningClosure),
         );
+        unimplemented!()
     }
 }
 
@@ -1429,6 +1433,7 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
 
         trace!("ProcessRootNode End");
+        unimplemented!();
     }
 }
 

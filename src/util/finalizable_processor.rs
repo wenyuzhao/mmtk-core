@@ -164,6 +164,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
 
         finalizable_processor.forward_finalizable(&mut w, is_nursery_gc(mmtk.get_plan()));
         trace!("Finished forwarding finlizable");
+        unimplemented!()
     }
 }
 impl<E: ProcessEdgesWork> ForwardFinalization<E> {
