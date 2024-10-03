@@ -324,14 +324,23 @@ impl<VM: VMBinding> GCWorker<VM> {
                 use BucketId::*;
                 // Transitive closure
                 if BucketId::Closure.is_open() && !BucketId::WeakRefClosure.is_open() {
-                    super::TOTAL_TRACE_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                    if let Some(start) = super::TRACE_START.elapsed_us_opt() {
+                        let us = us.min(start);
+                        super::TOTAL_TRACE_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                    }
                 }
                 // RC increments
                 if pause == Some(Pause::RefCount) && Incs.is_open() && !Release.is_open() {
-                    super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                    if let Some(start) = super::INCS_START.elapsed_us_opt() {
+                        let us = us.min(start);
+                        super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                    }
                 }
                 if pause != Some(Pause::RefCount) && Incs.is_open() && !Prepare.is_open() {
-                    super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                    if let Some(start) = super::INCS_START.elapsed_us_opt() {
+                        let us = us.min(start);
+                        super::TOTAL_INC_BUSY_TIME_US.fetch_add(us as usize, Ordering::SeqCst);
+                    }
                 }
                 // Whole GC except Release bucket
                 if !Release.is_open() && (lxr.is_none() || (!Decs.is_open() && !Finish.is_open())) {

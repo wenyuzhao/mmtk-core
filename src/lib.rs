@@ -60,7 +60,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize},
         Arc,
     },
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use atomic::{Atomic, Ordering};
@@ -221,6 +221,10 @@ impl Timer {
 
     pub fn elapsed_ms(&self) -> f32 {
         self.elapsed().as_micros() as f32 / 1000f32
+    }
+
+    pub fn elapsed_us_opt(&self) -> Option<u128> {
+        unsafe { (*self.0.get()).map(|i| i.elapsed().as_micros()) }
     }
 
     pub fn ready(&self) -> bool {

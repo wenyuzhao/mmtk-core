@@ -441,6 +441,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut new_buckets = false;
         let mut new_work = false;
         self.schedule().update(bucket, |b| {
+            if cfg!(feature = "utilization") {
+                self.on_new_bucket(bucket, Some(b));
+            }
             // dump everything to the active bucket
             let q = b.get_bucket().take_queue();
             if !q.is_empty() {
@@ -448,12 +451,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 new_work = true;
             }
             new_buckets = true;
-            if cfg!(feature = "utilization") {
-                self.on_new_bucket(bucket, b);
-            }
         });
         if new_buckets && new_work {
             self.worker_monitor.notify_work_available(true)
+        } else if cfg!(feature = "utilization") {
+            self.on_new_bucket(bucket, None);
         }
         new_buckets && new_work
     }
@@ -668,12 +670,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
-    fn on_new_bucket(&self, old: Option<BucketId>, new: BucketId) {
+    fn on_new_bucket(&self, old: Option<BucketId>, new: Option<BucketId>) {
         if !cfg!(feature = "utilization") || !crate::inside_harness() {
             return;
         }
         // RC increment started
-        if new == BucketId::Incs {
+        if new == Some(BucketId::Incs) {
             super::INCS_START.start();
         }
         // RC increment finished
@@ -687,7 +689,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             super::INC_UTILIZATIONS.push(utilization);
         }
         // Closure started
-        if new == BucketId::Closure {
+        if new == Some(BucketId::Closure) {
             super::TRACE_START.start();
         }
         // Closure finished
@@ -701,11 +703,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             super::TRACE_UTILIZATIONS.push(utilization);
         }
         // Release started
-        if new == BucketId::Release {
+        if new == Some(BucketId::Release) {
             super::RELEASE_START.start();
         }
         // Release finished
-        if old == Some(BucketId::Release) {
+        if old == Some(BucketId::Release)
+            && (new == Some(BucketId::Finish) || new == Some(BucketId::Decs))
+        {
             let release_us = super::RELEASE_START.elapsed().as_micros();
             super::TOTAL_RELEASE_TIME_US.fetch_add(release_us as usize, Ordering::SeqCst);
         }
