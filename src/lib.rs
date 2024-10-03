@@ -49,7 +49,6 @@ pub mod gc_log;
 mod mmtk;
 mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
-use scheduler::BucketId;
 use std::{
     cell::UnsafeCell,
     collections::HashMap,
@@ -96,16 +95,6 @@ pub struct LazySweepingJobsCounter {
     counter: Arc<AtomicUsize>,
 }
 impl LazySweepingJobsCounter {
-    fn new() -> Self {
-        let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
-        let counter = lazy_sweeping_jobs.curr_counter.as_ref().unwrap();
-        counter.fetch_add(1, Ordering::SeqCst);
-        Self {
-            decs_counter: None,
-            counter: counter.clone(),
-        }
-    }
-
     fn new_decs() -> Self {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         let decs_counter = lazy_sweeping_jobs.curr_decs_counter.as_ref().unwrap();
@@ -144,16 +133,12 @@ impl Drop for LazySweepingJobsCounter {
     fn drop(&mut self) {
         let lazy_sweeping_jobs = LAZY_SWEEPING_JOBS.read();
         if let Some(decs) = self.decs_counter.as_ref() {
-            let x = decs.fetch_sub(1, Ordering::SeqCst);
-            // println!("DECS: {} {}", x, BucketId::Decs.get_bucket().count());
-            if x == 1 {
+            if decs.fetch_sub(1, Ordering::SeqCst) == 1 {
                 let f = lazy_sweeping_jobs.end_of_decs.as_ref().unwrap();
                 f(self.clone())
             }
         }
-        let x = self.counter.fetch_sub(1, Ordering::SeqCst);
-        // println!("LAZY: {} {}", x, BucketId::Decs.get_bucket().count());
-        if x == 1 {
+        if self.counter.fetch_sub(1, Ordering::SeqCst) == 1 {
             if let Some(f) = lazy_sweeping_jobs.end_of_lazy.as_ref() {
                 f()
             }
