@@ -1448,6 +1448,7 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         crate::memory_manager::add_work_packet(mmtk, self.bucket, work);
 
         trace!("ProcessRootNode End");
+        unimplemented!();
     }
 }
 

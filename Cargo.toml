@@ -76,8 +76,10 @@ default = [
     "dep:sysinfo",
     "dep:regex",
     "dep:env_logger",
+    "no_meta_counting",
+    "tracing",
+    "flush_half",
     "ix_always_defrag",
-    # "no_meta_counting",
 ]
 # default = []
 nightly = []
