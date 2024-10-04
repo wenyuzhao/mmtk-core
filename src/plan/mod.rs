@@ -40,6 +40,7 @@ mod tracing;
 pub use tracing::{ObjectQueue, ObjectsClosure, SlotIterator, VectorObjectQueue, VectorQueue};
 
 /// Generational plans (with a copying nursery)
+#[allow(unused)]
 mod generational;
 /// Sticky plans (using sticky marks for generational behaviors without a copying nursery)
 // mod sticky;

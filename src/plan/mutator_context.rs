@@ -28,6 +28,7 @@ pub(crate) fn unreachable_prepare_func<VM: VMBinding>(
 
 /// A place-holder implementation for `MutatorConfig::release_func` that should not be called.
 /// Currently only used by `NoGC`.
+#[allow(unused)]
 pub(crate) fn unreachable_release_func<VM: VMBinding>(
     _mutator: &mut Mutator<VM>,
     _tls: VMWorkerThread,
@@ -36,6 +37,7 @@ pub(crate) fn unreachable_release_func<VM: VMBinding>(
 }
 
 /// A place-holder implementation for `MutatorConfig::release_func` that does nothing.
+#[allow(unused)]
 pub(crate) fn no_op_release_func<VM: VMBinding>(_mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {}
 
 // This struct is part of the Mutator struct.

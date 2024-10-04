@@ -161,6 +161,7 @@ impl ActiveWorkBucket {
         }
     }
 
+    #[allow(unused)]
     pub fn dump(&self) {
         println!(
             "ActiveWorkBucket: {},{}",
@@ -198,11 +199,6 @@ impl ActiveWorkBucket {
     pub fn add_boxed(&self, b: BucketId, work: Box<dyn GCWork>) {
         self.queue.push(b, work);
         self.notify_one_worker();
-    }
-
-    /// Like [`WorkBucket::add_no_notify`], but the work is boxed.
-    pub(crate) fn add_boxed_no_notify(&self, b: BucketId, work: Box<dyn GCWork>) {
-        self.queue.push(b, work);
     }
 
     /// Get a work packet from this bucket
