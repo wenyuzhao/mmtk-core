@@ -54,7 +54,6 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     scanned_non_null_slots: usize,
     #[cfg(feature = "measure_trace_rate")]
     enqueued_objs: usize,
-    worker: *mut GCWorker<VM>,
     pushes: usize,
 }
 
@@ -80,7 +79,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
-            worker: std::ptr::null_mut(),
             pushes: 0,
         }
     }
@@ -104,7 +102,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
-            worker: std::ptr::null_mut(),
             pushes: 0,
         }
     }
@@ -128,7 +125,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             scanned_non_null_slots: 0,
             #[cfg(feature = "measure_trace_rate")]
             enqueued_objs: 0,
-            worker: std::ptr::null_mut(),
             pushes: 0,
         }
     }

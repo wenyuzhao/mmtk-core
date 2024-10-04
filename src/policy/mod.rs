@@ -27,7 +27,9 @@ pub mod immix;
 pub mod immortalspace;
 pub mod largeobjectspace;
 pub mod lockfreeimmortalspace;
+#[allow(unused)]
 pub mod markcompactspace;
+#[allow(unused)]
 pub mod marksweepspace;
 #[cfg(feature = "vm_space")]
 pub mod vmspace;

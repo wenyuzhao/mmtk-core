@@ -1301,6 +1301,7 @@ pub struct PlanScanObjects<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceO
 }
 
 impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> PlanScanObjects<E, P> {
+    #[allow(unused)]
     pub fn new(
         plan: &'static P,
         buffer: Vec<ObjectReference>,
