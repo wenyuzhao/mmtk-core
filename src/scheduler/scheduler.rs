@@ -596,7 +596,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    pub fn try_steal(&self, worker: &GCWorker<VM>) -> Steal<(BucketId, Box<dyn GCWork>)> {
+    fn try_steal(&self, worker: &GCWorker<VM>) -> Steal<(BucketId, Box<dyn GCWork>)> {
         for _ in 0..self.worker_group.workers_shared.len() * 2 {
             if let Steal::Success(slot) = Self::steal_best_of_2(
                 worker.ordinal,
@@ -607,6 +607,30 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         Steal::Empty
+    }
+
+    pub fn try_poll_or_steal(&self, worker: &GCWorker<VM>) -> Option<(BucketId, Box<dyn GCWork>)> {
+        // steal
+        if let Steal::Success(w) = self.try_steal(worker) {
+            return Some(w);
+        }
+        // poll from global queue
+        loop {
+            let mut retry = false;
+            // Try get a packet from a work bucket.
+            match self.active_bucket.poll(&worker.local_work_buffer) {
+                Steal::Success(w) => return Some(w),
+                Steal::Retry => {
+                    retry = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if !retry {
+                break;
+            }
+        }
+        None
     }
 
     /// Get a schedulable work packet.

@@ -18,7 +18,6 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use crossbeam::deque::Steal;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_trace_rate")]
@@ -424,7 +423,7 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
             // Drain the stack
             if cfg!(feature = "steal") {
                 let worker = GCWorker::<VM>::current();
-                'outer: loop {
+                loop {
                     // depth += 1;
                     // Drain local stack
                     while let Some(o) = self.next_objects.pop().or_else(|| worker.satb_deque.pop())
@@ -440,19 +439,11 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
                     if self.should_defer() {
                         break;
                     }
-                    let workers = &worker.scheduler().worker_group.workers_shared;
-                    if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
-                        worker.cache = Some(w);
-                        break;
-                    }
-                    let n = workers.len();
-                    for _i in 0..n / 2 {
-                        if let Some(o) = worker
-                            .steal_best_of_2(&worker.satb_deque, workers, |x| &x.satb_deque_stealer)
-                        {
-                            self.trace_object(o);
-                            continue 'outer;
-                        }
+                    if let Some(o) =
+                        worker.steal_from_others(&worker.satb_deque, |x| &x.satb_deque_stealer)
+                    {
+                        self.trace_object(o);
+                        continue;
                     }
                     break;
                 }
@@ -697,7 +688,7 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
         self.should_record_forwarded_roots = false;
         if cfg!(feature = "steal") {
             let worker = GCWorker::<VM>::current();
-            'outer: loop {
+            loop {
                 while let Some(s) = self.slots.pop().or_else(|| worker.deque.pop()) {
                     self.__process_slot::<false, false>(s, 0)
                 }
@@ -709,19 +700,9 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
                 if !self.slots.is_empty() || !worker.deque.is_empty() {
                     continue;
                 }
-                let workers = &worker.scheduler().worker_group.workers_shared;
-                if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
-                    worker.cache = Some(w);
-                    break;
-                }
-                let n = workers.len();
-                for _i in 0..n / 2 {
-                    if let Some(s) =
-                        worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
-                    {
-                        self.__process_slot::<false, false>(s, 0);
-                        continue 'outer;
-                    }
+                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                    self.__process_slot::<false, false>(s, 0);
+                    continue;
                 }
                 break;
             }
@@ -1076,23 +1057,13 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         self.pause = self.lxr.current_pause().unwrap();
         if cfg!(feature = "steal") {
             let worker = GCWorker::<VM>::current();
-            'outer: loop {
+            loop {
                 while let Some(s) = self.slots.pop().or_else(|| worker.deque.pop()) {
                     self.process_slot(s);
                 }
-                let workers = &worker.scheduler().worker_group.workers_shared;
-                if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
-                    worker.cache = Some(w);
-                    break;
-                }
-                let n = workers.len();
-                for _i in 0..n / 2 {
-                    if let Some(s) =
-                        worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
-                    {
-                        self.process_slot(s);
-                        continue 'outer;
-                    }
+                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                    self.process_slot(s);
+                    continue;
                 }
                 break;
             }
