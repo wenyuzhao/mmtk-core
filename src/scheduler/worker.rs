@@ -11,6 +11,7 @@ use atomic::Atomic;
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use crossbeam::deque::{self, Stealer};
 use crossbeam::queue::ArrayQueue;
+use std::cell::UnsafeCell;
 #[cfg(feature = "count_live_bytes_in_gc")]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -134,7 +135,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub obj_deque: ItemWorker<ObjectReference>,
     pub satb_deque: ItemWorker<ObjectReference>,
     pub hash_seed: AtomicUsize,
-    pub cache: Option<Box<dyn GCWork<VM>>>,
+    pub cache: UnsafeCell<Option<Box<dyn GCWork<VM>>>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -192,7 +193,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             obj_deque,
             satb_deque,
             hash_seed: AtomicUsize::new(17),
-            cache: None,
+            cache: UnsafeCell::new(None),
             // hash_seed: rng.gen_range(0..102400),
         }
     }
@@ -262,7 +263,7 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// 3. Poll from activated global work-buckets
     /// 4. Steal from other workers
     fn poll(&mut self) -> PollResult<VM> {
-        if let Some(work) = self.cache.take() {
+        if let Some(work) = self.cache.get_mut().take() {
             return Ok(work);
         }
         if let Some(work) = self.shared.designated_work.pop() {
@@ -385,11 +386,30 @@ impl<VM: VMBinding> GCWorker<VM> {
         mmtk.scheduler.surrender_gc_worker(self);
     }
 
-    pub fn steal_best_of_2<T>(
+    pub fn steal_from_others<T>(
+        &self,
+        deque: &ItemWorker<T>,
+        stealer: impl Fn(&GCWorkerShared<VM>) -> &ItemStealer<T>,
+    ) -> Option<T> {
+        if let Some(w) = self.scheduler().try_poll_or_steal(self) {
+            unsafe { *self.cache.get() = Some(w) };
+            return None;
+        }
+        let workers = &self.scheduler().worker_group.workers_shared;
+        let n = workers.len();
+        for _i in 0..n / 2 {
+            if let Some(s) = self.steal_best_of_2(&deque, workers, &stealer) {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    fn steal_best_of_2<T>(
         &self,
         deque: &ItemWorker<T>,
         workers: &[Arc<GCWorkerShared<VM>>],
-        stealer: impl Fn(&GCWorkerShared<VM>) -> &ItemStealer<T>,
+        stealer: &impl Fn(&GCWorkerShared<VM>) -> &ItemStealer<T>,
     ) -> Option<T> {
         const BULK: bool = cfg!(feature = "steal_bulk");
         let n = workers.len();

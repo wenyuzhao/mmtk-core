@@ -741,8 +741,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
         if cfg!(feature = "steal") {
             let worker = self.worker();
             let depth = self.depth;
-            'outer: loop {
-                // depth += 1;
+            loop {
                 // Drain local stack
                 while let Some(s) = self.incs.pop().or_else(|| worker.deque.pop()) {
                     self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
@@ -754,19 +753,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
                 if !self.incs.is_empty() || !worker.deque.is_empty() {
                     continue;
                 }
-                let workers = &self.worker().scheduler().worker_group.workers_shared;
-                if let Some(w) = worker.scheduler().try_poll_or_steal(worker) {
-                    worker.cache = Some(w);
-                    break;
-                }
-                let n = workers.len();
-                for _i in 0..n / 2 {
-                    if let Some(s) =
-                        worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
-                    {
-                        self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
-                        continue 'outer;
-                    }
+                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                    self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
+                    continue;
                 }
                 break;
             }
@@ -1130,7 +1119,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         }
         if cfg!(feature = "steal") {
             let worker = GCWorker::<VM>::current();
-            'outer: loop {
+            loop {
                 // Drain local stack
                 while let Some(o) = self.stack.pop().or_else(|| worker.obj_deque.pop()) {
                     self.process_dec(o, lxr);
@@ -1138,19 +1127,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
                 if !self.stack.is_empty() || !worker.obj_deque.is_empty() {
                     continue;
                 }
-                let workers = &self.worker().scheduler().worker_group.workers_shared;
-                if let Some(w) = worker.scheduler().try_poll_or_steal(worker) {
-                    worker.cache = Some(w);
-                    break;
-                }
-                let n = workers.len();
-                for _i in 0..n / 2 {
-                    if let Some(o) =
-                        worker.steal_best_of_2(&worker.obj_deque, workers, |x| &x.obj_deque_stealer)
-                    {
-                        self.process_dec(o, lxr);
-                        continue 'outer;
-                    }
+                if let Some(o) =
+                    worker.steal_from_others(&worker.obj_deque, |x| &x.obj_deque_stealer)
+                {
+                    self.process_dec(o, lxr);
+                    continue;
                 }
                 break;
             }
