@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockReadGuard};
 use std::time::Instant;
+use worker::GCWorkerShared;
 
 pub trait IntoBoxedPacket {
     fn into_boxed_packet(self) -> Box<dyn GCWork>;
@@ -520,14 +521,18 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             _ => {}
         }
         // Try steal some packets from any worker
-        for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
-            if id == worker.ordinal {
-                continue;
-            }
-            match worker_shared.stealer.as_ref().unwrap().steal() {
-                Steal::Success(w) => return Steal::Success(w),
-                Steal::Retry => should_retry = true,
-                _ => {}
+        if cfg!(feature = "random_packet_stealing") {
+            return self.try_steal(worker);
+        } else {
+            for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
+                if id == worker.ordinal {
+                    continue;
+                }
+                match worker_shared.stealer.as_ref().unwrap().steal() {
+                    Steal::Success(w) => return Steal::Success(w),
+                    Steal::Retry => should_retry = true,
+                    _ => {}
+                }
             }
         }
         if should_retry {
@@ -535,6 +540,73 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         } else {
             Steal::Empty
         }
+    }
+
+    fn random_park_and_miller(seed0: &AtomicUsize) -> usize {
+        let a = 16807isize;
+        let m = 2147483647isize;
+        let q = 127773isize;
+        let r = 2836isize;
+        let seed = seed0.load(Ordering::Relaxed) as isize;
+        let hi = seed / q;
+        let lo = seed % q;
+        let test = a * lo - r * hi;
+        let result = if test > 0 { test } else { test + m };
+        seed0.store(result as usize, Ordering::Relaxed);
+        result as usize
+    }
+
+    pub fn get_random_steal_index(
+        worker_id: usize,
+        hash_seed: &AtomicUsize,
+        n: usize,
+    ) -> (usize, usize) {
+        let mut k1 = worker_id;
+        while k1 == worker_id {
+            k1 = Self::random_park_and_miller(hash_seed) % n;
+        }
+        let mut k2 = worker_id;
+        while k2 == worker_id || k2 == k1 {
+            k2 = Self::random_park_and_miller(hash_seed) % n;
+        }
+        (k1, k2)
+    }
+
+    fn steal_best_of_2(
+        worker_id: usize,
+        hash_seed: &AtomicUsize,
+        workers: &[Arc<GCWorkerShared<VM>>],
+    ) -> Steal<(BucketId, Box<dyn GCWork>)> {
+        let n = workers.len();
+        if n > 2 {
+            let (k1, k2) = Self::get_random_steal_index(worker_id, hash_seed, n);
+            let sz1 = workers[k1].stealer.as_ref().unwrap().len();
+            let sz2 = workers[k2].stealer.as_ref().unwrap().len();
+            if sz1 < sz2 {
+                return workers[k2].stealer.as_ref().unwrap().steal();
+            } else {
+                return workers[k1].stealer.as_ref().unwrap().steal();
+            }
+        } else if n == 2 {
+            let k = (worker_id + 1) % 2;
+            return workers[k].stealer.as_ref().unwrap().steal();
+        } else {
+            return Steal::Empty;
+        }
+    }
+
+    /// Get a schedulable work packet without retry.
+    pub fn try_steal(&self, worker: &GCWorker<VM>) -> Steal<(BucketId, Box<dyn GCWork>)> {
+        for _ in 0..self.worker_group.workers_shared.len() * 2 {
+            if let Steal::Success(slot) = Self::steal_best_of_2(
+                worker.ordinal,
+                &worker.hash_seed,
+                &self.worker_group.workers_shared,
+            ) {
+                return Steal::Success(slot);
+            }
+        }
+        Steal::Empty
     }
 
     /// Get a schedulable work packet.

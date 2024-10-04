@@ -6,6 +6,8 @@ use crate::plan::VectorQueue;
 use crate::scheduler::gc_work::RootKind;
 use crate::scheduler::gc_work::ScanObjects;
 use crate::scheduler::gc_work::SlotOf;
+use crate::scheduler::worker::GCWorkerShared;
+use crate::scheduler::GCWorkScheduler;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
 use crate::util::copy::CopySemantics;
@@ -24,6 +26,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use crossbeam::deque::Steal;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_rc_rate")]
 use std::sync::atomic::AtomicUsize;
@@ -107,15 +110,28 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     fn add_new_slot(&mut self, s: VM::VMSlot) {
-        if self.stack_size() + 1 > Self::CAPACITY {
-            self.flush();
+        if cfg!(feature = "steal") {
+            let worker = self.worker();
+            if worker.deque.push(s).is_err() {
+                self.incs.push(s);
+                self.pushes += 1;
+                if self.incs.len() >= crate::args::BUFFER_SIZE
+                    || (cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD)
+                {
+                    self.flush_half_slots();
+                }
+            }
+        } else {
+            if self.stack_size() + 1 > Self::CAPACITY {
+                self.flush();
+            }
+            if cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
+                self.flush_half_slots();
+            }
+            assert!(self.incs.len() <= Self::CAPACITY);
+            self.incs.push(s);
+            self.pushes += 1;
         }
-        if cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD {
-            self.flush_half_slots();
-        }
-        assert!(self.incs.len() <= Self::CAPACITY);
-        self.incs.push(s);
-        self.pushes += 1;
     }
 
     fn add_new_slice(&mut self, s: VM::VMMemorySlice) {
@@ -726,15 +742,48 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
         if self.incs.len() < Self::CAPACITY {
             self.incs.reserve(Self::CAPACITY - self.incs.len());
         }
-        let mut depth = self.depth;
-        while self.stack_size() != 0 {
-            depth += 1;
-            while let Some(s) = self.incs.pop() {
-                self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
+        if cfg!(feature = "steal") {
+            let worker = self.worker();
+            let depth = self.depth;
+            'outer: loop {
+                // depth += 1;
+                // Drain local stack
+                while let Some(s) = self.incs.pop().or_else(|| worker.deque.pop()) {
+                    self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
+                }
+                while let Some(s) = self.inc_slices.pop() {
+                    self.inc_slices_count -= s.len() as usize;
+                    self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
+                }
+                if !self.incs.is_empty() || !worker.deque.is_empty() {
+                    continue;
+                }
+                let workers = &self.worker().scheduler().worker_group.workers_shared;
+                if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                    worker.cache = Some(w);
+                    break;
+                }
+                let n = workers.len();
+                for _i in 0..n / 2 {
+                    const BULK: bool = cfg!(feature = "steal_bulk");
+                    if let Some(s) = steal_best_of_2::<VM, BULK>(worker, workers) {
+                        self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
+                        continue 'outer;
+                    }
+                }
+                break;
             }
-            while let Some(s) = self.inc_slices.pop() {
-                self.inc_slices_count -= s.len() as usize;
-                self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
+        } else {
+            let mut depth = self.depth;
+            while self.stack_size() != 0 {
+                depth += 1;
+                while let Some(s) = self.incs.pop() {
+                    self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
+                }
+                while let Some(s) = self.inc_slices.pop() {
+                    self.inc_slices_count -= s.len() as usize;
+                    self.process_incs_for_obj_array::<EDGE_KIND_NURSERY>(s.clone(), self.depth);
+                }
             }
         }
         self.survival_ratio_predictor_local.sync();
@@ -862,6 +911,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     fn recursive_dec(&mut self, o: ObjectReference) {
+        if cfg!(feature = "steal") {
+            if self.worker().obj_deque.push(o).is_ok() {
+                return;
+            }
+        }
         self.stack.push(o);
         self.pushes += 1;
         if self.stack.len() >= crate::args::BUFFER_SIZE
@@ -1081,8 +1135,35 @@ impl<VM: VMBinding> GCWork for ProcessDecs<VM> {
                 self.process_dec(*o, lxr);
             }
         }
-        while let Some(o) = self.stack.pop() {
-            self.process_dec(o, lxr);
+        if cfg!(feature = "steal") {
+            let worker = GCWorker::<VM>::current();
+            'outer: loop {
+                // Drain local stack
+                while let Some(o) = self.stack.pop().or_else(|| worker.obj_deque.pop()) {
+                    self.process_dec(o, lxr);
+                }
+                if !self.stack.is_empty() || !worker.obj_deque.is_empty() {
+                    continue;
+                }
+                let workers = &self.worker().scheduler().worker_group.workers_shared;
+                if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                    worker.cache = Some(w);
+                    break;
+                }
+                let n = workers.len();
+                for _i in 0..n / 2 {
+                    const BULK: bool = cfg!(feature = "steal_bulk");
+                    if let Some(o) = steal_best_of_2_obj::<VM, BULK>(worker, workers) {
+                        self.process_dec(o, lxr);
+                        continue 'outer;
+                    }
+                }
+                break;
+            }
+        } else {
+            while let Some(o) = self.stack.pop() {
+                self.process_dec(o, lxr);
+            }
         }
         self.flush();
         if cfg!(feature = "rust_mem_counter") {
@@ -1150,5 +1231,75 @@ impl<VM: VMBinding> Deref for RCImmixCollectRootEdges<VM> {
 impl<VM: VMBinding> DerefMut for RCImmixCollectRootEdges<VM> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
+    }
+}
+
+fn steal_best_of_2<VM: VMBinding, const BULK: bool>(
+    worker: &GCWorker<VM>,
+    workers: &[Arc<GCWorkerShared<VM>>],
+) -> Option<VM::VMSlot> {
+    let n = workers.len();
+    if n > 2 {
+        let (k1, k2) =
+            GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
+        let sz1 = workers[k1].deque_stealer.size();
+        let sz2 = workers[k2].deque_stealer.size();
+        if sz1 < sz2 {
+            return workers[k2]
+                .deque_stealer
+                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        } else {
+            return workers[k1]
+                .deque_stealer
+                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        }
+    } else if n == 2 {
+        let k = (worker.ordinal + 1) % 2;
+        return workers[k]
+            .deque_stealer
+            .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+            .ok()
+            .map(|x| x.0);
+    } else {
+        return None;
+    }
+}
+
+fn steal_best_of_2_obj<VM: VMBinding, const BULK: bool>(
+    worker: &GCWorker<VM>,
+    workers: &[Arc<GCWorkerShared<VM>>],
+) -> Option<ObjectReference> {
+    let n = workers.len();
+    if n > 2 {
+        let (k1, k2) =
+            GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
+        let sz1 = workers[k1].obj_deque_stealer.size();
+        let sz2 = workers[k2].obj_deque_stealer.size();
+        if sz1 < sz2 {
+            return workers[k2]
+                .obj_deque_stealer
+                .steal_and_pop(&worker.obj_deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        } else {
+            return workers[k1]
+                .obj_deque_stealer
+                .steal_and_pop(&worker.obj_deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        }
+    } else if n == 2 {
+        let k = (worker.ordinal + 1) % 2;
+        return workers[k]
+            .obj_deque_stealer
+            .steal_and_pop(&worker.obj_deque, |n| if BULK { n / 2 } else { 1 })
+            .ok()
+            .map(|x| x.0);
+    } else {
+        return None;
     }
 }

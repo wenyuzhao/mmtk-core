@@ -1,8 +1,10 @@
 use address::CLDScanPolicy;
 use address::RefScanPolicy;
+use crossbeam::deque::Steal;
 use policy::immix::block::Block;
 
 use self::global_state::GcStatus;
+use self::worker::GCWorkerShared;
 use super::work_bucket::BucketId;
 use super::*;
 use crate::plan::lxr::LXR;
@@ -1205,12 +1207,26 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     fn enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Discover, |s, _| {
             let Some(_) = s.load() else { return };
-            self.slots.push(s);
-            self.pushes += 1;
-            if self.slots.len() >= crate::args::BUFFER_SIZE
-                || (cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD)
-            {
-                self.flush_half();
+            if cfg!(feature = "steal") {
+                let worker = self.worker();
+                if worker.deque.push(s).is_err() {
+                    self.slots.push(s);
+                    self.pushes += 1;
+                    if self.slots.len() >= crate::args::BUFFER_SIZE
+                        || (cfg!(feature = "push")
+                            && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD)
+                    {
+                        self.flush_half();
+                    }
+                }
+            } else {
+                self.slots.push(s);
+                self.pushes += 1;
+                if self.slots.len() >= crate::args::BUFFER_SIZE
+                    || (cfg!(feature = "push") && self.pushes >= crate::args::FLUSH_HALF_THRESHOLD)
+                {
+                    self.flush_half();
+                }
             }
         });
         self.plan.post_scan_object(object);
@@ -1220,6 +1236,41 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     PlanProcessEdges<VM, P, KIND>
 {
+    fn steal_best_of_2<const BULK: bool>(
+        worker: &GCWorker<VM>,
+        workers: &[Arc<GCWorkerShared<VM>>],
+    ) -> Option<VM::VMSlot> {
+        let n = workers.len();
+        if n > 2 {
+            let (k1, k2) =
+                GCWorkScheduler::<VM>::get_random_steal_index(worker.ordinal, &worker.hash_seed, n);
+            let sz1 = workers[k1].deque_stealer.size();
+            let sz2 = workers[k2].deque_stealer.size();
+            if sz1 < sz2 {
+                return workers[k2]
+                    .deque_stealer
+                    .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                    .ok()
+                    .map(|x| x.0);
+            } else {
+                return workers[k1]
+                    .deque_stealer
+                    .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                    .ok()
+                    .map(|x| x.0);
+            }
+        } else if n == 2 {
+            let k = (worker.ordinal + 1) % 2;
+            return workers[k]
+                .deque_stealer
+                .steal_and_pop(&worker.deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        } else {
+            return None;
+        }
+    }
+
     fn flush_half(&mut self) {
         let slots = if cfg!(feature = "flush_half") {
             if self.slots.len() > 1 {
@@ -1263,8 +1314,33 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         }
         self.roots = false;
-        while let Some(slot) = self.slots.pop() {
-            self.__process_slot::<IX, false>(slot);
+        if cfg!(feature = "steal") {
+            let worker = self.worker();
+            'outer: loop {
+                // Drain local stack
+                while let Some(slot) = self.slots.pop().or_else(|| worker.deque.pop()) {
+                    self.__process_slot::<IX, false>(slot);
+                }
+                let workers = &self.worker().scheduler().worker_group.workers_shared;
+                // Steal from other workers
+                if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                    worker.cache = Some(w);
+                    break;
+                }
+                let n = workers.len();
+                for _i in 0..n / 2 {
+                    const BULK: bool = cfg!(feature = "steal_bulk");
+                    if let Some(s) = Self::steal_best_of_2::<BULK>(worker, workers) {
+                        self.__process_slot::<IX, false>(s);
+                        continue 'outer;
+                    }
+                }
+                break;
+            }
+        } else {
+            while let Some(slot) = self.slots.pop() {
+                self.__process_slot::<IX, false>(slot);
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::plan::immix::Pause;
 #[cfg(feature = "utilization")]
 use crate::plan::lxr::LXR;
 use crate::util::copy::GCWorkerCopyContext;
-use crate::util::opaque_pointer::*;
+use crate::util::{opaque_pointer::*, ObjectReference};
 use crate::vm::{Collection, GCThreadContext, VMBinding};
 use atomic::Atomic;
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
@@ -19,6 +19,16 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "utilization")]
 use std::time::Instant;
+
+#[cfg(feature = "fifo")]
+pub type ItemWorker<T> = crate::util::deque::fifo::Worker<T>;
+#[cfg(feature = "fifo")]
+pub type ItemStealer<T> = crate::util::deque::fifo::Stealer<T>;
+
+#[cfg(not(feature = "fifo"))]
+pub type ItemWorker<T> = crate::util::deque::lifo::Worker<T>;
+#[cfg(not(feature = "fifo"))]
+pub type ItemStealer<T> = crate::util::deque::lifo::Stealer<T>;
 
 /// Represents the ID of a GC worker thread.
 pub type ThreadId = usize;
@@ -68,16 +78,30 @@ pub struct GCWorkerShared<VM: VMBinding> {
     pub designated_work: ArrayQueue<(BucketId, Box<dyn GCWork>)>,
     /// Handle for stealing packets from the current worker
     pub stealer: Option<Stealer<(BucketId, Box<dyn GCWork>)>>,
+    pub deque_stealer: ItemStealer<VM::VMSlot>,
+    pub obj_deque_stealer: ItemStealer<ObjectReference>,
+    pub satb_deque_stealer: ItemStealer<ObjectReference>,
+    pub ordinal: ThreadId,
 }
 
 impl<VM: VMBinding> GCWorkerShared<VM> {
-    pub fn new(stealer: Option<Stealer<(BucketId, Box<dyn GCWork>)>>) -> Self {
+    pub fn new(
+        ordinal: ThreadId,
+        stealer: Option<Stealer<(BucketId, Box<dyn GCWork>)>>,
+        ds: ItemStealer<VM::VMSlot>,
+        ds2: ItemStealer<ObjectReference>,
+        ds3: ItemStealer<ObjectReference>,
+    ) -> Self {
         Self {
+            ordinal,
             stat: Default::default(),
             #[cfg(feature = "count_live_bytes_in_gc")]
             live_bytes: AtomicUsize::new(0),
             designated_work: ArrayQueue::new(16),
             stealer,
+            deque_stealer: ds,
+            obj_deque_stealer: ds2,
+            satb_deque_stealer: ds3,
         }
     }
 
@@ -108,6 +132,11 @@ pub struct GCWorker<VM: VMBinding> {
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<(BucketId, Box<dyn GCWork>)>,
+    pub deque: ItemWorker<VM::VMSlot>,
+    pub obj_deque: ItemWorker<ObjectReference>,
+    pub satb_deque: ItemWorker<ObjectReference>,
+    pub hash_seed: AtomicUsize,
+    pub cache: Option<(BucketId, Box<dyn GCWork>)>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -145,7 +174,13 @@ impl<VM: VMBinding> GCWorker<VM> {
         scheduler: Arc<GCWorkScheduler<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
         local_work_buffer: deque::Worker<(BucketId, Box<dyn GCWork>)>,
+        deque: ItemWorker<VM::VMSlot>,
+        obj_deque: ItemWorker<ObjectReference>,
+        satb_deque: ItemWorker<ObjectReference>,
     ) -> Self {
+        // use rand::prelude::*;
+        // let mut rng = thread_rng();
+
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,
@@ -155,6 +190,12 @@ impl<VM: VMBinding> GCWorker<VM> {
             mmtk,
             shared,
             local_work_buffer,
+            deque,
+            obj_deque,
+            satb_deque,
+            hash_seed: AtomicUsize::new(17),
+            cache: None,
+            // hash_seed: rng.gen_range(0..102400),
         }
     }
 
@@ -235,6 +276,9 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// 3. Poll from activated global work-buckets
     /// 4. Steal from other workers
     fn poll(&mut self) -> PollResult {
+        if let Some(work) = self.cache.take() {
+            return Ok(work);
+        }
         if let Some(work) = self.shared.designated_work.pop() {
             return Ok(work);
         }
@@ -362,6 +406,44 @@ impl<VM: VMBinding> GCWorker<VM> {
 
         mmtk.scheduler.surrender_gc_worker(self);
     }
+
+    pub fn steal_best_of_2<T>(
+        &self,
+        deque: &ItemWorker<T>,
+        workers: &[Arc<GCWorkerShared<VM>>],
+        stealer: impl Fn(&GCWorkerShared<VM>) -> &ItemStealer<T>,
+    ) -> Option<T> {
+        const BULK: bool = cfg!(feature = "steal_bulk");
+        let n = workers.len();
+        if n > 2 {
+            let (k1, k2) =
+                GCWorkScheduler::<VM>::get_random_steal_index(self.ordinal, &self.hash_seed, n);
+            let stealer1 = stealer(&workers[k1]);
+            let stealer2 = stealer(&workers[k2]);
+            let sz1 = stealer1.size();
+            let sz2 = stealer2.size();
+            if sz1 < sz2 {
+                return stealer2
+                    .steal_and_pop(&deque, |n| if BULK { n / 2 } else { 1 })
+                    .ok()
+                    .map(|x| x.0);
+            } else {
+                return stealer1
+                    .steal_and_pop(&deque, |n| if BULK { n / 2 } else { 1 })
+                    .ok()
+                    .map(|x| x.0);
+            }
+        } else if n == 2 {
+            let k = (self.ordinal + 1) % 2;
+            let stealer = stealer(&workers[k]);
+            return stealer
+                .steal_and_pop(&deque, |n| if BULK { n / 2 } else { 1 })
+                .ok()
+                .map(|x| x.0);
+        } else {
+            return None;
+        }
+    }
 }
 
 /// Stateful part of [`WorkerGroup`].
@@ -371,6 +453,9 @@ enum WorkerCreationState<VM: VMBinding> {
     Initial {
         /// The local work queues for to-be-created workers.
         local_work_queues: Vec<deque::Worker<(BucketId, Box<dyn GCWork>)>>,
+        local_item_queues: Vec<ItemWorker<VM::VMSlot>>,
+        local_obj_queues: Vec<ItemWorker<ObjectReference>>,
+        local_satb_queues: Vec<ItemWorker<ObjectReference>>,
     },
     /// All worker threads are spawn and running.  `GCWorker` structs have been transferred to
     /// worker threads.
@@ -408,17 +493,38 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
 
+        let local_item_queues = (0..num_workers)
+            .map(|_| ItemWorker::new(64))
+            .collect::<Vec<_>>();
+
+        let local_obj_queues = (0..num_workers)
+            .map(|_| ItemWorker::new(64))
+            .collect::<Vec<_>>();
+
+        let local_satb_queues = (0..num_workers)
+            .map(|_| ItemWorker::new(64))
+            .collect::<Vec<_>>();
+
         let workers_shared = (0..num_workers)
             .map(|i| {
-                Arc::new(GCWorkerShared::<VM>::new(Some(
-                    local_work_queues[i].stealer(),
-                )))
+                Arc::new(GCWorkerShared::<VM>::new(
+                    i,
+                    Some(local_work_queues[i].stealer()),
+                    local_item_queues[i].stealer(),
+                    local_obj_queues[i].stealer(),
+                    local_satb_queues[i].stealer(),
+                ))
             })
             .collect::<Vec<_>>();
 
         Arc::new(Self {
             workers_shared,
-            state: Mutex::new(Some(WorkerCreationState::Initial { local_work_queues })),
+            state: Mutex::new(Some(WorkerCreationState::Initial {
+                local_work_queues,
+                local_item_queues,
+                local_obj_queues,
+                local_satb_queues,
+            })),
         })
     }
 
@@ -426,11 +532,23 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     pub fn initial_spawn(&self, tls: VMThread, mmtk: &'static MMTK<VM>) {
         let mut state = self.state.lock().unwrap();
 
-        let WorkerCreationState::Initial { local_work_queues } = state.take().unwrap() else {
+        let WorkerCreationState::Initial {
+            local_work_queues,
+            local_item_queues,
+            local_obj_queues,
+            local_satb_queues,
+        } = state.take().unwrap()
+        else {
             panic!("GCWorker structs have already been created");
         };
 
-        let workers = self.create_workers(local_work_queues, mmtk);
+        let workers = self.create_workers(
+            local_work_queues,
+            local_item_queues,
+            local_obj_queues,
+            local_satb_queues,
+            mmtk,
+        );
         self.spawn(workers, tls);
 
         *state = Some(WorkerCreationState::Spawned);
@@ -454,6 +572,9 @@ impl<VM: VMBinding> WorkerGroup<VM> {
     fn create_workers(
         &self,
         local_work_queues: Vec<deque::Worker<(BucketId, Box<dyn GCWork>)>>,
+        local_item_queues: Vec<ItemWorker<VM::VMSlot>>,
+        local_obj_queues: Vec<ItemWorker<ObjectReference>>,
+        local_satb_queues: Vec<ItemWorker<ObjectReference>>,
         mmtk: &'static MMTK<VM>,
     ) -> Vec<Box<GCWorker<VM>>> {
         debug!("Creating GCWorker instances...");
@@ -463,16 +584,24 @@ impl<VM: VMBinding> WorkerGroup<VM> {
         // Each `GCWorker` instance corresponds to a `GCWorkerShared` at the same index.
         let workers = (local_work_queues.into_iter())
             .zip(self.workers_shared.iter())
+            .zip(local_item_queues.into_iter())
+            .zip(local_obj_queues.into_iter())
+            .zip(local_satb_queues.into_iter())
             .enumerate()
-            .map(|(ordinal, (queue, shared))| {
-                Box::new(GCWorker::new(
-                    mmtk,
-                    ordinal,
-                    mmtk.scheduler.clone(),
-                    shared.clone(),
-                    queue,
-                ))
-            })
+            .map(
+                |(ordinal, ((((queue, shared), item_queue), obj_queue), satb_queue))| {
+                    Box::new(GCWorker::new(
+                        mmtk,
+                        ordinal,
+                        mmtk.scheduler.clone(),
+                        shared.clone(),
+                        queue,
+                        item_queue,
+                        obj_queue,
+                        satb_queue,
+                    ))
+                },
+            )
             .collect::<Vec<_>>();
 
         debug!("Created {} GCWorker instances.", workers.len());

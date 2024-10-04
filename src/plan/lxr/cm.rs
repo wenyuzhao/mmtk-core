@@ -18,6 +18,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use crossbeam::deque::Steal;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_trace_rate")]
@@ -56,10 +57,16 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     enqueued_objs: usize,
     worker: *mut GCWorker<VM>,
     pushes: usize,
+    pause: Option<Pause>,
 }
 
 impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     const SATB_BUFFER_SIZE: usize = 8192;
+
+    #[inline(always)]
+    fn worker(&self) -> &GCWorker<VM> {
+        unsafe { &*self.worker }
+    }
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
         if cfg!(feature = "rust_mem_counter") {
@@ -82,6 +89,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
             pushes: 0,
+            pause: None,
         }
     }
 
@@ -106,6 +114,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
             pushes: 0,
+            pause: None,
         }
     }
 
@@ -130,6 +139,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             enqueued_objs: 0,
             worker: std::ptr::null_mut(),
             pushes: 0,
+            pause: None,
         }
     }
 
@@ -149,7 +159,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.should_defer() {
                 worker.scheduler().postpone(w);
             } else {
-                let bkt = if self.plan.current_pause() == Some(Pause::FinalMark) {
+                let bkt = if self.pause == Some(Pause::FinalMark) {
                     BucketId::FinishMark
                 } else {
                     BucketId::ConcClosure
@@ -175,7 +185,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             if self.should_defer() {
                 worker.scheduler().postpone(w);
             } else {
-                let bkt = if self.plan.current_pause() == Some(Pause::FinalMark) {
+                let bkt = if self.pause == Some(Pause::FinalMark) {
                     BucketId::FinishMark
                 } else {
                     BucketId::ConcClosure
@@ -313,6 +323,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     self.plan.immix_space.mature_evac_remset.record(s, t);
                 }
                 prefetch_object(t, &self.plan.immix_space);
+                if cfg!(feature = "steal") {
+                    if self.worker().satb_deque.push(t).is_ok() {
+                        return;
+                    }
+                }
                 self.next_objects.push(t);
                 self.pushes += 1;
                 if self.next_objects.len() > Self::SATB_BUFFER_SIZE
@@ -381,6 +396,7 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
     fn do_work(&mut self) {
         let worker = GCWorker::<VM>::current();
         debug_assert!(!BucketId::Incs.get_bucket().is_open());
+        self.pause = self.plan.current_pause();
         #[cfg(feature = "measure_trace_rate")]
         let t = std::time::SystemTime::now();
         #[cfg(feature = "measure_trace_rate")]
@@ -404,21 +420,53 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
         } else if let Some(arrays) = self.ref_arrays.take() {
             self.trace_arrays(&arrays)
         }
-        let pause_opt = self.plan.current_pause();
-        if !self.should_defer() && (pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
-            while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
-                let pause_opt = self.plan.current_pause();
-                if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
+        if !self.should_defer() && (self.pause == Some(Pause::FinalMark) || self.pause.is_none()) {
+            // Drain the stack
+            if cfg!(feature = "steal") {
+                let worker = GCWorker::<VM>::current();
+                'outer: loop {
+                    // depth += 1;
+                    // Drain local stack
+                    while let Some(o) = self.next_objects.pop().or_else(|| worker.satb_deque.pop())
+                    {
+                        self.trace_object(o);
+                    }
+                    while let Some(e) = self.next_ref_arrays.pop() {
+                        self.trace_slice_entry(&e);
+                    }
+                    if !self.next_objects.is_empty() || !worker.satb_deque.is_empty() {
+                        continue;
+                    }
+                    if self.should_defer() {
+                        break;
+                    }
+                    let workers = &worker.scheduler().worker_group.workers_shared;
+                    if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                        worker.cache = Some(w);
+                        break;
+                    }
+                    let n = workers.len();
+                    for _i in 0..n / 2 {
+                        if let Some(o) = worker
+                            .steal_best_of_2(&worker.satb_deque, workers, |x| &x.satb_deque_stealer)
+                        {
+                            self.trace_object(o);
+                            continue 'outer;
+                        }
+                    }
                     break;
                 }
-                while let Some(o) = self.next_objects.pop() {
-                    self.trace_object(o);
-                }
-                while let Some(e) = self.next_ref_arrays.pop() {
-                    self.trace_slice_entry(&e);
-                }
-                if self.should_defer() {
-                    break;
+            } else {
+                while !self.next_ref_arrays.is_empty() || !self.next_objects.is_empty() {
+                    while let Some(o) = self.next_objects.pop() {
+                        self.trace_object(o);
+                    }
+                    while let Some(e) = self.next_ref_arrays.pop() {
+                        self.trace_slice_entry(&e);
+                    }
+                    if self.should_defer() {
+                        break;
+                    }
                 }
             }
         }
@@ -647,13 +695,45 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
         self.remset_recorded_slots = false;
         let should_record_forwarded_roots = self.should_record_forwarded_roots;
         self.should_record_forwarded_roots = false;
-        while !self.slots.is_empty() || !self.array_slices.is_empty() {
-            while let Some(s) = self.slots.pop() {
-                self.__process_slot::<false, false>(s, 0)
-            }
-            while let Some(slice) = self.array_slices.pop() {
-                for s in slice.iter_slots() {
+        if cfg!(feature = "steal") {
+            let worker = GCWorker::<VM>::current();
+            'outer: loop {
+                while let Some(s) = self.slots.pop().or_else(|| worker.deque.pop()) {
                     self.__process_slot::<false, false>(s, 0)
+                }
+                while let Some(slice) = self.array_slices.pop() {
+                    for s in slice.iter_slots() {
+                        self.__process_slot::<false, false>(s, 0)
+                    }
+                }
+                if !self.slots.is_empty() || !worker.deque.is_empty() {
+                    continue;
+                }
+                let workers = &worker.scheduler().worker_group.workers_shared;
+                if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                    worker.cache = Some(w);
+                    break;
+                }
+                let n = workers.len();
+                for _i in 0..n / 2 {
+                    if let Some(s) =
+                        worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
+                    {
+                        self.__process_slot::<false, false>(s, 0);
+                        continue 'outer;
+                    }
+                }
+                break;
+            }
+        } else {
+            while !self.slots.is_empty() || !self.array_slices.is_empty() {
+                while let Some(s) = self.slots.pop() {
+                    self.__process_slot::<false, false>(s, 0)
+                }
+                while let Some(slice) = self.array_slices.pop() {
+                    for s in slice.iter_slots() {
+                        self.__process_slot::<false, false>(s, 0)
+                    }
                 }
             }
         }
@@ -882,6 +962,11 @@ impl<VM: VMBinding, const FULL_GC: bool> ObjectQueue for LXRStopTheWorldProcessE
                             return;
                         }
                         prefetch_object(o, &self.lxr.immix_space);
+                        if cfg!(feature = "steal") {
+                            if self.worker().deque.push(s).is_ok() {
+                                return;
+                            }
+                        }
                         self.slots.push(s);
                         self.stack_size += 1;
                         self.pushes += 1;
@@ -989,8 +1074,32 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
     fn process_slots(&mut self) {
         self.pause = self.lxr.current_pause().unwrap();
-        while let Some(s) = self.slots.pop() {
-            self.process_slot(s);
+        if cfg!(feature = "steal") {
+            let worker = GCWorker::<VM>::current();
+            'outer: loop {
+                while let Some(s) = self.slots.pop().or_else(|| worker.deque.pop()) {
+                    self.process_slot(s);
+                }
+                let workers = &worker.scheduler().worker_group.workers_shared;
+                if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                    worker.cache = Some(w);
+                    break;
+                }
+                let n = workers.len();
+                for _i in 0..n / 2 {
+                    if let Some(s) =
+                        worker.steal_best_of_2(&worker.deque, workers, |x| &x.deque_stealer)
+                    {
+                        self.process_slot(s);
+                        continue 'outer;
+                    }
+                }
+                break;
+            }
+        } else {
+            while let Some(s) = self.slots.pop() {
+                self.process_slot(s);
+            }
         }
         if cfg!(feature = "rust_mem_counter") {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
@@ -1016,6 +1125,11 @@ impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
                 return;
             };
             prefetch_object(o, &self.lxr.immix_space);
+            if cfg!(feature = "steal") {
+                if self.worker().deque.push(s).is_ok() {
+                    return;
+                }
+            }
             self.slots.push(s);
             self.pushes += 1;
             if self.slots.len() > crate::args::BUFFER_SIZE
