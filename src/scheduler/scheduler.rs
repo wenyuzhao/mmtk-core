@@ -616,19 +616,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         // poll from global queue
         loop {
-            let mut retry = false;
             // Try get a packet from a work bucket.
             match self.active_bucket.poll(&worker.local_work_buffer) {
                 Steal::Success(w) => return Some(w),
-                Steal::Retry => {
-                    retry = true;
-                    continue;
-                }
+                Steal::Retry => continue,
                 _ => {}
             }
-            if !retry {
-                break;
-            }
+            break;
         }
         None
     }
