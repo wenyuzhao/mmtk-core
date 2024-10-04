@@ -1,6 +1,5 @@
 use address::CLDScanPolicy;
 use address::RefScanPolicy;
-use crossbeam::deque::Steal;
 use policy::immix::block::Block;
 
 use self::global_state::GcStatus;
@@ -1321,17 +1320,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                 }
                 let workers = &self.worker().scheduler().worker_group.workers_shared;
                 // Steal from other workers
-                if !worker.scheduler().work_buckets[WorkBucketStage::Closure].is_empty()
-                    || (worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
-                        .is_activated()
-                        && !worker.scheduler().work_buckets[WorkBucketStage::WeakRefClosure]
-                            .is_empty())
-                    || !worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].is_empty()
-                    || !worker.local_work_buffer.is_empty()
-                {
-                    break;
-                }
-                if let Steal::Success(w) = self.worker().scheduler().try_steal(worker) {
+                if let Some(w) = worker.scheduler().try_poll_or_steal(worker) {
                     worker.cache = Some(w);
                     break;
                 }

@@ -18,7 +18,6 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use crossbeam::deque::Steal;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "measure_trace_rate")]
 use std::sync::atomic::AtomicUsize;
@@ -421,7 +420,7 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
                         continue;
                     }
                     let workers = &worker.scheduler().worker_group.workers_shared;
-                    if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                    if let Some(w) = worker.scheduler().try_poll_or_steal(worker) {
                         worker.cache = Some(w);
                         break;
                     }
@@ -686,7 +685,7 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
                     continue;
                 }
                 let workers = &worker.scheduler().worker_group.workers_shared;
-                if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                if let Some(w) = worker.scheduler().try_poll_or_steal(worker) {
                     worker.cache = Some(w);
                     break;
                 }
@@ -1057,7 +1056,7 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                     self.process_slot(s);
                 }
                 let workers = &worker.scheduler().worker_group.workers_shared;
-                if let Steal::Success(w) = worker.scheduler().try_steal(worker) {
+                if let Some(w) = worker.scheduler().try_poll_or_steal(worker) {
                     worker.cache = Some(w);
                     break;
                 }
