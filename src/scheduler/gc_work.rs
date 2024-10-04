@@ -3,7 +3,6 @@ use address::RefScanPolicy;
 use policy::immix::block::Block;
 
 use self::global_state::GcStatus;
-use self::worker::GCWorkerShared;
 use super::work_bucket::BucketId;
 use super::*;
 use crate::plan::lxr::LXR;
