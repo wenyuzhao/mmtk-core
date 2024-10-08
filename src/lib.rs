@@ -226,6 +226,11 @@ impl Timer {
     pub fn ready(&self) -> bool {
         unsafe { (*self.0.get()).is_some() }
     }
+
+    #[allow(unused)]
+    pub fn elapsed_us_opt(&self) -> Option<u128> {
+        unsafe { (*self.0.get()).map(|v| v.elapsed().as_micros()) }
+    }
 }
 
 unsafe impl Sync for Timer {}
