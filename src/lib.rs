@@ -228,6 +228,11 @@ impl Timer {
             *self.0.get() = Some(Instant::now());
         }
     }
+
+    #[allow(unused)]
+    pub fn elapsed_us_opt(&self) -> Option<u128> {
+        unsafe { (*self.0.get()).map(|v| v.elapsed().as_micros()) }
+    }
 }
 
 unsafe impl Sync for Timer {}
