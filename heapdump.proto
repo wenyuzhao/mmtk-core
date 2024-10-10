@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package mmtk.util.sanity;
+
+message HeapDump {
+    repeated HeapObject objects = 1;
+    repeated RootEdge roots = 2;
+    repeated Space spaces = 3;
+}
+
+message RootEdge {
+    uint64 objref = 1;
+}
+
+message NormalEdge {
+    uint64 slot = 1;
+    uint64 objref = 2;
+}
+
+message HeapObject {
+    uint64 start = 1;
+    uint64 klass = 2;
+    uint64 size = 3;
+    optional uint64 objarray_length = 4;
+    optional uint64 instance_mirror_start = 5;
+    optional uint64 instance_mirror_count = 6;
+    repeated NormalEdge edges = 7;
+}
+
+message Space {
+    string name = 1;
+    uint64 start = 2;
+    uint64 end = 3;
+}

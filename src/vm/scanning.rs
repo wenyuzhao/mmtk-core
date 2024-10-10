@@ -403,4 +403,8 @@ pub trait Scanning<VM: VMBinding> {
         _tracer_context: impl ObjectTracerContext<VM>,
     ) {
     }
+
+    fn instance_mirror_info(_o: ObjectReference) -> Option<(u64, u64)> {
+        unimplemented!()
+    }
 }

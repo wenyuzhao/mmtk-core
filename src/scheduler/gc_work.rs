@@ -1206,6 +1206,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             }
         });
         self.plan.post_scan_object(object);
+        crate::util::heapdump::record::<VM>(self.roots, object);
     }
 }
 
