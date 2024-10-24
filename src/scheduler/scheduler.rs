@@ -18,7 +18,7 @@ use crate::vm::VMBinding;
 use crate::Pause;
 use crate::Plan;
 use crossbeam::deque::Steal;
-use enum_map::EnumMap;
+use enum_map::{Enum, EnumMap};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1204,12 +1204,13 @@ impl BucketGraph {
         }
     }
 
-    fn bucket_can_open(&self, b: BucketId) -> bool {
+    #[inline]
+    fn bucket_can_open(&self, curr_open: &[bool], b: BucketId) -> bool {
         if self.bucket_is_open(b) {
             return false;
         }
         for pred in &self.preds[b] {
-            if !self.bucket_is_open(*pred) {
+            if !self.bucket_is_open(*pred) && !curr_open[pred.into_usize()] {
                 return false;
             }
             if !pred.get_bucket().is_empty() {
@@ -1219,10 +1220,29 @@ impl BucketGraph {
         true
     }
 
-    fn update(&self, bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
+    fn update_successors(
+        &self,
+        b: BucketId,
+        all_open: &mut [bool],
+        curr_open: &mut [bool],
+    ) -> bool {
+        let mut updated = false;
+        for s in &self.succs[b] {
+            if self.bucket_can_open(all_open, *s) {
+                all_open[s.into_usize()] = true;
+                curr_open[s.into_usize()] = true;
+                updated = true;
+            }
+        }
+        updated
+    }
+
+    fn update(&self, emptied_bucket: Option<BucketId>, mut on_bucket_open: impl FnMut(BucketId)) {
         let _lock = self.lock.write().unwrap();
-        let mut open_buckets = vec![];
-        if let Some(b) = bucket {
+        let mut all_open = [false; BucketId::LENGTH];
+        let mut prev_open = [false; BucketId::LENGTH];
+        let mut updated = false;
+        if let Some(b) = emptied_bucket {
             if crate::GC_START_TIME.ready() {
                 gc_log!([3]
                     " - ({:.3}ms) Bucket {:?} finished",
@@ -1231,29 +1251,42 @@ impl BucketGraph {
                 );
             }
             // Check successors
-            for s in &self.succs[b] {
-                if self.bucket_can_open(*s) {
-                    open_buckets.push(*s);
-                }
-            }
+            updated |= self.update_successors(b, &mut all_open, &mut prev_open);
         } else {
             // Check all buckets
             for b in &self.all_buckets {
-                if self.bucket_can_open(*b) {
-                    open_buckets.push(*b);
+                if self.bucket_can_open(&all_open, *b) {
+                    all_open[b.into_usize()] = true;
+                    prev_open[b.into_usize()] = true;
+                    updated = true;
                 }
             }
         }
+        while updated {
+            updated = false;
+            let mut curr_open = [false; BucketId::LENGTH];
+            for i in 0..prev_open.len() {
+                if !prev_open[i] {
+                    continue;
+                }
+                let b = BucketId::from_usize(i);
+                updated |= self.update_successors(b, &mut all_open, &mut curr_open);
+            }
+            prev_open = curr_open;
+        }
         // If the newly opened bucket is empty, we can open its successors.
-        for b in open_buckets {
-            assert_ne!(Some(b), bucket);
+        for i in 0..all_open.len() {
+            if !all_open[i] {
+                continue;
+            }
+            let b = BucketId::from_usize(i);
+            assert_ne!(Some(b), emptied_bucket);
             b.get_bucket().open();
             on_bucket_open(b);
             if crate::GC_START_TIME.ready() {
                 gc_log!([3]
-                    " - ({:.3}ms) Bucket {:?} opened",
-                    crate::GC_START_TIME.elapsed_ms(),
-                    b
+                    " - ({:.3}ms) Bucket {:?} opened count={}",
+                    crate::GC_START_TIME.elapsed_ms(), b, b.get_bucket().count()
                 );
             }
         }
