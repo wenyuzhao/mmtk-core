@@ -525,7 +525,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 continue;
             }
             match worker_shared.stealer.as_ref().unwrap().steal() {
-                Steal::Success(w) => return Steal::Success(w),
+                Steal::Success(w) => {
+                    if cfg!(feature = "measure_steal") && crate::inside_harness() {
+                        crate::PACKET_STEALS.fetch_add(1, Ordering::SeqCst);
+                        if w.1.is_transitive_closure() {
+                            crate::TC_PACKET_STEALS.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    return Steal::Success(w);
+                }
                 Steal::Retry => should_retry = true,
                 _ => {}
             }
