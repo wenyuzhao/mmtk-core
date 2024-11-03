@@ -297,6 +297,12 @@ impl<VM: VMBinding> GCWorker<VM> {
                 // The worker is asked to exit.  Break from the loop.
                 break;
             };
+            if cfg!(feature = "measure_steal") && crate::inside_harness() {
+                crate::PACKETS.fetch_add(1, Ordering::SeqCst);
+                if work.is_transitive_closure() {
+                    crate::TC_PACKETS.fetch_add(1, Ordering::SeqCst);
+                }
+            }
             // probe! expands to an empty block on unsupported platforms
             #[allow(unused_variables)]
             #[cfg(feature = "tracing")]

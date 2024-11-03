@@ -993,11 +993,27 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 "time.stw.norelease".to_owned(),
                 format!("{:.2}", time as f64 / 1000.0),
             );
-            const PRETTY: bool = true;
-            if PRETTY {
-                for (k, v) in stat.iter() {
-                    println!("{}: {}", k, v);
-                }
+        }
+        if cfg!(feature = "measure_steal") {
+            let total = crate::PACKETS.load(Ordering::SeqCst);
+            stat.insert("packets".to_owned(), format!("{}", total));
+            let steals = crate::PACKET_STEALS.load(Ordering::SeqCst);
+            stat.insert("packets.steal".to_owned(), format!("{}", steals));
+            let total = crate::TC_PACKETS.load(Ordering::SeqCst);
+            stat.insert("packets.trace".to_owned(), format!("{}", total));
+            let steals = crate::TC_PACKET_STEALS.load(Ordering::SeqCst);
+            stat.insert("packets.trace.steal".to_owned(), format!("{}", steals));
+            let total = crate::ITEMS.load(Ordering::SeqCst);
+            stat.insert("items".to_owned(), format!("{}", total));
+            let steals = crate::ITEM_STEALS.load(Ordering::SeqCst);
+            stat.insert("items.steal".to_owned(), format!("{}", steals));
+            let attempts = crate::ITEM_STEAL_ATTEPMTS.load(Ordering::SeqCst);
+            stat.insert("items.steal.attempts".to_owned(), format!("{}", attempts));
+        }
+        const PRETTY: bool = false;
+        if PRETTY {
+            for (k, v) in stat.iter() {
+                println!("{}: {}", k, v);
             }
         }
         stat

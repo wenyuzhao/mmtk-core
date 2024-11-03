@@ -811,6 +811,10 @@ impl<E: ProcessEdgesWork> GCWork for E {
         }
         trace!("ProcessEdgesWork End");
     }
+
+    fn is_transitive_closure(&self) -> bool {
+        true
+    }
 }
 
 /// A general implementation of [`ProcessEdgesWork`] using SFT. A plan can always implement their

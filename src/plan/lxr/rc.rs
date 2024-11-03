@@ -617,6 +617,10 @@ impl<S: Slot> DerefMut for AddressBuffer<S> {
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
+    fn is_transitive_closure(&self) -> bool {
+        true
+    }
+
     fn do_work(&mut self) {
         let worker = GCWorker::<VM>::current();
         let mmtk = worker.mmtk;
