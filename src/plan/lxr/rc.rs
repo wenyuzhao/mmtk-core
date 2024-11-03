@@ -60,6 +60,9 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     #[cfg(feature = "measure_rc_rate")]
     copy_objs: usize,
     pushes: usize,
+    items: usize,
+    steals: usize,
+    steal_attempts: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -99,6 +102,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             #[cfg(feature = "measure_rc_rate")]
             copy_objs: 0,
             pushes: 0,
+            items: 0,
+            steals: 0,
+            steal_attempts: 0,
         }
     }
 
@@ -492,6 +498,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         depth: u32,
         add_root_to_remset: bool,
     ) -> Option<ObjectReference> {
+        if cfg!(feature = "measure_steal") {
+            self.items += 1;
+        }
         let o = match self.unlog_and_load_rc_object::<K>(s) {
             Some(o) => o,
             _ => {
@@ -630,6 +639,10 @@ impl<S: Slot> DerefMut for AddressBuffer<S> {
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
+    fn is_transitive_closure(&self) -> bool {
+        true
+    }
+
     fn do_work(&mut self) {
         let worker = GCWorker::<VM>::current();
         let mmtk = worker.mmtk;
@@ -754,7 +767,14 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
                 if !self.incs.is_empty() || !worker.deque.is_empty() {
                     continue;
                 }
-                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                if let Some(s) =
+                    worker.steal_from_others(&worker.deque, Some(&mut self.steal_attempts), |x| {
+                        &x.deque_stealer
+                    })
+                {
+                    if cfg!(feature = "measure_steal") {
+                        self.steals += 1;
+                    }
                     self.process_slot::<EDGE_KIND_NURSERY>(s, depth, false);
                     continue;
                 }
@@ -803,6 +823,12 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork for ProcessIncs<VM, KIND> {
             INC_PACKETS.fetch_add(1, Ordering::SeqCst);
             INC_OBJS.fetch_add(self.inc_objs, Ordering::SeqCst);
             COPY_OBJS.fetch_add(self.copy_objs, Ordering::SeqCst);
+        }
+        if cfg!(feature = "measure_steal") && crate::inside_harness() {
+            crate::ITEMS.fetch_add(self.items, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEALS.fetch_add(self.steals, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEAL_ATTEPMTS
+                .fetch_add(self.steal_attempts, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }
@@ -1133,7 +1159,7 @@ impl<VM: VMBinding> GCWork for ProcessDecs<VM> {
                     continue;
                 }
                 if let Some(o) =
-                    worker.steal_from_others(&worker.obj_deque, |x| &x.obj_deque_stealer)
+                    worker.steal_from_others(&worker.obj_deque, None, |x| &x.obj_deque_stealer)
                 {
                     self.process_dec(o, lxr);
                     continue;

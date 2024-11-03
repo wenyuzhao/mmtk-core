@@ -1,5 +1,6 @@
 use address::CLDScanPolicy;
 use address::RefScanPolicy;
+use atomic_traits::fetch::Add;
 use policy::immix::block::Block;
 
 use self::global_state::GcStatus;
@@ -811,6 +812,10 @@ impl<E: ProcessEdgesWork> GCWork for E {
         }
         trace!("ProcessEdgesWork End");
     }
+
+    fn is_transitive_closure(&self) -> bool {
+        true
+    }
 }
 
 /// A general implementation of [`ProcessEdgesWork`] using SFT. A plan can always implement their
@@ -1130,6 +1135,9 @@ pub struct PlanProcessEdges<
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
     pushes: usize,
+    steals: usize,
+    steal_attepmts: usize,
+    items: usize,
 }
 
 impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> ProcessEdgesWork
@@ -1150,6 +1158,9 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             plan,
             base,
             pushes: 0,
+            steals: 0,
+            steal_attepmts: 0,
+            items: 0,
         }
     }
 
@@ -1255,6 +1266,9 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     #[inline]
     fn __process_slot<const IX: bool, const WEAK_ROOT: bool>(&mut self, slot: SlotOf<Self>) {
+        if cfg!(feature = "measure_steal") {
+            self.items += 1;
+        }
         let Some(object) = slot.load() else { return };
         if IX && WEAK_ROOT && !Block::containing::<VM>(object).is_defrag_source() {
             return;
@@ -1285,7 +1299,14 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
                     self.__process_slot::<IX, false>(slot);
                 }
                 // Steal from other workers
-                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                if let Some(s) =
+                    worker.steal_from_others(&worker.deque, Some(&mut self.steal_attepmts), |x| {
+                        &x.deque_stealer
+                    })
+                {
+                    if cfg!(feature = "measure_steal") {
+                        self.steals += 1;
+                    }
                     self.__process_slot::<IX, false>(s);
                     continue;
                 }
@@ -1295,6 +1316,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             while let Some(slot) = self.slots.pop() {
                 self.__process_slot::<IX, false>(slot);
             }
+        }
+        if cfg!(feature = "measure_steal") && crate::inside_harness() {
+            crate::ITEMS.fetch_add(self.items, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEALS.fetch_add(self.steals, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEAL_ATTEPMTS
+                .fetch_add(self.steal_attepmts, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }

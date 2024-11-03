@@ -745,3 +745,11 @@ static RC_STAT: RCStat = RCStat {
     los_rec_incs: AtomicUsize::new(0),
     roots: AtomicUsize::new(0),
 };
+
+static ITEMS: AtomicUsize = AtomicUsize::new(0);
+static ITEM_STEALS: AtomicUsize = AtomicUsize::new(0);
+static ITEM_STEAL_ATTEPMTS: AtomicUsize = AtomicUsize::new(0);
+static PACKETS: AtomicUsize = AtomicUsize::new(0);
+static PACKET_STEALS: AtomicUsize = AtomicUsize::new(0);
+static TC_PACKETS: AtomicUsize = AtomicUsize::new(0);
+static TC_PACKET_STEALS: AtomicUsize = AtomicUsize::new(0);

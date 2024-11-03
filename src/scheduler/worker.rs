@@ -342,6 +342,12 @@ impl<VM: VMBinding> GCWorker<VM> {
                 // The worker is asked to exit.  Break from the loop.
                 break;
             };
+            if cfg!(feature = "measure_steal") && crate::inside_harness() {
+                crate::PACKETS.fetch_add(1, Ordering::SeqCst);
+                if work.is_transitive_closure() {
+                    crate::TC_PACKETS.fetch_add(1, Ordering::SeqCst);
+                }
+            }
             // probe! expands to an empty block on unsupported platforms
             #[allow(unused_variables)]
             #[cfg(feature = "tracing")]
@@ -411,6 +417,7 @@ impl<VM: VMBinding> GCWorker<VM> {
     pub fn steal_from_others<T>(
         &self,
         deque: &ItemWorker<T>,
+        attempts: Option<&mut usize>,
         stealer: impl Fn(&GCWorkerShared<VM>) -> &ItemStealer<T>,
     ) -> Option<T> {
         if let Some(w) = self.scheduler().try_poll_or_steal(self) {
@@ -419,10 +426,16 @@ impl<VM: VMBinding> GCWorker<VM> {
         }
         let workers = &self.scheduler().worker_group.workers_shared;
         let n = workers.len();
-        for _i in 0..n / 2 {
+        for i in 0..n / 2 {
             if let Some(s) = self.steal_best_of_2(&deque, workers, &stealer) {
+                if let Some(attempts) = attempts {
+                    *attempts += i + 1;
+                }
                 return Some(s);
             }
+        }
+        if let Some(attempts) = attempts {
+            *attempts += n / 2;
         }
         None
     }

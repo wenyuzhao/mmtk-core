@@ -440,8 +440,8 @@ impl<VM: VMBinding> GCWork for LXRConcurrentTraceObjects<VM> {
                     if self.should_defer() {
                         break;
                     }
-                    if let Some(o) =
-                        worker.steal_from_others(&worker.satb_deque, |x| &x.satb_deque_stealer)
+                    if let Some(o) = worker
+                        .steal_from_others(&worker.satb_deque, None, |x| &x.satb_deque_stealer)
                     {
                         self.trace_object(o);
                         continue;
@@ -590,6 +590,9 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const FULL_GC: bool> {
     refs: Vec<ObjectReference>,
     should_record_forwarded_roots: bool,
     pushes: usize,
+    steals: usize,
+    items: usize,
+    steal_attempts: usize,
 }
 
 impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC> {
@@ -637,6 +640,9 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
             refs: vec![],
             should_record_forwarded_roots: false,
             pushes: 0,
+            steals: 0,
+            items: 0,
+            steal_attempts: 0,
         }
     }
 
@@ -701,7 +707,14 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
                 if !self.slots.is_empty() || !worker.deque.is_empty() {
                     continue;
                 }
-                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                if let Some(s) =
+                    worker.steal_from_others(&worker.deque, Some(&mut self.steal_attempts), |x| {
+                        &x.deque_stealer
+                    })
+                {
+                    if cfg!(feature = "measure_steal") {
+                        self.steals += 1;
+                    }
                     self.__process_slot::<false, false>(s, 0);
                     continue;
                 }
@@ -726,6 +739,12 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
         if should_record_forwarded_roots {
             let roots = std::mem::take(&mut self.forwarded_roots);
             self.lxr.curr_roots.read().unwrap().push(roots);
+        }
+        if cfg!(feature = "measure_steal") && crate::inside_harness() {
+            crate::ITEMS.fetch_add(self.items, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEALS.fetch_add(self.steals, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEAL_ATTEPMTS
+                .fetch_add(self.steal_attempts, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -841,6 +860,9 @@ impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC
         slot: SlotOf<Self>,
         i: usize,
     ) {
+        if cfg!(feature = "measure_steal") {
+            self.items += 1;
+        }
         let Some(object) = slot.load() else {
             return;
         };
@@ -982,6 +1004,9 @@ pub struct LXRWeakRefProcessEdges<VM: VMBinding> {
     pause: Pause,
     base: ProcessEdgesBase<VM>,
     pushes: usize,
+    steals: usize,
+    items: usize,
+    steal_attempts: usize,
 }
 
 impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
@@ -1005,6 +1030,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             base,
             pause: Pause::RefCount,
             pushes: 0,
+            steals: 0,
+            items: 0,
+            steal_attempts: 0,
         }
     }
 
@@ -1045,6 +1073,9 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
     }
 
     fn process_slot(&mut self, slot: SlotOf<Self>) {
+        if cfg!(feature = "measure_steal") {
+            self.items += 1;
+        }
         let Some(object) = slot.load() else {
             return;
         };
@@ -1062,7 +1093,14 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                 while let Some(s) = self.slots.pop().or_else(|| worker.deque.pop()) {
                     self.process_slot(s);
                 }
-                if let Some(s) = worker.steal_from_others(&worker.deque, |x| &x.deque_stealer) {
+                if let Some(s) =
+                    worker.steal_from_others(&worker.deque, Some(&mut self.steal_attempts), |x| {
+                        &x.deque_stealer
+                    })
+                {
+                    if cfg!(feature = "measure_steal") {
+                        self.steals += 1;
+                    }
                     self.process_slot(s);
                     continue;
                 }
@@ -1077,6 +1115,12 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
             crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
         }
         self.flush();
+        if cfg!(feature = "measure_steal") && crate::inside_harness() {
+            crate::ITEMS.fetch_add(self.items, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEALS.fetch_add(self.steals, std::sync::atomic::Ordering::SeqCst);
+            crate::ITEM_STEAL_ATTEPMTS
+                .fetch_add(self.steal_attempts, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     fn create_scan_work(&self, _nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
