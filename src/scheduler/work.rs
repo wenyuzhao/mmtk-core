@@ -19,6 +19,9 @@ pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
     fn is_concurrent_marking_work(&self) -> bool {
         false
     }
+    fn is_transitive_closure(&self) -> bool {
+        false
+    }
     /// Define the work for this packet. However, this is not supposed to be called directly.
     /// Usually `do_work_with_stat()` should be used.
     ///

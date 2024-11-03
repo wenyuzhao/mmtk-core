@@ -767,6 +767,9 @@ pub trait ProcessEdgesWork:
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
+    fn is_transitive_closure(&self) -> bool {
+        true
+    }
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         self.set_worker(worker);
         #[cfg(feature = "sanity")]

@@ -618,6 +618,10 @@ impl<S: Slot> DerefMut for AddressBuffer<S> {
 }
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
+    fn is_transitive_closure(&self) -> bool {
+        true
+    }
+
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         #[cfg(any(feature = "log_outstanding_packets", feature = "measure_rc_rate"))]
         let t = std::time::SystemTime::now();
