@@ -751,5 +751,7 @@ static ITEM_STEALS: AtomicUsize = AtomicUsize::new(0);
 static ITEM_STEAL_ATTEPMTS: AtomicUsize = AtomicUsize::new(0);
 static PACKETS: AtomicUsize = AtomicUsize::new(0);
 static PACKET_STEALS: AtomicUsize = AtomicUsize::new(0);
+static PACKET_STEALS2: AtomicUsize = AtomicUsize::new(0);
 static TC_PACKETS: AtomicUsize = AtomicUsize::new(0);
 static TC_PACKET_STEALS: AtomicUsize = AtomicUsize::new(0);
+static TC_PACKET_STEALS2: AtomicUsize = AtomicUsize::new(0);

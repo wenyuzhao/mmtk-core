@@ -522,7 +522,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         // Try steal some packets from any worker
         if cfg!(feature = "random_packet_stealing") {
-            return self.try_steal(worker);
+            return self.try_steal(worker, false);
         } else {
             for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
                 if id == worker.ordinal {
@@ -596,7 +596,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Get a schedulable work packet without retry.
-    fn try_steal(&self, worker: &GCWorker<VM>) -> Steal<(BucketId, Box<dyn GCWork>)> {
+    fn try_steal(
+        &self,
+        worker: &GCWorker<VM>,
+        in_packet: bool,
+    ) -> Steal<(BucketId, Box<dyn GCWork>)> {
         for _ in 0..self.worker_group.workers_shared.len() * 2 {
             if let Steal::Success(slot) = Self::steal_best_of_2(
                 worker.ordinal,
@@ -605,8 +609,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             ) {
                 if cfg!(feature = "measure_steal") && crate::inside_harness() {
                     crate::PACKET_STEALS.fetch_add(1, Ordering::SeqCst);
+                    if !in_packet {
+                        crate::PACKET_STEALS2.fetch_add(1, Ordering::SeqCst);
+                    }
                     if slot.1.is_transitive_closure() {
                         crate::TC_PACKET_STEALS.fetch_add(1, Ordering::SeqCst);
+                        if !in_packet {
+                            crate::TC_PACKET_STEALS2.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
                 }
                 return Steal::Success(slot);
@@ -617,7 +627,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn try_poll_or_steal(&self, worker: &GCWorker<VM>) -> Option<(BucketId, Box<dyn GCWork>)> {
         // steal
-        if let Steal::Success(w) = self.try_steal(worker) {
+        if let Steal::Success(w) = self.try_steal(worker, true) {
             return Some(w);
         }
         // poll from global queue
@@ -1095,15 +1105,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             stat.insert("packets".to_owned(), format!("{}", total));
             let steals = crate::PACKET_STEALS.load(Ordering::SeqCst);
             stat.insert("packets.steal".to_owned(), format!("{}", steals));
+            let steals = crate::PACKET_STEALS2.load(Ordering::SeqCst);
+            stat.insert("packets.steal2".to_owned(), format!("{}", steals));
             let total = crate::TC_PACKETS.load(Ordering::SeqCst);
             stat.insert("packets.trace".to_owned(), format!("{}", total));
             let steals = crate::TC_PACKET_STEALS.load(Ordering::SeqCst);
             stat.insert("packets.trace.steal".to_owned(), format!("{}", steals));
+            let steals = crate::TC_PACKET_STEALS2.load(Ordering::SeqCst);
+            stat.insert("packets.trace.steal2".to_owned(), format!("{}", steals));
             let total = crate::ITEMS.load(Ordering::SeqCst);
             stat.insert("items".to_owned(), format!("{}", total));
             let steals = crate::ITEM_STEALS.load(Ordering::SeqCst);
             stat.insert("items.steal".to_owned(), format!("{}", steals));
-            let attempts = crate::ITEM_STEALS.load(Ordering::SeqCst);
+            let attempts = crate::ITEM_STEAL_ATTEPMTS.load(Ordering::SeqCst);
             stat.insert("items.steal.attempts".to_owned(), format!("{}", attempts));
         }
         const PRETTY: bool = false;
