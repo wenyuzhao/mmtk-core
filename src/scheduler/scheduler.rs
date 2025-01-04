@@ -9,6 +9,7 @@ use super::worker_monitor::{LastParkedResult, WorkerMonitor};
 use super::*;
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
+use crate::plan::immix::Immix;
 use crate::plan::lxr::LXR;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
@@ -915,13 +916,21 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
-    pub fn statistics(&self) -> HashMap<String, String> {
+    pub fn statistics(&self, mmtk: &'static MMTK<VM>) -> HashMap<String, String> {
         let mut summary = SchedulerStat::default();
         for worker in &self.worker_group.workers_shared {
             let worker_stat = worker.borrow_stat();
             summary.merge(&worker_stat);
         }
         let mut stat = summary.harness_stat();
+        if cfg!(feature = "ix_dump_holes") {
+            if let Some(p) = mmtk.get_plan().downcast_ref::<LXR<VM>>() {
+                p.immix_space.dump_holes_final(&mut stat);
+            }
+            if let Some(p) = mmtk.get_plan().downcast_ref::<Immix<VM>>() {
+                p.immix_space.dump_holes_final(&mut stat);
+            }
+        }
         if crate::plan::barriers::TAKERATE_MEASUREMENT {
             let fast = crate::plan::barriers::FAST_COUNT.load(Ordering::SeqCst);
             let slow = crate::plan::barriers::SLOW_COUNT.load(Ordering::SeqCst);

@@ -33,6 +33,7 @@ use crate::{
 use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
 use crossbeam::queue::SegQueue;
+use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
@@ -80,6 +81,11 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
     pub(super) evac_set: MatureEvacuationSet,
+    skipped_holes: Vec<AtomicUsize>,
+    all_skipped_holes: Vec<AtomicUsize>,
+    pub medium_slow: AtomicUsize,
+    pub medium_slow_hit_holes: AtomicUsize,
+    pub medium_slow_no_small_tlab: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -431,6 +437,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
             evac_set: MatureEvacuationSet::default(),
+            skipped_holes: (0..(Block::BYTES / Line::BYTES + 1))
+                .map(|_| AtomicUsize::new(0))
+                .collect(),
+            all_skipped_holes: (0..(Block::BYTES / Line::BYTES + 1))
+                .map(|_| AtomicUsize::new(0))
+                .collect(),
+            medium_slow: AtomicUsize::new(0),
+            medium_slow_hit_holes: AtomicUsize::new(0),
+            medium_slow_no_small_tlab: AtomicUsize::new(0),
         }
     }
 
@@ -942,6 +957,95 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             &mut dist.cm_live_words_in_block,
             Block::BYTES >> 3,
         );
+    }
+
+    pub fn dump_holes_final(&self, stat: &mut HashMap<String, String>) {
+        eprintln!("HOLES--FINAL");
+        let mut skipped_holes = vec![0usize; Block::BYTES / Line::BYTES + 1];
+        for i in 0..(Block::BYTES / Line::BYTES + 1) {
+            let v = self.all_skipped_holes[i].load(Ordering::Relaxed);
+            skipped_holes[i] = v;
+        }
+        eprintln!("SKIPPED-HOLES: {:?}", skipped_holes);
+        eprintln!("MED-SLOW: {}", self.medium_slow.load(Ordering::Relaxed));
+        eprintln!(
+            "MED-SLOW-HIT-HOLES: {}",
+            self.medium_slow_hit_holes.load(Ordering::Relaxed)
+        );
+        eprintln!(
+            "MED-SLOW-NO-SMALL-TLAB: {}",
+            self.medium_slow_no_small_tlab.load(Ordering::Relaxed)
+        );
+        stat.insert(
+            "medium_slow".to_string(),
+            self.medium_slow.load(Ordering::Relaxed).to_string(),
+        );
+        stat.insert(
+            "medium_slow_hit".to_string(),
+            self.medium_slow_hit_holes
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        stat.insert(
+            "medium_slow_no_small_tlab".to_string(),
+            self.medium_slow_no_small_tlab
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+    }
+
+    pub fn dump_holes(&self, gc_start: bool) {
+        if gc_start {
+            eprintln!("HOLES--GC-START");
+        } else {
+            eprintln!("HOLES--GC-END");
+        }
+        let mut hole_sizes = vec![0usize; Block::BYTES / Line::BYTES + 1];
+        for chunk in self.chunk_map.all_chunks() {
+            if !self.address_in_space(chunk.start()) {
+                continue;
+            }
+            for block in chunk
+                .iter_region::<Block>()
+                .filter(|b| b.get_state() != BlockState::Unallocated)
+            {
+                block.iter_holes(|lines| hole_sizes[lines] += 1);
+            }
+        }
+        eprintln!("HOLES: {:?}", hole_sizes);
+        let mut skipped_holes = vec![0usize; Block::BYTES / Line::BYTES + 1];
+        for i in 0..(Block::BYTES / Line::BYTES + 1) {
+            let v = self.skipped_holes[i].load(Ordering::Relaxed);
+            skipped_holes[i] = v;
+            self.skipped_holes[i].store(0, Ordering::Relaxed);
+            self.all_skipped_holes[i].fetch_add(v, Ordering::Relaxed);
+        }
+        eprintln!("SKIPPED-HOLES: {:?}", skipped_holes);
+    }
+
+    pub fn record_skipped_holes(&self, size: usize, block: Option<Block>, cursor: usize) {
+        let mut found_hole = false;
+        if let Some(block) = block {
+            block.iter_holes_from(cursor, |lines| {
+                if found_hole {
+                    return;
+                }
+                let hole_size = lines << Line::LOG_BYTES;
+                if hole_size < size {
+                    self.skipped_holes[lines].fetch_add(1, Ordering::Relaxed);
+                } else {
+                    found_hole = true;
+                }
+            });
+        }
+        if found_hole {
+            self.medium_slow_hit_holes.fetch_add(1, Ordering::Relaxed);
+        }
+        if block.is_none() {
+            self.medium_slow_no_small_tlab
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        self.medium_slow.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Release a block.

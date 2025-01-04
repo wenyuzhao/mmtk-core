@@ -131,10 +131,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
         Block::update_global_phase_epoch(&self.immix_space);
+        if cfg!(feature = "ix_dump_holes") {
+            self.immix_space.dump_holes(true);
+        }
     }
 
     fn gc_pause_end(&self) {
         Block::update_global_phase_epoch(&self.immix_space);
+        if cfg!(feature = "ix_dump_holes") {
+            self.immix_space.dump_holes(false);
+        }
     }
 
     fn get_collection_reserved_pages(&self) -> usize {

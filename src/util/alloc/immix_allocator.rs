@@ -289,11 +289,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// Large-object (larger than a line) bump allocation.
     fn overflow_alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("{:?}: overflow_alloc", self.tls);
+        if cfg!(feature = "ix_dump_holes") {
+            if !self.retry {
+                if let Some(line) = self.line {
+                    let i = line.get_index_within_block();
+                    let block = line.block();
+                    self.space.record_skipped_holes(size, Some(block), i);
+                } else {
+                    self.space.record_skipped_holes(size, None, 0);
+                }
+            }
+        }
         let start = align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset);
         let end = start + size;
         if end > self.large_bump_pointer.limit {
             self.request_for_large = true;
+            let retry = self.retry;
+            self.retry = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
+            self.retry = retry;
             self.request_for_large = false;
             rtn
         } else {

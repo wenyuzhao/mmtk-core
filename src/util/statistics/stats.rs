@@ -184,7 +184,7 @@ impl Stats {
     }
 
     pub fn print_stats<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
-        let scheduler_stat = mmtk.scheduler.statistics();
+        let scheduler_stat = mmtk.scheduler.statistics(mmtk);
         println!(
             "============================ MMTk Statistics Totals ============================"
         );

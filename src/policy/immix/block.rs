@@ -800,9 +800,9 @@ impl Block {
         false
     }
 
-    pub fn iter_holes(&self, mut f: impl FnMut(usize)) {
+    pub fn iter_holes_from(&self, start: usize, mut f: impl FnMut(usize)) {
         let rc_array = RCArray::of(*self);
-        let mut i = 0;
+        let mut i = start;
         while i < Block::LINES {
             if rc_array.is_dead(i) {
                 let mut j = i + 1;
@@ -812,12 +812,22 @@ impl Block {
                     }
                     j += 1;
                 }
-                f(j - i);
+                let mut n = j - i;
+                if i != 0 {
+                    n -= 1;
+                }
+                if n > 0 {
+                    f(j - i);
+                }
                 i = j;
             } else {
                 i += 1;
             }
         }
+    }
+
+    pub fn iter_holes(&self, f: impl FnMut(usize)) {
+        self.iter_holes_from(0, f);
     }
 
     pub fn calc_holes(&self) -> usize {

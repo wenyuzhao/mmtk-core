@@ -429,6 +429,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             gc_log!([3] "POSTPONED {} DELETED OBJS FOR DECREMENT", self.barrier_decs.load(Ordering::SeqCst));
             self.barrier_decs.store(0, Ordering::SeqCst);
         }
+        if cfg!(feature = "ix_dump_holes") {
+            self.immix_space.dump_holes(true);
+        }
     }
 
     fn gc_pause_end(&self) {
@@ -477,6 +480,9 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
+        }
+        if cfg!(feature = "ix_dump_holes") {
+            self.immix_space.dump_holes(false);
         }
     }
 

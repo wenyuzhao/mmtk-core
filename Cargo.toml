@@ -203,6 +203,7 @@ lxr_fixed_rc_trigger = []
 fixed_clean_alloc_trigger_based_on_system_time = []
 enable_sysinfo = []
 regex = ["dep:regex"]
+ix_dump_holes = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
