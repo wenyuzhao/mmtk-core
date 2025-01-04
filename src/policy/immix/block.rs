@@ -800,7 +800,7 @@ impl Block {
         false
     }
 
-    pub fn iter_holes_from(&self, start: usize, mut f: impl FnMut(usize)) {
+    pub fn rc_iter_holes_from(&self, start: usize, mut f: impl FnMut(usize)) {
         let rc_array = RCArray::of(*self);
         let mut i = start;
         while i < Block::LINES {
@@ -826,8 +826,58 @@ impl Block {
         }
     }
 
-    pub fn iter_holes(&self, f: impl FnMut(usize)) {
-        self.iter_holes_from(0, f);
+    pub fn ix_iter_holes_from<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        start: usize,
+        mut f: impl FnMut(usize),
+    ) {
+        let unavail_state = space.line_unavail_state.load(Ordering::Acquire);
+        let current_state = space.line_mark_state.load(Ordering::Acquire);
+        let mark_data = self.line_mark_table();
+        let is_dead = |i: usize| {
+            let mark = mark_data.get(i);
+            mark != unavail_state && mark != current_state
+        };
+        let mut i = start;
+        while i < Block::LINES {
+            if is_dead(i) {
+                let mut j = i + 1;
+                while j < Block::LINES {
+                    if !is_dead(j) {
+                        break;
+                    }
+                    j += 1;
+                }
+                let mut n = j - i;
+                if i != 0 {
+                    n -= 1;
+                }
+                if n > 0 {
+                    f(j - i);
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    pub fn iter_holes_from<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        i: usize,
+        f: impl FnMut(usize),
+    ) {
+        if space.rc_enabled {
+            self.rc_iter_holes_from(i, f);
+        } else {
+            self.ix_iter_holes_from(space, i, f);
+        }
+    }
+
+    pub fn iter_holes<VM: VMBinding>(&self, space: &ImmixSpace<VM>, f: impl FnMut(usize)) {
+        self.iter_holes_from(space, 0, f);
     }
 
     pub fn calc_holes(&self) -> usize {

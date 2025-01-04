@@ -54,7 +54,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Current line mark state
     pub line_mark_state: AtomicU8,
     /// Line mark state in previous GC
-    line_unavail_state: AtomicU8,
+    pub line_unavail_state: AtomicU8,
     /// Defrag utilities
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
@@ -849,7 +849,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 dist.avail_pages_in_block.push(avail_pages_in_block);
                 dist.avail_lines_in_block.push(avail_lines_in_block);
                 // Get contig_avail_lines
-                block.iter_holes(|lines| dist.contig_avail_lines.push(lines as u8));
+                block.iter_holes(self, |lines| dist.contig_avail_lines.push(lines as u8));
                 // Get rc_live_bytes_in_block
                 let mut rc_live_size: usize = 0;
                 let mut cm_live_size: usize = 0;
@@ -1005,11 +1005,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if !self.address_in_space(chunk.start()) {
                 continue;
             }
+            if self.chunk_map.get(chunk) != ChunkState::Allocated {
+                continue;
+            }
             for block in chunk
                 .iter_region::<Block>()
                 .filter(|b| b.get_state() != BlockState::Unallocated)
             {
-                block.iter_holes(|lines| hole_sizes[lines] += 1);
+                block.iter_holes(self, |lines| hole_sizes[lines] += 1);
             }
         }
         eprintln!("HOLES: {:?}", hole_sizes);
@@ -1026,7 +1029,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn record_skipped_holes(&self, size: usize, block: Option<Block>, cursor: usize) {
         let mut found_hole = false;
         if let Some(block) = block {
-            block.iter_holes_from(cursor, |lines| {
+            block.iter_holes_from(self, cursor, |lines| {
                 if found_hole {
                     return;
                 }
