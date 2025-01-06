@@ -187,6 +187,12 @@ pub fn alloc<VM: VMBinding>(
         if semantics == AllocationSemantics::Los {
             s.alloc_los_objects += 1;
             s.alloc_los_volume += size;
+        } else if size <= 256 {
+            s.alloc_small_objects += 1;
+            s.alloc_small_volume += size;
+        } else {
+            s.alloc_medium_objects += 1;
+            s.alloc_medium_volume += size;
         }
     });
     // MMTk has assumptions about minimal object size.
