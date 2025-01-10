@@ -120,7 +120,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
-        .alloc(size, align, offset)
+        .alloc_outer(size, align, offset)
     }
 
     fn alloc_slow(

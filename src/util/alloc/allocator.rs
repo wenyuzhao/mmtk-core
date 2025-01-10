@@ -194,6 +194,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `offset` the required offset in bytes.
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address;
 
+    fn alloc_outer(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        self.alloc(size, align, offset)
+    }
+
     /// Slowpath allocation attempt. This function is explicitly not inlined for performance
     /// considerations.
     ///

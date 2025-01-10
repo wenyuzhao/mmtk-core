@@ -175,6 +175,21 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn get_thread_local_buffer_granularity(&self) -> usize {
         crate::policy::immix::block::Block::BYTES
     }
+    fn alloc_outer(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
+        let new_cursor = result + size;
+
+        if new_cursor > self.bump_pointer.limit {
+            crate::stat(|s| {
+                if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+                    s.alloc_medium_objects_slow += 1;
+                } else {
+                    s.alloc_small_objects_slow += 1;
+                }
+            });
+        }
+        self.alloc(size, align, offset)
+    }
 
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
         // debug_assert!(
@@ -191,9 +206,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
-            if (self.copy || !crate::args().no_mutator_line_recycling)
-                && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES
-            {
+            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
                 self.overflow_alloc(size, align, offset)
             } else {
