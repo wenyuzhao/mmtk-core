@@ -36,6 +36,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     block: Option<Block>,
+    sm_block: Option<Block>,
     large_block: Option<Block>,
     mutator_recycled_blocks: Box<Vec<Block>>,
     local_clean_blocks: Box<Vec<Block>>,
@@ -56,6 +57,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.request_for_large = false;
         self.line = None;
+        self.block = None;
     }
 
     pub fn reset(&mut self) {
@@ -278,6 +280,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             block: None,
+            sm_block: None,
             large_block: None,
             mutator_recycled_blocks: Box::new(vec![]),
             mutator_recycled_lines: 0,
@@ -344,6 +347,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
+            if line == self.sm_block.unwrap().end_line() {
+                self.line = None;
+                continue;
+            }
             if let Some((start_line, end_line)) =
                 self.immix_space().get_next_available_lines(self.copy, line)
             {
@@ -377,14 +384,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
                         <= self.bump_pointer.limit
                 );
-                let block = line.block();
-                self.line = if end_line == block.end_line() {
-                    // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
-                    None
-                } else {
-                    // Update the hole-searching cursor to None.
-                    Some(end_line)
-                };
+                self.line = Some(end_line);
                 return true;
             } else {
                 // No more recyclable lines. Set the hole-searching cursor to None.
@@ -408,6 +408,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // Set the hole-searching cursor to the start of this block.
 
                 self.line = Some(block.start_line());
+                self.sm_block = Some(block);
                 self.set_allocating_block(block);
 
                 true
