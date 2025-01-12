@@ -86,6 +86,9 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub medium_slow: AtomicUsize,
     pub medium_slow_hit_holes: AtomicUsize,
     pub medium_slow_no_small_tlab: AtomicUsize,
+    pub medium_slow_refill: AtomicUsize,
+    pub medium_slow_refill_success: AtomicUsize,
+    pub medium_slow_refill_alloc_success: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -446,6 +449,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             medium_slow: AtomicUsize::new(0),
             medium_slow_hit_holes: AtomicUsize::new(0),
             medium_slow_no_small_tlab: AtomicUsize::new(0),
+            medium_slow_refill: AtomicUsize::new(0),
+            medium_slow_refill_success: AtomicUsize::new(0),
+            medium_slow_refill_alloc_success: AtomicUsize::new(0),
         }
     }
 
@@ -976,6 +982,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "MED-SLOW-NO-SMALL-TLAB: {}",
             self.medium_slow_no_small_tlab.load(Ordering::Relaxed)
         );
+        eprintln!(
+            "MED-SLOW-REFILL: {}",
+            self.medium_slow_refill.load(Ordering::Relaxed)
+        );
+        eprintln!(
+            "MED-SLOW-REFILL-SUCCESS: {}",
+            self.medium_slow_refill_success.load(Ordering::Relaxed)
+        );
+        eprintln!(
+            "MED-SLOW-REFILL-ALLOC-SUCCESS: {}",
+            self.medium_slow_refill_alloc_success
+                .load(Ordering::Relaxed)
+        );
         stat.insert(
             "medium_slow".to_string(),
             self.medium_slow.load(Ordering::Relaxed).to_string(),
@@ -989,6 +1008,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         stat.insert(
             "medium_slow_no_small_tlab".to_string(),
             self.medium_slow_no_small_tlab
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        stat.insert(
+            "medium_slow_refill".to_string(),
+            self.medium_slow_refill.load(Ordering::Relaxed).to_string(),
+        );
+        stat.insert(
+            "medium_slow_refill_success".to_string(),
+            self.medium_slow_refill_success
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        stat.insert(
+            "medium_slow_refill_alloc_success".to_string(),
+            self.medium_slow_refill_alloc_success
                 .load(Ordering::Relaxed)
                 .to_string(),
         );

@@ -209,6 +209,39 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 self.tls
             );
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+                if cfg!(feature = "init_bump_pointer_on_medium_alloc") {
+                    if self.bump_pointer.cursor.is_zero()
+                        || self
+                            .line
+                            .map(|l| l == self.sm_block.unwrap().end_line())
+                            .unwrap_or(true)
+                    {
+                        // Refill the tlab
+                        let success = self.acquire_recyclable_lines();
+                        self.space
+                            .medium_slow_refill
+                            .fetch_add(1, Ordering::Relaxed);
+                        if success {
+                            self.space
+                                .medium_slow_refill_success
+                                .fetch_add(1, Ordering::Relaxed);
+                            let result = align_allocation_no_fill::<VM>(
+                                self.bump_pointer.cursor,
+                                align,
+                                offset,
+                            );
+                            let new_cursor = result + size;
+                            if new_cursor <= self.bump_pointer.limit {
+                                self.space
+                                    .medium_slow_refill_alloc_success
+                                    .fetch_add(1, Ordering::Relaxed);
+                                fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
+                                self.bump_pointer.cursor = new_cursor;
+                                return result;
+                            }
+                        }
+                    }
+                }
                 // Size larger than a line: do large allocation
                 self.overflow_alloc(size, align, offset)
             } else {
@@ -336,7 +369,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// Bump allocate small objects into recyclable lines (i.e. holes).
     fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("{:?}: alloc_slow_hot", self.tls);
-        if self.acquire_recyclable_lines(size, align, offset) {
+        if self.acquire_recyclable_lines() {
             self.alloc(size, align, offset)
         } else {
             self.alloc_slow_inline(size, align, offset)
@@ -344,7 +377,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     /// Search for recyclable lines.
-    fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
+    fn acquire_recyclable_lines(&mut self) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
             if line == self.sm_block.unwrap().end_line() {
@@ -380,10 +413,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         self.bump_pointer.limit - self.bump_pointer.cursor,
                     );
                 }
-                debug_assert!(
-                    align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
-                        <= self.bump_pointer.limit
-                );
+                // debug_assert!(
+                //     align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
+                //         <= self.bump_pointer.limit
+                // );
                 self.line = Some(end_line);
                 return true;
             } else {
@@ -564,7 +597,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             end > self.large_bump_pointer.limit
         } else {
             // We try to acquire recyclable lines here just like `alloc_slow_hot()`
-            insufficient_space && !self.acquire_recyclable_lines(size, align, offset)
+            insufficient_space && !self.acquire_recyclable_lines()
         }
     }
 

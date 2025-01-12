@@ -332,3 +332,6 @@ malloc_mark_sweep = []
 # Group:end
 
 tracing = ["probe"]
+
+
+init_bump_pointer_on_medium_alloc = []
