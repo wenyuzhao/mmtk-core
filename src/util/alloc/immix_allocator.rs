@@ -337,6 +337,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Large-object (larger than a line) bump allocation.
     fn overflow_alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        // Grab a new small block
+        if cfg!(feature = "ix_overflow_reused_alloc") {
+            if self.acquire_recyclable_lines() {
+                let result =
+                    align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
+                let new_cursor = result + size;
+                if new_cursor <= self.bump_pointer.limit {
+                    // Simple bump allocation.
+                    fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
+                    self.bump_pointer.cursor = new_cursor;
+                    return result;
+                }
+            }
+        }
         trace!("{:?}: overflow_alloc", self.tls);
         if cfg!(feature = "ix_dump_holes") {
             if !self.retry {

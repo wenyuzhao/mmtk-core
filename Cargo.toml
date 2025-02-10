@@ -204,6 +204,7 @@ fixed_clean_alloc_trigger_based_on_system_time = []
 enable_sysinfo = []
 regex = ["dep:regex"]
 ix_dump_holes = []
+ix_overflow_reused_alloc = []
 
 fixed_alloc_trigger_based_on_system_time = []
 
