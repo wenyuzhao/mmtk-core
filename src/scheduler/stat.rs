@@ -44,10 +44,78 @@ impl SchedulerStat {
 
     /// Used during statistics printing at [`crate::memory_manager::harness_end`]
     pub fn harness_stat(&self) -> HashMap<String, String> {
-        if cfg!(not(feature = "work_packet_counter")) {
-            return Default::default();
-        }
         let mut stat = HashMap::new();
+        // Block reusability
+        let mut report_reusability = |tag: &str, data: &Vec<(bool, usize, usize)>| {
+            if data.len() == 0 {
+                println!("No data for {}", tag);
+                return;
+            }
+            println!("{}: {:.3?}", tag, data);
+            let no_reusable = data
+                .iter()
+                .map(|(r, _, _)| if *r { 1 } else { 0 })
+                .sum::<usize>() as f64
+                / data.len() as f64;
+            let no_partially_free = data
+                .iter()
+                .map(|(_, x, _)| if *x == 0 { 1 } else { 0 })
+                .sum::<usize>() as f64
+                / data.len() as f64;
+            stat.insert(format!("no_reusable.{tag}"), format!("{:.3}", no_reusable));
+            stat.insert(
+                format!("no_partially_free.{tag}"),
+                format!("{:.3}", no_partially_free),
+            );
+            let partially_free_ratio = data
+                .iter()
+                .filter(|(_, _, y)| *y != 0)
+                .map(|(_, x, y)| *x as f64 / *y as f64)
+                .collect::<Vec<f64>>();
+            if partially_free_ratio.len() == 0 {
+                return;
+            }
+            let min = partially_free_ratio
+                .iter()
+                .fold(f64::INFINITY, |a, &b| a.min(b));
+            let max = partially_free_ratio
+                .iter()
+                .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            let mean = partially_free_ratio.iter().sum::<f64>() / partially_free_ratio.len() as f64;
+            stat.insert(
+                format!("partially_free_ratio.min.{tag}"),
+                format!("{:.3}", min),
+            );
+            stat.insert(
+                format!("partially_free_ratio.max.{tag}"),
+                format!("{:.3}", max),
+            );
+            stat.insert(
+                format!("partially_free_ratio.mean.{tag}"),
+                format!("{:.3}", mean),
+            );
+            let partially_free_ratio_non_zero = partially_free_ratio
+                .iter()
+                .filter(|&&x| x != 0.0)
+                .collect::<Vec<&f64>>();
+            fn geometric_mean(numbers: &Vec<&f64>) -> f64 {
+                let log_sum: f64 = numbers.iter().map(|&x| x.ln()).sum();
+                let n = numbers.len() as f64;
+                (log_sum / n).exp()
+            }
+            let geomean = geometric_mean(&partially_free_ratio_non_zero);
+            stat.insert(
+                format!("partially_free_ratio.geomean.{tag}"),
+                format!("{:.3}", geomean),
+            );
+        };
+        report_reusability("beforegc", &*crate::REUSABLE_BLOCKS_BEFORE_GC.lock());
+        report_reusability("aftergc", &*crate::REUSABLE_BLOCKS_AFTER_GC.lock());
+
+        if cfg!(not(feature = "work_packet_counter")) {
+            return stat;
+        }
+        // let mut stat = HashMap::new();
         let mut counts = HashMap::<String, usize>::new();
         let mut times = HashMap::<String, f64>::new();
         // Work counts
@@ -105,7 +173,6 @@ impl SchedulerStat {
                 }
             }
         }
-
         if crate::args::HARNESS_PRETTY_PRINT {
             println!("SUM: {} ns", total);
             if crate::args::INSTRUMENTATION {

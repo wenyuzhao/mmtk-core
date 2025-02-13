@@ -434,6 +434,37 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    pub fn count_reusable_blocks(&self, before_gc: bool) {
+        let exhausted = self.pr.exhausted_reusable_space();
+        let mut total_blocks = 0usize;
+        let mut total_reusable_blocks = 0usize;
+
+        for c in self.chunk_map.all_chunks() {
+            for b in c.iter_region::<Block>() {
+                if b.get_state() == BlockState::Unallocated {
+                    continue;
+                }
+                total_blocks += 1;
+                if b.has_holes() && !b.is_clean() {
+                    total_reusable_blocks += 1;
+                }
+            }
+        }
+        if before_gc {
+            crate::REUSABLE_BLOCKS_BEFORE_GC.lock().push((
+                exhausted,
+                total_reusable_blocks,
+                total_blocks,
+            ));
+        } else {
+            crate::REUSABLE_BLOCKS_AFTER_GC.lock().push((
+                exhausted,
+                total_reusable_blocks,
+                total_blocks,
+            ));
+        }
+    }
+
     /// Flush the thread-local queues in BlockPageResource
     pub fn flush_page_resource(&self) {
         #[cfg(target_pointer_width = "64")]
@@ -759,7 +790,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Generate chunk sweep work packets.
     fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        assert!(self.rc_enabled && self.cm_enabled);
+        // assert!(self.rc_enabled && self.cm_enabled);
         self.chunk_map
             .generate_tasks_batched(|chunks| Box::new(PrepareChunksForFullGC { chunks }))
     }

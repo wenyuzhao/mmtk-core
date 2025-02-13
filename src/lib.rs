@@ -742,3 +742,6 @@ static RC_STAT: RCStat = RCStat {
     los_rec_incs: AtomicUsize::new(0),
     roots: AtomicUsize::new(0),
 };
+
+static REUSABLE_BLOCKS_BEFORE_GC: Mutex<Vec<(bool, usize, usize)>> = Mutex::new(Vec::new());
+static REUSABLE_BLOCKS_AFTER_GC: Mutex<Vec<(bool, usize, usize)>> = Mutex::new(Vec::new());

@@ -778,6 +778,16 @@ impl Block {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
     }
 
+    pub fn is_clean(&self) -> bool {
+        let rc_array = RCArray::of(*self);
+        for i in 0..Self::LINES {
+            if !rc_array.is_dead(i) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn has_holes(&self) -> bool {
         let rc_array = RCArray::of(*self);
         let mut found_free_line = false;

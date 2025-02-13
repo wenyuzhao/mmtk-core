@@ -396,6 +396,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+        self.immix_space.count_reusable_blocks(true);
         Block::update_global_phase_epoch(&self.immix_space);
         self.dump_heap_usage(true);
         crate::NO_EVAC.store(false, Ordering::SeqCst);
@@ -478,6 +479,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if cfg!(feature = "fragmentation_analysis") && crate::frag_exp_enabled() {
             self.dump_memory(pause);
         }
+        self.immix_space.count_reusable_blocks(false);
     }
 
     #[cfg(feature = "nogc_no_zeroing")]
