@@ -528,6 +528,8 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mmtk = worker.mmtk;
 
         // Tell GC trigger that GC ended - this happens before we resume mutators.
+        let perform_class_unloading = mmtk.get_plan().current_gc_should_perform_class_unloading();
+        <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         mmtk.gc_trigger.policy.on_gc_end(mmtk);
 
         // All other workers are parked, so it is safe to access the Plan instance mutably.

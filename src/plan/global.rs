@@ -305,6 +305,14 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         true
     }
 
+    fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
+        true
+    }
+
+    fn current_gc_should_perform_class_unloading(&self) -> bool {
+        true
+    }
+
     /// Return whether the current GC may move any object.  The VM binding can make use of this
     /// information and choose to or not to update some data structures that record the addresses
     /// of objects.

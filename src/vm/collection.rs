@@ -22,8 +22,11 @@ pub trait Collection<VM: VMBinding> {
     /// Arguments:
     /// * `tls`: The thread pointer for the GC worker.
     /// * `mutator_visitor`: A callback.  Call it with a mutator as argument to notify MMTk that the mutator is ready to be scanned.
-    fn stop_all_mutators<F>(tls: VMWorkerThread, mutator_visitor: F)
-    where
+    fn stop_all_mutators<F>(
+        tls: VMWorkerThread,
+        mutator_visitor: F,
+        current_gc_should_unload_classes: bool,
+    ) where
         F: FnMut(&'static mut Mutator<VM>);
 
     /// Resume all the mutator threads, the opposite of the above. When a GC is finished, MMTk calls this method.
@@ -81,6 +84,8 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The thread pointer for the current GC thread.
     fn schedule_finalization(_tls: VMWorkerThread) {}
 
+    fn clear_cld_claimed_marks() {}
+
     /// A hook for the VM to do work after forwarding objects.
     ///
     /// This function is called after all of the following have finished:
@@ -103,6 +108,9 @@ pub trait Collection<VM: VMBinding> {
     /// Arguments:
     /// * `tls_worker`: The thread pointer for the worker thread performing this call.
     fn post_forwarding(_tls: VMWorkerThread) {}
+
+    /// Inform the VM to do its VM-specific release work at the end of a GC.
+    fn vm_release(_do_unloading: bool) {}
 
     /// Return the amount of memory (in bytes) which the VM allocated outside the MMTk heap but
     /// wants to include into the current MMTk heap size.  MMTk core will consider the reported
