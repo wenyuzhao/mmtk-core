@@ -580,8 +580,9 @@ pub fn total_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
 pub fn handle_user_collection_request<VM: VMBinding>(
     mmtk: &MMTK<VM>,
     tls: VMMutatorThread,
+    force: bool,
 ) -> bool {
-    mmtk.handle_user_collection_request(tls, false, false)
+    mmtk.handle_user_collection_request(tls, force, false)
 }
 
 /// Is the object alive?
