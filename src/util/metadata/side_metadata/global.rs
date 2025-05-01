@@ -549,6 +549,11 @@ impl SideMetadataSpec {
         )
     }
 
+    pub fn load_byte(&self, data_addr: Address) -> u8 {
+        let meta_addr = address_to_meta_address(self, data_addr);
+        unsafe { meta_addr.load::<u8>() }
+    }
+
     /// Loads a value from the side metadata for the given address.
     /// This method has similar semantics to `store` in Rust atomics.
     pub fn load_atomic<T: MetadataValue>(&self, data_addr: Address, order: Ordering) -> T {
@@ -939,7 +944,7 @@ impl SideMetadataSpec {
     /// Fetches the value for this side metadata for the given address, and applies a function to it that returns an optional new value.
     /// This method has similar semantics to `fetch_update` in Rust atomics.
     /// Returns a Result of Ok(previous_value) if the function returned Some(_), else Err(previous_value).
-    pub fn fetch_update_atomic<T: MetadataValue, F: FnMut(T) -> Option<T> + Copy>(
+    pub fn fetch_update_atomic<T: MetadataValue, F: FnMut(T) -> Option<T>>(
         &self,
         data_addr: Address,
         set_order: Ordering,
@@ -1339,6 +1344,9 @@ impl SideMetadataContext {
         #[cfg(feature = "vo_bit")]
         ret.push(VO_BIT_SIDE_METADATA_SPEC);
 
+        #[cfg(feature = "sanity")]
+        ret.push(crate::util::metadata::side_metadata::spec_defs::SANITY_MARK_BITS);
+
         if let Some(spec) = crate::mmtk::SFT_MAP.get_side_metadata() {
             if spec.is_global {
                 ret.push(*spec);
@@ -1537,7 +1545,7 @@ pub struct MetadataByteArrayRef<const ENTRIES: usize> {
     heap_range_start: Address,
     #[cfg(feature = "extreme_assertions")]
     spec: SideMetadataSpec,
-    data: &'static [u8; ENTRIES],
+    data: &'static mut [u8; ENTRIES],
 }
 
 impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
@@ -1566,7 +1574,7 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
             spec: *metadata_spec,
             // # Safety
             // The metadata memory is assumed to be mapped when accessing.
-            data: unsafe { &*address_to_meta_address(metadata_spec, start).to_ptr() },
+            data: unsafe { &mut *address_to_meta_address(metadata_spec, start).to_mut_ptr() },
         }
     }
 
@@ -1588,6 +1596,11 @@ impl<const ENTRIES: usize> MetadataByteArrayRef<ENTRIES> {
             sanity::verify_load::<u8>(&self.spec, data_addr, value);
         }
         value
+    }
+
+    /// Get a byte from the metadata byte array at the given index.
+    pub fn set(&mut self, index: usize, value: u8) {
+        self.data[index] = value;
     }
 }
 

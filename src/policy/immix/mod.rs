@@ -1,4 +1,5 @@
 pub mod block;
+pub mod block_allocation;
 pub mod defrag;
 pub mod immixspace;
 pub mod line;
@@ -9,7 +10,7 @@ use crate::policy::immix::block::Block;
 use crate::util::linear_scan::Region;
 
 /// The max object size for immix: half of a block
-pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES >> 1;
+pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES;
 
 /// Mark/sweep memory for block-level only
 pub const BLOCK_ONLY: bool = false;
@@ -43,7 +44,7 @@ pub const DEFRAG_EVERY_BLOCK: bool = cfg!(feature = "immix_stress_copying");
 pub const DEFRAG_HEADROOM_PERCENT: usize = if cfg!(feature = "immix_stress_copying") {
     50
 } else {
-    2
+    5
 };
 
 /// If Immix is used as a nursery space, do we prefer copy?
@@ -67,7 +68,7 @@ macro_rules! validate {
 
 fn validate_features() {
     // Block-only immix cannot do defragmentation
-    validate!(DEFRAG => !BLOCK_ONLY);
-    // Number of lines in a block should not exceed BlockState::MARK_MARKED
-    assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
+    // validate!(DEFRAG => !BLOCK_ONLY);
+    // // Number of lines in a block should not exceed BlockState::MARK_MARKED
+    // assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }

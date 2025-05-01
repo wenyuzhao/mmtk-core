@@ -1,3 +1,5 @@
+use downcast_rs::Downcast;
+
 use crate::util::freelist::FreeList;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::Address;
@@ -16,7 +18,7 @@ pub struct CreateFreeListResult {
     pub space_displacement: usize,
 }
 
-pub trait VMMap: Sync {
+pub trait VMMap: Sync + Downcast {
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor);
 
     /// Create a free-list for a discontiguous space. Must only be called at boot time.
@@ -86,4 +88,16 @@ pub trait VMMap: Sync {
     fn get_descriptor_for_address(&self, address: Address) -> SpaceDescriptor;
 
     fn add_to_cumulative_committed_pages(&self, pages: usize);
+
+    fn out_of_virtual_space(&self) -> bool {
+        false
+    }
+
+    fn reset_out_of_virtual_space(&self) {}
+
+    fn available_chunks(&self) -> usize {
+        unimplemented!("map32 only")
+    }
 }
+
+impl_downcast!(VMMap);

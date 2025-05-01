@@ -532,6 +532,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         <VM as VMBinding>::VMCollection::vm_release(perform_class_unloading);
         mmtk.gc_trigger.policy.on_gc_end(mmtk);
 
+        println!(
+            "GC finished. {}M->{}M({}M) used={}M",
+            crate::RESERVED_PAGES_AT_GC_START.load(std::sync::atomic::Ordering::SeqCst) / 256,
+            mmtk.get_plan().get_reserved_pages() / 256,
+            mmtk.get_plan().get_total_pages() / 256,
+            mmtk.get_plan().get_used_pages() / 256,
+        );
+
         // All other workers are parked, so it is safe to access the Plan instance mutably.
         probe!(mmtk, plan_end_of_gc_begin);
         let plan_mut: &mut dyn Plan<VM = VM> = unsafe { mmtk.get_plan_mut() };
@@ -581,6 +589,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Reset the triggering information.
+        mmtk.get_plan().gc_pause_end();
         mmtk.state.reset_collection_trigger();
 
         // Set to NotInGC after everything, and right before resuming mutators.

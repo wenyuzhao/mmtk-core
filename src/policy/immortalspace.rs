@@ -107,7 +107,11 @@ impl<VM: VMBinding> Space<VM> for ImmortalSpace<VM> {
     }
 
     fn initialize_sft(&self, sft_map: &mut dyn crate::policy::sft_map::SFTMap) {
-        self.common().initialize_sft(self.as_sft(), sft_map)
+        self.common().initialize_sft(
+            self.as_sft(),
+            sft_map,
+            &self.get_page_resource().common().metadata,
+        )
     }
 
     fn release_multiple_pages(&mut self, _start: Address) {
@@ -141,17 +145,19 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
         let vm_map = args.vm_map;
         let is_discontiguous = args.vmrequest.is_discontiguous();
-        let common = CommonSpace::new(args.into_policy_args(
+        let policy_args = args.into_policy_args(
             false,
             true,
             metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_MARK_BIT_SPEC]),
-        ));
+        );
+        let metadata = policy_args.metadata();
+        let common = CommonSpace::new(policy_args);
         ImmortalSpace {
             mark_state: MarkState::new(),
             pr: if is_discontiguous {
-                MonotonePageResource::new_discontiguous(vm_map)
+                MonotonePageResource::new_discontiguous(vm_map, metadata)
             } else {
-                MonotonePageResource::new_contiguous(common.start, common.extent, vm_map)
+                MonotonePageResource::new_contiguous(common.start, common.extent, vm_map, metadata)
             },
             common,
             vm_space: false,

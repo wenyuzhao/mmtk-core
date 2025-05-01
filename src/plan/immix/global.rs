@@ -7,6 +7,7 @@ use crate::plan::global::CreateSpecificPlanArgs;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
@@ -15,7 +16,9 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::gc_trigger::SpaceStats;
 use crate::util::heap::VMRequest;
+use crate::util::metadata;
 use crate::util::metadata::side_metadata::SideMetadataContext;
+use crate::util::metadata::MetadataSpec;
 use crate::vm::VMBinding;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
@@ -105,6 +108,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.immix_space.in_defrag()
     }
 
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+        Block::update_global_phase_epoch(&self.immix_space);
+    }
+
+    fn gc_pause_end(&self) {
+        Block::update_global_phase_epoch(&self.immix_space);
+    }
+
     fn get_collection_reserved_pages(&self) -> usize {
         self.immix_space.defrag_headroom_pages()
     }
@@ -128,10 +139,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
 impl<VM: VMBinding> Immix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
+        let immix_specs =
+            metadata::extract_side_metadata(&[MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE)]);
         let plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &IMMIX_CONSTRAINTS,
-            global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
+            global_side_metadata_specs: SideMetadataContext::new_global_specs(&immix_specs),
         };
         Self::new_with_args(
             plan_args,

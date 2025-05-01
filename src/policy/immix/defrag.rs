@@ -42,7 +42,7 @@ impl StatsForDefrag {
 }
 
 impl Defrag {
-    const NUM_BINS: usize = (Block::LINES >> 1) + 1;
+    pub const NUM_BINS: usize = (Block::LINES >> 1) + 1;
     const DEFRAG_LINE_REUSE_RATIO: f32 = 0.99;
     const MIN_SPILL_THRESHOLD: usize = 2;
     const DEFRAG_HEADROOM_PERCENT: usize = super::DEFRAG_HEADROOM_PERCENT;
@@ -71,14 +71,20 @@ impl Defrag {
         user_triggered: bool,
         exhausted_reusable_space: bool,
         full_heap_system_gc: bool,
+        concurrent_marking_enabled: bool,
     ) {
-        let in_defrag = super::DEFRAG
+        let mut in_defrag = super::DEFRAG
             && (emergency_collection
                 || (collection_attempts > 1)
                 || !exhausted_reusable_space
                 || super::STRESS_DEFRAG
-                || (collect_whole_heap && user_triggered && full_heap_system_gc));
+                || (collect_whole_heap && user_triggered && full_heap_system_gc))
+            && !concurrent_marking_enabled;
+        // if cfg!(feature = "ix_always_defrag") {
+        //     in_defrag = true;
+        // }
         info!("Defrag: {}", in_defrag);
+        // #[cfg(feature = "tracing")]
         probe!(mmtk, immix_defrag, in_defrag);
         self.in_defrag_collection
             .store(in_defrag, Ordering::Release)
@@ -150,16 +156,21 @@ impl Defrag {
         spill_avail_histograms: &mut Histogram,
     ) -> usize {
         let mut total_available_lines = 0;
-        space.reusable_blocks.iterate_blocks(|block| {
-            let bucket = block.get_holes();
-            let unavailable_lines = match block.get_state() {
-                BlockState::Reusable { unavailable_lines } => unavailable_lines as usize,
-                s => unreachable!("{:?} {:?}", block, s),
-            };
-            let available_lines = Block::LINES - unavailable_lines;
-            spill_avail_histograms[bucket] += available_lines;
-            total_available_lines += available_lines;
-        });
+        for chunk in space.chunk_map.all_chunks() {
+            if !space.address_in_space(chunk.start()) {
+                continue;
+            }
+            for block in chunk.iter_region::<Block>().filter(|b| b.is_reusable()) {
+                let bucket = block.get_holes();
+                let unavailable_lines = match block.get_state() {
+                    BlockState::Reusable { unavailable_lines } => unavailable_lines as usize,
+                    s => unreachable!("{:?} {:?}", block, s),
+                };
+                let available_lines = Block::LINES - unavailable_lines;
+                spill_avail_histograms[bucket] += available_lines;
+                total_available_lines += available_lines;
+            }
+        }
         total_available_lines
     }
 

@@ -3,6 +3,7 @@
 use super::PlanConstraints;
 use crate::global_state::GlobalState;
 use crate::mmtk::MMTK;
+use crate::mmtk::VM_MAP;
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
@@ -304,6 +305,8 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     fn last_collection_was_exhaustive(&self) -> bool {
         true
     }
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<Self::VM>) {}
+    fn gc_pause_end(&self) {}
 
     fn current_gc_should_prepare_for_class_unloading(&self) -> bool {
         true
@@ -546,7 +549,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         // than the heap's total pages. In that case, we will have to do a GC.
         let heap_full = plan.base().gc_trigger.is_heap_full();
 
-        space_full || stress_force_gc || heap_full
+        space_full || stress_force_gc || heap_full || VM_MAP.out_of_virtual_space()
     }
 }
 
@@ -604,6 +607,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 
     pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
+        VM_MAP.reset_out_of_virtual_space();
         self.immortal.release();
         self.los.release(full_heap);
         self.nonmoving.release();

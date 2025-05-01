@@ -809,7 +809,7 @@ options! {
     /// Should a major GC be performed when a system GC is required?
     full_heap_system_gc:   bool                 [env_var: true, command_line: true]  [always_valid] = false,
     /// Should finalization be disabled?
-    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = true,
     /// Should reference type processing be disabled?
     /// If reference type processing is disabled, no weak reference processing work is scheduled,
     /// and we expect a binding to treat weak references as strong references.

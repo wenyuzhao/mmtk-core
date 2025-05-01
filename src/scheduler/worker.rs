@@ -20,17 +20,17 @@ pub type ThreadId = usize;
 thread_local! {
     /// Current worker's ordinal
     static WORKER_ORDINAL: Atomic<ThreadId> = const { Atomic::new(ThreadId::MAX) };
+    static _WORKER: Atomic<usize> = Atomic::new(0);
 }
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
-pub fn current_worker_ordinal() -> ThreadId {
+pub fn current_worker_ordinal() -> Option<ThreadId> {
     let ordinal = WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed));
-    debug_assert_ne!(
-        ordinal,
-        ThreadId::MAX,
-        "Thread-local variable WORKER_ORDINAL not set yet."
-    );
-    ordinal
+    if ordinal == ThreadId::MAX {
+        None
+    } else {
+        Some(ordinal)
+    }
 }
 
 /// The struct has one instance per worker, but is shared between workers via the scheduler
@@ -151,6 +151,12 @@ impl<VM: VMBinding> GCWorker<VM> {
         }
     }
 
+    /// Get current worker.
+    pub fn current() -> &'static mut Self {
+        let ptr = _WORKER.with(|x| x.load(Ordering::Relaxed)) as *mut Self;
+        unsafe { &mut *ptr }
+    }
+
     const LOCALLY_CACHED_WORK_PACKETS: usize = 16;
 
     /// Add a work packet to the work queue and mark it with a higher priority.
@@ -164,6 +170,16 @@ impl<VM: VMBinding> GCWorker<VM> {
             return;
         }
         self.local_work_buffer.push(Box::new(work));
+    }
+
+    pub fn add_boxed_work(&mut self, bucket: WorkBucketStage, work: Box<dyn GCWork<VM>>) {
+        if !self.scheduler().work_buckets[bucket].is_activated()
+            || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
+        {
+            self.scheduler.work_buckets[bucket].add_boxed(work);
+            return;
+        }
+        self.local_work_buffer.push(work);
     }
 
     /// Add a work packet to the work queue.
@@ -226,6 +242,13 @@ impl<VM: VMBinding> GCWorker<VM> {
             crate::util::rust_util::debug_process_thread_id(),
         );
         WORKER_ORDINAL.with(|x| x.store(self.ordinal, Ordering::SeqCst));
+        let worker = (&mut *self as &mut Self) as *mut Self;
+        _WORKER.with(|x| {
+            x.store(
+                (&mut *self as &mut Self) as *mut Self as usize,
+                Ordering::SeqCst,
+            )
+        });
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);

@@ -1,26 +1,25 @@
 use super::defrag::Histogram;
 use super::line::Line;
 use super::ImmixSpace;
-use crate::util::constants::*;
-use crate::util::heap::blockpageresource::BlockPool;
+use crate::util::heap::blockpageresource_nosweep::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::{Region, RegionIterator};
-use crate::util::metadata::side_metadata::{MetadataByteArrayRef, SideMetadataSpec};
+use crate::util::metadata::side_metadata::spec_defs::{BLOCK_IN_USE, BLOCK_OWNER};
+use crate::util::metadata::side_metadata::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
-#[cfg(feature = "object_pinning")]
-use crate::util::metadata::MetadataSpec;
 use crate::util::object_enum::BlockMayHaveObjects;
-use crate::util::Address;
+use crate::util::{constants::*, OpaquePointer, VMThread};
+use crate::util::{Address, ObjectReference};
 use crate::vm::*;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The block allocation state.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BlockState {
     /// the block is not allocated.
     Unallocated,
-    /// the block is allocated but not marked.
+    /// the block is a young block.
     Unmarked,
     /// the block is allocated and marked.
     Marked,
@@ -54,7 +53,10 @@ impl From<BlockState> for u8 {
             BlockState::Unallocated => BlockState::MARK_UNALLOCATED,
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
-            BlockState::Reusable { unavailable_lines } => unavailable_lines,
+            BlockState::Reusable { unavailable_lines } => {
+                assert_ne!(unavailable_lines, 0);
+                u8::min(unavailable_lines, u8::MAX - 4)
+            }
         }
     }
 }
@@ -63,6 +65,24 @@ impl BlockState {
     /// Test if the block is reuasable.
     pub const fn is_reusable(&self) -> bool {
         matches!(self, BlockState::Reusable { .. })
+    }
+}
+
+/// Data structure to reference an OS 4K page.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+pub struct Page(Address);
+
+impl Region for Page {
+    const LOG_BYTES: usize = LOG_BYTES_IN_PAGE as usize;
+
+    fn from_aligned_address(address: Address) -> Self {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+
+    fn start(&self) -> Address {
+        self.0
     }
 }
 
@@ -77,6 +97,9 @@ impl Region for Block {
     #[cfg(feature = "immix_smaller_block")]
     const LOG_BYTES: usize = 13;
 
+    const BPR_ALLOC_TABLE: Option<SideMetadataSpec> =
+        Some(crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_ALLOC_BITS);
+
     fn from_aligned_address(address: Address) -> Self {
         debug_assert!(address.is_aligned_to(Self::BYTES));
         Self(address)
@@ -87,6 +110,8 @@ impl Region for Block {
     }
 }
 
+static GLOBAL_PHASE_EPOCH: AtomicU8 = AtomicU8::new(1);
+
 impl BlockMayHaveObjects for Block {
     fn may_have_objects(&self) -> bool {
         self.get_state() != BlockState::Unallocated
@@ -94,6 +119,10 @@ impl BlockMayHaveObjects for Block {
 }
 
 impl Block {
+    /// Log bytes in block
+    pub const LOG_BYTES: usize = <Self as Region>::LOG_BYTES;
+    /// Bytes in block
+    pub const BYTES: usize = 1 << Self::LOG_BYTES;
     /// Log pages in block
     pub const LOG_PAGES: usize = Self::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
     /// Pages in block
@@ -110,6 +139,46 @@ impl Block {
     /// Block mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+    pub const PHASE_EPOCH: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::PHASE_EPOCH;
+
+    pub const ZERO: Self = Self(Address::ZERO);
+
+    pub fn is_zero(&self) -> bool {
+        self.0.is_zero()
+    }
+
+    /// Align the address to a block boundary.
+    pub const fn align(address: Address) -> Address {
+        address.align_down(Self::BYTES)
+    }
+
+    /// Get the block from a given address.
+    /// The address must be block-aligned.
+    pub fn from(address: Address) -> Self {
+        debug_assert!(address.is_aligned_to(Self::BYTES));
+        Self(address)
+    }
+
+    pub fn of(a: Address) -> Self {
+        Self::from(Self::align(a))
+    }
+
+    /// Get the block containing the given address.
+    /// The input address does not need to be aligned.
+    pub fn containing(object: ObjectReference) -> Self {
+        Self(object.to_raw_address().align_down(Self::BYTES))
+    }
+
+    /// Get block start address
+    pub const fn start(&self) -> Address {
+        self.0
+    }
+
+    /// Get block end address
+    pub const fn end(&self) -> Address {
+        self.0.add(Self::BYTES)
+    }
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -121,6 +190,169 @@ impl Block {
     pub fn line_mark_table(&self) -> MetadataByteArrayRef<{ Block::LINES }> {
         debug_assert!(!super::BLOCK_ONLY);
         MetadataByteArrayRef::<{ Block::LINES }>::new(&Line::MARK_TABLE, self.start(), Self::BYTES)
+    }
+
+    fn try_lock(&self) -> bool {
+        let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+            self.start(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |b| {
+                if b == 1 {
+                    return None;
+                }
+                Some(1)
+            },
+        );
+        result == Ok(0)
+    }
+
+    fn lock_skip_reusing_or_unallocated(&self) -> bool {
+        loop {
+            std::hint::spin_loop();
+            let state = self.get_state();
+            if state == BlockState::Unallocated || (Self::in_mutatar_phase() && self.is_reusing()) {
+                return false;
+            }
+            let result = BLOCK_IN_USE.fetch_update_atomic::<u8, _>(
+                self.start(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |b| {
+                    if b == 1 {
+                        return None;
+                    }
+                    Some(1)
+                },
+            );
+            if result == Ok(0) {
+                return true;
+            }
+        }
+    }
+
+    pub fn try_lock_with_condition(&self, predicate: impl Fn() -> bool) -> bool {
+        if !predicate() {
+            return false;
+        }
+        let locked = self.try_lock();
+        if !locked {
+            return false;
+        }
+        if !predicate() {
+            self.unlock();
+            return false;
+        }
+        true
+    }
+
+    pub fn is_locked(&self) -> bool {
+        BLOCK_IN_USE.load_atomic::<u8>(self.start(), Ordering::Relaxed) != 0
+    }
+
+    pub fn unlock(&self) {
+        BLOCK_IN_USE.store_atomic::<u8>(self.start(), 0u8, Ordering::Relaxed);
+    }
+
+    pub fn get_owner(&self) -> Option<VMThread> {
+        let ptr = BLOCK_OWNER.load_atomic::<usize>(self.start(), Ordering::Relaxed);
+        if ptr == 0 {
+            None
+        } else {
+            Some(VMThread(OpaquePointer::from_mut_ptr(ptr as *mut ())))
+        }
+    }
+
+    pub fn set_owner(&self, owner: Option<VMThread>) {
+        let ptr = if let Some(owner) = owner {
+            owner.0.to_address().as_usize()
+        } else {
+            0
+        };
+        BLOCK_OWNER.store_atomic(self.start(), ptr, Ordering::Relaxed);
+    }
+
+    /// The block is in one of the copy allocator's local block list.
+    pub fn is_owned_by_copy_allocator(&self) -> bool {
+        let ge = Self::global_phase_epoch();
+        assert_eq!(ge & 1, 0);
+        let e: u8 = self.phase_epoch();
+        ge == e
+    }
+
+    /// The global phase epoch.
+    /// This counter is bumped by one at the end of every mutator and GC phase.
+    /// Any block matching this epoch are used for allocation in the current phase.
+    pub fn global_phase_epoch() -> u8 {
+        GLOBAL_PHASE_EPOCH.load(Ordering::Relaxed)
+    }
+
+    /// Get the current block phase epoch.
+    /// This indicates the last phase that this block is used for object allocation.
+    /// Either as a clean block or a partially-free block.
+    ///
+    /// Odd epoch means the block is in a mutator phase.
+    /// Even epoch means the block is allocated in a GC phase.
+    pub fn phase_epoch(&self) -> u8 {
+        Self::PHASE_EPOCH.load_atomic::<u8>(self.start(), Ordering::Relaxed)
+    }
+
+    pub fn update_phase_epoch(&self) {
+        Self::PHASE_EPOCH.store_atomic::<u8>(
+            self.start(),
+            Self::global_phase_epoch(),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn is_reusing(&self) -> bool {
+        self.get_state() != BlockState::Unallocated && self.is_nursery_or_reusing()
+    }
+
+    pub fn is_gc_reusing(&self) -> bool {
+        if self.get_state() == BlockState::Unallocated {
+            return false;
+        }
+        let ge = Self::global_phase_epoch();
+        assert_eq!(ge & 1, 0);
+        let e = self.phase_epoch();
+        e == ge
+    }
+
+    pub fn is_nursery(&self) -> bool {
+        self.get_state() == BlockState::Unallocated && self.is_nursery_or_reusing()
+    }
+
+    pub fn is_nursery_or_reusing(&self) -> bool {
+        let ge = Self::global_phase_epoch();
+        let e = self.phase_epoch();
+        if (ge & 1) == 1 {
+            return e == ge;
+        } else {
+            return e == ge - 1;
+        }
+    }
+
+    fn in_mutatar_phase() -> bool {
+        let ge = Self::global_phase_epoch();
+        (ge & 1) == 1
+    }
+
+    pub fn update_global_phase_epoch<VM: VMBinding>(space: &ImmixSpace<VM>) {
+        let old = GLOBAL_PHASE_EPOCH.load(Ordering::SeqCst);
+        if old == 254 {
+            GLOBAL_PHASE_EPOCH.store(1, Ordering::SeqCst);
+            space.pr.reset_nursery_state();
+        } else {
+            GLOBAL_PHASE_EPOCH.store(old + 1, Ordering::SeqCst);
+        }
+    }
+
+    pub fn is_reusable(&self) -> bool {
+        if self.is_defrag_source() {
+            return false;
+        }
+        self.get_state().is_reusable()
     }
 
     /// Get block mark state.
@@ -135,16 +367,48 @@ impl Block {
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
+    /// Set block mark state.
+    pub fn fetch_update_state(
+        &self,
+        mut f: impl FnMut(BlockState) -> Option<BlockState>,
+    ) -> Result<BlockState, BlockState> {
+        Self::MARK_TABLE
+            .fetch_update_atomic::<u8, _>(self.start(), Ordering::SeqCst, Ordering::SeqCst, |s| {
+                f(s.into()).map(|x| u8::from(x))
+            })
+            .map(|x| (x as u8).into())
+            .map_err(|x| (x as u8).into())
+    }
+
+    fn attempt_dealloc(&self) -> bool {
+        self.fetch_update_state(|s| {
+            if (Self::in_mutatar_phase() && self.is_reusing()) || s == BlockState::Unallocated {
+                None
+            } else {
+                Some(BlockState::Unallocated)
+            }
+        })
+        .is_ok()
+    }
+
     // Defrag byte
 
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
 
     /// Test if the block is marked for defragmentation.
     pub fn is_defrag_source(&self) -> bool {
-        let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
+        let byte = Self::DEFRAG_STATE_TABLE.load_byte(self.start());
         // The byte should be 0 (not defrag source) or 255 (defrag source) if this is a major defrag GC, as we set the values in PrepareBlockState.
         // But it could be any value in a nursery GC.
-        byte == Self::DEFRAG_SOURCE_STATE
+        byte != 0
+    }
+
+    pub fn in_defrag_block<VM: VMBinding>(o: ObjectReference) -> bool {
+        Self::DEFRAG_STATE_TABLE.load_byte(o.to_raw_address()) != 0
+    }
+
+    pub fn address_in_defrag_block(a: Address) -> bool {
+        Self::DEFRAG_STATE_TABLE.load_byte(a) != 0
     }
 
     /// Mark the block for defragmentation.
@@ -166,17 +430,25 @@ impl Block {
     }
 
     /// Initialize a clean block after acquired from page-resource.
-    pub fn init(&self, copy: bool) {
+    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
+        // println!("Alloc block {:?} copy={} reuse={}", self, copy, reuse);
+        // #[cfg(feature = "sanity")]
+        // if !copy && !reuse && space.rc_enabled {
+        //     self.assert_log_table_cleared::<VM>(super::get_unlog_bit_slow::<VM>());
+        // }
+        self.update_phase_epoch();
         self.set_state(if copy {
             BlockState::Marked
         } else {
             BlockState::Unmarked
         });
-        Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        if !reuse || cfg!(feature = "ix_no_defrag_fix") {
+            Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        }
     }
 
     /// Deinitalize a block before releasing.
-    pub fn deinit(&self) {
+    pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
         self.set_state(BlockState::Unallocated);
     }
 
@@ -195,6 +467,22 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
+    #[allow(unused)]
+    pub(super) fn clear_mark_table<VM: VMBinding>(&self) {
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(self.start(), Self::BYTES);
+    }
+
+    pub(super) fn initialize_mark_table_as_marked<VM: VMBinding>(&self) {
+        let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
+        let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
+        let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
+        unsafe {
+            let bytes = limit.offset_from(start) as usize;
+            std::ptr::write_bytes(start, 0xffu8, bytes);
+        }
+    }
     /// Sweep this block.
     /// Return true if the block is swept.
     pub fn sweep<VM: VMBinding>(
@@ -203,25 +491,14 @@ impl Block {
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
+        self.set_as_defrag_source(false);
         if super::BLOCK_ONLY {
             match self.get_state() {
                 BlockState::Unallocated => false,
                 BlockState::Unmarked => {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                    // If the pin bit is not on the side, we cannot bulk zero.
-                    // We shouldn't need to clear it here in that case, since the pin bit
-                    // should be overwritten at each object allocation. The same applies below
-                    // when we are sweeping on a line granularity.
-                    #[cfg(feature = "object_pinning")]
-                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
-                        side.bzero_metadata(self.start(), Block::BYTES);
-                    }
-
-                    // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self);
-                    true
+                    unimplemented!();
                 }
                 BlockState::Marked => {
                     #[cfg(feature = "vo_bit")]
@@ -277,21 +554,25 @@ impl Block {
                 if marked_lines != Block::LINES {
                     // There are holes. Mark the block as reusable.
                     self.set_state(BlockState::Reusable {
-                        unavailable_lines: marked_lines as _,
+                        unavailable_lines: usize::min(marked_lines, u8::MAX as usize) as _,
                     });
-                    space.reusable_blocks.push(*self)
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                 }
-                // Update mark_histogram
-                mark_histogram[holes] += marked_lines;
-                // Record number of holes in block side metadata.
-                self.set_holes(holes);
-
+                if cfg!(feature = "ix_live_size_based_defrag") {
+                    // Update mark_histogram
+                    mark_histogram[Block::LINES - marked_lines] += marked_lines;
+                    // Record number of holes in block side metadata.
+                    self.set_holes(Block::LINES - marked_lines);
+                } else {
+                    // Update mark_histogram
+                    mark_histogram[holes] += marked_lines;
+                    // Record number of holes in block side metadata.
+                    self.set_holes(holes);
+                }
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
                 false
             }
         }
@@ -335,11 +616,12 @@ pub struct ReusableBlockPool {
     num_workers: usize,
 }
 
+#[allow(unused)]
 impl ReusableBlockPool {
     /// Create empty block list
     pub fn new(num_workers: usize) -> Self {
         Self {
-            queue: BlockPool::new(num_workers),
+            queue: BlockPool::<Block>::new(num_workers),
             num_workers,
         }
     }

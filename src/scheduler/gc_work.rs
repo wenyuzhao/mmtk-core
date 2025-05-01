@@ -215,6 +215,12 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                 .current_gc_should_prepare_for_class_unloading(),
         );
         trace!("stop_all_mutators end");
+
+        crate::RESERVED_PAGES_AT_GC_START.store(
+            mmtk.get_plan().get_reserved_pages(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        mmtk.get_plan().gc_pause_start(&mmtk.scheduler);
         mmtk.scheduler.notify_mutators_paused(mmtk);
         mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanVMSpecificRoots::<C>::new());
     }

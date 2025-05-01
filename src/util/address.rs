@@ -8,6 +8,9 @@ use std::ops::*;
 use std::sync::atomic::Ordering;
 
 use crate::mmtk::{MMAPPER, SFT_MAP};
+use crate::vm::{ObjectModel, VMBinding};
+
+use super::heap::layout::vm_layout::vm_layout;
 
 /// size in bytes
 pub type ByteSize = usize;
@@ -342,6 +345,16 @@ impl Address {
         }
     }
 
+    pub fn is_in_mmtk_heap(self) -> bool {
+        let layout = vm_layout();
+        self >= layout.heap_start && self < layout.heap_end
+    }
+
+    pub fn to_object_reference<VM: VMBinding>(self) -> ObjectReference {
+        debug_assert!(!self.is_zero());
+        unsafe { ObjectReference::from_raw_address_unchecked(self) }
+        // VM::VMObjectModel::ref_to_object_start(self)
+    }
     /// Returns the intersection of the two address ranges. The returned range could
     /// be empty if there is no intersection between the ranges.
     pub fn range_intersection(r1: &Range<Address>, r2: &Range<Address>) -> Range<Address> {
@@ -465,8 +478,6 @@ mod tests {
     }
 }
 
-use crate::vm::VMBinding;
-
 /// `ObjectReference` represents address for an object. Compared with `Address`, operations allowed
 /// on `ObjectReference` are very limited. No address arithmetics are allowed for `ObjectReference`.
 /// The idea is from the paper [Demystifying Magic: High-level Low-level Programming (VEE09)][FBC09]
@@ -573,6 +584,8 @@ use crate::vm::VMBinding;
 pub struct ObjectReference(NonZeroUsize);
 
 impl ObjectReference {
+    /// The null object reference, represented as zero.
+    pub const NULL: Option<Self> = None;
     /// The required minimal alignment for object reference. If the object reference's raw address is not aligned to this value,
     /// you will see an assertion failure in the debug build when constructing an object reference instance.
     pub const ALIGNMENT: usize = crate::util::constants::BYTES_IN_ADDRESS;
@@ -691,6 +704,10 @@ impl ObjectReference {
 
     /// Is the object in any MMTk spaces?
     pub fn is_in_any_space(self) -> bool {
+        let addr = self.to_raw_address();
+        if addr < vm_layout().heap_start || addr >= vm_layout().heap_end {
+            return false;
+        }
         unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_in_space(self)
     }
 
@@ -698,6 +715,14 @@ impl ObjectReference {
     #[cfg(feature = "sanity")]
     pub fn is_sane(self) -> bool {
         unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_sane()
+    }
+    pub fn get_size<VM: VMBinding>(self) -> usize {
+        VM::VMObjectModel::get_current_size(self)
+    }
+
+    pub fn range<VM: VMBinding>(self) -> Range<Address> {
+        let a = VM::VMObjectModel::ref_to_object_start(self);
+        a..a + self.get_size::<VM>()
     }
 }
 

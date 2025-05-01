@@ -80,6 +80,39 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         false
     }
 
+    fn acquire_logically(&self, tls: VMThread, pages: usize) -> bool {
+        debug_assert!(
+            !self.will_oom_on_acquire(tls, pages << LOG_BYTES_IN_PAGE),
+            "The requested pages is larger than the max heap size. Is will_go_oom_on_acquire used before acquring memory?"
+        );
+
+        // Should we poll to attempt to GC?
+        // - If tls is collector, we cannot attempt a GC.
+        // - If gc is disabled, we cannot attempt a GC.
+        let is_mutator = VM::VMActivePlan::is_mutator(tls);
+        let should_poll = is_mutator && VM::VMCollection::is_collection_enabled();
+        // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
+        // initialize_collection() has to be called so we know GC is initialized.
+        let allow_gc = should_poll && self.common().global_state.is_initialized();
+        let pr = self.get_page_resource();
+        let pages_reserved = pr.reserve_pages(pages);
+        if should_poll && self.get_gc_trigger().poll(false, Some(self.as_space())) {
+            assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
+
+            // Clear the request, and inform GC trigger about the pending allocation.
+            pr.clear_request(pages_reserved);
+            self.get_gc_trigger()
+                .policy
+                .on_pending_allocation(pages_reserved);
+
+            VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
+            false
+        } else {
+            pr.commit_pages(pages_reserved, pages, tls);
+            true
+        }
+    }
+
     fn acquire(&self, tls: VMThread, pages: usize) -> Address {
         trace!("Space.acquire, tls={:?}", tls);
 
@@ -91,8 +124,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         // Should we poll to attempt to GC?
         // - If tls is collector, we cannot attempt a GC.
         // - If gc is disabled, we cannot attempt a GC.
-        let should_poll =
-            VM::VMActivePlan::is_mutator(tls) && VM::VMCollection::is_collection_enabled();
+        let is_mutator = VM::VMActivePlan::is_mutator(tls);
+        let should_poll = is_mutator && VM::VMCollection::is_collection_enabled();
         // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
         // initialize_collection() has to be called so we know GC is initialized.
         let allow_gc = should_poll && self.common().global_state.is_initialized();
@@ -117,110 +150,18 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 .on_pending_allocation(total_pages_reserved);
 
             VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
-            unsafe { Address::zero() }
+            Address::ZERO
         } else {
-            debug!("Collection not required");
-
-            // We need this lock: Othrewise, it is possible that one thread acquires pages in a new chunk, but not yet
-            // set SFT for it (in grow_space()), and another thread acquires pages in the same chunk, which is not
-            // a new chunk so grow_space() won't be called on it. The second thread could return a result in the chunk before
-            // its SFT is properly set.
-            // We need to minimize the scope of this lock for performance when we have many threads (mutator threads, or GC threads with copying allocators).
-            // See: https://github.com/mmtk/mmtk-core/issues/610
-            let lock = self.common().acquire_lock.lock().unwrap();
-
-            match pr.get_new_pages(self.common().descriptor, pages_reserved, pages, tls) {
+            match pr.get_new_pages(self.as_space(), pages_reserved, pages, tls) {
                 Ok(res) => {
-                    debug!(
-                        "Got new pages {} ({} pages) for {} in chunk {}, new_chunk? {}",
-                        res.start,
-                        res.pages,
-                        self.get_name(),
-                        conversions::chunk_align_down(res.start),
-                        res.new_chunk
-                    );
                     let bytes = conversions::pages_to_bytes(res.pages);
-
-                    let mmap = || {
-                        // Mmap the pages and the side metadata, and handle error. In case of any error,
-                        // we will either call back to the VM for OOM, or simply panic.
-                        if let Err(mmap_error) = self
-                            .common()
-                            .mmapper
-                            .ensure_mapped(
-                                res.start,
-                                res.pages,
-                                self.common().mmap_strategy(),
-                                &memory::MmapAnnotation::Space {
-                                    name: self.get_name(),
-                                },
-                            )
-                            .and(self.common().metadata.try_map_metadata_space(
-                                res.start,
-                                bytes,
-                                self.get_name(),
-                            ))
-                        {
-                            memory::handle_mmap_error::<VM>(mmap_error, tls, res.start, bytes);
-                        }
-                    };
-                    let grow_space = || {
-                        self.grow_space(res.start, bytes, res.new_chunk);
-                    };
-
-                    // The scope of the lock is important in terms of performance when we have many allocator threads.
-                    if SFT_MAP.get_side_metadata().is_some() {
-                        // If the SFT map uses side metadata, so we have to initialize side metadata first.
-                        mmap();
-                        // then grow space, which will use the side metadata we mapped above
-                        grow_space();
-                        // then we can drop the lock after grow_space()
-                        drop(lock);
-                    } else {
-                        // In normal cases, we can drop lock immediately after grow_space()
-                        grow_space();
-                        drop(lock);
-                        // and map side metadata without holding the lock
-                        mmap();
-                    }
-
                     // TODO: Concurrent zeroing
-                    if self.common().zeroed {
+                    if self.common().zeroed && is_mutator && cfg!(feature = "force_zeroing") {
                         memory::zero(res.start, bytes);
                     }
-
-                    // Some assertions
-                    {
-                        // --- Assert the start of the allocated region ---
-                        // The start address SFT should be correct.
-                        debug_assert_eq!(SFT_MAP.get_checked(res.start).name(), self.get_name());
-                        // The start address is in our space.
-                        debug_assert!(self.address_in_space(res.start));
-                        // The descriptor should be correct.
-                        debug_assert_eq!(
-                            self.common().vm_map().get_descriptor_for_address(res.start),
-                            self.common().descriptor
-                        );
-
-                        // --- Assert the last byte in the allocated region ---
-                        let last_byte = res.start + bytes - 1;
-                        // The SFT for the last byte in the allocated memory should be correct.
-                        debug_assert_eq!(SFT_MAP.get_checked(last_byte).name(), self.get_name());
-                        // The last byte in the allocated memory should be in this space.
-                        debug_assert!(self.address_in_space(last_byte));
-                        // The descriptor for the last byte should be correct.
-                        debug_assert_eq!(
-                            self.common().vm_map().get_descriptor_for_address(last_byte),
-                            self.common().descriptor
-                        );
-                    }
-
-                    debug!("Space.acquire(), returned = {}", res.start);
                     res.start
                 }
                 Err(_) => {
-                    drop(lock); // drop the lock immediately
-
                     // We thought we had memory to allocate, but somehow failed the allocation. Will force a GC.
                     assert!(
                         allow_gc,
@@ -243,16 +184,14 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    fn address_in_space(&self, start: Address) -> bool {
-        if !self.common().descriptor.is_contiguous() {
-            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
-        } else {
-            start >= self.common().start && start < self.common().start + self.common().extent
-        }
-    }
-
     fn in_space(&self, object: ObjectReference) -> bool {
         self.address_in_space(object.to_raw_address())
+    }
+
+    fn address_in_space(&self, start: Address) -> bool {
+        use crate::vm::object_model::ObjectModel;
+        let common = self.common();
+        common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
     }
 
     /**
@@ -303,7 +242,8 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// Ensure this space is marked as mapped -- used when the space is already
     /// mapped (e.g. for a vm image which is externally mmapped.)
     fn ensure_mapped(&self) {
-        self.common()
+        self.get_page_resource()
+            .common()
             .metadata
             .try_map_metadata_space(self.common().start, self.common().extent, self.get_name())
             .unwrap_or_else(|e| {
@@ -324,7 +264,10 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// This function is used for both triggering GC (via [`Space::reserved_pages`]) and resizing
     /// the heap (via [`crate::util::heap::GCTriggerPolicy::on_pending_allocation`]).
     fn estimate_side_meta_pages(&self, data_pages: usize) -> usize {
-        self.common().metadata.calculate_reserved_pages(data_pages)
+        self.get_page_resource()
+            .common()
+            .metadata
+            .calculate_reserved_pages(data_pages)
     }
 
     fn reserved_pages(&self) -> usize {
@@ -369,8 +312,10 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// Arguments:
     /// * `side_metadata_sanity_checker`: The `SideMetadataSanity` object instantiated in the calling plan.
     fn verify_side_metadata_sanity(&self, side_metadata_sanity_checker: &mut SideMetadataSanity) {
-        side_metadata_sanity_checker
-            .verify_metadata_context(std::any::type_name::<Self>(), &self.common().metadata)
+        side_metadata_sanity_checker.verify_metadata_context(
+            std::any::type_name::<Self>(),
+            &self.get_page_resource().common().metadata,
+        )
     }
 
     /// Enumerate objects in the current space.
@@ -478,9 +423,8 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
 
     pub vm_map: &'static dyn VMMap,
+    pub vm_map_32: Option<&'static crate::util::heap::layout::map32::Map32>,
     pub mmapper: &'static dyn Mmapper,
-
-    pub(crate) metadata: SideMetadataContext,
 
     /// This field equals to needs_log_bit in the plan constraints.
     // TODO: This should be a constant for performance.
@@ -502,6 +446,15 @@ pub struct PolicyCreateSpaceArgs<'a, VM: VMBinding> {
     pub movable: bool,
     pub immortal: bool,
     pub local_side_metadata_specs: Vec<SideMetadataSpec>,
+}
+
+impl<VM: VMBinding> PolicyCreateSpaceArgs<'_, VM> {
+    pub(crate) fn metadata(&self) -> SideMetadataContext {
+        SideMetadataContext {
+            global: self.plan_args.global_side_metadata_specs.clone(),
+            local: self.local_side_metadata_specs.clone(),
+        }
+    }
 }
 
 /// Arguments passed from a plan to create a space.
@@ -553,13 +506,15 @@ impl<VM: VMBinding> CommonSpace<VM> {
             start: unsafe { Address::zero() },
             extent: 0,
             vm_map: args.plan_args.vm_map,
+            vm_map_32: args
+                .plan_args
+                .vm_map
+                .as_any()
+                .downcast_ref::<crate::util::heap::layout::map32::Map32>()
+                .map(|x| unsafe { &*(x as *const crate::util::heap::layout::map32::Map32) }),
             mmapper: args.plan_args.mmapper,
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             gc_trigger: args.plan_args.gc_trigger,
-            metadata: SideMetadataContext {
-                global: args.plan_args.global_side_metadata_specs,
-                local: args.local_side_metadata_specs,
-            },
             acquire_lock: Mutex::new(()),
             global_state: args.plan_args.global_state,
             options: args.plan_args.options.clone(),
@@ -631,14 +586,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
             }
         }
 
-        // For contiguous space, we know its address range so we reserve metadata memory for its range.
-        rtn.metadata
-            .try_map_metadata_address_range(rtn.start, rtn.extent, rtn.name)
-            .unwrap_or_else(|e| {
-                // TODO(Javad): handle meta space allocation failure
-                panic!("failed to mmap meta memory: {e}");
-            });
-
         debug!(
             "Created space {} [{}, {}) for {} bytes",
             rtn.name,
@@ -650,10 +597,11 @@ impl<VM: VMBinding> CommonSpace<VM> {
         rtn
     }
 
-    pub fn initialize_sft(
+    pub(crate) fn initialize_sft(
         &self,
         sft: &(dyn SFT + Sync + 'static),
         sft_map: &mut dyn crate::policy::sft_map::SFTMap,
+        metadata: &SideMetadataContext,
     ) {
         // We have to keep this for now: if a space is contiguous, our page resource will NOT consider newly allocated chunks
         // as new chunks (new_chunks = true). In that case, in grow_space(), we do not set SFT when new_chunks = false.
@@ -662,12 +610,27 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // * change grow_space() so it sets SFT no matter what the new_chunks value is.
         // FIXME: eagerly initializing SFT is not a good idea.
         if self.contiguous {
+            // FIXME(wenyuzhao):
+            // Move this if-block from CommonSpace::new to here, to fix the mutator performance
+            // issue on 32-core Zen3 machines (dacapo-evaluation-git-6e411f33, h2o, 7341M heap)
+            if metadata
+                .try_map_metadata_address_range(self.start, self.extent, &self.name)
+                .is_err()
+            {
+                // TODO(Javad): handle meta space allocation failure
+                panic!("failed to mmap meta memory");
+            }
             unsafe { sft_map.eager_initialize(sft, self.start, self.extent) };
         }
     }
 
     pub fn vm_map(&self) -> &'static dyn VMMap {
         self.vm_map
+    }
+
+    #[allow(unused)]
+    pub(crate) fn get_vm_map32(&self) -> &'static crate::util::heap::layout::map32::Map32 {
+        unsafe { self.vm_map_32.unwrap_unchecked() }
     }
 
     pub fn mmap_strategy(&self) -> MmapStrategy {

@@ -41,6 +41,8 @@ extern crate static_assertions;
 extern crate probe;
 
 mod mmtk;
+use std::sync::atomic::AtomicUsize;
+
 pub use mmtk::MMTKBuilder;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
@@ -60,3 +62,4 @@ pub mod vm;
 pub use crate::plan::{
     AllocationSemantics, BarrierSelector, Mutator, MutatorContext, ObjectQueue, Plan,
 };
+static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);

@@ -5,6 +5,8 @@ use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
 
+use super::metadata::side_metadata::SideMetadataSpec;
+
 // FIXME: MarkCompact uses linear scanning to discover allocated objects in the MarkCompactSpace.
 // It should use a local metadata (specific to the MarkCompactSpace) for that purpose.
 // In the future, we should let MarkCompact do linear scanning using its local metadata instead.
@@ -91,6 +93,7 @@ pub trait Region: Copy + PartialEq + PartialOrd {
     const LOG_BYTES: usize;
     /// The size in bytes for the region.
     const BYTES: usize = 1 << Self::LOG_BYTES;
+    const BPR_ALLOC_TABLE: Option<SideMetadataSpec> = None;
 
     /// Create a region from an address that is aligned to the region boundary. The method should panic if the address
     /// is not properly aligned to the region. For performance, this method should always be inlined.
@@ -129,9 +132,28 @@ pub trait Region: Copy + PartialEq + PartialOrd {
     fn containing(object: ObjectReference) -> Self {
         Self::from_unaligned_address(object.to_raw_address())
     }
+    /// Get the number of lines between the given two lines.
+    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+        if start.start() > end.start() {
+            return None;
+        }
+        Some((end.start() - start.start()) >> Self::LOG_BYTES)
+    }
     /// Check if the given address is in the region.
     fn includes_address(&self, addr: Address) -> bool {
         Self::align(addr) == self.start()
+    }
+    /// Get an iterator for regions within this chunk.
+    fn iter_region<R: Region>(&self) -> RegionIterator<R> {
+        // R should be smaller than a chunk
+        debug_assert!(R::LOG_BYTES < Self::LOG_BYTES);
+        // R should be aligned to chunk boundary
+        debug_assert!(R::is_aligned(self.start()));
+        debug_assert!(R::is_aligned(self.end()));
+
+        let start = R::from_aligned_address(self.start());
+        let end = R::from_aligned_address(self.end());
+        RegionIterator::<R>::new(start, end)
     }
 }
 

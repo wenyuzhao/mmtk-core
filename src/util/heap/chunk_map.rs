@@ -1,4 +1,5 @@
 use crate::scheduler::GCWork;
+use crate::scheduler::GCWorker;
 use crate::util::linear_scan::Region;
 use crate::util::linear_scan::RegionIterator;
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -29,19 +30,6 @@ impl Chunk {
     /// Chunk constant with zero address
     // FIXME: We use this as an empty value. What if we actually use the first chunk?
     pub const ZERO: Self = Self(Address::ZERO);
-
-    /// Get an iterator for regions within this chunk.
-    pub fn iter_region<R: Region>(&self) -> RegionIterator<R> {
-        // R should be smaller than a chunk
-        debug_assert!(R::LOG_BYTES < Self::LOG_BYTES);
-        // R should be aligned to chunk boundary
-        debug_assert!(R::is_aligned(self.start()));
-        debug_assert!(R::is_aligned(self.end()));
-
-        let start = R::from_aligned_address(self.start());
-        let end = R::from_aligned_address(self.end());
-        RegionIterator::<R>::new(start, end)
-    }
 }
 
 /// Chunk allocation state
@@ -123,6 +111,28 @@ impl ChunkMap {
             .filter(|c| self.get(*c) == ChunkState::Allocated)
         {
             work_packets.push(func(chunk));
+        }
+        work_packets
+    }
+
+    pub fn generate_tasks_batched<VM: VMBinding>(
+        &self,
+        func: impl Fn(Range<Chunk>) -> Box<dyn GCWork<VM>>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+        let chunk_range = self.chunk_range.lock();
+        let chunks = (chunk_range.end.start() - chunk_range.start.start()) >> Chunk::LOG_BYTES;
+        let num_bins = GCWorker::<VM>::current().mmtk.scheduler.num_workers() * 8;
+        let bin_size = (chunks + num_bins - 1) / num_bins;
+        for i in (0..chunks).step_by(bin_size) {
+            let start = chunk_range.start.next_nth(i);
+            let end = chunk_range.start.next_nth(i + bin_size);
+            let end = if end > chunk_range.end {
+                chunk_range.end
+            } else {
+                end
+            };
+            work_packets.push(func(start..end));
         }
         work_packets
     }

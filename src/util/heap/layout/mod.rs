@@ -11,7 +11,7 @@ mod map;
 pub(crate) use self::map::CreateFreeListResult;
 pub use self::map::VMMap;
 use self::vm_layout::vm_layout;
-mod map32;
+pub(crate) mod map32;
 #[cfg(target_pointer_width = "64")]
 mod map64;
 
