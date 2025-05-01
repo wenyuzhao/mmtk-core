@@ -71,23 +71,17 @@ impl Defrag {
         user_triggered: bool,
         exhausted_reusable_space: bool,
         full_heap_system_gc: bool,
-        concurrent_marking_enabled: bool,
     ) {
-        let mut in_defrag = super::DEFRAG
+        let _in_defrag = super::DEFRAG
             && (emergency_collection
                 || (collection_attempts > 1)
                 || !exhausted_reusable_space
                 || super::STRESS_DEFRAG
-                || (collect_whole_heap && user_triggered && full_heap_system_gc))
-            && !concurrent_marking_enabled;
-        // if cfg!(feature = "ix_always_defrag") {
-        //     in_defrag = true;
-        // }
-        info!("Defrag: {}", in_defrag);
-        // #[cfg(feature = "tracing")]
-        probe!(mmtk, immix_defrag, in_defrag);
-        self.in_defrag_collection
-            .store(in_defrag, Ordering::Release)
+                || (collect_whole_heap && user_triggered && full_heap_system_gc));
+        // info!("Defrag: {}", in_defrag);
+        // // #[cfg(feature = "tracing")]
+        // probe!(mmtk, immix_defrag, in_defrag);
+        self.in_defrag_collection.store(true, Ordering::Release)
     }
 
     /// Get the number of defrag headroom pages.

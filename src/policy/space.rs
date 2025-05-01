@@ -156,7 +156,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                 Ok(res) => {
                     let bytes = conversions::pages_to_bytes(res.pages);
                     // TODO: Concurrent zeroing
-                    if self.common().zeroed && is_mutator && cfg!(feature = "force_zeroing") {
+                    if self.common().zeroed {
                         memory::zero(res.start, bytes);
                     }
                     res.start
@@ -184,14 +184,16 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         }
     }
 
-    fn in_space(&self, object: ObjectReference) -> bool {
-        self.address_in_space(object.to_raw_address())
+    fn address_in_space(&self, start: Address) -> bool {
+        if !self.common().descriptor.is_contiguous() {
+            self.common().vm_map().get_descriptor_for_address(start) == self.common().descriptor
+        } else {
+            start >= self.common().start && start < self.common().start + self.common().extent
+        }
     }
 
-    fn address_in_space(&self, start: Address) -> bool {
-        use crate::vm::object_model::ObjectModel;
-        let common = self.common();
-        common.get_vm_map32().get_descriptor_for_address(start) == common.descriptor
+    fn in_space(&self, object: ObjectReference) -> bool {
+        self.address_in_space(object.to_raw_address())
     }
 
     /**
@@ -423,7 +425,6 @@ pub struct CommonSpace<VM: VMBinding> {
     pub extent: usize,
 
     pub vm_map: &'static dyn VMMap,
-    pub vm_map_32: Option<&'static crate::util::heap::layout::map32::Map32>,
     pub mmapper: &'static dyn Mmapper,
 
     /// This field equals to needs_log_bit in the plan constraints.
@@ -506,12 +507,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
             start: unsafe { Address::zero() },
             extent: 0,
             vm_map: args.plan_args.vm_map,
-            vm_map_32: args
-                .plan_args
-                .vm_map
-                .as_any()
-                .downcast_ref::<crate::util::heap::layout::map32::Map32>()
-                .map(|x| unsafe { &*(x as *const crate::util::heap::layout::map32::Map32) }),
             mmapper: args.plan_args.mmapper,
             needs_log_bit: args.plan_args.constraints.needs_log_bit,
             gc_trigger: args.plan_args.gc_trigger,
@@ -597,7 +592,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
         rtn
     }
 
-    pub(crate) fn initialize_sft(
+    pub fn initialize_sft(
         &self,
         sft: &(dyn SFT + Sync + 'static),
         sft_map: &mut dyn crate::policy::sft_map::SFTMap,
@@ -626,11 +621,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
 
     pub fn vm_map(&self) -> &'static dyn VMMap {
         self.vm_map
-    }
-
-    #[allow(unused)]
-    pub(crate) fn get_vm_map32(&self) -> &'static crate::util::heap::layout::map32::Map32 {
-        unsafe { self.vm_map_32.unwrap_unchecked() }
     }
 
     pub fn mmap_strategy(&self) -> MmapStrategy {

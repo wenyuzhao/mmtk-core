@@ -5,10 +5,7 @@ use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
-use crate::scheduler::GCWork;
-use crate::scheduler::GCWorker;
 use crate::util::constants::BYTES_IN_PAGE;
-use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::object_enum::ObjectEnumerator;
@@ -17,10 +14,6 @@ use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use crossbeam::queue::SegQueue;
-use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 
 #[allow(unused)]
 const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
@@ -32,14 +25,11 @@ const LOS_BIT_MASK: u8 = 0b11;
 /// to one Treadmill space.
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
-    pub(crate) pr: FreeListPageResource<VM>,
+    pr: FreeListPageResource<VM>,
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill,
     trace_in_progress: bool,
-    pub num_pages_released_lazy: AtomicUsize,
-    pub young_alloc_size: AtomicUsize,
-    pub is_end_of_satb_or_full_gc: bool,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -188,8 +178,8 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
         &self.common
     }
 
-    fn release_multiple_pages(&mut self, _start: Address) {
-        unreachable!()
+    fn release_multiple_pages(&mut self, start: Address) {
+        self.pr.release_pages(start);
     }
 
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
@@ -197,6 +187,7 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     }
 }
 
+use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjectSpace<VM> {
@@ -245,14 +236,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             in_nursery_gc: false,
             treadmill: TreadMill::new(),
             trace_in_progress: false,
-            num_pages_released_lazy: Default::default(),
-            young_alloc_size: Default::default(),
-            is_end_of_satb_or_full_gc: false,
         }
-    }
-
-    fn release_object(&self, start: Address) -> usize {
-        self.pr.release_pages(start)
     }
 
     pub fn prepare(&mut self, full_heap: bool) {
@@ -261,8 +245,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             debug_assert!(self.treadmill.is_from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
-        self.num_pages_released_lazy.store(0, Ordering::Relaxed);
-        self.young_alloc_size.store(0, Ordering::Relaxed);
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
     }
@@ -275,18 +257,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.sweep_large_pages(false);
         }
     }
-
-    pub fn trace_object_rc<Q: ObjectQueue>(
-        &self,
-        queue: &mut Q,
-        object: ObjectReference,
-    ) -> ObjectReference {
-        if self.test_and_mark(object, self.mark_state) {
-            queue.enqueue(object);
-        }
-        return object;
-    }
-
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
@@ -314,6 +284,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 trace!("LOS object {} is being marked now", object);
                 self.treadmill.copy(object, nursery_object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
+                // We also unlog mature objects as their unlog bit may have been unset before the
+                // full-heap GC
+                if self.common.needs_log_bit {
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                }
                 queue.enqueue(object);
             } else {
                 trace!(
@@ -334,7 +310,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
                 unreachable!()
             }
-            self.release_object(get_super_page(object.to_object_start::<VM>()));
+            self.pr
+                .release_pages(get_super_page(object.to_object_start::<VM>()));
         };
         if sweep_nursery {
             for object in self.treadmill.collect_nursery() {
@@ -352,47 +329,49 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.acquire(tls, pages)
     }
 
-    pub fn attempt_mark(&self, object: ObjectReference) -> bool {
-        self.test_and_mark(object, self.mark_state)
-    }
-
-    pub fn is_marked(&self, object: ObjectReference) -> bool {
-        self.test_mark_bit(object, self.mark_state)
-    }
-
     /// Test if the object's mark bit is the same as the given value. If it is not the same,
     /// the method will attemp to mark the object and clear its nursery bit. If the attempt
     /// succeeds, the method will return true, meaning the object is marked by this invocation.
     /// Otherwise, it returns false.
     fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {
-        let mask = if self.in_nursery_gc {
-            LOS_BIT_MASK
-        } else {
-            MARK_BIT
-        };
-        let result = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
-            .as_spec()
-            .extract_side_spec()
-            .fetch_update_atomic::<u8, _>(
-                object.to_raw_address(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |old_value| {
-                    let mark_bit = old_value & mask;
-                    if mark_bit == value {
-                        return None;
-                    }
-                    Some(old_value & !LOS_BIT_MASK | value)
-                },
+        loop {
+            let mask = if self.in_nursery_gc {
+                LOS_BIT_MASK
+            } else {
+                MARK_BIT
+            };
+            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
+                object,
+                None,
+                Ordering::SeqCst,
             );
-        result.is_ok()
+            let mark_bit = old_value & mask;
+            if mark_bit == value {
+                return false;
+            }
+            // using LOS_BIT_MASK have side effects of clearing nursery bit
+            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
+                .compare_exchange_metadata::<VM, u8>(
+                    object,
+                    old_value,
+                    old_value & !LOS_BIT_MASK | value,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        true
     }
 
     fn test_mark_bit(&self, object: ObjectReference, value: u8) -> bool {
         VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
             object,
             None,
-            Ordering::Relaxed,
+            Ordering::SeqCst,
         ) & MARK_BIT
             == value
     }

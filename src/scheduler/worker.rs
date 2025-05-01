@@ -172,16 +172,6 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.local_work_buffer.push(Box::new(work));
     }
 
-    pub fn add_boxed_work(&mut self, bucket: WorkBucketStage, work: Box<dyn GCWork<VM>>) {
-        if !self.scheduler().work_buckets[bucket].is_activated()
-            || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
-        {
-            self.scheduler.work_buckets[bucket].add_boxed(work);
-            return;
-        }
-        self.local_work_buffer.push(work);
-    }
-
     /// Add a work packet to the work queue.
     /// If the bucket is activated, the packet will be pushed to the local queue, otherwise it will be
     /// pushed to the global bucket.
@@ -242,7 +232,6 @@ impl<VM: VMBinding> GCWorker<VM> {
             crate::util::rust_util::debug_process_thread_id(),
         );
         WORKER_ORDINAL.with(|x| x.store(self.ordinal, Ordering::SeqCst));
-        let worker = (&mut *self as &mut Self) as *mut Self;
         _WORKER.with(|x| {
             x.store(
                 (&mut *self as &mut Self) as *mut Self as usize,

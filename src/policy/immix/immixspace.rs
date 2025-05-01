@@ -28,15 +28,9 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use crossbeam::queue::SegQueue;
-use std::mem;
 use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 use std::sync::{atomic::AtomicU8, Arc};
-
-pub static RELEASED_NURSERY_BLOCKS: AtomicUsize = AtomicUsize::new(0);
-pub static RELEASED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
@@ -54,7 +48,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
     lines_consumed: AtomicUsize,
-    reused_lines_consumed: AtomicUsize,
     /// Object mark state
     mark_state: u8,
     /// Work packet scheduler
@@ -62,15 +55,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
     pub block_allocation: BlockAllocation<VM>,
-    possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
-    pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    pub num_clean_blocks_released_young: AtomicUsize,
-    pub num_clean_blocks_released_mature: AtomicUsize,
-    pub num_clean_blocks_released_lazy: AtomicUsize,
     pub copy_alloc_bytes: AtomicUsize,
-    pub cm_enabled: bool,
-    pub is_end_of_satb_or_full_gc: bool,
 }
 
 /// Some arguments for Immix Space.
@@ -109,11 +95,6 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     fn is_live(&self, object: ObjectReference) -> bool {
         if self.initial_mark_pause {
             return true;
-        }
-        if self.cm_enabled {
-            if Block::containing(object).is_nursery() {
-                return true;
-            }
         }
 
         // If the mark bit is set, it is live.
@@ -355,22 +336,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
             lines_consumed: AtomicUsize::new(0),
-            reused_lines_consumed: AtomicUsize::new(0),
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
             mark_state: Self::MARKED_STATE,
             scheduler,
             space_args,
             block_allocation: BlockAllocation::new(),
-            possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
-            mature_evac_remsets: Default::default(),
-            num_clean_blocks_released_young: Default::default(),
-            num_clean_blocks_released_mature: Default::default(),
-            num_clean_blocks_released_lazy: Default::default(),
             copy_alloc_bytes: Default::default(),
-            cm_enabled: false,
-            is_end_of_satb_or_full_gc: false,
         }
     }
 
@@ -406,7 +379,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             user_triggered_collection,
             self.pr.exhausted_reusable_space(),
             full_heap_system_gc,
-            self.cm_enabled,
         );
         self.defrag.in_defrag()
     }
@@ -556,31 +528,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
-        block.deinit(self);
-    }
-
-    /// Allocate a clean block.
-    pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block_address = self.acquire(tls, Block::PAGES);
-        if block_address.is_zero() {
-            return None;
-        }
-        self.defrag.notify_new_clean_block(copy);
-        let block = Block::from_aligned_address(block_address);
-        self.block_allocation
-            .initialize_new_clean_block(block, copy, self.cm_enabled);
-        self.chunk_map.set(block.chunk(), ChunkState::Allocated);
-
-        self.lines_consumed
-            .fetch_add(Block::LINES, Ordering::SeqCst);
-
-        #[cfg(feature = "lxr_srv_ratio_counter")]
-        if !copy {
-            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
-                .ix_clean_alloc_vol
-                .fetch_add(Block::BYTES, Ordering::SeqCst);
-        }
-        Some(block)
+        block.deinit();
     }
 
     /// Get a list of clean or reusable blocks.
@@ -624,18 +572,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if clean {
             self.defrag.notify_new_clean_block(copy);
             self.block_allocation
-                .initialize_new_clean_block(block, copy, self.cm_enabled);
+                .initialize_new_clean_block(block, copy);
             self.chunk_map.set(block.chunk(), ChunkState::Allocated);
             self.lines_consumed
                 .fetch_add(Block::LINES, Ordering::SeqCst);
-            #[cfg(feature = "lxr_srv_ratio_counter")]
-            if !copy {
-                crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
-                    .ix_clean_alloc_vol
-                    .fetch_add(Block::BYTES, Ordering::SeqCst);
-            }
         } else {
-            block.init(copy, true, self);
+            block.init(copy, true);
         }
     }
 
@@ -816,22 +758,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         result.is_ok()
     }
 
-    /// Atomically mark an object.
-    pub fn unmark(&self, object: ObjectReference) -> bool {
-        let result = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.fetch_update_metadata::<VM, u8, _>(
-            object,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |v| {
-                if v != 1 {
-                    return None;
-                }
-                Some(0)
-            },
-        );
-        result.is_ok()
-    }
-
     pub fn is_marked(&self, object: ObjectReference) -> bool {
         let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
             object,
@@ -839,13 +765,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Ordering::Relaxed,
         );
         old_value == 1
-    }
-
-    pub fn line_is_marked(&self, a: Address) -> bool {
-        let b = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-            .extract_side_spec()
-            .load_byte(a);
-        b == u8::MAX
     }
 
     /// Check if an object is pinned.
@@ -880,7 +799,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         let block = search_start.block();
-        let mut mark_data = block.line_mark_table();
+        let mark_data = block.line_mark_table();
         let start_cursor = search_start.get_index_within_block();
         let mut cursor = start_cursor;
         // Find start
@@ -900,9 +819,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let mark = mark_data.get(cursor);
             if mark == unavail_state || mark == current_state {
                 break;
-            }
-            if self.cm_enabled {
-                mark_data.set(cursor, current_state);
             }
             cursor += 1;
         }
@@ -1070,7 +986,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                     freed_blocks += 1;
                 }
             }
-            #[cfg(feature = "tracing")]
             probe!(mmtk, sweep_chunk, allocated_blocks);
             // Set this chunk as free if there is not live blocks.
             if allocated_blocks == 0 {

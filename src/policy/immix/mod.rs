@@ -68,7 +68,7 @@ macro_rules! validate {
 
 fn validate_features() {
     // Block-only immix cannot do defragmentation
-    // validate!(DEFRAG => !BLOCK_ONLY);
-    // // Number of lines in a block should not exceed BlockState::MARK_MARKED
-    // assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
+    validate!(DEFRAG => !BLOCK_ONLY);
+    // Number of lines in a block should not exceed BlockState::MARK_MARKED
+    assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
