@@ -84,8 +84,6 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The thread pointer for the current GC thread.
     fn schedule_finalization(_tls: VMWorkerThread) {}
 
-    fn clear_cld_claimed_marks() {}
-
     /// A hook for the VM to do work after forwarding objects.
     ///
     /// This function is called after all of the following have finished:
