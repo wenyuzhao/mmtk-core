@@ -310,7 +310,9 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     }
 
     fn current_gc_should_perform_class_unloading(&self) -> bool {
-        true
+        !self
+            .generational()
+            .is_some_and(|plan| plan.is_current_gc_nursery())
     }
 
     /// Return whether the current GC may move any object.  The VM binding can make use of this
