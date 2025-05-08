@@ -427,7 +427,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
         if force || !*self.options.ignore_system_gc && VM::VMCollection::is_collection_enabled() {
             info!("User triggering collection");
-            if exhaustive {
+            if exhaustive || force {
                 if let Some(gen) = self.get_plan().generational() {
                     gen.force_full_heap_collection();
                 }
