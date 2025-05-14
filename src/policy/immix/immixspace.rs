@@ -322,14 +322,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     metadata,
                 )
             } else {
-                BlockPageResource::new_contiguous(
-                    Block::LOG_PAGES,
-                    common.start,
-                    common.extent,
-                    vm_map,
-                    scheduler.num_workers(),
-                    metadata,
-                )
+                unreachable!()
             },
             common,
             chunk_map: ChunkMap::new(),

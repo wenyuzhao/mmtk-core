@@ -85,21 +85,7 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         _num_workers: usize,
         mut metadata: SideMetadataContext,
     ) -> Self {
-        assert!((1 << log_pages) <= PAGES_IN_CHUNK);
-        Self::append_local_metadata(&mut metadata);
-        Self {
-            flpr: FreeListPageResource::new_contiguous(start, bytes, vm_map, metadata),
-            total_chunks: AtomicUsize::new(0),
-            chunks: RwLock::new(vec![]),
-            clean_block_cursor: AtomicUsize::new(0),
-            clean_block_steal_cursor: AtomicUsize::new(0),
-            reuse_block_cursor: AtomicUsize::new(0),
-            reuse_block_steal_cursor: AtomicUsize::new(0),
-            clean_block_cursor_before_gc: AtomicUsize::new(0),
-            reuse_block_cursor_before_gc: AtomicUsize::new(0),
-            rc_enabled: false,
-            _p: PhantomData,
-        }
+        unimplemented!()
     }
 
     pub(crate) fn new_discontiguous(
