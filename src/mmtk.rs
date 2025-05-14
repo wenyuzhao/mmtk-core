@@ -427,7 +427,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
         if force || !*self.options.ignore_system_gc && VM::VMCollection::is_collection_enabled() {
             info!("User triggering collection");
-            if exhaustive {
+            if exhaustive || force {
                 if let Some(gen) = self.get_plan().generational() {
                     gen.force_full_heap_collection();
                 }
@@ -437,7 +437,8 @@ impl<VM: VMBinding> MMTK<VM> {
                 .user_triggered_collection
                 .store(true, Ordering::Relaxed);
             self.gc_requester.request();
-            if !tls.0 .0.is_null() {
+            // Block if the caller is a mutator thread.
+            if !tls.is_uninitialized() {
                 VM::VMCollection::block_for_gc(tls);
             }
             return true;

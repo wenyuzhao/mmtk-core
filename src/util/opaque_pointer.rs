@@ -67,6 +67,14 @@ impl VMThread {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct VMMutatorThread(pub VMThread);
 
+impl VMMutatorThread {
+    /// Return true if this is an uninitialized VMMutatorThread.
+    /// For VM-thread triggered GCs, the handle_user_collection_request callers may not be able to provide a valid VMMutatorThread pointer.
+    pub fn is_uninitialized(&self) -> bool {
+        self.0 .0.is_null()
+    }
+}
+
 /// A VMWorkerThread is a VMThread that is associates with a [`crate::scheduler::GCWorker`].
 /// When a VMWorkerThread is used as an argument or a field of a type, it generally means
 /// the function or the functions for the type is executed in the context of the mutator thread.
