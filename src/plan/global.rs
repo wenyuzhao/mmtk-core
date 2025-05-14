@@ -3,7 +3,6 @@
 use super::PlanConstraints;
 use crate::global_state::GlobalState;
 use crate::mmtk::MMTK;
-use crate::mmtk::VM_MAP;
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;

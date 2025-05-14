@@ -139,12 +139,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
 impl<VM: VMBinding> Immix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
-        let immix_specs =
-            metadata::extract_side_metadata(&[MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE)]);
         let plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &IMMIX_CONSTRAINTS,
-            global_side_metadata_specs: SideMetadataContext::new_global_specs(&immix_specs),
+            global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
         };
         Self::new_with_args(
             plan_args,

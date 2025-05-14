@@ -570,7 +570,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
                 space.get_name(),
             ))
         {
-            crate::util::memory::handle_mmap_error::<VM>(mmap_error, VMThread::UNINITIALIZED);
+            crate::util::memory::handle_mmap_error::<VM>(
+                mmap_error,
+                VMThread::UNINITIALIZED,
+                start,
+                BYTES_IN_CHUNK,
+            );
         }
         space.grow_space(start, BYTES_IN_CHUNK, true);
         self.total_chunks.fetch_add(1, Ordering::SeqCst);

@@ -164,7 +164,12 @@ impl<VM: VMBinding> PageResource<VM> for FreeListPageResource<VM> {
                     space.get_name(),
                 ))
             {
-                memory::handle_mmap_error::<VM>(mmap_error, tls);
+                memory::handle_mmap_error::<VM>(
+                    mmap_error,
+                    tls,
+                    rtn,
+                    growed_chunks << LOG_BYTES_IN_CHUNK,
+                );
             }
             space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, true);
         }

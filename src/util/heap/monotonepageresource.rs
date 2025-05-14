@@ -188,7 +188,12 @@ impl<VM: VMBinding> PageResource<VM> for MonotonePageResource<VM> {
                         space.get_name(),
                     ))
                 {
-                    memory::handle_mmap_error::<VM>(mmap_error, tls);
+                    memory::handle_mmap_error::<VM>(
+                        mmap_error,
+                        tls,
+                        new_chunks_start,
+                        growed_chunks << LOG_BYTES_IN_CHUNK,
+                    );
                 }
                 space.grow_space(rtn, growed_chunks << LOG_BYTES_IN_CHUNK, true);
             }

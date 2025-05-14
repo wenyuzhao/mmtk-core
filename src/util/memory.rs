@@ -304,10 +304,15 @@ pub fn munmap(start: Address, size: usize) -> Result<()> {
 
 /// Properly handle errors from a mmap Result, including invoking the binding code in the case of
 /// an OOM error.
-pub fn handle_mmap_error<VM: VMBinding>(error: Error, tls: VMThread) -> ! {
+pub fn handle_mmap_error<VM: VMBinding>(
+    error: Error,
+    tls: VMThread,
+    addr: Address,
+    bytes: usize,
+) -> ! {
     use std::io::ErrorKind;
 
-    // eprintln!("Failed to mmap {}, size {}", addr, bytes);
+    eprintln!("Failed to mmap {}, size {}", addr, bytes);
     eprintln!("{}", get_process_memory_maps());
 
     match error.kind() {
