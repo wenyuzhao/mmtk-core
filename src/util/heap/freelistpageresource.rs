@@ -34,7 +34,6 @@ pub struct FreeListPageResource<VM: VMBinding> {
     _p: PhantomData<VM>,
     /// Protect memory on release, and unprotect on re-allocate.
     pub(crate) protect_memory_on_release: Option<memory::MmapProtection>,
-    pub(crate) total_chunks: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Send for FreeListPageResource<VM> {}
@@ -213,7 +212,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             }),
             _p: PhantomData,
             protect_memory_on_release: None,
-            total_chunks: AtomicUsize::new(0),
         }
     }
 
@@ -252,7 +250,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             }),
             _p: PhantomData,
             protect_memory_on_release: None,
-            total_chunks: AtomicUsize::new(0),
         }
     }
 
@@ -332,8 +329,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         );
 
         if !region.is_zero() {
-            self.total_chunks
-                .fetch_add(required_chunks, Ordering::Relaxed);
             let region_start = conversions::bytes_to_pages_up(region - sync.start);
             let region_end = region_start + (required_chunks * PAGES_IN_CHUNK) - 1;
             sync.free_list.set_uncoalescable(region_start as _);
@@ -354,7 +349,6 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
 
     unsafe fn free_contiguous_chunk(&self, chunk: Address, sync: &mut FreeListPageResourceSync) {
         let num_chunks = self.vm_map().get_contiguous_region_chunks(chunk);
-        self.total_chunks.fetch_sub(num_chunks, Ordering::Relaxed);
         /* nail down all pages associated with the chunk, so it is no longer on our free list */
         let mut chunk_start = conversions::bytes_to_pages_up(chunk - sync.start);
         let chunk_end = chunk_start + (num_chunks * PAGES_IN_CHUNK);
