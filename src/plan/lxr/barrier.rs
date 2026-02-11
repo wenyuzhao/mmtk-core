@@ -20,6 +20,7 @@ use crate::policy::space::Space;
 use crate::scheduler::WorkBucketStage;
 use crate::util::address::CLDScanPolicy;
 use crate::util::address::RefScanPolicy;
+use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
 use crate::vm::slot::MemorySlice;
 use crate::vm::slot::Slot;
@@ -42,6 +43,10 @@ pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
+    const UNLOG_BITS: SideMetadataSpec = *VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
+        .as_spec()
+        .extract_side_spec();
+
     #[allow(unused)]
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         Self {
@@ -55,13 +60,18 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
+    fn get_slot_logging_state(&self, slot: VM::VMSlot) -> u8 {
+        unsafe { Self::UNLOG_BITS.load(slot.to_address()) }
+    }
+
     fn attempt_to_log_field(&self, slot: VM::VMSlot) -> bool {
-        let spec = VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
-            .as_spec()
-            .extract_side_spec();
         loop {
+            // Bailout if logged
+            if self.get_slot_logging_state(slot) == LOGGED_VALUE {
+                return false;
+            }
             // Attempt to log the slots
-            match spec.compare_exchange_atomic(
+            match Self::UNLOG_BITS.compare_exchange_atomic(
                 slot.to_address(),
                 UNLOGGED_VALUE,
                 LOGGED_VALUE,
