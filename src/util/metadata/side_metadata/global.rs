@@ -13,6 +13,31 @@ use std::fmt;
 use std::io::Result;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+pub struct BitRef {
+    pub addr: Address,
+    pub lshift: u8,
+}
+
+impl BitRef {
+    pub const fn load(&self) -> u8 {
+        (self.load_raw_byte() >> self.lshift) & 1
+    }
+
+    pub const fn load_raw_byte(&self) -> u8 {
+        unsafe { *(self.addr.to_ptr::<u8>()) }
+    }
+
+    pub fn fetch_update(
+        &self,
+        set_order: Ordering,
+        fetch_order: Ordering,
+        f: impl FnMut(u8) -> Option<u8>,
+    ) -> std::result::Result<u8, u8> {
+        let slot: &AtomicU8 = unsafe { self.addr.as_ref::<AtomicU8>() };
+        slot.fetch_update(set_order, fetch_order, f)
+    }
+}
+
 /// This struct stores the specification of a side metadata bit-set.
 /// It is used as an input to the (inline) functions provided by the side metadata module.
 ///
@@ -523,6 +548,12 @@ impl SideMetadataSpec {
                 sanity::verify_load(self, data_addr, _v);
             },
         )
+    }
+
+    pub const fn extract_bit_location(&self, data_addr: Address) -> BitRef {
+        let addr = { address_to_contiguous_meta_address(self, data_addr) };
+        let lshift = meta_byte_lshift(self, data_addr);
+        BitRef { addr, lshift }
     }
 
     /// Non-atomic store of metadata.

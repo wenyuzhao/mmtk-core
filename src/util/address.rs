@@ -322,7 +322,7 @@ impl Address {
     }
 
     /// converts the Address to a pointer
-    pub fn to_ptr<T>(self) -> *const T {
+    pub const fn to_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 

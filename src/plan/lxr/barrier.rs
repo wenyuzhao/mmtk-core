@@ -1,14 +1,12 @@
 //! Read/Write barrier implementations.
 
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use atomic::Ordering;
 
 use super::LXR;
 use crate::plan::barriers::BarrierSemantics;
-use crate::plan::barriers::LOGGED_VALUE;
-use crate::plan::barriers::UNLOGGED_VALUE;
+use crate::plan::barriers::{FAST_COUNT, SLOW_COUNT};
 use crate::plan::immix::Pause;
 use crate::plan::lxr::cm::ProcessModBufSATB;
 use crate::plan::lxr::rc::ProcessDecs;
@@ -29,8 +27,6 @@ use crate::LazySweepingJobsCounter;
 use crate::MMTK;
 
 pub const TAKERATE_MEASUREMENT: bool = crate::args::TAKERATE_MEASUREMENT;
-pub static FAST_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub struct LXRFieldBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
@@ -60,59 +56,30 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    fn get_slot_logging_state(&self, slot: VM::VMSlot) -> u8 {
-        unsafe { Self::UNLOG_BITS.load(slot.to_address()) }
-    }
-
-    fn attempt_to_log_field(&self, slot: VM::VMSlot) -> bool {
-        loop {
-            // Bailout if logged
-            if self.get_slot_logging_state(slot) == LOGGED_VALUE {
-                return false;
-            }
-            // Attempt to log the slots
-            match Self::UNLOG_BITS.compare_exchange_atomic(
-                slot.to_address(),
-                UNLOGGED_VALUE,
-                LOGGED_VALUE,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => return true,
-                Err(current) => {
-                    if current == LOGGED_VALUE {
-                        return false;
-                    }
-                }
-            }
-            // Failed to log the slot. Spin.
-            std::hint::spin_loop();
+    fn log_slot_and_get_old_target(&self, slot: VM::VMSlot) -> Option<Option<ObjectReference>> {
+        let bit_ref = Self::UNLOG_BITS.extract_bit_location(slot.to_address());
+        let byte = bit_ref.load_raw_byte();
+        if byte == 0 {
+            return None;
         }
-    }
-
-    fn log_slot_and_get_old_target(&self, slot: VM::VMSlot) -> Result<Option<ObjectReference>, ()> {
-        if self.get_slot_logging_state(slot) == LOGGED_VALUE {
-            return Err(());
+        let mask: u8 = 1 << bit_ref.lshift;
+        if (byte & mask) == 0 {
+            return None;
         }
         let old = slot.load();
-        if self.attempt_to_log_field(slot) {
-            Ok(old)
+        let r = bit_ref.fetch_update(Ordering::SeqCst, Ordering::Relaxed, |byte| {
+            if byte == 0 {
+                None
+            } else if (byte & mask) == 0 {
+                None
+            } else {
+                Some(byte & !mask)
+            }
+        });
+        if r.is_ok() {
+            Some(old)
         } else {
-            Err(())
-        }
-    }
-
-    #[allow(unused)]
-    fn log_slot_and_get_old_target_sloppy(
-        &self,
-        slot: VM::VMSlot,
-    ) -> Result<Option<ObjectReference>, ()> {
-        if !slot.to_address().is_field_logged::<VM>() {
-            let old = slot.load();
-            slot.to_address().log_field::<VM>();
-            Ok(old)
-        } else {
-            Err(())
+            None
         }
     }
 
@@ -159,7 +126,12 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
         // Reference counting
         if let Some(old) = old {
-            if !cfg!(feature = "lxr_no_decs") || !self.lxr.is_marked(old) {
+            if !cfg!(feature = "lxr_no_decs") {
+                self.decs.push(old);
+                if self.decs.is_full() {
+                    self.flush_decs_and_satb();
+                }
+            } else if !self.lxr.is_marked(old) {
                 self.decs.push(old);
                 if self.decs.is_full() {
                     self.flush_decs_and_satb();
@@ -179,16 +151,11 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
         }
     }
 
-    fn enqueue_node(
-        &mut self,
-        src: Option<ObjectReference>,
-        slot: VM::VMSlot,
-        _new: Option<ObjectReference>,
-    ) -> bool {
+    fn enqueue_node(&mut self, src: Option<ObjectReference>, slot: VM::VMSlot) -> bool {
         if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
             FAST_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        if let Ok(old) = self.log_slot_and_get_old_target(slot) {
+        if let Some(old) = self.log_slot_and_get_old_target(slot) {
             if TAKERATE_MEASUREMENT && self.mmtk.inside_harness() {
                 SLOW_COUNT.fetch_add(1, Ordering::SeqCst);
             }
@@ -272,16 +239,16 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         &mut self,
         src: Option<ObjectReference>,
         slot: VM::VMSlot,
-        target: Option<ObjectReference>,
+        _target: Option<ObjectReference>,
     ) {
-        self.enqueue_node(src, slot, target);
+        self.enqueue_node(src, slot);
     }
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
         for s in dst.iter_slots() {
-            let _succ = self.enqueue_node(ObjectReference::NULL, s, None);
+            let _succ = self.enqueue_node(ObjectReference::NULL, s);
             #[cfg(feature = "lxr_precise_incs_counter")]
             if _succ {
                 slots += 1;
@@ -313,7 +280,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
         #[cfg(feature = "lxr_precise_incs_counter")]
         let mut slots = 0;
         obj.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |s, _| {
-            let _succ = self.enqueue_node(Some(obj), s, None);
+            let _succ = self.enqueue_node(Some(obj), s);
             #[cfg(feature = "lxr_precise_incs_counter")]
             {
                 assert!(_succ);
