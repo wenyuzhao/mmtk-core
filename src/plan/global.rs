@@ -245,10 +245,6 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
     fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool;
 
-    fn concurrent_collection_required(&self) -> bool {
-        false
-    }
-
     fn should_process_reference(
         &self,
         _reference: ObjectReference,
@@ -861,6 +857,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
         }
     }
 
+    #[allow(unused)]
     fn prepare_nonmoving_space(&mut self, _full_heap: bool) {
         cfg_if::cfg_if! {
             if #[cfg(feature = "immortal_as_nonmoving")] {
@@ -873,6 +870,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
         }
     }
 
+    #[allow(unused)]
     fn release_nonmoving_space(&mut self, _full_heap: bool) {
         cfg_if::cfg_if! {
             if #[cfg(feature = "immortal_as_nonmoving")] {

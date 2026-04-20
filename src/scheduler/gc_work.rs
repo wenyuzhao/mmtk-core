@@ -9,8 +9,6 @@ use crate::plan::lxr::LXR;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
 use crate::plan::VectorQueue;
-use crate::util::metadata::side_metadata::address_to_meta_address;
-use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::*;
 use crate::vm::slot::Slot;
 use crate::vm::*;
@@ -208,6 +206,7 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
 ///
 /// TODO: Smaller work granularity
 #[derive(Default)]
+#[allow(unused)]
 pub struct StopMutators<C: GCWorkContext> {
     /// If this is true, we skip creating [`ScanMutatorRoots`] work packets for mutators.
     /// By default, this is false.
@@ -1125,36 +1124,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     }
 }
 
-pub struct UnlogSlots<VM: VMBinding>(pub Vec<VM::VMSlot>);
-
-impl<VM: VMBinding> UnlogSlots<VM> {
-    fn unlog_slots(&self, meta: &SideMetadataSpec) {
-        if !self.0.is_empty() {
-            for slot in &self.0 {
-                let ptr = address_to_meta_address(meta, slot.to_address());
-                unsafe {
-                    ptr.store(0b11111111u8);
-                }
-            }
-        }
-    }
-}
-impl<VM: VMBinding> GCWork<VM> for UnlogSlots<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.unlog_slots(
-            VM::VMObjectModel::GLOBAL_FIELD_UNLOG_BIT_SPEC
-                .as_spec()
-                .extract_side_spec(),
-        );
-    }
-}
-
-pub struct DummyPacket<T: 'static + Send>(pub T);
-
-impl<T: 'static + Send, VM: VMBinding> GCWork<VM> for DummyPacket<T> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {}
-}
-
 use crate::mmtk::MMTK;
 use crate::plan::Plan;
 use crate::plan::PlanTraceObject;
@@ -1432,8 +1401,6 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
             }
         }
 
-        let num_roots = self.roots.len();
-
         // This step conceptually traces the edges from root slots to the objects they point to.
         // However, VMs that deliver root objects instead of root slots are incapable of updating
         // root slots.  Therefore, we call `trace_object` on those objects, and assert the GC
@@ -1462,6 +1429,7 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
             VectorQueue::take(&mut process_edges_work.nodes)
         };
 
+        #[cfg(feature = "tracing")]
         let num_enqueued_nodes = root_objects_to_scan.len();
         #[cfg(feature = "tracing")]
         probe!(mmtk, process_root_nodes, num_roots, num_enqueued_nodes);

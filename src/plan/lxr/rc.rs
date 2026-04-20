@@ -25,8 +25,6 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
-#[cfg(feature = "measure_rc_rate")]
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[inline]
@@ -56,12 +54,6 @@ pub struct ProcessIncs<VM: VMBinding, const KIND: EdgeKind> {
     rc: RefCountHelper<VM>,
     survival_ratio_predictor_local: SurvivalRatioPredictorLocal,
     copy_context: *mut GCWorkerCopyContext<VM>,
-    #[cfg(feature = "lxr_precise_incs_counter")]
-    stat: crate::LocalRCStat,
-    #[cfg(feature = "measure_rc_rate")]
-    inc_objs: usize,
-    #[cfg(feature = "measure_rc_rate")]
-    copy_objs: usize,
 }
 
 unsafe impl<VM: VMBinding, const KIND: EdgeKind> Send for ProcessIncs<VM, KIND> {}
@@ -96,12 +88,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             root_kind: None,
             survival_ratio_predictor_local: SurvivalRatioPredictorLocal::default(),
             copy_context: std::ptr::null_mut(),
-            #[cfg(feature = "lxr_precise_incs_counter")]
-            stat: crate::LocalRCStat::default(),
-            #[cfg(feature = "measure_rc_rate")]
-            inc_objs: 0,
-            #[cfg(feature = "measure_rc_rate")]
-            copy_objs: 0,
         }
     }
 
@@ -130,9 +116,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
     }
 
     pub fn new(incs: Vec<VM::VMSlot>, lxr: &'static LXR<VM>) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::INC_BUFFER_COUNTER.add(incs.len());
-        }
         Self {
             incs,
             ..Self::__default(lxr)
@@ -153,9 +136,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 s.promoted_copy_volume += o.get_size::<VM>();
             }
         });
-        #[cfg(feature = "lxr_srv_ratio_counter")]
-        self.survival_ratio_predictor_local
-            .record_total_promotion(o.get_size::<VM>(), los);
         let size = o.get_size::<VM>();
 
         if !los {
@@ -253,25 +233,11 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if VM::VMScanning::is_obj_array(o) && VM::VMScanning::obj_array_data(o).len() > 1024 {
             let data = VM::VMScanning::obj_array_data(o);
             for chunk in data.chunks(Self::CAPACITY) {
-                #[cfg(feature = "lxr_precise_incs_counter")]
-                {
-                    self.stat.rec_incs += chunk.len();
-                    if los {
-                        self.stat.los_rec_incs += chunk.len();
-                    }
-                }
                 self.add_new_slice(chunk);
             }
         } else if !is_val_array {
             let obj_in_defrag = !los && Block::in_defrag_block::<VM>(o);
             o.iterate_fields::<VM, _>(CLDScanPolicy::Ignore, RefScanPolicy::Follow, |slot, _| {
-                #[cfg(feature = "lxr_precise_incs_counter")]
-                {
-                    self.stat.rec_incs += 1;
-                    if los {
-                        self.stat.los_rec_incs += 1;
-                    }
-                }
                 let Some(target) = slot.load() else {
                     return;
                 };
@@ -290,13 +256,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     slot,
                     target
                 );
-                // debug_assert!(
-                //     target.class_is_valid::<VM>(),
-                //     "Invalid object {:?}.{:?} -> {:?}",
-                //     o,
-                //     slot,
-                //     target
-                // );
                 let rc = self.rc.count(target);
                 if rc == 0 {
                     // println!(" -- rec inc {:?}.{:?} -> {:?}", o, slot, target);
@@ -304,14 +263,9 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                 } else {
                     if rc != crate::util::rc::MAX_REF_COUNT {
                         let _ = self.rc.inc(target);
-                        #[cfg(feature = "measure_rc_rate")]
-                        {
-                            self.inc_objs += 1;
-                        }
                     }
                     self.record_mature_evac_remset2(obj_in_defrag, slot, target);
                 }
-                super::record_slot_for_validation(slot, Some(target));
             });
         }
     }
@@ -342,8 +296,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return true;
         }
         // Skip recycled lines
-        let block = Block::containing(o);
-        if crate::args::RC_DONT_EVACUATE_NURSERY_IN_RECYCLED_LINES && !block.is_nursery() {
+        if !Block::containing(o).is_nursery() {
             return true;
         }
         if cfg!(debug_assertions) {
@@ -362,10 +315,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             s.inc_objects += 1;
             s.inc_volume += o.get_size::<VM>();
         });
-        #[cfg(feature = "measure_rc_rate")]
-        {
-            self.inc_objs += 1;
-        }
         let los = self.lxr.los().in_space(o);
         if crate::args::RC_NURSERY_EVACUATION
             && !los
@@ -407,10 +356,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
                     CopySemantics::DefaultCopy,
                     self.copy_context(),
                 );
-                #[cfg(feature = "measure_rc_rate")]
-                {
-                    self.copy_objs += 1;
-                }
                 if let Some(new) = new {
                     self.inc(new);
                     self.promote(new, true, false, depth);
@@ -462,7 +407,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         let o = match self.unlog_and_load_rc_object::<K>(s) {
             Some(o) => o,
             _ => {
-                super::record_slot_for_validation(s, ObjectReference::NULL);
                 return None;
             }
         };
@@ -492,7 +436,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             //     K
             // );
         }
-        super::record_slot_for_validation(s, Some(new));
         Some(new)
     }
 
@@ -601,19 +544,10 @@ impl<S: Slot> DerefMut for AddressBuffer<'_, S> {
 
 impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        #[cfg(any(feature = "log_outstanding_packets", feature = "measure_rc_rate"))]
-        let t = std::time::SystemTime::now();
-
-        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
         self.lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.pause = self.lxr.current_pause().unwrap();
         self.in_cm = self.lxr.cm_in_progress();
         self.copy_context = self.worker().get_copy_context_mut() as *mut GCWorkerCopyContext<VM>;
-        let count = if cfg!(feature = "rust_mem_counter") {
-            self.incs.len()
-        } else {
-            0
-        };
         if crate::NO_EVAC.load(Ordering::Relaxed) {
             self.no_evac = true;
         } else {
@@ -635,10 +569,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         // Process main buffer
-        #[cfg(feature = "lxr_precise_incs_counter")]
-        if KIND == EDGE_KIND_ROOT {
-            self.stat.roots = self.incs.len();
-        }
         let root_slots = if KIND == EDGE_KIND_ROOT
             && (self.pause == Pause::FinalMark || self.pause == Pause::Full)
         {
@@ -733,66 +663,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> GCWork<VM> for ProcessIncs<VM, KIND> {
             }
         }
         self.survival_ratio_predictor_local.sync();
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::INC_BUFFER_COUNTER.sub(count);
-        }
-        #[cfg(feature = "lxr_precise_incs_counter")]
-        {
-            crate::RC_STAT.merge(&mut self.stat);
-        }
-
-        #[cfg(feature = "log_outstanding_packets")]
-        {
-            let ms = t.elapsed().unwrap().as_micros() as f32 / 1000f32;
-            if ms > 10f32 || cfg!(feature = "log_all_inc_packets") {
-                gc_log!(
-                        "WARNING: Incs packet took {:.3}ms! KIND={} RootKind={:?} depth={} counters={:?}",
-                        ms,
-                        KIND,
-                        self.root_kind,
-                        depth,
-                        self.counters,
-                    );
-            }
-        }
-        #[cfg(feature = "measure_rc_rate")]
-        {
-            let us = t.elapsed().unwrap().as_micros() as usize;
-            INC_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
-            INC_PACKETS.fetch_add(1, Ordering::SeqCst);
-            INC_OBJS.fetch_add(self.inc_objs, Ordering::SeqCst);
-            COPY_OBJS.fetch_add(self.copy_objs, Ordering::SeqCst);
-        }
     }
-}
-
-#[cfg(feature = "measure_rc_rate")]
-pub static INC_PACKETS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_rc_rate")]
-pub static INC_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_rc_rate")]
-pub static INC_OBJS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_rc_rate")]
-pub static COPY_OBJS: AtomicUsize = AtomicUsize::new(0);
-
-#[cfg(feature = "measure_rc_rate")]
-pub fn dump_rc_rate() {
-    gc_log!(
-        " - RC-INCS: packets={} total-time={}ms inc-objs={} cp-objs={}",
-        INC_PACKETS.load(Ordering::SeqCst),
-        INC_PACKETS_TIME.load(Ordering::SeqCst) / 1000,
-        INC_OBJS.load(Ordering::SeqCst),
-        COPY_OBJS.load(Ordering::SeqCst),
-    );
-    let t = INC_PACKETS_TIME.load(Ordering::SeqCst) as f32 / 1000f32;
-    gc_log!(
-        " - RC-INCS-RATE: {:.1}",
-        INC_OBJS.load(Ordering::SeqCst) as f32 / t,
-    );
-    INC_PACKETS.store(0, Ordering::SeqCst);
-    INC_PACKETS_TIME.store(0, Ordering::SeqCst);
-    INC_OBJS.store(0, Ordering::SeqCst);
-    COPY_OBJS.store(0, Ordering::SeqCst);
 }
 
 pub struct ProcessDecs<VM: VMBinding> {
@@ -817,9 +688,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     pub fn new(decs: Vec<ObjectReference>, counter: LazySweepingJobsCounter) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(decs.len());
-        }
         Self {
             decs: Some(decs),
             decs_arc: None,
@@ -834,9 +702,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
     }
 
     pub fn new_arc(decs: Arc<Vec<ObjectReference>>, counter: LazySweepingJobsCounter) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(decs.len());
-        }
         Self {
             decs: None,
             decs_arc: Some(decs),
@@ -914,77 +779,55 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             }
         });
         if self.mark_dead_objects {
-            let marked = lxr.mark(o);
-            if cfg!(feature = "lxr_satb_live_bytes_counter") && marked {
-                crate::record_live_bytes(o.get_size::<VM>());
-            }
+            lxr.mark(o);
         }
         // println!(" - dead {:?}", o);
-        // debug_assert_eq!(self::count(o), 0);
         // Recursively decrease field ref counts
-        if false
-            && VM::VMScanning::is_obj_array(o)
-            && VM::VMScanning::obj_array_data(o).bytes() > 1024
-        {
-            // Buggy. Dead array can be recycled at any time.
-            unimplemented!()
-        } else if !cfg!(feature = "lxr_no_recursive_dec") {
-            o.iterate_fields::<VM, _>(
-                self.cld_policy,
-                RefScanPolicy::Follow,
-                |slot, out_of_heap| {
-                    if let Some(x) = slot.load() {
-                        // println!(" -- rec dec {:?}.{:?} -> {:?}", o, slot, x);
-                        if !out_of_heap {
-                            let rc = self.rc.count(x);
-                            if rc != MAX_REF_COUNT && rc != 0 {
-                                self.recursive_dec(x);
-                            }
-                        } else {
-                            self.record_mature_evac_remset(lxr, slot, x);
+        o.iterate_fields::<VM, _>(
+            self.cld_policy,
+            RefScanPolicy::Follow,
+            |slot, out_of_heap| {
+                if let Some(x) = slot.load() {
+                    // println!(" -- rec dec {:?}.{:?} -> {:?}", o, slot, x);
+                    if !out_of_heap {
+                        let rc = self.rc.count(x);
+                        if rc != MAX_REF_COUNT && rc != 0 {
+                            self.recursive_dec(x);
                         }
-                        if self.mark_dead_objects && !lxr.is_marked(x) {
-                            if cfg!(any(feature = "sanity", debug_assertions)) {
-                                assert!(
-                                    x.to_raw_address().is_mapped(),
-                                    "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
-                                    o,
-                                    slot,
-                                    x
-                                );
-                            }
-                            self.mark_objects.push(x);
-                            if self.mark_objects.is_full() {
-                                self.flush();
-                            }
+                    } else {
+                        self.record_mature_evac_remset(lxr, slot, x);
+                    }
+                    if self.mark_dead_objects && !lxr.is_marked(x) {
+                        if cfg!(any(feature = "sanity", debug_assertions)) {
+                            assert!(
+                                x.to_raw_address().is_mapped(),
+                                "Invalid object {:?}.{:?} -> {:?}: address is not mapped",
+                                o,
+                                slot,
+                                x
+                            );
+                        }
+                        self.mark_objects.push(x);
+                        if self.mark_objects.is_full() {
+                            self.flush();
                         }
                     }
-                },
-            );
-        }
+                }
+            },
+        );
         let in_ix_space = lxr.immix_space.in_space(o);
-        if !crate::args::BLOCK_ONLY && in_ix_space {
+        if in_ix_space {
             self.rc.unmark_straddle_object(o);
         }
         if cfg!(feature = "sanity") || ObjectReference::STRICT_VERIFICATION {
             unsafe { o.to_raw_address().store(0xdeadusize) };
         }
         if in_ix_space {
-            if cfg!(feature = "lxr_log_reclaim") {
-                lxr.immix_space
-                    .rc_killed_bytes
-                    .fetch_add(o.get_size::<VM>(), Ordering::Relaxed);
-            }
             let block = Block::containing(o);
             lxr.immix_space
                 .add_to_possibly_dead_mature_blocks(block, false);
             false
         } else {
-            if cfg!(feature = "lxr_log_reclaim") {
-                lxr.los()
-                    .rc_killed_bytes
-                    .fetch_add(o.get_size::<VM>(), Ordering::Relaxed);
-            }
             true
         }
     }
@@ -1039,9 +882,6 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        if cfg!(feature = "lxr_no_decs") {
-            return;
-        }
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.mark_dead_objects = if crate::args::LAZY_DECREMENTS {
             lxr.cm_in_progress() && lxr.previous_pause() != Some(Pause::InitialMark)
@@ -1055,13 +895,6 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
             lxr.current_pause() == Some(Pause::FinalMark)
                 || lxr.current_pause() == Some(Pause::Full)
         };
-        debug_assert!(!crate::plan::barriers::BARRIER_MEASUREMENT);
-        let count = if cfg!(feature = "rust_mem_counter") {
-            self.decs.as_ref().map(|x| x.len()).unwrap_or(0)
-                + self.decs_arc.as_ref().map(|x| x.len()).unwrap_or(0)
-        } else {
-            0
-        };
         if let Some(decs) = std::mem::take(&mut self.decs) {
             self.process_decs(&decs, lxr);
         } else if let Some(decs) = std::mem::take(&mut self.decs_arc) {
@@ -1071,19 +904,9 @@ impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
         while !self.new_decs.is_empty() {
             decs.clear();
             self.new_decs.swap(&mut decs);
-            let c = decs.len();
-            if cfg!(feature = "rust_mem_counter") {
-                crate::rust_mem_counter::DEC_BUFFER_COUNTER.add(c);
-            }
             self.process_decs(&decs, lxr);
-            if cfg!(feature = "rust_mem_counter") {
-                crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(c);
-            }
         }
         self.flush();
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::DEC_BUFFER_COUNTER.sub(count);
-        }
     }
 }
 
@@ -1118,7 +941,6 @@ impl<VM: VMBinding> ProcessEdgesWork for RCImmixCollectRootEdges<VM> {
             #[cfg(feature = "sanity")]
             if self.roots
                 && !self.mmtk().get_plan().is_in_sanity()
-                && (cfg!(feature = "fragmentation_analysis") || crate::frag_exp_enabled())
                 && self.root_kind != Some(RootKind::Weak)
             {
                 self.cache_roots_for_sanity_gc(self.slots.clone());

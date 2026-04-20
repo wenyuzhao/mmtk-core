@@ -63,16 +63,12 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn increase_inc_buffer_size(&self, delta: usize) {
-        if cfg!(feature = "lxr_precise_incs_counter") {
-            INC_BUFFER_SIZE.fetch_add(delta, Ordering::Relaxed);
-        } else {
-            INC_BUFFER_SIZE.store(
-                INC_BUFFER_SIZE
-                    .load(Ordering::Relaxed)
-                    .saturating_add(delta),
-                Ordering::Relaxed,
-            );
-        }
+        INC_BUFFER_SIZE.store(
+            INC_BUFFER_SIZE
+                .load(Ordering::Relaxed)
+                .saturating_add(delta),
+            Ordering::Relaxed,
+        )
     }
 
     pub fn reset_inc_buffer_size(&self) {
@@ -185,7 +181,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     fn mark_straddle_object_with_size(&self, o: ObjectReference, size: usize) {
-        debug_assert!(!crate::args::BLOCK_ONLY);
         debug_assert!(size > Line::BYTES);
         let start_line = Line::containing::<VM>(o).next();
         let end_line = Line::from(Line::align(o.to_raw_address() + size));
@@ -203,7 +198,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     }
 
     pub fn unmark_straddle_object(&self, o: ObjectReference) {
-        debug_assert!(!crate::args::BLOCK_ONLY);
         // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let size = VM::VMObjectModel::get_current_size(o);
         if size > Line::BYTES {

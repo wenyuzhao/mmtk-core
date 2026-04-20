@@ -21,7 +21,7 @@ pub const MAX_IMMIX_OBJECT_SIZE: usize = {
 };
 
 /// Mark/sweep memory for block-level only
-pub const BLOCK_ONLY: bool = crate::args::BLOCK_ONLY;
+pub const BLOCK_ONLY: bool = false;
 
 /// Mark lines when scanning objects.
 /// Otherwise, do it at mark time.

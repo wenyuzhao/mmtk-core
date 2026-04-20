@@ -1,4 +1,3 @@
-use super::barrier::ImmixFakeFieldBarrierSemantics;
 use super::gc_work::ImmixGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
 use crate::plan::global::BasePlan;
@@ -22,7 +21,6 @@ use crate::util::metadata::log_bit::UnlogBitsOperation;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::MetadataSpec;
 use crate::vm::VMBinding;
-use crate::BarrierSelector;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
@@ -48,15 +46,6 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     moves_objects: !cfg!(feature = "immix_non_moving"),
     // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-    needs_log_bit: crate::args::BARRIER_MEASUREMENT,
-    needs_field_log_bit: crate::args::BARRIER_MEASUREMENT,
-    barrier: if crate::args::BARRIER_MEASUREMENT
-        && !cfg!(feature = "barrier_measurement_no_barrier")
-    {
-        BarrierSelector::FieldBarrier
-    } else {
-        BarrierSelector::NoBarrier
-    },
     ..PlanConstraints::default()
 };
 
@@ -159,16 +148,11 @@ impl<VM: VMBinding> Immix<VM> {
         let immix_specs =
             metadata::extract_side_metadata(&[MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE)]);
         crate::args::validate_features(IMMIX_CONSTRAINTS.barrier, &args.options);
-        let mut plan_args = CreateSpecificPlanArgs {
+        let plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &IMMIX_CONSTRAINTS,
             global_side_metadata_specs: SideMetadataContext::new_global_specs(&immix_specs),
         };
-        if crate::args::BARRIER_MEASUREMENT {
-            plan_args
-                .global_side_metadata_specs
-                .push(ImmixFakeFieldBarrierSemantics::<VM>::UNLOG_BITS);
-        }
         Self::new_with_args(
             plan_args,
             ImmixSpaceArgs {

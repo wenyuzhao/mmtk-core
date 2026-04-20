@@ -115,13 +115,19 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
+        #[cfg(feature = "tracing")]
         let mut num_objects = 0;
+        #[cfg(feature = "tracing")]
         let mut num_next_objects = 0;
+        #[cfg(feature = "tracing")]
         let mut iterations = 0;
         // mark objects
         if let Some(objects) = self.objects.take() {
             self.trace_objects(&objects);
-            num_objects = objects.len();
+            #[cfg(feature = "tracing")]
+            {
+                num_objects = objects.len();
+            }
         }
         let pause_opt = self.plan.current_pause();
         if pause_opt == Some(Pause::FinalMark) || pause_opt.is_none() {
@@ -132,8 +138,12 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
                 }
                 let next_objects = self.next_objects.take();
                 self.trace_objects(&next_objects);
-                num_next_objects += next_objects.len();
-                iterations += 1;
+                #[cfg(feature = "tracing")]
+                {
+                    num_next_objects += next_objects.len();
+
+                    iterations += 1;
+                }
             }
         }
         #[cfg(feature = "tracing")]

@@ -68,24 +68,6 @@ impl BlockState {
     }
 }
 
-/// Data structure to reference an OS 4K page.
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
-pub struct Page(Address);
-
-impl Region for Page {
-    const LOG_BYTES: usize = LOG_BYTES_IN_PAGE as usize;
-
-    fn from_aligned_address(address: Address) -> Self {
-        debug_assert!(address.is_aligned_to(Self::BYTES));
-        Self(address)
-    }
-
-    fn start(&self) -> Address {
-        self.0
-    }
-}
-
 /// Data structure to reference an immix block.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
@@ -510,7 +492,7 @@ impl Block {
             } else {
                 BlockState::Unmarked
             });
-            if !reuse || cfg!(feature = "ix_no_defrag_fix") {
+            if !reuse {
                 Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
             }
         }
@@ -748,17 +730,10 @@ impl Block {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                 }
-                if cfg!(feature = "ix_live_size_based_defrag") {
-                    // Update mark_histogram
-                    mark_histogram[Block::LINES - marked_lines] += marked_lines;
-                    // Record number of holes in block side metadata.
-                    self.set_holes(Block::LINES - marked_lines);
-                } else {
-                    // Update mark_histogram
-                    mark_histogram[holes] += marked_lines;
-                    // Record number of holes in block side metadata.
-                    self.set_holes(holes);
-                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                self.set_holes(holes);
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, true);
                 false
@@ -837,58 +812,6 @@ impl Block {
         }
     }
 
-    pub fn calc_holes(&self) -> usize {
-        let rc_array = RCArray::of(*self);
-        let search_next_hole = |start: usize| -> Option<usize> {
-            // Find start
-            let first_free_cursor = {
-                let start_cursor = start;
-                let mut first_free_cursor = None;
-                let mut find_free_line = false;
-                for i in start_cursor..Block::LINES {
-                    if rc_array.is_dead(i) {
-                        if i == 0 {
-                            first_free_cursor = Some(i);
-                            break;
-                        } else if !find_free_line {
-                            find_free_line = true;
-                        } else {
-                            first_free_cursor = Some(i);
-                            break;
-                        }
-                    } else {
-                        find_free_line = false;
-                    }
-                }
-                first_free_cursor
-            };
-            let start = match first_free_cursor {
-                Some(c) => c,
-                _ => return None,
-            };
-            // Find limit
-            let end = {
-                let mut cursor = start + 1;
-                while cursor < Block::LINES {
-                    if !rc_array.is_dead(cursor) {
-                        break;
-                    }
-                    cursor += 1;
-                }
-                cursor
-            };
-            Some(end)
-        };
-        let mut holes = 0;
-        let mut cursor = 0;
-        while let Some(end) = search_next_hole(cursor) {
-            cursor = end;
-            if end - cursor >= crate::args().min_reuse_lines {
-                holes += 1;
-            }
-        }
-        holes
-    }
     /// Clear VO bits metadata for unmarked regions.
     /// This is useful for clearing VO bits during nursery GC for StickyImmix
     /// at which time young objects (allocated in unmarked regions) may die

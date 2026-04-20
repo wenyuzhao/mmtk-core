@@ -20,8 +20,6 @@ use crate::{
 };
 use atomic::Ordering;
 use std::ops::{Deref, DerefMut};
-#[cfg(feature = "measure_trace_rate")]
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[inline]
@@ -29,14 +27,6 @@ fn prefetch_object<VM: VMBinding>(o: ObjectReference, _ix: &ImmixSpace<VM>) {
     if crate::args::PREFETCH_HEADER {
         o.prefetch_read();
     }
-    // if crate::args::PREFETCH_MARK {
-    //     if ix.in_space(o) {
-    //         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
-    //             .as_spec()
-    //             .extract_side_spec()
-    //             .prefetch_read(o.to_raw_address())
-    //     }
-    // }
 }
 
 pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
@@ -50,10 +40,6 @@ pub struct LXRConcurrentTraceObjects<VM: VMBinding> {
     next_ref_arrays: VectorQueue<(ObjectReference, Address, usize, VM::VMMemorySlice)>,
     next_ref_arrays_size: usize,
     rc: RefCountHelper<VM>,
-    #[cfg(feature = "measure_trace_rate")]
-    scanned_non_null_slots: usize,
-    #[cfg(feature = "measure_trace_rate")]
-    enqueued_objs: usize,
     worker: *mut GCWorker<VM>,
 }
 
@@ -61,9 +47,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
     const SATB_BUFFER_SIZE: usize = 8192;
 
     pub fn new(objects: Vec<ObjectReference>, mmtk: &'static MMTK<VM>) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
-        }
         let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -75,18 +58,11 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_ref_arrays: VectorQueue::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
-            #[cfg(feature = "measure_trace_rate")]
-            scanned_non_null_slots: 0,
-            #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
             worker: std::ptr::null_mut(),
         }
     }
 
     pub fn new_arc(objects: Arc<Vec<ObjectReference>>, mmtk: &'static MMTK<VM>) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(objects.len());
-        }
         let plan = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -98,10 +74,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_ref_arrays: VectorQueue::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
-            #[cfg(feature = "measure_trace_rate")]
-            scanned_non_null_slots: 0,
-            #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
             worker: std::ptr::null_mut(),
         }
     }
@@ -121,10 +93,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             next_ref_arrays: VectorQueue::default(),
             next_ref_arrays_size: 0,
             rc: RefCountHelper::NEW,
-            #[cfg(feature = "measure_trace_rate")]
-            scanned_non_null_slots: 0,
-            #[cfg(feature = "measure_trace_rate")]
-            enqueued_objs: 0,
             worker: std::ptr::null_mut(),
         }
     }
@@ -212,10 +180,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             {
                 return;
             }
-            #[cfg(feature = "measure_trace_rate")]
-            {
-                self.scanned_non_null_slots += 1;
-            }
             if crate::args::RC_MATURE_EVACUATION && !SRC_IN_DEFRAG && self.plan.in_defrag(t) {
                 self.plan
                     .immix_space
@@ -263,10 +227,6 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 let Some(t) = s.load() else {
                     return;
                 };
-                #[cfg(feature = "measure_trace_rate")]
-                {
-                    self.scanned_non_null_slots += 1;
-                }
                 if crate::args::RC_MATURE_EVACUATION
                     && (CHECK_REMSET || out_of_heap)
                     && self.plan.in_defrag(t)
@@ -307,10 +267,6 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                         self.flush_arrs();
                     }
                 }
-                #[cfg(feature = "measure_trace_rate")]
-                {
-                    self.enqueued_objs += 1;
-                }
             }
             ObjectKind::ValArray => {}
             _ => {
@@ -319,10 +275,6 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
                     self.scan_and_enqueue::<true>(object)
                 } else {
                     self.scan_and_enqueue::<false>(object)
-                }
-                #[cfg(feature = "measure_trace_rate")]
-                {
-                    self.enqueued_objs += 1;
                 }
             }
         }
@@ -341,15 +293,6 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_open());
-        #[cfg(feature = "measure_trace_rate")]
-        let t = std::time::SystemTime::now();
-        #[cfg(feature = "measure_trace_rate")]
-        let record = if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
-            STW_CM_PACKETS.fetch_add(1, Ordering::SeqCst);
-            true
-        } else {
-            false
-        };
         // mark objects
         if let Some(objects) = self.objects.take() {
             self.trace_objects(&objects)
@@ -379,13 +322,6 @@ impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
         // CM: Decrease counter
         crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_open());
-        #[cfg(feature = "measure_trace_rate")]
-        if record {
-            let us = t.elapsed().unwrap().as_micros() as usize;
-            STW_CM_PACKETS_TIME.fetch_add(us, Ordering::SeqCst);
-            STW_SCAN_NON_NULL_SLOTS.fetch_add(self.scanned_non_null_slots, Ordering::SeqCst);
-            STW_ENQUEUE_OBJS.fetch_add(self.enqueued_objs, Ordering::SeqCst);
-        }
     }
 }
 
@@ -411,44 +347,8 @@ impl ProcessModBufSATB {
     }
 }
 
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_CM_PACKETS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_MODBUF_PACKETS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_CM_PACKETS_TIME: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_ENQUEUE_OBJS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "measure_trace_rate")]
-pub static STW_SCAN_NON_NULL_SLOTS: AtomicUsize = AtomicUsize::new(0);
-
-#[cfg(feature = "measure_trace_rate")]
-pub fn dump_trace_rate() {
-    gc_log!(
-        " - STW_CM_PACKETS={} STW_MODBUF_PACKETS={}",
-        STW_CM_PACKETS.load(Ordering::SeqCst),
-        STW_MODBUF_PACKETS.load(Ordering::SeqCst),
-    );
-    STW_CM_PACKETS.store(0, Ordering::SeqCst);
-    STW_MODBUF_PACKETS.store(0, Ordering::SeqCst);
-    gc_log!(
-        " - STW_CM_PACKETS_TIME={}ms STW_ENQUEUE_OBJS={} STW_SCAN_NON_NULL_SLOTS={}",
-        STW_CM_PACKETS_TIME.load(Ordering::SeqCst) / 1000,
-        STW_ENQUEUE_OBJS.load(Ordering::SeqCst),
-        STW_SCAN_NON_NULL_SLOTS.load(Ordering::SeqCst),
-    );
-    STW_CM_PACKETS_TIME.store(0, Ordering::SeqCst);
-    STW_ENQUEUE_OBJS.store(0, Ordering::SeqCst);
-    STW_SCAN_NON_NULL_SLOTS.store(0, Ordering::SeqCst);
-}
-
 impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
-        #[cfg(feature = "measure_trace_rate")]
-        if crate::verbose(3) && !mmtk.scheduler.in_concurrent() {
-            STW_MODBUF_PACKETS.fetch_add(1, Ordering::SeqCst);
-        }
         let mut w = if let Some(nodes) = self.nodes.take() {
             if nodes.is_empty() {
                 return;
@@ -511,9 +411,6 @@ pub struct LXRStopTheWorldProcessEdges<VM: VMBinding, const FULL_GC: bool> {
 
 impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC> {
     pub(super) fn new_remset(slots: Vec<SlotOf<Self>>, mmtk: &'static MMTK<VM>) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
-        }
         let mut me = Self::new(slots, false, mmtk, WorkBucketStage::Closure);
         me.remset_recorded_slots = true;
         me
@@ -533,9 +430,6 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
-        }
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -606,9 +500,6 @@ impl<VM: VMBinding, const FULL_GC: bool> ProcessEdgesWork
             self.next_slots.swap(&mut slots);
             self.next_array_slices.swap(&mut slices);
             self.process_slots_impl::<false, false>(&slots, &slices);
-        }
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
         }
         self.flush();
         if should_record_forwarded_roots {
@@ -749,7 +640,6 @@ impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC
                 slot.store(Some(new_object));
             }
         }
-        super::record_slot_for_validation(slot, Some(new_object));
     }
 
     fn process_slots_impl<const WEAK_ROOT: bool, const REMSET: bool>(
@@ -786,12 +676,6 @@ impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC
 
 impl<VM: VMBinding, const FULL_GC: bool> ObjectQueue for LXRStopTheWorldProcessEdges<VM, FULL_GC> {
     fn enqueue(&mut self, object: ObjectReference) {
-        if cfg!(feature = "object_size_distribution") {
-            crate::record_obj(object.get_size::<VM>());
-        }
-        if cfg!(feature = "lxr_satb_live_bytes_counter") {
-            crate::record_live_bytes(object.get_size::<VM>());
-        }
         let limit: usize = if FULL_GC { 8192 } else { 1024 };
         // Skip primitive array
         match VM::VMScanning::get_obj_kind(object) {
@@ -864,9 +748,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
     ) -> Self {
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.add(slots.len());
-        }
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
         let lxr = base.plan().downcast_ref::<LXR<VM>>().unwrap();
         Self {
@@ -937,9 +818,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
                 self.process_slot(*s);
             }
         }
-        if cfg!(feature = "rust_mem_counter") {
-            crate::rust_mem_counter::SATB_BUFFER_COUNTER.sub(self.slots.len());
-        }
         self.flush();
     }
 
@@ -950,12 +828,6 @@ impl<VM: VMBinding> ProcessEdgesWork for LXRWeakRefProcessEdges<VM> {
 
 impl<VM: VMBinding> ObjectQueue for LXRWeakRefProcessEdges<VM> {
     fn enqueue(&mut self, object: ObjectReference) {
-        if cfg!(feature = "object_size_distribution") {
-            crate::record_obj(object.get_size::<VM>());
-        }
-        if cfg!(feature = "lxr_satb_live_bytes_counter") {
-            crate::record_live_bytes(object.get_size::<VM>());
-        }
         object.iterate_fields::<VM, _>(CLDScanPolicy::Claim, RefScanPolicy::Follow, |s, _| {
             self.next_slots.push(s);
             if self.next_slots.is_full() {

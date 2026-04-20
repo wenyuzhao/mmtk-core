@@ -9,7 +9,6 @@ use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::constants::BYTES_IN_PAGE;
-use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::metadata::side_metadata::spec_defs::LOS_PAGE_REUSE_COUNT;
@@ -110,10 +109,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 let a = object.to_raw_address() + off;
                 self.test_and_mark(a.to_object_reference::<VM>(), self.mark_state);
             }
-            #[cfg(feature = "lxr_srv_ratio_counter")]
-            crate::plan::lxr::SURVIVAL_RATIO_PREDICTOR
-                .los_alloc_vol
-                .fetch_add(bytes, Ordering::SeqCst);
             let lxr = self.lxr.unwrap();
             if lxr.cm_in_progress() {
                 for off in (0..bytes).step_by(BYTES_IN_PAGE) {
@@ -389,53 +384,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    pub fn dump_memory(&self, lxr: &crate::plan::lxr::LXR<VM>) {
-        // use crate::util::heap::chunk_map::Chunk;
-        // use crate::util::linear_scan::Region;
-        assert!(!self.common.contiguous);
-        // owned chunks
-        let mut owned_chunks = 0usize;
-        let mut a = self.pr.common().get_head_discontiguous_region();
-        while !a.is_zero() {
-            owned_chunks += self.common.vm_map().get_contiguous_region_chunks(a);
-            a = self.common.vm_map().get_next_contiguous_region(a);
-        }
-        // live pages and live size
-        // let mut chunks = HashSet::<Address>::new();
-        let mut live_pages = 0usize;
-        let mut rc_live_bytes = 0usize;
-        let mut cm_live_bytes = 0usize;
-        let mature_objects = self.rc_mature_objects.lock().unwrap();
-        for (o, size) in &*mature_objects {
-            // let c = Chunk::align(o.to_raw_address());
-            // if !chunks.contains(&c) {
-            //     chunks.insert(c);
-            // }
-            live_pages += (size + (BYTES_IN_PAGE - 1)) >> LOG_BYTES_IN_PAGE;
-            rc_live_bytes += size;
-            if lxr.is_marked(*o) {
-                cm_live_bytes += size;
-            } else {
-                // panic!("{:?} is dead. rc={}", o, self.rc.count(*o));
-            }
-        }
-        eprintln!("los:");
-        eprintln!("  reserved-pages: {}", self.reserved_pages());
-        eprintln!("  live-chunks: {}", owned_chunks);
-        // println!("  live-chunks: {}", chunks.len());
-        eprintln!("  live-pages: {}", live_pages);
-        eprintln!("  rc-live-bytes: {}", rc_live_bytes);
-        eprintln!("  cm-live-bytes: {}", cm_live_bytes);
-        eprintln!(
-            "  reachable-live-bytes: {}",
-            crate::SANITY_LIVE_SIZE_LOS.load(Ordering::SeqCst)
-        );
-    }
-
     fn release_object(&self, start: Address) -> usize {
-        if crate::args::BARRIER_MEASUREMENT
-            || (self.common.needs_log_bit && self.common.needs_field_log_bit)
-        {
+        if self.common.needs_log_bit && self.common.needs_field_log_bit {
             if self.rc_enabled {
                 self.rc.set(start.to_object_reference::<VM>(), 0);
             }
@@ -538,7 +488,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // We just moved the object out of the logical nursery, mark it as unlogged.
                 if !self.rc_enabled
                     && (self.common.unlog_traced_object || self.common.needs_field_log_bit)
-                    && !crate::args::BARRIER_MEASUREMENT_NO_SLOW
                 {
                     if self.common.needs_field_log_bit {
                         let step = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {

@@ -67,21 +67,12 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         lxr.cm_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
     }
 
-    pub(super) fn initialize_new_clean_block(&self, block: Block, copy: bool, cm_enabled: bool) {
+    pub(super) fn initialize_new_clean_block(&self, block: Block, copy: bool) {
         if self.space().in_defrag() {
             self.space().defrag.notify_new_clean_block(copy);
         }
-        if cm_enabled && !super::BLOCK_ONLY && !self.space().rc_enabled {
-            let current_state = self.space().line_mark_state.load(Ordering::Acquire);
-            for line in block.lines() {
-                line.mark(current_state);
-            }
-        }
         // Initialize unlog table
-        if (self.space().rc_enabled
-            || (crate::args::BARRIER_MEASUREMENT && !crate::args::BARRIER_MEASUREMENT_NO_SLOW))
-            && copy
-        {
+        if self.space().rc_enabled && copy {
             block.initialize_field_unlog_table_as_unlogged::<VM>();
         }
         // Initialize mark table

@@ -42,12 +42,11 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocks {
         let is_emergency_gc = lxr.current_pause().unwrap() == Pause::Full;
         const BLOCKS_IN_CHUNK: usize = 1 << (LOG_BYTES_IN_CHUNK - Block::LOG_BYTES);
         let threshold = {
-            let chunk_defarg_percent =
-                if is_emergency_gc || cfg!(feature = "aggressive_mature_evac") {
-                    crate::args().chunk_defarg_percent << 1
-                } else {
-                    crate::args().chunk_defarg_percent
-                };
+            let chunk_defarg_percent = if is_emergency_gc {
+                crate::args().chunk_defarg_percent << 1
+            } else {
+                crate::args().chunk_defarg_percent
+            };
             let chunk_defarg_percent = chunk_defarg_percent.min(100);
             let threshold = BLOCKS_IN_CHUNK * chunk_defarg_percent / 100;
             threshold.max(1)
@@ -85,21 +84,8 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocks {
                     }
                 }
                 // This is a fragmented block?
-                let score = if crate::args::HOLE_COUNTING {
-                    unreachable!();
-                    // match state {
-                    //     BlockState::Reusable { unavailable_lines } => unavailable_lines as _,
-                    //     _ => block.calc_holes(),
-                    // }
-                } else {
-                    // block.dead_bytes()
-                    // block.calc_dead_bytes::<VM>()
-                    block.calc_dead_lines() << Line::LOG_BYTES
-                };
-                if lxr.current_pause().unwrap() == Pause::Full
-                    || cfg!(feature = "aggressive_mature_evac")
-                    || score >= (Block::BYTES >> 1)
-                {
+                let score = block.calc_dead_lines() << Line::LOG_BYTES;
+                if lxr.current_pause().unwrap() == Pause::Full || score >= (Block::BYTES >> 1) {
                     fragmented_blocks.push((block, score));
                 }
             }
@@ -229,9 +215,7 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
                 o.to_raw_address().store(0xdeadusize);
             }
         }
-        if !crate::args::BLOCK_ONLY {
-            self.rc.unmark_straddle_object(o)
-        }
+        self.rc.unmark_straddle_object(o);
         self.rc.set(o, 0);
     }
 
@@ -244,7 +228,7 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
             cursor = cursor + rc::MIN_OBJECT_SIZE;
             let c = self.rc.count(o);
             if c != 0 && !immix_space.is_marked(o) {
-                if !crate::args::BLOCK_ONLY && Line::is_aligned(o.to_raw_address()) {
+                if Line::is_aligned(o.to_raw_address()) {
                     if c == 1 && self.rc.is_straddle_line(Line::from(o.to_raw_address())) {
                         continue;
                     } else {
@@ -383,10 +367,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunksForFullGC {
                     continue;
                 }
                 // Clear unlog table on CM
-                if crate::args::BARRIER_MEASUREMENT {
-                    block.initialize_field_unlog_table_as_unlogged::<VM>();
-                    unreachable!();
-                }
                 // Clear defrag state
                 assert!(!block.is_defrag_source());
                 // Clear block mark data.
@@ -412,11 +392,6 @@ pub(super) struct MatureEvacuationSet {
 impl MatureEvacuationSet {
     /// Release all the mature defrag source blocks
     pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        #[cfg(feature = "lxr_release_stage_timer")]
-        gc_log!([3]
-            "    - ({:.3}ms) sweep_mature_evac_candidates start",
-            crate::gc_start_time_ms(),
-        );
         let mut defrag_blocks: Vec<Block> =
             std::mem::take(&mut *self.defrag_blocks.lock().unwrap());
         if defrag_blocks.is_empty() {
@@ -434,19 +409,9 @@ impl MatureEvacuationSet {
             block.rc_sweep_mature::<VM>(space, true, true);
             assert!(!block.is_defrag_source());
         }
-        #[cfg(feature = "lxr_release_stage_timer")]
-        gc_log!([3]
-            "    - ({:.3}ms) sweep_mature_evac_candidates released {}",
-            crate::gc_start_time_ms(), count
-        );
         if count != 0 {
             space.pr.bulk_release_blocks(count);
         }
-        #[cfg(feature = "lxr_release_stage_timer")]
-        gc_log!([3]
-            "    - ({:.3}ms) sweep_mature_evac_candidates finish",
-            crate::gc_start_time_ms(),
-        );
     }
 
     pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
@@ -478,7 +443,6 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
-        #[cfg(not(feature = "lxr_no_mature_defrag"))]
         while let Some((block, _)) = blocks.pop() {
             if Self::skip_block(block) {
                 continue;
@@ -503,7 +467,6 @@ impl MatureEvacuationSet {
             blocks.append(&mut x);
         }
         blocks.sort_by_key(|x| x.1);
-        #[cfg(not(feature = "lxr_no_mature_defrag"))]
         while let Some((block, _dead_bytes)) = blocks.pop() {
             if Self::skip_block(block) {
                 continue;

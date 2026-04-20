@@ -55,9 +55,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
         if lxr.address_in_defrag(addr) {
             return false;
         }
-        if crate::args::NO_RC_PAUSES_DURING_CONCURRENT_MARKING {
-            return true;
-        }
         // Check if it is a real oop field
         if lxr.immix_space.address_in_space(s.to_address()) {
             let block = Block::of(s.to_address());
@@ -88,11 +85,6 @@ impl<VM: VMBinding> EvacuateMatureObjects<VM> {
             return true;
         }
         false
-        // Maybe a forwarded nursery or mature object from inc processing.
-        // if object_forwarding::is_forwarded_or_being_forwarded::<VM>(o) {
-        //     return true;
-        // }
-        // rc::count(o) != 0 && Block::in_defrag_block::<VM>(o)
     }
 
     fn process_slots(&mut self, mmtk: &'static MMTK<VM>) -> Option<Box<dyn GCWork<VM>>> {

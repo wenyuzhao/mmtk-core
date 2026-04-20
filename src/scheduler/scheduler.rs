@@ -140,24 +140,20 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn postpone(&self, w: impl GCWork<VM>) {
-        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(Box::new(w))
     }
 
     pub fn postpone_prioritized(&self, w: impl GCWork<VM>) {
-        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized
             .read()
             .push(Box::new(w))
     }
 
     pub fn postpone_dyn(&self, w: Box<dyn GCWork<VM>>) {
-        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work.read().push(w)
     }
 
     pub fn postpone_dyn_prioritized(&self, w: Box<dyn GCWork<VM>>) {
-        debug_assert!(!crate::args::BARRIER_MEASUREMENT);
         self.postponed_concurrent_work_prioritized.read().push(w)
     }
 
@@ -486,25 +482,15 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);
             }
-            let verbose = crate::verbose(3);
-            if (verbose || cfg!(feature = "pause_time")) && bucket_opened {
-                if verbose {
-                    gc_log!([3]
-                        " - ({:.3}ms) Start GC Stage: {:?}",
-                        crate::GC_START_TIME
-                            .elapsed()
-                            .as_nanos() as f64
-                            / 1000000f64,
-                        id
-                    );
-                }
-            }
-            if cfg!(feature = "yield_and_roots_timer")
-                && bucket_opened
-                && id == WorkBucketStage::Prepare
-            {
-                let t = crate::GC_START_TIME.elapsed().as_nanos();
-                crate::counters().roots_nanos.fetch_add(t, Ordering::SeqCst);
+            if crate::verbose(3) && bucket_opened {
+                gc_log!([3]
+                    " - ({:.3}ms) Start GC Stage: {:?}",
+                    crate::GC_START_TIME
+                        .elapsed()
+                        .as_nanos() as f64
+                        / 1000000f64,
+                    id
+                );
             }
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
@@ -797,15 +783,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             .downcast_ref::<LXR<VM>>()
             .map(|ix| ix.current_pause().unwrap())
             .unwrap_or(Pause::Full);
-        crate::add_pause_time(pause, pause_time.as_nanos());
         if crate::verbose(2) {
-            let _released_n =
-                crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.load(Ordering::SeqCst);
-            let _released =
-                crate::policy::immix::immixspace::RELEASED_BLOCKS.load(Ordering::SeqCst);
-            crate::policy::immix::immixspace::RELEASED_NURSERY_BLOCKS.store(0, Ordering::SeqCst);
-            crate::policy::immix::immixspace::RELEASED_BLOCKS.store(0, Ordering::SeqCst);
-
             let pause_time = pause_time.as_micros() as f64 / 1000f64;
             let pause_s = match pause {
                 Pause::RefCount => "RefCount",
@@ -823,9 +801,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 mmtk.get_plan().get_used_pages() / 256,
                 pause_time
             );
-            if cfg!(feature = "lxr_precise_incs_counter") {
-                crate::RC_STAT.dump(pause, pause_time);
-            }
             crate::RESERVED_PAGES_AT_GC_END
                 .store(mmtk.get_plan().get_reserved_pages(), Ordering::SeqCst);
         }
@@ -959,14 +934,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 "barrier.takerate".to_owned(),
                 format!("{}", slow as f64 / fast as f64),
             );
-            if crate::args::HARNESS_PRETTY_PRINT {
-                println!(
-                    "barrier: fast={} slow={} takerate={}",
-                    fast,
-                    slow,
-                    slow as f64 / fast as f64
-                );
-            }
         }
         stat
     }

@@ -50,7 +50,7 @@ impl MetadataSpec {
 
 /// This specifies what to do to the global side unlog bits in various functions or work packets.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UnlogBitsOperation {
+pub enum UnlogBitsOperation {
     /// Do nothing.
     NoOp,
     /// Bulk set unlog bits to all 1s.

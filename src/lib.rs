@@ -36,13 +36,10 @@ extern crate probe;
 #[macro_use]
 pub mod gc_log;
 mod mmtk;
-mod rust_mem_counter;
 pub use mmtk::MMTKBuilder;
 use std::{
     cell::UnsafeCell,
     collections::HashMap,
-    fs::File,
-    io::Write,
     ops::Deref,
     ptr::{addr_of, addr_of_mut},
     sync::{
@@ -53,7 +50,6 @@ use std::{
 };
 
 use atomic::{Atomic, Ordering};
-use crossbeam::queue::SegQueue;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 use plan::immix::Pause;
@@ -238,7 +234,6 @@ static GC_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_START: AtomicUsize = AtomicUsize::new(0);
 static RESERVED_PAGES_AT_GC_END: AtomicUsize = AtomicUsize::new(0);
 static INSIDE_HARNESS: AtomicBool = AtomicBool::new(false);
-static SATB_START: Timer = Timer::new();
 static PAUSE_CONCURRENT_MARKING: AtomicBool = AtomicBool::new(false);
 static MOVE_CONCURRENT_MARKING_TO_STW: AtomicBool = AtomicBool::new(false);
 
@@ -481,46 +476,6 @@ fn stat(f: impl Fn(&mut GCStat)) {
     f(&mut STAT.lock())
 }
 
-fn should_record_pause_time() -> bool {
-    cfg!(feature = "pause_time") && INSIDE_HARNESS.load(Ordering::SeqCst)
-}
-
-static SRV: SegQueue<(f64, f64)> = SegQueue::new();
-
-fn add_survival_ratio(srv: f64, predict: f64) {
-    if cfg!(feature = "survival_ratio") && INSIDE_HARNESS.load(Ordering::SeqCst) {
-        SRV.push((srv, predict));
-    }
-}
-
-fn output_survival_ratios() {
-    let headers = ["srv", "predict"];
-    let mut s = headers.join(",") + "\n";
-    while let Some((a, b)) = SRV.pop() {
-        s += &[format!("{:.3}", a), format!("{:.3}", b)].join(",");
-        s += "\n";
-    }
-    let mut file = File::create("scratch/srv.csv").unwrap();
-    file.write_all(s.as_bytes()).unwrap();
-}
-
-static PAUSE_TIMES: SegQueue<u128> = SegQueue::new();
-
-fn add_pause_time(_pause: Pause, nanos: u128) {
-    if should_record_pause_time() {
-        PAUSE_TIMES.push(nanos);
-    }
-}
-
-fn output_pause_time() {
-    let mut s = "".to_owned();
-    while let Some(record) = PAUSE_TIMES.pop() {
-        s += &format!("{}\n", record);
-    }
-    let mut file = File::create("scratch/pauses.csv").unwrap();
-    file.write_all(s.as_bytes()).unwrap();
-}
-
 static NO_EVAC: AtomicBool = AtomicBool::new(false);
 static REMSET_RECORDING: AtomicBool = AtomicBool::new(false);
 
@@ -537,198 +492,8 @@ lazy_static! {
         std::sync::Mutex::new(HashMap::new());
 }
 
-fn record_obj(size: usize) {
-    assert!(cfg!(feature = "object_size_distribution"));
-    let mut counts = OBJ_COUNT.lock().unwrap();
-    counts
-        .entry(size.next_power_of_two())
-        .and_modify(|x| {
-            x.0 += 1;
-            x.1 += size;
-        })
-        .or_insert((1, size));
-}
-
-static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
-
-fn record_live_bytes(size: usize) {
-    assert!(cfg!(feature = "lxr_satb_live_bytes_counter"));
-    LIVE_BYTES.fetch_add(size, Ordering::SeqCst);
-}
-
-fn report_and_reset_live_bytes() {
-    assert!(cfg!(feature = "lxr_satb_live_bytes_counter"));
-    gc_log!(
-        " - live size: {} bytes ({}M)",
-        LIVE_BYTES.load(Ordering::SeqCst),
-        LIVE_BYTES.load(Ordering::SeqCst) >> 20
-    );
-    LIVE_BYTES.store(0, Ordering::SeqCst);
-}
-
-pub fn dump_and_reset_obj_dist(kind: &str, counts: &mut HashMap<usize, (usize, usize)>) {
-    assert!(cfg!(feature = "object_size_distribution"));
-    // let mut total_size: usize = 0;
-    let mut total_count: usize = 0;
-    let mut table = vec![];
-    for (size, v) in &*counts {
-        // total_size += v.1;
-        total_count += v.0;
-        table.push((size, v));
-    }
-    table.sort_by_key(|x| x.0);
-    eprintln!("{} Size Distribution:", kind);
-    let mut accumulative_count = 0;
-    for (size, (count, total)) in table {
-        // let curr = size * count;
-        accumulative_count += count;
-        eprintln!(
-            " - obj-size={} ({}) count={} total-size={} accumulative-count={} ({}%)",
-            size,
-            if *size < (1 << 10) {
-                format!("{}B", *size)
-            } else if *size < (1 << 20) {
-                format!("{}K", *size >> 10)
-            } else if *size < (1 << 30) {
-                format!("{}M", *size >> 20)
-            } else {
-                format!("{}G", *size >> 30)
-            },
-            count,
-            total,
-            accumulative_count,
-            (100 * accumulative_count) as f64 / total_count as f64
-        );
-    }
-    counts.clear();
-}
-
 static VERBOSE: AtomicUsize = AtomicUsize::new(0);
 
 pub fn verbose(level: usize) -> bool {
     VERBOSE.load(Ordering::Relaxed) >= level
 }
-
-static SANITY_LIVE_SIZE_IX: AtomicUsize = AtomicUsize::new(0);
-static SANITY_LIVE_SIZE_LOS: AtomicUsize = AtomicUsize::new(0);
-static FRAG_EXP_ENABLED: AtomicBool = AtomicBool::new(false);
-fn frag_exp_enabled() -> bool {
-    if !cfg!(feature = "periodic_fragmentation_analysis") {
-        return true;
-    }
-    FRAG_EXP_ENABLED.load(Ordering::Relaxed)
-}
-
-#[derive(Default)]
-#[allow(unused)]
-struct LocalRCStat {
-    pub total_incs: usize,
-    pub los_incs: usize,
-    pub ac_incs: usize,
-    pub los_ac_incs: usize,
-    pub ac_calls: usize,
-    pub los_ac_calls: usize,
-    pub opw_incs: usize,
-    pub opw_calls: usize,
-    pub los_opw_incs: usize,
-    pub los_opw_calls: usize,
-    pub rec_incs: usize,
-    pub los_rec_incs: usize,
-    pub roots: usize,
-}
-
-#[derive(Default)]
-#[allow(unused)]
-struct RCStat {
-    pub total_incs: AtomicUsize,
-    pub los_incs: AtomicUsize,
-    pub ac_incs: AtomicUsize,
-    pub los_ac_incs: AtomicUsize,
-    pub ac_calls: AtomicUsize,
-    pub los_ac_calls: AtomicUsize,
-    pub opw_incs: AtomicUsize,
-    pub opw_calls: AtomicUsize,
-    pub los_opw_incs: AtomicUsize,
-    pub los_opw_calls: AtomicUsize,
-    pub rec_incs: AtomicUsize,
-    pub los_rec_incs: AtomicUsize,
-    pub roots: AtomicUsize,
-}
-
-#[allow(unused)]
-impl RCStat {
-    fn merge(&self, local: &mut LocalRCStat) {
-        self.total_incs
-            .fetch_add(local.total_incs, Ordering::SeqCst);
-        self.los_incs.fetch_add(local.los_incs, Ordering::SeqCst);
-        self.ac_incs.fetch_add(local.ac_incs, Ordering::SeqCst);
-        self.los_ac_incs
-            .fetch_add(local.los_ac_incs, Ordering::SeqCst);
-        self.ac_calls.fetch_add(local.ac_calls, Ordering::SeqCst);
-        self.los_ac_calls
-            .fetch_add(local.los_ac_calls, Ordering::SeqCst);
-        self.opw_incs.fetch_add(local.opw_incs, Ordering::SeqCst);
-        self.opw_calls.fetch_add(local.opw_calls, Ordering::SeqCst);
-        self.los_opw_incs
-            .fetch_add(local.los_opw_incs, Ordering::SeqCst);
-        self.los_opw_calls
-            .fetch_add(local.los_opw_calls, Ordering::SeqCst);
-        self.rec_incs.fetch_add(local.rec_incs, Ordering::SeqCst);
-        self.los_rec_incs
-            .fetch_add(local.los_rec_incs, Ordering::SeqCst);
-        self.roots.fetch_add(local.roots, Ordering::SeqCst);
-        *local = Default::default();
-    }
-
-    fn dump(&self, pause: Pause, pause_time: f64) {
-        if pause != Pause::RefCount {
-            return;
-        }
-        eprintln!(
-            "<<<RC-STAT>>> {:.3}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
-            pause_time,
-            self.total_incs.load(Ordering::SeqCst),
-            self.los_incs.load(Ordering::SeqCst),
-            self.ac_incs.load(Ordering::SeqCst),
-            self.los_ac_incs.load(Ordering::SeqCst),
-            self.ac_calls.load(Ordering::SeqCst),
-            self.los_ac_calls.load(Ordering::SeqCst),
-            self.opw_incs.load(Ordering::SeqCst),
-            self.opw_calls.load(Ordering::SeqCst),
-            self.los_opw_incs.load(Ordering::SeqCst),
-            self.los_opw_calls.load(Ordering::SeqCst),
-            self.rec_incs.load(Ordering::SeqCst),
-            self.los_rec_incs.load(Ordering::SeqCst),
-            self.roots.load(Ordering::SeqCst),
-        );
-        self.total_incs.store(0, Ordering::SeqCst);
-        self.los_incs.store(0, Ordering::SeqCst);
-        self.ac_incs.store(0, Ordering::SeqCst);
-        self.los_ac_incs.store(0, Ordering::SeqCst);
-        self.ac_calls.store(0, Ordering::SeqCst);
-        self.los_ac_calls.store(0, Ordering::SeqCst);
-        self.opw_incs.store(0, Ordering::SeqCst);
-        self.opw_calls.store(0, Ordering::SeqCst);
-        self.los_opw_incs.store(0, Ordering::SeqCst);
-        self.los_opw_calls.store(0, Ordering::SeqCst);
-        self.rec_incs.store(0, Ordering::SeqCst);
-        self.los_rec_incs.store(0, Ordering::SeqCst);
-        self.roots.store(0, Ordering::SeqCst);
-    }
-}
-
-static RC_STAT: RCStat = RCStat {
-    total_incs: AtomicUsize::new(0),
-    los_incs: AtomicUsize::new(0),
-    ac_incs: AtomicUsize::new(0),
-    los_ac_incs: AtomicUsize::new(0),
-    ac_calls: AtomicUsize::new(0),
-    los_ac_calls: AtomicUsize::new(0),
-    opw_incs: AtomicUsize::new(0),
-    opw_calls: AtomicUsize::new(0),
-    los_opw_incs: AtomicUsize::new(0),
-    los_opw_calls: AtomicUsize::new(0),
-    rec_incs: AtomicUsize::new(0),
-    los_rec_incs: AtomicUsize::new(0),
-    roots: AtomicUsize::new(0),
-};
