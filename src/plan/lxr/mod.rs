@@ -1,4 +1,5 @@
 mod barrier;
+mod block_allocation;
 pub(super) mod cm;
 mod gc_work;
 pub(super) mod global;

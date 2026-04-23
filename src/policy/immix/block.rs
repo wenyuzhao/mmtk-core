@@ -533,14 +533,13 @@ impl Block {
         crate::util::rc::RC_STRADDLE_LINES.bzero_metadata(self.start(), Block::BYTES);
     }
 
-    #[allow(unused)]
-    pub(super) fn clear_mark_table<VM: VMBinding>(&self) {
+    pub fn clear_mark_table<VM: VMBinding>(&self) {
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
             .extract_side_spec()
             .bzero_metadata(self.start(), Self::BYTES);
     }
 
-    pub(super) fn initialize_mark_table_as_marked<VM: VMBinding>(&self) {
+    pub fn initialize_mark_table_as_marked<VM: VMBinding>(&self) {
         let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
         let start: *mut u8 = address_to_meta_address(&meta, self.start()).to_mut_ptr();
         let limit: *mut u8 = address_to_meta_address(&meta, self.end()).to_mut_ptr();
@@ -580,7 +579,6 @@ impl Block {
                 .is_ok()
             {
                 space
-                    .block_allocation
                     .in_place_promoted_nursery_blocks
                     .fetch_add(1, Ordering::Relaxed);
                 self.set_state(BlockState::Unmarked);
@@ -768,28 +766,6 @@ impl Block {
 
     pub fn rc_table_start(&self) -> Address {
         address_to_meta_address(&crate::util::rc::RC_TABLE, self.start())
-    }
-
-    pub fn has_holes(&self) -> bool {
-        let rc_array = RCArray::of(*self);
-        let mut found_free_line = false;
-        let mut free_lines = 0;
-        for i in 0..Self::LINES {
-            if rc_array.is_dead(i) {
-                if i == 0 || found_free_line {
-                    free_lines += 1
-                } else if !found_free_line {
-                    found_free_line = true;
-                }
-                if free_lines >= crate::args().min_reuse_lines {
-                    return true;
-                }
-            } else {
-                free_lines = 0;
-                found_free_line = false;
-            }
-        }
-        false
     }
 
     pub fn iter_holes(&self, mut f: impl FnMut(usize)) {

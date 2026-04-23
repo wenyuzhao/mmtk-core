@@ -1,3 +1,4 @@
+use super::block_allocation::BlockAllocation;
 use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext, ReleaseLOSNursery};
 use super::mutator::ALLOCATOR_MAPPING;
 use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
@@ -90,6 +91,7 @@ pub struct LXR<VM: VMBinding> {
     pub prev_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub curr_roots: RwLock<SegQueue<Vec<ObjectReference>>>,
     pub rc: RefCountHelper<VM>,
+    block_allocation: BlockAllocation<VM>,
     gc_cause: Atomic<GCCause>,
 }
 
@@ -121,11 +123,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // Survival limits
-        let total_young_alloc_pages = self
-            .immix_space
-            .block_allocation
-            .total_young_allocation_in_bytes()
-            >> LOG_BYTES_IN_MBYTE;
+        let total_young_alloc_pages =
+            self.block_allocation.total_young_allocation_in_bytes() >> LOG_BYTES_IN_MBYTE;
         let predicted_survival_mb: usize =
             ((total_young_alloc_pages as f64 * super::SURVIVAL_RATIO_PREDICTOR.ratio()) as usize)
                 << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER;
@@ -154,18 +153,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // clean young blocks limits
-        if self.immix_space.block_allocation.clean_nursery_blocks() >= self.nursery_blocks {
+        if self.block_allocation.clean_nursery_blocks() >= self.nursery_blocks {
             self.gc_cause
                 .store(GCCause::FixedNursery, Ordering::Relaxed);
             return true;
         }
         // total young alloc limits (including clean and recycled allocation)
-        if self
-            .immix_space
-            .block_allocation
-            .total_young_allocation_in_bytes()
-            >= self.young_alloc_trigger
-        {
+        if self.block_allocation.total_young_allocation_in_bytes() >= self.young_alloc_trigger {
             self.gc_cause
                 .store(GCCause::FixedNursery, Ordering::Relaxed);
             return true;
@@ -299,7 +293,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn get_collection_reserved_pages(&self) -> usize {
         let survival = {
-            let predicted_survival = (self.immix_space.block_allocation.clean_nursery_mb() as f64
+            let predicted_survival = (self.block_allocation.clean_nursery_mb() as f64
                 * super::SURVIVAL_RATIO_PREDICTOR.ratio())
                 as usize;
             predicted_survival << LOG_CONSERVATIVE_SURVIVAL_RATIO_MULTIPLER
@@ -329,11 +323,8 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         crate::NO_EVAC.store(false, Ordering::SeqCst);
         let pause = self.current_pause().unwrap();
 
-        super::SURVIVAL_RATIO_PREDICTOR.set_alloc_size(
-            self.immix_space
-                .block_allocation
-                .total_young_allocation_in_bytes(),
-        );
+        super::SURVIVAL_RATIO_PREDICTOR
+            .set_alloc_size(self.block_allocation.total_young_allocation_in_bytes());
         self.immix_space.rc_eager_prepare(pause);
 
         if pause == Pause::FinalMark {
@@ -466,6 +457,7 @@ impl<VM: VMBinding> LXR<VM> {
             prev_roots: Default::default(),
             curr_roots: Default::default(),
             rc: RefCountHelper::NEW,
+            block_allocation: BlockAllocation::new(),
             gc_cause: Atomic::new(GCCause::Unknown),
         });
 
@@ -587,10 +579,7 @@ impl<VM: VMBinding> LXR<VM> {
             self.gc_cause.load(Ordering::SeqCst)
         };
         let epoch = crate::GC_EPOCH.load(Ordering::SeqCst);
-        let alloc_ix = self
-            .immix_space
-            .block_allocation
-            .total_young_allocation_in_bytes();
+        let alloc_ix = self.block_allocation.total_young_allocation_in_bytes();
         let alloc_los = self.los().young_alloc_size.load(Ordering::Relaxed);
         let alloc_total = alloc_los + alloc_ix;
         gc_log!([2]
@@ -601,8 +590,8 @@ impl<VM: VMBinding> LXR<VM> {
             self.rc.inc_buffer_size(),
             alloc_total >> LOG_BYTES_IN_MBYTE,
             alloc_ix >> LOG_BYTES_IN_MBYTE,
-            self.immix_space.block_allocation.clean_nursery_blocks(),
-            self.immix_space.block_allocation.clean_nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
+            self.block_allocation.clean_nursery_blocks(),
+            self.block_allocation.clean_nursery_blocks() << Block::LOG_BYTES >> LOG_BYTES_IN_MBYTE,
             alloc_los >> LOG_BYTES_IN_MBYTE,
         );
     }
@@ -917,8 +906,9 @@ impl<VM: VMBinding> LXR<VM> {
         self.immix_space.rc_enabled = true;
         self.common.los.rc_enabled = true;
         unsafe {
-            let me = &*(self as *const Self);
-            self.immix_space.block_allocation.lxr = Some(me);
+            let me: &'static Self = &*(self as *const Self);
+            me.block_allocation.init(&me.immix_space, me);
+            me.immix_space.install_hooks(&me.block_allocation);
             self.common.los.lxr = Some(me);
         }
         let mut lazy_sweeping_jobs = crate::LAZY_SWEEPING_JOBS.write();

@@ -1,4 +1,3 @@
-use super::block_allocation::BlockAllocation;
 use super::defrag::StatsForDefrag;
 use super::line::*;
 use super::rc_work::*;
@@ -18,7 +17,7 @@ use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::chunk_map::*;
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::PageResource;
-use crate::util::linear_scan::Region;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::log_bit::UnlogBitsOperation;
 use crate::util::metadata::side_metadata::spec_defs::IX_LINE_REUSE_COUNT;
 use crate::util::metadata::side_metadata::*;
@@ -43,10 +42,26 @@ use std::mem;
 use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::{atomic::AtomicU8, Arc};
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
+/// Plan-level hooks invoked by ImmixSpace during mutator allocation.
+/// Default impls are no-ops; LXR provides the concrete implementation.
+pub trait ImmixHooks<VM: VMBinding>: Send + Sync {
+    /// Called after a fresh clean block is acquired. `copy` distinguishes
+    /// mutator vs. GC-copy allocation. The hook owns any plan-specific
+    /// per-block bookkeeping (e.g. nursery list, mark-table init).
+    fn on_clean_block_acquired(&self, _block: Block, _copy: bool) {}
+    /// Whether tracing is in progress; consulted on the mutator
+    /// reused-line fast path so newly handed-out lines can be marked.
+    fn cm_in_progress_or_final_mark(&self) -> bool {
+        false
+    }
+    fn sweep_nursery_blocks(&self) {}
+    fn inc_inplace_promoted_nursery_blocks(&self, _num_blocks: usize) {}
+}
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -68,7 +83,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
-    pub block_allocation: BlockAllocation<VM>,
     possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
     pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
@@ -78,10 +92,12 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub copy_alloc_bytes: AtomicUsize,
     pub rc_killed_bytes: AtomicUsize,
     pub mature_evac_remset: MatureEvecRemSet<VM>,
+    pub(super) hooks: OnceLock<&'static dyn ImmixHooks<VM>>,
     pub rc_enabled: bool,
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
     pub(super) evac_set: MatureEvacuationSet,
+    pub(crate) in_place_promoted_nursery_blocks: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -251,8 +267,6 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
             sft_map,
             &self.get_page_resource().common().metadata,
         );
-        // Initialize the block queues in `reusable_blocks` and `pr`.
-        self.block_allocation.init(self);
     }
     fn release_multiple_pages(&mut self, _start: Address) {
         panic!("immixspace only releases pages enmasse")
@@ -465,7 +479,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mature_evac_remset: MatureEvecRemSet::new(scheduler.num_workers()),
             scheduler,
             space_args,
-            block_allocation: BlockAllocation::new(),
+            hooks: OnceLock::new(),
             possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
             mature_evac_remsets: Default::default(),
@@ -478,6 +492,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
             evac_set: MatureEvacuationSet::default(),
+            in_place_promoted_nursery_blocks: AtomicUsize::new(0),
         }
     }
 
@@ -525,12 +540,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
+    /// Install the plan-level hooks. Called once by the owning plan during `gc_init`.
+    pub fn install_hooks(&self, hooks: &'static dyn ImmixHooks<VM>) {
+        self.hooks
+            .set(hooks)
+            .unwrap_or_else(|_| panic!("ImmixSpace::install_hooks called more than once"));
+    }
+
+    fn hooks(&self) -> Option<&'static dyn ImmixHooks<VM>> {
+        self.hooks.get().copied()
+    }
+
     fn schedule_defrag_selection_packets(&self, _pause: Pause) {
         self.evac_set.schedule_defrag_selection_packets(self)
     }
 
     pub fn rc_eager_prepare(&self, pause: Pause) {
-        self.block_allocation.notify_mutator_phase_end();
         self.pr.prepare_gc();
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
@@ -601,8 +626,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn release_rc(&mut self, pause: Pause) {
         debug_assert_ne!(pause, Pause::FullDefrag);
-        self.block_allocation
-            .sweep_nursery_blocks(&self.scheduler, pause);
+        self.hooks().map(|hooks| hooks.sweep_nursery_blocks());
         self.flush_page_resource();
         let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
         if disable_lasy_dec_for_current_gc {
@@ -802,6 +826,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         block.deinit(self);
     }
 
+    fn initialize_new_clean_block(&self, block: Block, copy: bool) {
+        if self.in_defrag() {
+            self.defrag.notify_new_clean_block(copy);
+        }
+        if let Some(hooks) = self.hooks() {
+            hooks.on_clean_block_acquired(block, copy);
+        }
+        // println!("Alloc {:?} {}", block, copy);
+        block.init(copy, false, self);
+        if self.common().zeroed && !copy && cfg!(feature = "force_zeroing") {
+            crate::util::memory::zero_w(block.start(), Block::BYTES);
+        }
+    }
+
     /// Allocate a clean block.
     pub fn get_clean_block(
         &self,
@@ -817,8 +855,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.notify_new_clean_block(copy);
         }
         let block = Block::from_aligned_address(block_address);
-        self.block_allocation
-            .initialize_new_clean_block(block, copy);
+        self.initialize_new_clean_block(block, copy);
+        block.init(copy, false, self);
         self.chunk_map.set_allocated(block.chunk(), true);
         if !self.rc_enabled {
             self.lines_consumed
@@ -871,8 +909,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if !self.rc_enabled {
                 self.defrag.notify_new_clean_block(copy);
             }
-            self.block_allocation
-                .initialize_new_clean_block(block, copy);
+            self.initialize_new_clean_block(block, copy);
             self.chunk_map.set_allocated(block.chunk(), true);
             if !self.rc_enabled {
                 self.lines_consumed
@@ -1312,7 +1349,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
-        if Line::steps_between(&start, &end).unwrap() < crate::args().min_reuse_lines {
+        if Line::steps_between(&start, &end).unwrap() < 1 {
             if end == block.end_line() {
                 return None;
             } else {
@@ -1331,22 +1368,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.reused_lines_consumed
                 .fetch_add(num_lines, Ordering::Relaxed);
         }
-        if self.block_allocation.cm_in_progress_or_final_mark() {
+        if self
+            .hooks()
+            .is_some_and(|h| h.cm_in_progress_or_final_mark())
+        {
             Line::initialize_mark_table_as_marked::<VM>(start..end);
             Line::inc_reuse_counts::<VM>(start..end);
-        } else {
-            // Line::clear_mark_table::<VM>(start..end);
         }
-        // if !_copy {
-        //     println!("reuse {:?} copy={}", start..end, copy);
-        // }
         Some((start, end))
     }
 
     #[allow(clippy::assertions_on_constants)]
     pub fn normal_get_next_available_lines(
         &self,
-        copy: bool,
+        _copy: bool,
         search_start: Line,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
@@ -1358,19 +1393,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let start_cursor = search_start.get_index_within_block();
         let mut cursor = start_cursor;
         // Find start
-        while cursor < Block::LINES {
+        while cursor < mark_data.len() {
             let mark = mark_data.get(cursor);
             if mark != unavail_state && mark != current_state {
                 break;
             }
             cursor += 1;
         }
-        if cursor == Block::LINES {
+        if cursor == mark_data.len() {
             return None;
         }
         let start = search_start.next_nth(cursor - start_cursor);
         // Find limit
-        while cursor < Block::LINES {
+        while cursor < mark_data.len() {
             let mark = mark_data.get(cursor);
             if mark == unavail_state || mark == current_state {
                 break;
@@ -1378,20 +1413,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             cursor += 1;
         }
         let end = search_start.next_nth(cursor - start_cursor);
-        if Line::steps_between(&start, &end).unwrap() < crate::args().min_reuse_lines {
-            if end == block.end_line() {
-                return None;
-            } else {
-                return self.normal_get_next_available_lines(copy, end);
-            };
-        }
-        if self.common.needs_log_bit {
-            if !copy {
-                Line::clear_field_unlog_table::<VM>(start..end);
-            } else {
-                Line::initialize_field_unlog_table_as_unlogged::<VM>(start..end);
-            }
-        }
+        debug_assert!(RegionIterator::<Line>::new(start, end)
+            .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
         Some((start, end))
     }
 
