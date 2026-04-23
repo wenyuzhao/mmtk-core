@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use atomic::Ordering;
 
+use super::gc_work::rc::ProcessDecs;
+use super::gc_work::rc::ProcessIncs;
+use super::gc_work::rc::EDGE_KIND_MATURE;
+use super::gc_work::tracing::ProcessModBufSATB;
 use super::LXR;
 use crate::plan::barriers::BarrierSemantics;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::barriers::{FAST_COUNT, SLOW_COUNT};
 use crate::plan::immix::Pause;
-use crate::plan::lxr::cm::ProcessModBufSATB;
-use crate::plan::lxr::rc::ProcessDecs;
-use crate::plan::lxr::rc::ProcessIncs;
-use crate::plan::lxr::rc::EDGE_KIND_MATURE;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
 use crate::util::address::CLDScanPolicy;

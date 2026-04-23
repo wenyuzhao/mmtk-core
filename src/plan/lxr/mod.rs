@@ -1,18 +1,14 @@
 mod barrier;
 mod block_allocation;
-pub(super) mod cm;
-mod gc_work;
+pub mod gc_work;
 pub(super) mod global;
-mod mature_evac;
+pub mod mature_evac;
 pub(super) mod mutator;
-pub mod rc;
-mod remset;
 
 use std::sync::atomic::AtomicUsize;
 
 pub use self::global::LXR;
 pub use self::global::LXR_CONSTRAINTS;
-pub use self::remset::MatureEvecRemSet;
 
 use atomic::Atomic;
 use atomic::Ordering;

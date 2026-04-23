@@ -2,7 +2,6 @@ pub mod block;
 pub mod defrag;
 pub mod immixspace;
 pub mod line;
-pub mod rc_work;
 
 pub use immixspace::*;
 

@@ -5,7 +5,6 @@ use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
-use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::constants::BYTES_IN_PAGE;
@@ -21,7 +20,6 @@ use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use crate::LazySweepingJobsCounter;
 use crossbeam::queue::SegQueue;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
@@ -49,7 +47,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     pub rc_killed_bytes: AtomicUsize,
     pub young_alloc_size: AtomicUsize,
     pub rc_enabled: bool,
-    rc: RefCountHelper<VM>,
+    pub rc: RefCountHelper<VM>,
     pub is_end_of_satb_or_full_gc: bool,
     pub(crate) lxr: Option<&'static crate::plan::lxr::LXR<VM>>,
 }
@@ -668,25 +666,4 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
 fn get_super_page(cell: Address) -> Address {
     cell.align_down(BYTES_IN_PAGE)
-}
-
-pub struct RCSweepMatureAfterSATBLOS {
-    _counter: LazySweepingJobsCounter,
-}
-
-impl RCSweepMatureAfterSATBLOS {
-    pub fn new(counter: LazySweepingJobsCounter) -> Self {
-        Self { _counter: counter }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for RCSweepMatureAfterSATBLOS {
-    fn do_work(
-        &mut self,
-        _worker: &mut crate::scheduler::GCWorker<VM>,
-        mmtk: &'static crate::MMTK<VM>,
-    ) {
-        let los = mmtk.get_plan().common().get_los();
-        los.sweep_rc_mature_objects_after_satb(&|o| !(!los.is_marked(o) && los.rc.count(o) != 0));
-    }
 }

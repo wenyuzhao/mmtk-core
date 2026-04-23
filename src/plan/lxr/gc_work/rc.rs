@@ -1,6 +1,6 @@
-use super::cm::LXRConcurrentTraceObjects;
-use super::cm::LXRStopTheWorldProcessEdges;
-use super::SurvivalRatioPredictorLocal;
+use super::super::SurvivalRatioPredictorLocal;
+use super::tracing::LXRConcurrentTraceObjects;
+use super::tracing::LXRStopTheWorldProcessEdges;
 use super::LXR;
 use crate::plan::VectorQueue;
 use crate::scheduler::gc_work::RootKind;
@@ -109,10 +109,6 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
         if self.new_incs_count as usize >= Self::CAPACITY {
             self.flush();
         }
-    }
-
-    pub fn new_objects(_objects: Vec<ObjectReference>) -> Self {
-        unreachable!()
     }
 
     pub fn new(incs: Vec<VM::VMSlot>, lxr: &'static LXR<VM>) -> Self {
@@ -681,8 +677,6 @@ pub struct ProcessDecs<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> ProcessDecs<VM> {
-    pub const CAPACITY: usize = crate::args::BUFFER_SIZE;
-
     fn worker(&self) -> &mut GCWorker<VM> {
         GCWorker::<VM>::current()
     }

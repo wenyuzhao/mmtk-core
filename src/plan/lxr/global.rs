@@ -1,13 +1,14 @@
 use super::block_allocation::BlockAllocation;
-use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext, ReleaseLOSNursery};
+use super::gc_work::mature_evac::FlushMatureEvacRemsets;
+use super::gc_work::rc::{ProcessDecs, RCImmixCollectRootEdges};
+use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
-use super::rc::{ProcessDecs, RCImmixCollectRootEdges};
-use super::remset::FlushMatureEvacRemsets;
 use crate::mmtk::VM_MAP;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::immix::Pause;
-use crate::plan::lxr::gc_work::FastRCPrepare;
+use crate::plan::lxr::gc_work::nursery_sweeping::ReleaseLOSNursery;
+use crate::plan::lxr::gc_work::prepare::FastRCPrepare;
 use crate::plan::AllocationSemantics;
 use crate::plan::MutatorContext;
 use crate::plan::Plan;

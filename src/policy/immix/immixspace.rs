@@ -1,12 +1,13 @@
 use super::defrag::StatsForDefrag;
 use super::line::*;
-use super::rc_work::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::immix::Pause;
-use crate::plan::lxr::MatureEvecRemSet;
+use crate::plan::lxr::gc_work::mature_sweeping::{RCSweepMatureAfterSATBLOS, SweepDeadCycles};
+use crate::plan::lxr::gc_work::nursery_sweeping::SweepBlocksAfterDecs;
+use crate::plan::lxr::gc_work::prepare::{ConcurrentChunkMetadataZeroing, PrepareChunksForFullGC};
+use crate::plan::lxr::mature_evac::{MatureEvacuationSet, MatureEvecRemSet};
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, DEFAULT_TRACE, TRACE_KIND_TRANSITIVE_PIN};
-use crate::policy::largeobjectspace::RCSweepMatureAfterSATBLOS;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;
@@ -96,7 +97,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub rc_enabled: bool,
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
-    pub(super) evac_set: MatureEvacuationSet,
+    pub evac_set: MatureEvacuationSet,
     pub(crate) in_place_promoted_nursery_blocks: AtomicUsize,
 }
 
