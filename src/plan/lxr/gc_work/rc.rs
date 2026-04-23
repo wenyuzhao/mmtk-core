@@ -164,10 +164,7 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             return;
         }
         if !slot_in_defrag && self.lxr.in_defrag(o) {
-            self.lxr
-                .immix_space
-                .mature_evac_remset
-                .record(s, o, self.lxr);
+            self.lxr.mature_evac_remset.record(s, o, self.lxr);
         }
     }
 
@@ -751,7 +748,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             return;
         }
         if !lxr.address_in_defrag(s.to_address()) && lxr.in_defrag(o) {
-            lxr.immix_space.mature_evac_remset.record(s, o, lxr);
+            lxr.mature_evac_remset.record(s, o, lxr);
         }
     }
 
@@ -818,8 +815,7 @@ impl<VM: VMBinding> ProcessDecs<VM> {
         }
         if in_ix_space {
             let block = Block::containing(o);
-            lxr.immix_space
-                .add_to_possibly_dead_mature_blocks(block, false);
+            lxr.add_to_possibly_dead_mature_blocks(block, false);
             false
         } else {
             true

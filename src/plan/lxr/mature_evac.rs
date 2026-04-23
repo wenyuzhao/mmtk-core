@@ -48,16 +48,21 @@ impl RemSetEntry {
 }
 
 pub struct MatureEvecRemSet<VM: VMBinding> {
-    pub(super) gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
+    pub gc_buffers: Vec<UnsafeCell<Vec<RemSetEntry>>>,
+    pub global_packets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
     local_packets: Vec<UnsafeCell<Vec<Box<dyn GCWork<VM>>>>>,
     _p: PhantomData<VM>,
     size: AtomicUsize,
 }
 
+unsafe impl<VM: VMBinding> Send for MatureEvecRemSet<VM> {}
+unsafe impl<VM: VMBinding> Sync for MatureEvecRemSet<VM> {}
+
 impl<VM: VMBinding> MatureEvecRemSet<VM> {
     pub fn new(workers: usize) -> Self {
         let mut rs = Self {
             gc_buffers: vec![],
+            global_packets: Mutex::new(vec![]),
             local_packets: vec![],
             _p: PhantomData,
             size: AtomicUsize::new(0),
@@ -73,8 +78,8 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
         unsafe { &mut *self.gc_buffers[id].get() }
     }
 
-    pub fn flush_all(&self, space: &ImmixSpace<VM>) {
-        let mut mature_evac_remsets = space.mature_evac_remsets.lock().unwrap();
+    pub fn flush_all(&self) {
+        let mut mature_evac_remsets = self.global_packets.lock().unwrap();
         self.size.store(0, Ordering::SeqCst);
         for id in 0..self.gc_buffers.len() {
             if self.gc_buffer(id).len() > 0 {
@@ -91,6 +96,11 @@ impl<VM: VMBinding> MatureEvecRemSet<VM> {
                 }
             }
         }
+    }
+
+    pub(super) fn take_global_packets(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        let mut mature_evac_remsets = self.global_packets.lock().unwrap();
+        std::mem::take(&mut *mature_evac_remsets)
     }
 
     #[cold]

@@ -181,10 +181,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                 return;
             }
             if crate::args::RC_MATURE_EVACUATION && !SRC_IN_DEFRAG && self.plan.in_defrag(t) {
-                self.plan
-                    .immix_space
-                    .mature_evac_remset
-                    .record(s, t, self.plan);
+                self.plan.mature_evac_remset.record(s, t, self.plan);
             }
             self.trace_object(t);
             if crate::args::PREFETCH {
@@ -231,10 +228,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
                     && (CHECK_REMSET || out_of_heap)
                     && self.plan.in_defrag(t)
                 {
-                    self.plan
-                        .immix_space
-                        .mature_evac_remset
-                        .record(s, t, self.plan);
+                    self.plan.mature_evac_remset.record(s, t, self.plan);
                 }
                 self.next_objects.push(t);
                 if self.next_objects.len() > Self::SATB_BUFFER_SIZE {

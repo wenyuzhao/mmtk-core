@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::super::mature_evac::{RemSetEntry,MatureEvacuationSet};
+use super::super::mature_evac::{MatureEvacuationSet, RemSetEntry};
 use super::tracing::LXRStopTheWorldProcessEdges;
 use super::LXR;
 use crate::policy::immix::line::Line;
@@ -89,35 +89,27 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocks {
         }
         // Flush to global fragmented_blocks
         if !fragmented_blocks.is_empty() {
-            lxr.immix_space
-                .evac_set
+            lxr.evac_set
                 .fragmented_blocks_size
                 .fetch_add(fragmented_blocks.len(), Ordering::SeqCst);
-            lxr.immix_space
-                .evac_set
-                .fragmented_blocks
-                .push(fragmented_blocks);
+            lxr.evac_set.fragmented_blocks.push(fragmented_blocks);
         }
         // Flush to global blocks_in_fragmented_chunks
         if !blocks_in_fragmented_chunks.is_empty() {
-            lxr.immix_space
-                .evac_set
+            lxr.evac_set
                 .blocks_in_fragmented_chunks_size
                 .fetch_add(blocks_in_fragmented_chunks.len(), Ordering::SeqCst);
-            lxr.immix_space
-                .evac_set
+            lxr.evac_set
                 .blocks_in_fragmented_chunks
                 .push(blocks_in_fragmented_chunks);
         }
 
         if SELECT_DEFRAG_BLOCK_JOB_COUNTER.fetch_sub(1, Ordering::SeqCst) == 1 {
-            lxr.immix_space
-                .evac_set
-                .select_mature_evacuation_candidates(
-                    lxr,
-                    lxr.current_pause().unwrap(),
-                    mmtk.get_plan().get_total_pages(),
-                )
+            lxr.evac_set.select_mature_evacuation_candidates(
+                lxr,
+                lxr.current_pause().unwrap(),
+                mmtk.get_plan().get_total_pages(),
+            )
         }
     }
 }
@@ -228,12 +220,8 @@ pub struct FlushMatureEvacRemsets;
 
 impl<VM: VMBinding> GCWork<VM> for FlushMatureEvacRemsets {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let immix_space = &mmtk
-            .get_plan()
-            .downcast_ref::<LXR<VM>>()
-            .unwrap()
-            .immix_space;
-        immix_space.mature_evac_remset.flush_all(immix_space);
-        immix_space.process_mature_evacuation_remset();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        lxr.mature_evac_remset.flush_all();
+        lxr.process_mature_evacuation_remset();
     }
 }

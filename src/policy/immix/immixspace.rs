@@ -2,10 +2,6 @@ use super::defrag::StatsForDefrag;
 use super::line::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::immix::Pause;
-use crate::plan::lxr::gc_work::mature_sweeping::{RCSweepMatureAfterSATBLOS, SweepDeadCycles};
-use crate::plan::lxr::gc_work::nursery_sweeping::SweepBlocksAfterDecs;
-use crate::plan::lxr::gc_work::prepare::{ConcurrentChunkMetadataZeroing, PrepareChunksForFullGC};
-use crate::plan::lxr::mature_evac::{MatureEvacuationSet, MatureEvecRemSet};
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, DEFAULT_TRACE, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::sft::GCWorkerMutRef;
@@ -30,19 +26,16 @@ use crate::util::object_forwarding;
 use crate::util::rc::RefCountHelper;
 use crate::util::{copy::*, epilogue, object_enum};
 use crate::util::{Address, ObjectReference};
+use crate::vm::*;
 use crate::{
     plan::ObjectQueue,
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::opaque_pointer::{VMThread, VMWorkerThread},
     MMTK,
 };
-use crate::{vm::*, LazySweepingJobsCounter};
 use atomic::Ordering;
-use crossbeam::queue::SegQueue;
-use std::mem;
 use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::{atomic::AtomicU8, Arc};
 
@@ -84,20 +77,11 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
-    possibly_dead_mature_blocks: SegQueue<(Block, bool)>,
     initial_mark_pause: bool,
-    pub mature_evac_remsets: Mutex<Vec<Box<dyn GCWork<VM>>>>,
-    pub num_clean_blocks_released_young: AtomicUsize,
-    pub num_clean_blocks_released_mature: AtomicUsize,
-    pub num_clean_blocks_released_lazy: AtomicUsize,
-    pub copy_alloc_bytes: AtomicUsize,
-    pub rc_killed_bytes: AtomicUsize,
-    pub mature_evac_remset: MatureEvecRemSet<VM>,
     pub(super) hooks: OnceLock<&'static dyn ImmixHooks<VM>>,
     pub rc_enabled: bool,
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
-    pub evac_set: MatureEvacuationSet,
     pub(crate) in_place_promoted_nursery_blocks: AtomicUsize,
 }
 
@@ -204,7 +188,6 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, _object: ObjectReference, _bytes: usize) {
-        self.copy_alloc_bytes.store(0, Ordering::SeqCst);
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit(_object);
     }
@@ -477,22 +460,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
             mark_state: Self::MARKED_STATE,
-            mature_evac_remset: MatureEvecRemSet::new(scheduler.num_workers()),
             scheduler,
             space_args,
             hooks: OnceLock::new(),
-            possibly_dead_mature_blocks: Default::default(),
             initial_mark_pause: false,
-            mature_evac_remsets: Default::default(),
-            num_clean_blocks_released_young: Default::default(),
-            num_clean_blocks_released_mature: Default::default(),
-            num_clean_blocks_released_lazy: Default::default(),
-            copy_alloc_bytes: Default::default(),
-            rc_killed_bytes: Default::default(),
             rc_enabled,
             is_end_of_satb_or_full_gc: false,
             rc: RefCountHelper::NEW,
-            evac_set: MatureEvacuationSet::default(),
             in_place_promoted_nursery_blocks: AtomicUsize::new(0),
         }
     }
@@ -552,47 +526,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.hooks.get().copied()
     }
 
-    fn schedule_defrag_selection_packets(&self, _pause: Pause) {
-        self.evac_set.schedule_defrag_selection_packets(self)
-    }
-
-    pub fn rc_eager_prepare(&self, pause: Pause) {
+    pub fn rc_eager_prepare(&self) {
         self.pr.prepare_gc();
-        if pause == Pause::Full || pause == Pause::InitialMark {
-            // Update mark_state
-            // if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
-            //     self.mark_state = Self::MARKED_STATE;
-            // } else {
-            //     // For header metadata, we use cyclic mark bits.
-            //     unimplemented!("cyclic mark bits is not supported at the moment");
-            // }
-            // Reset block mark and object mark table.
-            let work_packets = self.generate_lxr_full_trace_prepare_tasks();
-            self.scheduler().work_buckets[WorkBucketStage::Initial].bulk_add(work_packets);
-        }
-    }
-
-    pub fn schedule_mark_table_zeroing_tasks(&self, stage: WorkBucketStage) {
-        let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
-        self.scheduler().work_buckets[stage].bulk_add(work_packets);
     }
 
     pub fn prepare_rc(&mut self, pause: Pause) {
-        self.num_clean_blocks_released_young
-            .store(0, Ordering::SeqCst);
-        self.num_clean_blocks_released_mature
-            .store(0, Ordering::SeqCst);
-        self.num_clean_blocks_released_lazy
-            .store(0, Ordering::SeqCst);
-        self.copy_alloc_bytes.store(0, Ordering::SeqCst);
-        self.rc_killed_bytes.store(0, Ordering::SeqCst);
-        debug_assert_ne!(pause, Pause::FullDefrag);
-        if pause == Pause::InitialMark || pause == Pause::Full {
-            // Select mature evacuation set
-            if !cfg!(feature = "lxr_no_evac") {
-                self.schedule_defrag_selection_packets(pause);
-            }
-        }
         // Initialize mark state for tracing
         if pause == Pause::Full || pause == Pause::InitialMark {
             // Update mark_state
@@ -625,39 +563,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn release_rc(&mut self, pause: Pause) {
-        debug_assert_ne!(pause, Pause::FullDefrag);
-        self.hooks().map(|hooks| hooks.sweep_nursery_blocks());
+    pub fn release_rc(&mut self) {
         self.flush_page_resource();
-        let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
-        if disable_lasy_dec_for_current_gc {
-            self.scheduler().process_lazy_decrement_packets();
-        } else {
-            debug_assert_ne!(pause, Pause::Full);
-        }
         self.rc.reset_inc_buffer_size();
         self.is_end_of_satb_or_full_gc = false;
-        // This cannot be done in parallel in a separate thread
-        self.schedule_post_satb_mature_sweeping(pause);
         self.reused_lines_consumed.store(0, Ordering::Relaxed);
-    }
-
-    fn schedule_post_satb_mature_sweeping(&self, pause: Pause) {
-        if pause == Pause::Full || pause == Pause::FinalMark {
-            self.evac_set.sweep_mature_evac_candidates(self);
-            let disable_lasy_dec_for_current_gc = crate::disable_lasy_dec_for_current_gc();
-            let dead_cycle_sweep_packets = self.generate_dead_cycle_sweep_tasks();
-            let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
-            if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
-                debug_assert_ne!(pause, Pause::Full);
-                self.scheduler().postpone_all(dead_cycle_sweep_packets);
-                self.scheduler().postpone(sweep_los);
-            } else {
-                self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep]
-                    .bulk_add(dead_cycle_sweep_packets);
-                self.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep].add(sweep_los);
-            }
-        }
     }
 
     pub fn prepare(
@@ -800,28 +710,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         tasks
     }
 
-    /// Generate chunk sweep work packets.
-    pub fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map.generate_tasks_batched(|chunks| {
-            Box::new(SweepDeadCycles::new(
-                chunks,
-                LazySweepingJobsCounter::new_decs(),
-            ))
-        })
-    }
-
-    /// Generate chunk sweep work packets.
-    fn generate_lxr_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        assert!(self.rc_enabled);
-        self.chunk_map
-            .generate_tasks_batched(|chunks| Box::new(PrepareChunksForFullGC { chunks }))
-    }
-
-    pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.chunk_map
-            .generate_tasks_batched(|chunks| Box::new(ConcurrentChunkMetadataZeroing { chunks }))
-    }
-
     /// Release a block.
     pub fn release_block(&self, block: Block) {
         block.deinit(self);
@@ -936,12 +824,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Trace and mark objects without evacuation.
-    pub fn process_mature_evacuation_remset(&self) {
-        let mut remsets = vec![];
-        mem::swap(&mut remsets, &mut self.mature_evac_remsets.lock().unwrap());
-        self.scheduler.work_buckets[WorkBucketStage::RCEvacuateMature].bulk_add(remsets);
-    }
-
     pub fn trace_object_without_moving_rc(
         &self,
         queue: &mut impl ObjectQueue,
@@ -1350,13 +1232,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         let start = Line::from(block.start() + (start << Line::LOG_BYTES));
         let end = Line::from(block.start() + (end << Line::LOG_BYTES));
-        if Line::steps_between(&start, &end).unwrap() < 1 {
-            if end == block.end_line() {
-                return None;
-            } else {
-                return self.rc_get_next_available_lines(copy, end);
-            };
-        }
         if self.common.needs_log_bit {
             if !copy {
                 Line::clear_field_unlog_table::<VM>(start..end);
@@ -1426,42 +1301,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // If defrag is disabled, every GC is exhaustive.
             true
         }
-    }
-
-    pub fn add_to_possibly_dead_mature_blocks(&self, block: Block, is_defrag_source: bool) {
-        if block.log() {
-            self.possibly_dead_mature_blocks
-                .push((block, is_defrag_source));
-        }
-    }
-
-    pub fn schedule_rc_block_sweeping_tasks(&self, counter: LazySweepingJobsCounter) {
-        // while let Some(x) = self.last_mutator_recycled_blocks.pop() {
-        //     x.set_state(BlockState::Marked);
-        // }
-        // This may happen either within a pause, or in concurrent.
-        let size = self.possibly_dead_mature_blocks.len();
-        let num_bins = self.scheduler().num_workers();
-        let bin_cap = size / num_bins + if size % num_bins == 0 { 0 } else { 1 };
-        let mut bins = (0..num_bins)
-            .map(|_| Vec::with_capacity(bin_cap))
-            .collect::<Vec<Vec<(Block, bool)>>>();
-        'out: for i in 0..num_bins {
-            for _ in 0..bin_cap {
-                if let Some(block) = self.possibly_dead_mature_blocks.pop() {
-                    bins[i].push(block);
-                } else {
-                    break 'out;
-                }
-            }
-        }
-        let packets = bins
-            .into_iter()
-            .map::<Box<dyn GCWork<VM>>, _>(|blocks| {
-                Box::new(SweepBlocksAfterDecs::new(blocks, counter.clone()))
-            })
-            .collect();
-        self.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add_prioritized(packets);
     }
 
     pub(crate) fn get_mutator_recycled_lines_in_pages(&self) -> usize {

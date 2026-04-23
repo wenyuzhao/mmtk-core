@@ -125,11 +125,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCycles<VM> {
             && (lxr.current_pause().is_none()
                 || mmtk.scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].is_open())
         {
-            lxr.immix_space
-                .num_clean_blocks_released_mature
+            lxr.num_clean_blocks_released_mature
                 .fetch_add(dead_blocks, Ordering::Relaxed);
-            lxr.immix_space
-                .num_clean_blocks_released_lazy
+            lxr.num_clean_blocks_released_lazy
                 .fetch_add(dead_blocks, Ordering::Relaxed);
         }
     }

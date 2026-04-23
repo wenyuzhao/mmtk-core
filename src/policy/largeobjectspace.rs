@@ -44,7 +44,6 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     rc_nursery_objects: SegQueue<ObjectReference>,
     rc_mature_objects: Mutex<HashMap<ObjectReference, usize>>,
     pub num_pages_released_lazy: AtomicUsize,
-    pub rc_killed_bytes: AtomicUsize,
     pub young_alloc_size: AtomicUsize,
     pub rc_enabled: bool,
     pub rc: RefCountHelper<VM>,
@@ -373,7 +372,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             rc_nursery_objects: Default::default(),
             rc_mature_objects: Default::default(),
             num_pages_released_lazy: Default::default(),
-            rc_killed_bytes: Default::default(),
             young_alloc_size: Default::default(),
             rc_enabled: false,
             rc: RefCountHelper::NEW,
@@ -412,7 +410,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.mark_state = MARK_BIT - self.mark_state;
         }
         self.num_pages_released_lazy.store(0, Ordering::Relaxed);
-        self.rc_killed_bytes.store(0, Ordering::Relaxed);
         self.young_alloc_size.store(0, Ordering::Relaxed);
         if self.rc_enabled {
             return;

@@ -1,8 +1,8 @@
 mod barrier;
 mod block_allocation;
-pub mod gc_work;
+mod gc_work;
 pub(super) mod global;
-pub mod mature_evac;
+mod mature_evac;
 pub(super) mod mutator;
 
 use std::sync::atomic::AtomicUsize;
