@@ -3,9 +3,10 @@ use super::gc_work::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
 use crate::mmtk::VM_MAP;
+use crate::plan::concurrent::global::ConcurrentPlan;
+use crate::plan::concurrent::Pause;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
-use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::mature_sweeping::{RCSweepMatureAfterSATBLOS, SweepDeadCycles};
 use crate::plan::lxr::gc_work::nursery_sweeping::{ReleaseLOSNursery, SweepBlocksAfterDecs};
 use crate::plan::lxr::gc_work::prepare::{
@@ -128,7 +129,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             return true;
         }
         // SATB is finished
-        if self.cm_in_progress() && crate::concurrent_marking_packets_drained() {
+        if self.concurrent_work_in_progress() && crate::concurrent_marking_packets_drained() {
             self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
             return true;
         }
@@ -179,7 +180,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn last_collection_was_exhaustive(&self) -> bool {
         let x = self.previous_pause.load(Ordering::SeqCst);
-        x == Some(Pause::Full) || x == Some(Pause::FullDefrag)
+        x == Some(Pause::Full)
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
@@ -208,7 +209,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         let pause = self.select_collection_kind();
         self.update_stats_after_gc_decided(pause);
         // Wait for concurrent packets
-        if self.cm_in_progress() && pause == Pause::RefCount {
+        if self.concurrent_work_in_progress() && pause == Pause::RefCount {
             crate::counters()
                 .rc_during_satb
                 .fetch_add(1, Ordering::SeqCst);
@@ -229,7 +230,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         match pause {
             Pause::Full => self
                 .schedule_emergency_full_heap_collection::<RCImmixCollectRootEdges<VM>>(scheduler),
-            Pause::FullDefrag => unreachable!(),
             Pause::RefCount => self.schedule_rc_collection(scheduler),
             Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
             Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
@@ -399,6 +399,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
 
     fn end_of_gc(&mut self, _tls: VMWorkerThread) {}
 
+    fn concurrent(&self) -> Option<&dyn ConcurrentPlan<VM = VM>> {
+        Some(self)
+    }
+
     #[cfg(feature = "nogc_no_zeroing")]
     fn handle_user_collection_request(&self, _tls: crate::util::VMMutatorThread, _force: bool) {
         println!("Warning: User attempted a collection request. The request is ignored.");
@@ -444,6 +448,16 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn requires_weak_root_scanning(&self) -> bool {
         // Collect weak roots and keep them alive across RC pauses.
         true
+    }
+}
+
+impl<VM: VMBinding> ConcurrentPlan for LXR<VM> {
+    fn current_pause(&self) -> Option<Pause> {
+        self.current_pause.load(Ordering::SeqCst)
+    }
+
+    fn concurrent_work_in_progress(&self) -> bool {
+        self.in_concurrent_marking.load(Ordering::Acquire)
     }
 }
 
@@ -527,10 +541,6 @@ impl<VM: VMBinding> LXR<VM> {
                 LazySweepingJobsCounter::new_decs(),
             ))
         })
-    }
-
-    pub fn cm_in_progress(&self) -> bool {
-        self.in_concurrent_marking.load(Ordering::Relaxed)
     }
 
     fn schedule_mature_sweeping(&self, pause: Pause) {
@@ -632,7 +642,7 @@ impl<VM: VMBinding> LXR<VM> {
             mature_space_pages,
             available_pages
         );
-        !self.cm_in_progress()
+        !self.concurrent_work_in_progress()
             && (self.cm_enabled()
                 && garbage * 100 >= crate::args().trace_threshold as usize * total_pages)
     }
@@ -731,7 +741,7 @@ impl<VM: VMBinding> LXR<VM> {
 
         let emergency = self.base().global_state.is_emergency_collection();
         let user_triggered = self.base().global_state.is_user_triggered_collection();
-        let cm_in_progress = self.cm_in_progress();
+        let cm_in_progress = self.concurrent_work_in_progress();
         let cm_packets_drained = crate::concurrent_marking_packets_drained();
         let hint_cycle_gc = self.hint_cycle_gc.load(Ordering::SeqCst);
         let hint_emergency_gc = self.hint_emergency_gc.load(Ordering::SeqCst);
@@ -840,7 +850,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
-        if self.cm_in_progress() {
+        if self.concurrent_work_in_progress() {
             scheduler.pause_concurrent_marking_work_packets_during_gc();
         }
         type E<VM> = RCImmixCollectRootEdges<VM>;
@@ -870,7 +880,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
-        if self.cm_in_progress() {
+        if self.concurrent_work_in_progress() {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
         self.process_prev_roots(scheduler);

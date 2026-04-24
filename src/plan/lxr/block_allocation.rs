@@ -1,4 +1,5 @@
-use crate::plan::immix::Pause;
+use crate::plan::concurrent::global::ConcurrentPlan;
+use crate::plan::concurrent::Pause;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::{ImmixHooks, ImmixSpace};
 use crate::util::constants::LOG_BYTES_IN_PAGE;
@@ -92,7 +93,7 @@ impl<VM: VMBinding> ImmixHooks<VM> for BlockAllocation<VM> {
 
     fn cm_in_progress_or_final_mark(&self) -> bool {
         let lxr = self.lxr();
-        lxr.cm_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
+        lxr.concurrent_work_in_progress() || lxr.current_pause() == Some(Pause::FinalMark)
     }
 
     fn sweep_nursery_blocks(&self) {

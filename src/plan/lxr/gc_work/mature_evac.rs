@@ -13,7 +13,7 @@ use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::spec_defs::{IX_LINE_REUSE_COUNT, LOS_PAGE_REUSE_COUNT};
 use crate::vm::slot::Slot;
 use crate::{
-    plan::immix::Pause,
+    plan::concurrent::Pause,
     policy::{
         immix::block::{Block, BlockState},
         space::Space,

@@ -13,7 +13,8 @@ use crate::plan::barriers::BarrierSemantics;
 use crate::plan::barriers::LOGGED_VALUE;
 use crate::plan::barriers::UNLOGGED_VALUE;
 use crate::plan::barriers::{FAST_COUNT, SLOW_COUNT};
-use crate::plan::immix::Pause;
+use crate::plan::concurrent::global::ConcurrentPlan;
+use crate::plan::concurrent::Pause;
 use crate::plan::VectorQueue;
 use crate::scheduler::WorkBucketStage;
 use crate::util::address::CLDScanPolicy;
@@ -136,7 +137,8 @@ impl<VM: VMBinding> LXRFieldBarrierSemantics<VM> {
 
     fn should_create_satb_packets(&self) -> bool {
         self.lxr.cm_enabled()
-            && (self.lxr.cm_in_progress() || self.lxr.current_pause() == Some(Pause::FinalMark))
+            && (self.lxr.concurrent_work_in_progress()
+                || self.lxr.current_pause() == Some(Pause::FinalMark))
     }
 
     #[cold]
@@ -229,7 +231,7 @@ impl<VM: VMBinding> BarrierSemantics for LXRFieldBarrierSemantics<VM> {
     }
 
     fn load_weak_reference(&mut self, o: ObjectReference) {
-        if !self.lxr.cm_in_progress() || self.lxr.is_marked(o) {
+        if !self.lxr.concurrent_work_in_progress() || self.lxr.is_marked(o) {
             return;
         }
         self.refs.push(o);

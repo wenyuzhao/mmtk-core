@@ -1,8 +1,8 @@
 use std::sync::Mutex;
 use std::{cell::UnsafeCell, marker::PhantomData};
 
+use crate::plan::concurrent::Pause;
 use crate::plan::global::Plan;
-use crate::plan::immix::Pause;
 use crate::plan::lxr::gc_work::mature_evac::SelectDefragBlocks;
 use crate::plan::lxr::gc_work::mature_evac::SELECT_DEFRAG_BLOCK_JOB_COUNTER;
 use crate::policy::immix::block::{Block, BlockState};

@@ -1,7 +1,7 @@
 use super::defrag::StatsForDefrag;
 use super::line::*;
 use super::{block::*, defrag::Defrag};
-use crate::plan::immix::Pause;
+use crate::plan::concurrent::Pause;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, DEFAULT_TRACE, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::sft::GCWorkerMutRef;

@@ -1,5 +1,6 @@
 use atomic::Ordering;
 
+use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::ObjectQueue;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
@@ -103,7 +104,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             // Initialize mark bit
             self.test_and_mark(object, self.mark_state);
             let lxr = self.lxr.unwrap();
-            if lxr.cm_in_progress() {
+            if lxr.concurrent_work_in_progress() {
                 for off in (0..bytes).step_by(BYTES_IN_PAGE) {
                     let a = object.to_raw_address() + off;
                     let count = LOS_PAGE_REUSE_COUNT.load_atomic::<u8>(a, Ordering::SeqCst);

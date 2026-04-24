@@ -52,7 +52,7 @@ use std::{
 use atomic::{Atomic, Ordering};
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
-use plan::immix::Pause;
+use plan::concurrent::Pause;
 use spin::{Lazy, Mutex};
 type RwLock<T> = spin::rwlock::RwLock<T>;
 
