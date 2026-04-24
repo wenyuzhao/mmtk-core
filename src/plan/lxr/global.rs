@@ -1,5 +1,4 @@
 use super::block_allocation::BlockAllocation;
-use super::gc_work::mature_evac::FlushMatureEvacRemsets;
 use super::gc_work::rc::{ProcessDecs, RCImmixCollectRootEdges};
 use super::gc_work::{LXRGCWorkContext, LXRWeakRefWorkContext};
 use super::mutator::ALLOCATOR_MAPPING;
@@ -268,8 +267,6 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if crate::args::RC_MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full)
         {
             self.process_mature_evacuation_remset();
-            self.immix_space.scheduler().work_buckets[WorkBucketStage::RCEvacuateMature]
-                .add(FlushMatureEvacRemsets);
         }
         if !cfg!(feature = "lxr_no_evac") && (pause == Pause::InitialMark || pause == Pause::Full) {
             // Select mature evacuation set

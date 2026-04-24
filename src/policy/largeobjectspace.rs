@@ -102,10 +102,6 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             self.rc_nursery_objects.push(object);
             // Initialize mark bit
             self.test_and_mark(object, self.mark_state);
-            for off in (0..bytes).step_by(BYTES_IN_PAGE) {
-                let a = object.to_raw_address() + off;
-                self.test_and_mark(a.to_object_reference::<VM>(), self.mark_state);
-            }
             let lxr = self.lxr.unwrap();
             if lxr.cm_in_progress() {
                 for off in (0..bytes).step_by(BYTES_IN_PAGE) {
