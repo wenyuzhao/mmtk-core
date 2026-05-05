@@ -110,11 +110,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.cm_enabled());
             let w = Self::new_ref_arrays(next_ref_arrays, worker.mmtk);
-            if self.plan.current_pause() == Some(Pause::RefCount) {
-                worker.scheduler().postpone(w);
-            } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
-            }
+            worker.add_work(WorkBucketStage::ConcurrentResumable, w);
         }
     }
 
@@ -125,11 +121,7 @@ impl<VM: VMBinding> LXRConcurrentTraceObjects<VM> {
             let worker = GCWorker::<VM>::current();
             debug_assert!(self.plan.cm_enabled());
             let w = Self::new(objects, worker.mmtk);
-            if self.plan.current_pause() == Some(Pause::RefCount) {
-                worker.scheduler().postpone(w);
-            } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
-            }
+            worker.add_work(WorkBucketStage::ConcurrentResumable, w);
         }
     }
 
@@ -278,12 +270,6 @@ impl<VM: VMBinding> ObjectQueue for LXRConcurrentTraceObjects<VM> {
 unsafe impl<VM: VMBinding> Send for LXRConcurrentTraceObjects<VM> {}
 
 impl<VM: VMBinding> GCWork<VM> for LXRConcurrentTraceObjects<VM> {
-    fn should_defer(&self) -> bool {
-        crate::PAUSE_CONCURRENT_MARKING.load(Ordering::SeqCst)
-    }
-    fn is_concurrent_marking_work(&self) -> bool {
-        true
-    }
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_open());
@@ -381,7 +367,7 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
             .unwrap()
             .current_pause();
         if current_pause != Some(Pause::FinalMark) {
-            worker.scheduler().postpone(w);
+            worker.scheduler().work_buckets[WorkBucketStage::ConcurrentResumable].add(w);
         } else {
             GCWork::do_work(&mut w, worker, mmtk);
         }

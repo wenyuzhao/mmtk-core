@@ -305,7 +305,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         if disable_lasy_dec_for_current_gc {
             self.immix_space
                 .scheduler()
-                .process_lazy_decrement_packets();
+                .process_concurrent_packets_in_pause();
         } else {
             debug_assert_ne!(pause, Pause::Full);
         }
@@ -552,10 +552,10 @@ impl<VM: VMBinding> LXR<VM> {
             let sweep_los = RCSweepMatureAfterSATBLOS::new(LazySweepingJobsCounter::new_decs());
             if crate::args::LAZY_DECREMENTS && !disable_lasy_dec_for_current_gc {
                 debug_assert_ne!(pause, Pause::Full);
-                self.immix_space
-                    .scheduler()
-                    .postpone_all(dead_cycle_sweep_packets);
-                self.immix_space.scheduler().postpone(sweep_los);
+                let concurrent_bucket =
+                    &self.immix_space.scheduler().work_buckets[WorkBucketStage::Concurrent];
+                concurrent_bucket.bulk_add_deferred(dead_cycle_sweep_packets);
+                concurrent_bucket.add_deferred(Box::new(sweep_los));
             } else {
                 self.immix_space.scheduler().work_buckets[WorkBucketStage::STWRCDecsAndSweep]
                     .bulk_add(dead_cycle_sweep_packets);
@@ -598,8 +598,7 @@ impl<VM: VMBinding> LXR<VM> {
                 Box::new(SweepBlocksAfterDecs::new(blocks, counter.clone()))
             })
             .collect();
-        self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
-            .bulk_add_prioritized(packets);
+        self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained].bulk_add(packets);
     }
 
     pub(super) fn process_mature_evacuation_remset(&self) {
@@ -850,15 +849,12 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
-        if self.concurrent_work_in_progress() {
-            scheduler.pause_concurrent_marking_work_packets_during_gc();
-        }
         type E<VM> = RCImmixCollectRootEdges<VM>;
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E<VM>>>::new()));
+            .add(StopMutators::<LXRGCWorkContext<E<VM>>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::RCProcessIncs].add(FastRCPrepare);
         // Release global/collectors/mutators
@@ -869,9 +865,8 @@ impl<VM: VMBinding> LXR<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         self.process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
-            StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
-        ));
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
         scheduler.work_buckets[WorkBucketStage::Release]
@@ -884,9 +879,8 @@ impl<VM: VMBinding> LXR<VM> {
             crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
         }
         self.process_prev_roots(scheduler);
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
-            StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new(),
-        ));
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<LXRGCWorkContext<RCImmixCollectRootEdges<VM>>>::new());
 
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
@@ -905,7 +899,7 @@ impl<VM: VMBinding> LXR<VM> {
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add_prioritized(Box::new(StopMutators::<LXRGCWorkContext<E>>::new()));
+            .add(StopMutators::<LXRGCWorkContext<E>>::new());
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(Prepare::<LXRGCWorkContext<UnsupportedProcessEdges<VM>>>::new(self));
@@ -931,7 +925,7 @@ impl<VM: VMBinding> LXR<VM> {
             )));
         }
         if crate::args::LAZY_DECREMENTS {
-            scheduler.postpone_all_prioritized(work_packets);
+            scheduler.work_buckets[WorkBucketStage::Concurrent].bulk_add_deferred(work_packets);
         } else {
             scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].bulk_add(work_packets);
         }

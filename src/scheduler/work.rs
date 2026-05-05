@@ -13,12 +13,6 @@ use std::any::{type_name, Any};
 /// enough to ensure that the costs of managing the work packets do not dominate, and the packet must be
 /// small enough that good load balancing is achieved.
 pub trait GCWork<VM: VMBinding>: 'static + Send + Any {
-    fn should_defer(&self) -> bool {
-        false
-    }
-    fn is_concurrent_marking_work(&self) -> bool {
-        false
-    }
     /// Define the work for this packet. However, this is not supposed to be called directly.
     /// Usually `do_work_with_stat()` should be used.
     ///

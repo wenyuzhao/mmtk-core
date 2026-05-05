@@ -260,7 +260,6 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             mmtk.get_plan()
                 .current_gc_should_prepare_for_class_unloading(),
         );
-        mmtk.scheduler.set_in_gc_pause(true);
         gc_log!([3] "Discovered {} mutators", n);
         let is_lxr = mmtk.get_plan().downcast_ref::<LXR<C::VM>>().is_some();
         if BULK_THREAD_SCAN {
