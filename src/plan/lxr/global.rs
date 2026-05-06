@@ -822,16 +822,18 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
-        if pause == Pause::RefCount {
-            scheduler.work_buckets[WorkBucketStage::Prepare].set_enabled(false);
-        }
-        if pause == Pause::RefCount || pause == Pause::InitialMark {
-            scheduler.work_buckets[WorkBucketStage::Closure].set_enabled(false);
-            scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_enabled(false);
-            scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_enabled(false);
-            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_enabled(false);
-        }
-        scheduler.work_buckets[WorkBucketStage::Concurrent].set_enabled(false);
+        scheduler.work_buckets[WorkBucketStage::Prepare].set_enabled(pause != Pause::RefCount);
+        let final_mark_or_full = pause == Pause::FinalMark || pause == Pause::Full;
+        scheduler.work_buckets[WorkBucketStage::Closure].set_enabled(final_mark_or_full);
+        scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_enabled(final_mark_or_full);
+        scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_enabled(final_mark_or_full);
+        scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_enabled(final_mark_or_full);
+        scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep]
+            .set_enabled(!(crate::args::LAZY_DECREMENTS && pause != Pause::Full));
+        // Always enabled
+        scheduler.work_buckets[WorkBucketStage::Concurrent].set_enabled(true);
+        scheduler.work_buckets[WorkBucketStage::ConcurrentResumable].set_enabled(true);
+        // Always disabled
         scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_enabled(false);
@@ -842,9 +844,6 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::RefForwarding].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::Compact].set_enabled(false);
-        if crate::args::LAZY_DECREMENTS && pause != Pause::Full {
-            scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep].set_enabled(false);
-        }
     }
 
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
