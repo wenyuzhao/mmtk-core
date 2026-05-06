@@ -169,6 +169,7 @@ lxr_no_mature_evac = []
 lxr_no_evac = ["lxr_no_nursery_evac", "lxr_no_mature_evac"]
 ix_always_defrag = []
 lxr_no_prefetch = []
+lxr_no_decs = []
 takerate_measurement = []
 
 # This feature is only supported on x86-64 for now

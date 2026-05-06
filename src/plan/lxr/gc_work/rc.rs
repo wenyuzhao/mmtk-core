@@ -863,6 +863,9 @@ impl<VM: VMBinding> ProcessDecs<VM> {
 
 impl<VM: VMBinding> GCWork<VM> for ProcessDecs<VM> {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        if cfg!(feature = "lxr_no_decs") {
+            return;
+        }
         let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         self.mark_dead_objects = if crate::args::LAZY_DECREMENTS {
             lxr.concurrent_work_in_progress() && lxr.previous_pause() != Some(Pause::InitialMark)
