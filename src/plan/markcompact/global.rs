@@ -109,13 +109,13 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Reference processing
         if !*self.base().options.no_reference_types {
-            use crate::util::reference_processor::{
-                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            };
+            use crate::util::reference_processor::{PhantomRefProcessing, SoftRefProcessing};
             scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
                 .add(SoftRefProcessing::<MarkingProcessEdges<VM>>::new());
-            scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(WeakRefProcessing::<VM>::new());
+            // NOTE: `WeakRefProcessing` is deliberately not scheduled here. On this
+            // branch it is a dead stub (`unreachable!()`); weak references are handled
+            // by the `VMProcessWeakRefs` sentinel on `VMRefClosure` below, which is what
+            // `GCWorkScheduler::schedule_common_work` also does.
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
                 .add(PhantomRefProcessing::<MarkingProcessEdges<VM>>::new());
 
@@ -129,17 +129,16 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
 
         // Finalization
         if !*self.base().options.no_finalizer {
-            unimplemented!();
-            // use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-            // // finalization
-            // // treat finalizable objects as roots and perform a closure (marking)
-            // // must be done before calculating forwarding pointers
-            // scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
-            //     .add(Finalization::<MarkingProcessEdges<VM>>::new());
-            // // update finalizable object references
-            // // must be done before compacting
-            // scheduler.work_buckets[WorkBucketStage::FinalizableForwarding]
-            //     .add(ForwardFinalization::<ForwardingProcessEdges<VM>>::new());
+            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
+            // finalization
+            // treat finalizable objects as roots and perform a closure (marking)
+            // must be done before calculating forwarding pointers
+            scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
+                .add(Finalization::<MarkingProcessEdges<VM>>::new());
+            // update finalizable object references
+            // must be done before compacting
+            scheduler.work_buckets[WorkBucketStage::FinalizableForwarding]
+                .add(ForwardFinalization::<ForwardingProcessEdges<VM>>::new());
         }
 
         // VM-specific weak ref processing

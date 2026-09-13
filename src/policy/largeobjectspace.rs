@@ -517,7 +517,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             // Clear log bits for dead objects to prevent a new nursery object having the unlog bit set
             if self.clear_log_bit_on_sweep {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
-                unreachable!()
             }
             self.release_object(get_super_page(object.to_object_start::<VM>()));
         };

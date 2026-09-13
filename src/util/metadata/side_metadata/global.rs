@@ -970,10 +970,27 @@ impl SideMetadataSpec {
         fetch_order: Ordering,
         mut f: F,
     ) -> std::result::Result<T, T> {
+        // `f` is moved into the access closure below, so the verification closure
+        // cannot call it again. Record the value `f` produced instead -- this also
+        // avoids running caller-supplied code twice. `fetch_update` may invoke `f`
+        // several times on CAS retry; the last call is the one that was stored.
+        #[cfg(feature = "extreme_assertions")]
+        let new_val_cell: std::cell::Cell<Option<T>> = std::cell::Cell::new(None);
+        #[cfg(feature = "extreme_assertions")]
+        let new_val_cell = &new_val_cell;
+        #[cfg(feature = "extreme_assertions")]
+        let mut f = move |old: T| -> Option<T> {
+            let new = f(old);
+            if let Some(v) = new {
+                new_val_cell.set(Some(v));
+            }
+            new
+        };
+
         self.side_metadata_access::<true, T, _, _, _>(
             data_addr,
             None,
-            move || -> std::result::Result<T, T> {
+            || -> std::result::Result<T, T> {
                 let meta_addr = address_to_meta_address(self, data_addr);
                 if self.log_num_of_bits < 3 {
                     let lshift = meta_byte_lshift(self, data_addr);
@@ -1002,7 +1019,12 @@ impl SideMetadataSpec {
             |_result| {
                 #[cfg(feature = "extreme_assertions")]
                 if let Ok(old_val) = _result {
-                    sanity::verify_update::<T>(self, data_addr, old_val, f(old_val).unwrap())
+                    sanity::verify_update::<T>(
+                        self,
+                        data_addr,
+                        old_val,
+                        new_val_cell.get().unwrap(),
+                    )
                 }
             },
         )

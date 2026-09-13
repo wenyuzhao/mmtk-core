@@ -265,11 +265,26 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
 
 impl<VM: VMBinding> GenImmix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
+        // GenImmix's mature space is an ImmixSpace, and `Block::init` unconditionally
+        // writes `Block::DEFRAG_STATE_TABLE` for every freshly acquired (non-reused)
+        // block. That spec is declared `global: true`, so it is only mapped if the plan
+        // registers it in its *global* side metadata specs -- a policy-level spec list
+        // cannot map it. `Immix::new` registers it for the non-generational plan;
+        // `new_generational_global_metadata_specs` does not, so GenImmix was writing to
+        // unmapped side metadata and segfaulting on the first nursery copy into the
+        // mature space.
+        let mut global_side_metadata_specs =
+            crate::plan::generational::new_generational_global_metadata_specs::<VM>();
+        global_side_metadata_specs.extend(crate::util::metadata::extract_side_metadata(&[
+            crate::util::metadata::MetadataSpec::OnSide(
+                crate::policy::immix::block::Block::DEFRAG_STATE_TABLE,
+            ),
+        ]));
+
         let mut plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &GENIMMIX_CONSTRAINTS,
-            global_side_metadata_specs:
-                crate::plan::generational::new_generational_global_metadata_specs::<VM>(),
+            global_side_metadata_specs,
         };
         let immix_space = ImmixSpace::new(
             plan_args.get_mature_space_args(
