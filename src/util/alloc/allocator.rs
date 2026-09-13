@@ -420,6 +420,18 @@ pub trait Allocator<VM: VMBinding>: Downcast {
             };
 
             if !is_mutator {
+                // A GC worker's copy allocation must not fail: plans are expected to
+                // reserve enough space for copying. Returning a null address here is
+                // not detectable by the caller -- `ObjectModel::copy` would memcpy to
+                // address 0 and the VM would die with a SIGSEGV at 0x0 and no useful
+                // context. Fail loudly instead. (Upstream has a `debug_assert!` here;
+                // this makes it a release-mode check, since the failure is silent and
+                // fatal either way.)
+                assert!(
+                    !result.is_zero(),
+                    "GC copy allocation failed (size={size}, align={align}): the \
+                     copy reserve is exhausted"
+                );
                 return result;
             }
 

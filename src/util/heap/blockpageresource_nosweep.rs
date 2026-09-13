@@ -548,7 +548,14 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
             return true;
         }
         // 1. Get a new chunk
-        let chunk = self.alloc_chunk(space).unwrap();
+        // `alloc_chunk` returns `None` when the space cannot grow any further. That is
+        // a normal out-of-memory condition, not a bug, so report it the same way the
+        // reusable-block paths above do: returning `false` makes `ImmixAllocator::
+        // acquire_block` return `None`, which lets the allocator trigger a GC or let
+        // the VM raise OutOfMemoryError. Unwrapping here aborted the VM instead.
+        let Some(chunk) = self.alloc_chunk(space) else {
+            return false;
+        };
         gc_log!([3] "new-chunk: {:?} (total={})", chunk.start(), chunks.len());
         // 2. Take the first N blocks in the chunk as the allocation result
         let count = usize::min(alloc_count, Self::BLOCKS_IN_CHUNK);
